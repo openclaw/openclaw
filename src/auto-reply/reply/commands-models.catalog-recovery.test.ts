@@ -66,6 +66,7 @@ beforeEach(() => {
         allowGatewaySubagentBinding: false,
         modelCatalog,
         configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
         inlineProviderModels: [],
         createStores() {
           throw new Error("Browsing must not start model execution");

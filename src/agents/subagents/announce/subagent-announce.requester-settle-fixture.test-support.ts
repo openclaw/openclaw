@@ -13,7 +13,10 @@ import {
 
 let sessionStore: Record<string, { sessionId?: string; lastChannel?: string; lastTo?: string }>;
 
-const { registryRuntimeMock } = vi.hoisted(() => ({
+const { registryRuntimeMock, findTranscriptEventMock } = vi.hoisted(() => ({
+  findTranscriptEventMock: vi.fn<
+    typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
+  >(async () => undefined),
   registryRuntimeMock: {
     getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
     countActiveDescendantRuns: vi.fn((_rootSessionKey: string) => 0),
@@ -36,6 +39,7 @@ const { registryRuntimeMock } = vi.hoisted(() => ({
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
+  findTranscriptEvent: findTranscriptEventMock,
   loadSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],
 }));
 
@@ -46,7 +50,9 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main", scope: "per-sender" } }),
   loadSessionStore: vi.fn(() => ({})),
   readSessionMessagesAsync: vi.fn(async () => []),
-  readSubagentSessionEntry: vi.fn(() => undefined),
+  readSubagentSessionEntry: vi.fn(
+    (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
+  ),
   resolveAgentIdFromSessionKey: vi.fn(() => "main"),
   resolveMainSessionKey: vi.fn(() => "agent:main:main"),
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
@@ -90,6 +96,7 @@ function wakeParams(
 }
 
 beforeEach(() => {
+  findTranscriptEventMock.mockReset().mockResolvedValue(undefined);
   deliverSpy.mockClear();
   transitionBatchSpy.mockClear();
   completeBatchSpy.mockClear();
@@ -104,4 +111,11 @@ function setSessionStore(store: typeof sessionStore): void {
   sessionStore = store;
 }
 
-export { sessionStore, setSessionStore, registryRuntimeMock, listedRequesterRuns, wakeParams };
+export {
+  sessionStore,
+  setSessionStore,
+  registryRuntimeMock,
+  findTranscriptEventMock,
+  listedRequesterRuns,
+  wakeParams,
+};

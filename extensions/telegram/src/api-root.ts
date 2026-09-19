@@ -1,4 +1,3 @@
-// Telegram plugin module implements api root behavior.
 const DEFAULT_TELEGRAM_API_ROOT = "https://api.telegram.org";
 
 const TELEGRAM_BOT_ENDPOINT_SEGMENT_RE = /^bot\d+:[^/]+$/u;

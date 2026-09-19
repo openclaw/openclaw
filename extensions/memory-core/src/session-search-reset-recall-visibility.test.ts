@@ -68,7 +68,7 @@ describe("reset-generation session search visibility", () => {
       ),
     };
     vi.mocked(engineSessions.loadArchivedSessions).mockReturnValue([
-      { archiveName, sessionId: archivedSessionId, sessionKey, createdAt: 1 },
+      { agentId: "main", archiveName, sessionId: archivedSessionId, sessionKey, createdAt: 1 },
     ]);
     const hit: MemorySearchResult = searchHit(
       `sessions/main/${archiveName}`,

@@ -25,6 +25,11 @@ Embedded OpenClaw compaction uses the provider's compaction thinking preference,
 
 Each summarization request uses one primary format. Safeguard history summaries use its structured checkpoint format, while split-turn prefixes use the prefix format. Operator focus and identifier-preservation guidance remain additional instructions; they do not add a competing set of required headings.
 
+Branch-navigation summaries budget the text actually sent for summarization,
+including bounded tool output, instructions, and output headroom. An older
+summary cannot override that budget. If visible branch history cannot fit,
+summarization reports a failure instead of claiming there was no content.
+
 AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
 ### Chunk boundaries and tool pairing
@@ -54,6 +59,8 @@ Two additional guards run outside these paths:
 - **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add a tool-loop guard. After a tool result is appended and before the next model call, OpenClaw estimates prompt pressure using the same preflight budget logic used at turn start. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
 
 ## Compaction settings
+
+Checkpoint replay prechecks distinguish predicted pressure from a provider-confirmed overflow. A matching measured Responses request supplies the covered context count; only appended content is estimated. If the current checkpoint or covered input changes, that measurement is no longer used. Predicted pressure can use native budget compaction, including the public OpenAI compact endpoint by default, while actual provider overflow retains client-side recovery. Both paths preserve the unresolved user request when client summarization is required.
 
 ```json5
 {
@@ -85,6 +92,12 @@ Set `enabled: false` to disable threshold-driven auto-compaction inside the embe
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
 
 OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Branch/restore checkpoint actions use a returned successor when present; legacy pre-compaction checkpoint files remain readable while referenced.
+
+Recovery follows the active successor's tool-result projections and timeout state.
+A checkpoint branch or restore preserves its selected model and workspace and
+follows the normal creator and isolation rules. It starts without the source run's writer claim,
+native CLI binding, pending delivery, or recovery work. Starting a checkpoint
+branch does not interrupt its source conversation.
 
 ## Pluggable compaction providers
 

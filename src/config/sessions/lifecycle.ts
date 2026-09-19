@@ -2,7 +2,7 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
-import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
+import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry,
@@ -238,6 +238,13 @@ function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (candidateSessionKey !== configuredMainSessionKey) {
     return undefined;
   }
+  if (params.entry.status === "running") {
+    // A yielded parent keeps status "running" next to the settled run's endedAt
+    // (see deriveGatewaySessionLifecycleSnapshot). That timestamp records run
+    // timing, not a terminal session: sibling completions must keep reusing the
+    // same session generation instead of rotating the parent mid-preparation.
+    return undefined;
+  }
   const hasTerminalLifecycle =
     isTerminalSessionStatus(params.entry.status) ||
     resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
@@ -286,17 +293,17 @@ export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
   try {
     // Runtime transcripts are SQLite-only. Legacy-looking sessionFile values still
     // resolve through agent/session/store scope, so a file stat would read stale state.
-    const stats = readTranscriptStatsSync({
+    const mutation = readTranscriptMutationStateSync({
       agentId: params.agentId,
       sessionId: check.sessionId,
       storePath: params.storePath,
     });
-    if (stats.lastMutationAtMs === undefined) {
+    if (mutation.updatedAt === null) {
       return false;
     }
     return isTranscriptMutationNewerThanRegistry({
-      transcriptMutationAtMs: stats.lastMutationAtMs,
-      registryTimestampMs: stats.lastObservedMutationAtMs ?? check.registryTimestampMs,
+      transcriptMutationAtMs: mutation.updatedAt,
+      registryTimestampMs: mutation.observedAt ?? check.registryTimestampMs,
     });
   } catch {
     return false;

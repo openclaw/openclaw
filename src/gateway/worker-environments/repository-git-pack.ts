@@ -63,6 +63,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
         input: "",
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: params.signal,
+        beforeRun: assertCurrent,
         killProcessTree: true,
         maxOutputBytes: 4_096,
       },

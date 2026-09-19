@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/llama-cpp-provider",
-  "version": "2026.9.4",
+  "version": "2026.9.5",
   "description": "OpenClaw provider for managed and external llama.cpp servers",
   "repository": {
     "type": "git",
@@ -15,15 +15,16 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/llama-cpp-provider",
       "npmSpec": "@openclaw/llama-cpp-provider",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.6.2"
     },
     "compat": {
-      "pluginApi": ">=2026.9.4"
+      "pluginApi": ">=2026.9.5"
     },
     "build": {
-      "openclawVersion": "2026.9.4"
+      "openclawVersion": "2026.9.5"
     },
     "release": {
       "bundleRuntimeDependencies": false,

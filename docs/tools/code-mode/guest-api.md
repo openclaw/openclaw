@@ -173,6 +173,10 @@ inbox capacity, search rejects with guidance to narrow the request.
 It never silently substitutes an empty or partial match list. A narrower search
 remains available after the error.
 
+Exact callable spelling takes precedence over case-insensitive matching. Use a
+handle's `callableName` to find that same tool when enabled names differ only in
+capitalization.
+
 Paired Gateway nodes are available through the `nodes` global:
 
 ```typescript

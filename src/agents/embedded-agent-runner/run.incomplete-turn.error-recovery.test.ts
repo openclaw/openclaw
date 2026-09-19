@@ -527,21 +527,23 @@ describe("incomplete-turn error recovery", () => {
     ).toBe(false);
   });
 
-  it("treats exact NO_REPLY assistant turns as silent only when the caller allows it", () => {
-    const attempt = makeAttemptResult({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: makeLastAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      }),
-    });
+  it.each([true, false, undefined])(
+    "treats exact NO_REPLY as authored silence with allowEmptyAssistantReplyAsSilent=%s",
+    (allowEmptyAssistantReplyAsSilent) => {
+      const attempt = makeAttemptResult({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: makeLastAssistant({
+          content: [{ type: "text", text: "NO_REPLY" }],
+        }),
+      });
 
-    expect(shouldTreatEmptyAssistantReplyAsSilent(makeSilentReplyParams(attempt))).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent(
-        makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent: false }),
-      ),
-    ).toBe(false);
-  });
+      expect(
+        shouldTreatEmptyAssistantReplyAsSilent(
+          makeSilentReplyParams(attempt, { allowEmptyAssistantReplyAsSilent }),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
     const attempt = makeAttemptResult({

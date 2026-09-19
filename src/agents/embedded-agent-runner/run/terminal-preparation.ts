@@ -171,6 +171,7 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames: resolveSuccessfulToolNames(attempt),
+      assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
       sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },
@@ -185,6 +186,7 @@ export function prepareEmbeddedRunTerminal(input: {
     : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
     assistantTexts: attempt.assistantTexts,
+    answerSegments: attempt.answerSegments,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
@@ -282,7 +284,7 @@ export function prepareEmbeddedRunTerminal(input: {
     (attempt.toolMetas?.length ?? 0) === 0;
   const attemptToolSummary = buildTraceToolSummary({
     toolMetas: attempt.toolMetas,
-    fallbackHadFailure: Boolean(attempt.lastToolError),
+    lastToolError: attempt.lastToolError,
   });
   const failureSignal = resolveEmbeddedRunFailureSignal({
     trigger: runParams.trigger,

@@ -25,7 +25,8 @@ import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { APP_NAME, getBinDir } from "../config.js";
+import { getBinDir } from "../config.js";
+import { APP_NAME } from "../package-metadata.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const NETWORK_TIMEOUT_MS = 10_000;

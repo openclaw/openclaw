@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
+import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   isRuntimeToolAllowed,
   createRuntimeToolMatcher,
@@ -24,6 +25,28 @@ import {
 } from "./tool-policy.js";
 
 describe("tool-policy", () => {
+  it.each([
+    { deny: "bundle-mcp", expected: [] },
+    { deny: "group:plugins", expected: [] },
+    { deny: "*", expected: [] },
+    { deny: " ALPHA__* ", expected: ["beta"] },
+    { deny: "a*__*", expected: ["beta"] },
+    { deny: "alpha__read", expected: ["alpha", "beta"] },
+    { deny: "alpha__", expected: ["alpha", "beta"] },
+    { deny: "alpha*__", expected: ["alpha", "beta"] },
+    { deny: "bundle*", expected: ["alpha", "beta"] },
+    { deny: "group:*", expected: ["alpha", "beta"] },
+  ])("preserves discoverable MCP namespaces for deny=$deny", ({ deny, expected }) => {
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        plugins: { enabled: false },
+        mcp: { servers: { alpha: { command: "alpha" }, beta: { command: "beta" } } },
+      },
+      toolDenylist: [deny],
+    });
+    expect([...(declared?.mcpServerNames ?? [])]).toEqual(expected);
+  });
+
   it("expands groups and normalizes aliases", () => {
     const expanded = expandToolGroups(["group:runtime", "BASH", "apply-patch", "group:fs"]);
     const set = new Set(expanded);

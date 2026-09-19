@@ -1,6 +1,20 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/source-reply-delivery-mode.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
+/** Exact task and requester generation captured by the admitted host completion turn. */
+export type HarnessCompletionRecovery = {
+  taskId: string;
+  /** Terminal outcome captured when this completion input was admitted. */
+  taskStatus: "succeeded" | "failed";
+  taskRunId: string;
+  sourceRunId: string;
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  sessionId: string;
+  /** Absence is an expected absent revision, not a wildcard. */
+  lifecycleRevision?: string;
+};
+
 export type RestartRecoveryBeforeAgentReplyState =
   | "admitted"
   | "pending"
@@ -16,6 +30,7 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
   payloadsTruncated?: true;
   deliveryStatus?: {
     status: "failed" | "partial_failed" | "sent" | "suppressed";
+    resultCount?: number;
     errorMessage?: string;
     payloadOutcomes?: Array<{
       index: number;
@@ -32,6 +47,8 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
     threadSuppressed?: boolean;
     mediaUrls?: string[];
     visible?: boolean;
+    /** Explicit false remains progress-only after a restart. */
+    sourceReplyFinal?: boolean;
   }>;
   messagingToolSentTargetsTruncated?: true;
   /** Aggregate committed sends were not all represented by route-checkable target records. */
@@ -43,6 +60,10 @@ export type RestartRecoveryTerminalDeliveryEvidenceResult = {
 export type RestartRecoveryTerminalDeliveryEvidence =
   RestartRecoveryTerminalDeliveryEvidenceResult & {
     runId: string;
+    harnessCompletion?: HarnessCompletionRecovery;
+    deliveryContext?: DeliveryContext;
+    /** Identified queue completion retained before its exact harness task settles. */
+    durableFinalReceipt?: { intentId: string; deliveryId: string; platformMessageId: string };
     /** Actual completion run; a resumed run can differ from its queued source. */
     transcriptRunId?: string;
   };
@@ -64,6 +85,7 @@ export type SessionRestartRecoveryState = {
   restartRecoveryDeliveryRequestFingerprint?: string;
   restartRecoveryDeliveryRunId?: string;
   restartRecoveryDeliverySourceRunId?: string;
+  restartRecoveryHarnessCompletion?: HarnessCompletionRecovery;
   restartRecoveryRequesterAccountId?: string;
   restartRecoveryRequesterSenderId?: string;
   restartRecoverySameChannelThreadRequired?: true;

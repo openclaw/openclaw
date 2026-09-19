@@ -22,7 +22,7 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { hasConnectedTalkNode } from "./server-talk-nodes.js";
+import { hasConnectedTalkNode } from "./talk/nodes.js";
 
 // Node session runtime owns connected node registry state, session event
 // subscriptions, and voice-wake fanout helpers for the gateway process.

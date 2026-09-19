@@ -41,16 +41,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     <a className="maturity-surface-link" href="#gateway-runtime">
       <span className="maturity-surface-title">Gateway runtime</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>13 areas - 89% complete</span></span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>13 areas - 88% complete</span></span>
     </a>
 
     <a className="maturity-surface-link" href="#agent-runtime">
       <span className="maturity-surface-title">Agent Runtime</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas - 79% complete</span></span>
-    </a>
-
-    <a className="maturity-surface-link" href="#session-memory-and-context-engine">
-      <span className="maturity-surface-title">Session, memory, and context engine</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas - 79% complete</span></span>
     </a>
 
@@ -84,6 +79,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
+    <a className="maturity-surface-link" href="#session-memory-and-state-lifecycle">
+      <span className="maturity-surface-title">Session, memory, and state lifecycle</span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>9 areas - 76% complete</span></span>
+    </a>
+
     <a className="maturity-surface-link" href="#media-understanding-and-media-generation">
       <span className="maturity-surface-title">Media understanding and media generation</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas - 68% complete</span></span>
@@ -104,9 +104,9 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 62% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#openclaw-app-sdk">
-      <span className="maturity-surface-title">OpenClaw App SDK</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas - 53% complete</span></span>
+    <a className="maturity-surface-link" href="#external-apps-and-interoperability">
+      <span className="maturity-surface-title">External apps and interoperability</span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>6 areas - 51% complete</span></span>
     </a>
 
   </Tab>
@@ -132,11 +132,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-stable"><span className="maturity-level-code">M4</span><span>Stable</span></span><span>7 areas - 80% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#docker-and-podman-hosting">
-      <span className="maturity-surface-title">Docker and Podman hosting</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas - 79% complete</span></span>
-    </a>
-
     <a className="maturity-surface-link" href="#windows-via-wsl2">
       <span className="maturity-surface-title">Windows via WSL2</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
@@ -155,6 +150,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a className="maturity-surface-link" href="#linux-companion-app">
       <span className="maturity-surface-title">Linux companion app</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 76% complete</span></span>
+    </a>
+
+    <a className="maturity-surface-link" href="#fleet-containers-and-cloud-execution">
+      <span className="maturity-surface-title">Fleet, containers, and cloud execution</span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>4 areas - 71% complete</span></span>
     </a>
 
     <a className="maturity-surface-link" href="#windows-app-node">
@@ -230,13 +230,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>5 areas - 66% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels">
-      <span className="maturity-surface-title">Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels</span>
+    <a className="maturity-surface-link" href="#regional-channel-cohort">
+      <span className="maturity-surface-title">Regional channel cohort</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 58% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat">
-      <span className="maturity-surface-title">Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat</span>
+    <a className="maturity-surface-link" href="#community-channel-cohort">
+      <span className="maturity-surface-title">Community channel cohort</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 54% complete</span></span>
     </a>
 
@@ -448,14 +448,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
     Core architecture, auth, pairing, protocol docs, daemon docs, and CLI runbooks are broad and current.
 
-    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Stable - 81%</span><span>Completeness Stable - 89%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 12</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Stable - 80%</span><span>Completeness Stable - 88%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 11</span></span></div>
 
     <details>
     <summary>Decision context</summary>
     <p>Missing history is unknown. Differences are non-gating and do not change current values.</p>
     <div><p><strong><span>Level</span></strong></p><p>Current value: <span>stable</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>81</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>89</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>80</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>88</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Approvals and Remote Execution / Quality</span></strong></p><p>Current value: <span>75</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Approvals and Remote Execution / Completeness</span></strong></p><p>Current value: <span>89</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Approvals and Remote Execution / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
@@ -483,9 +483,9 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <div><p><strong><span>Protocol Compatibility / Quality</span></strong></p><p>Current value: <span>75</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Protocol Compatibility / Completeness</span></strong></p><p>Current value: <span>89</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Protocol Compatibility / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Roles and Permissions / Quality</span></strong></p><p>Current value: <span>75</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Roles and Permissions / Completeness</span></strong></p><p>Current value: <span>89</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Roles and Permissions / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Roles and Permissions / Quality</span></strong></p><p>Current value: <span>70</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Roles and Permissions / Completeness</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Roles and Permissions / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Gateway Lifecycle / Quality</span></strong></p><p>Current value: <span>90</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Gateway Lifecycle / Completeness</span></strong></p><p>Current value: <span>90</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Gateway Lifecycle / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
@@ -628,14 +628,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Roles and Permissions</span>
-          <span>5 capabilities / LTS-supported</span>
+          <span>11 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-stable"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-stable">Stable</span><span>89%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "89%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>70%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "70%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Protocol](/gateway/protocol), [Index](/gateway/security/index)
+    [Protocol](/gateway/protocol), [Index](/gateway/security/index), [Multi User](/concepts/multi-user), [Agent Bindings](/concepts/agent-bindings), [Multi Tenant Hosting](/gateway/multi-tenant-hosting), [Audit](/gateway/audit)
 
     </div>
       </div>
@@ -852,180 +852,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">
 
     [Sandbox Vs Tool Policy Vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated), [Agent Loop](/concepts/agent-loop), [Subagents](/tools/subagents)
-
-    </div>
-      </div>
-    </div>
-
-  </Accordion>
-
-  <Accordion title="Session, memory, and context engine - M3 Beta - 9 areas">
-    <a id="session-memory-and-context-engine" />
-
-    Strong docs and active implementation. Maturity depends on transcript durability, compaction quality, and cross-client parity.
-
-    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Beta - 77%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 6</span></span></div>
-
-    <details>
-    <summary>Decision context</summary>
-    <p>Missing history is unknown. Differences are non-gating and do not change current values.</p>
-    <div><p><strong><span>Level</span></strong></p><p>Current value: <span>beta</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>77</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>CLI Session and Transcript Management / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>CLI Session and Transcript Management / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>CLI Session and Transcript Management / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Token Management / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Token Management / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Token Management / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Context Engine / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Context Engine / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Context Engine / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Cross-client History and Session Parity / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Cross-client History and Session Parity / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Cross-client History and Session Parity / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Diagnostics, Maintenance, and Recovery / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Diagnostics, Maintenance, and Recovery / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Diagnostics, Maintenance, and Recovery / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Core Prompts and Context / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Core Prompts and Context / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Core Prompts and Context / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Memory / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Memory / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Memory / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Session Routing / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Session Routing / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Session Routing / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Transcript Persistence / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Transcript Persistence / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Transcript Persistence / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    </details>
-
-    <div className="maturity-category-list">
-      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">CLI Session and Transcript Management</span>
-          <span>2 capabilities / LTS-supported</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Session](/concepts/session), [Session Management Compaction](/reference/session-management-compaction), [Sessions](/cli/sessions)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Token Management</span>
-          <span>10 capabilities / LTS-supported</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Compaction](/concepts/compaction), [Context](/concepts/context), [Session Management Compaction](/reference/session-management-compaction)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Context Engine</span>
-          <span>9 capabilities / LTS-supported</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Context](/concepts/context), [Context Engine](/concepts/context-engine), [Goal](/tools/goal)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Cross-client History and Session Parity</span>
-          <span>5 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Webchat](/web/webchat), [Android](/platforms/android), [Channel Routing](/channels/channel-routing)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Diagnostics, Maintenance, and Recovery</span>
-          <span>10 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Diagnostics](/gateway/diagnostics), [Session Management Compaction](/reference/session-management-compaction), [Flags](/diagnostics/flags)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Core Prompts and Context</span>
-          <span>8 capabilities / LTS-supported</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Context](/concepts/context), [Transcript Hygiene](/reference/transcript-hygiene), [Discord](/channels/discord)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Memory</span>
-          <span>22 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Memory Config](/reference/memory-config), [Memory](/concepts/memory), [Discord](/channels/discord)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Session Routing</span>
-          <span>4 capabilities / LTS-supported</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Session](/concepts/session), [Channel Routing](/channels/channel-routing), [Discord](/channels/discord)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Transcript Persistence</span>
-          <span>2 capabilities / LTS-supported</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Session Management Compaction](/reference/session-management-compaction), [Transcript Hygiene](/reference/transcript-hygiene)
 
     </div>
       </div>
@@ -1841,6 +1667,181 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
+  <Accordion title="Session, memory, and state lifecycle - M3 Beta - 9 areas">
+    <a id="session-memory-and-state-lifecycle" />
+    <a id="session-memory-and-context-engine" />
+
+    OpenClaw has durable sessions, memory, backup and restore, state migrations, and cross-client attachment. Maturity still depends on portability guarantees, recovery discipline, transcript durability, compaction quality, and cross-client parity.
+
+    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Beta - 75%</span><span>Completeness Beta - 76%</span><span><span className="maturity-lts maturity-lts-partial">Partial - 5</span></span></div>
+
+    <details>
+    <summary>Decision context</summary>
+    <p>Missing history is unknown. Differences are non-gating and do not change current values.</p>
+    <div><p><strong><span>Level</span></strong></p><p>Current value: <span>beta</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>75</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>76</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>CLI Session and Transcript Management / Quality</span></strong></p><p>Current value: <span>66</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>CLI Session and Transcript Management / Completeness</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>CLI Session and Transcript Management / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Token Management / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Token Management / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Token Management / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Context Engine / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Context Engine / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Context Engine / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Cross-client History and Session Parity / Quality</span></strong></p><p>Current value: <span>75</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Cross-client History and Session Parity / Completeness</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Cross-client History and Session Parity / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Diagnostics, Maintenance, and Recovery / Quality</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Diagnostics, Maintenance, and Recovery / Completeness</span></strong></p><p>Current value: <span>70</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Diagnostics, Maintenance, and Recovery / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Core Prompts and Context / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Core Prompts and Context / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Core Prompts and Context / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Memory / Quality</span></strong></p><p>Current value: <span>74</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Memory / Completeness</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Memory / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Session Routing / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Session Routing / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Session Routing / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Transcript Persistence / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Transcript Persistence / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Transcript Persistence / LTS</span></strong></p><p>Current value: <span>true</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    </details>
+
+    <div className="maturity-category-list">
+      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">CLI Session and Transcript Management</span>
+          <span>3 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Session](/concepts/session), [Session Management Compaction](/reference/session-management-compaction), [Sessions](/cli/sessions)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Token Management</span>
+          <span>10 capabilities / LTS-supported</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Compaction](/concepts/compaction), [Context](/concepts/context), [Session Management Compaction](/reference/session-management-compaction)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Context Engine</span>
+          <span>9 capabilities / LTS-supported</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Context](/concepts/context), [Context Engine](/concepts/context-engine), [Goal](/tools/goal)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Cross-client History and Session Parity</span>
+          <span>6 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>75%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "75%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Webchat](/web/webchat), [Android](/platforms/android), [Channel Routing](/channels/channel-routing), [Session Attachment](/concepts/session-attachment), [Session Catalogs](/nodes/session-catalogs)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Diagnostics, Maintenance, and Recovery</span>
+          <span>13 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>70%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "70%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Diagnostics](/gateway/diagnostics), [Session Management Compaction](/reference/session-management-compaction), [Flags](/diagnostics/flags), [Backup](/cli/backup), [Backups](/install/backups), [Versioned State Guarded Upgrades](/start/why-openclaw/versioned-state-guarded-upgrades), [State Schema History](/reference/database-schemas/state-schema-history)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Core Prompts and Context</span>
+          <span>8 capabilities / LTS-supported</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Context](/concepts/context), [Transcript Hygiene](/reference/transcript-hygiene), [Discord](/channels/discord)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Memory</span>
+          <span>23 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Memory Config](/reference/memory-config), [Memory](/concepts/memory), [Discord](/channels/discord), [Memory Provenance](/concepts/memory-provenance)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Session Routing</span>
+          <span>4 capabilities / LTS-supported</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Session](/concepts/session), [Channel Routing](/channels/channel-routing), [Discord](/channels/discord)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Transcript Persistence</span>
+          <span>2 capabilities / LTS-supported</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Session Management Compaction](/reference/session-management-compaction), [Transcript Hygiene](/reference/transcript-hygiene)
+
+    </div>
+      </div>
+    </div>
+
+  </Accordion>
+
   <Accordion title="Media understanding and media generation - M2 Alpha - 6 areas">
     <a id="media-understanding-and-media-generation" />
 
@@ -2282,24 +2283,25 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="OpenClaw App SDK - M2 Alpha - 6 areas">
+  <Accordion title="External apps and interoperability - M2 Alpha - 6 areas">
+    <a id="external-apps-and-interoperability" />
     <a id="openclaw-app-sdk" />
 
-    OpenClaw App SDK is a distinct external app contract separate from Gateway runtime and Plugin SDK. Current scoring shows a real `@openclaw/sdk` path with gaps around public packaging, auto-discovery, approvals, helpers, and compatibility.
+    External apps can use the public SDK, attach to sessions, or interoperate through ACP/ACPX, MCP, and A2A. These paths are real but still have uneven packaging, discovery, transport, approval, and compatibility guarantees.
 
-    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 54%</span><span>Completeness Alpha - 53%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 53%</span><span>Completeness Alpha - 51%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
     <details>
     <summary>Decision context</summary>
     <p>Missing history is unknown. Differences are non-gating and do not change current values.</p>
     <div><p><strong><span>Level</span></strong></p><p>Current value: <span>alpha</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>54</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>53</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>53</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>51</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Client API / Quality</span></strong></p><p>Current value: <span>51</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Client API / Completeness</span></strong></p><p>Current value: <span>50</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Client API / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Gateway Access / Quality</span></strong></p><p>Current value: <span>53</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Gateway Access / Completeness</span></strong></p><p>Current value: <span>54</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Gateway Access / Quality</span></strong></p><p>Current value: <span>50</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Gateway Access / Completeness</span></strong></p><p>Current value: <span>50</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Gateway Access / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Agent Conversations / Quality</span></strong></p><p>Current value: <span>52</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Agent Conversations / Completeness</span></strong></p><p>Current value: <span>52</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
@@ -2310,8 +2312,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <div><p><strong><span>Resource Helpers / Quality</span></strong></p><p>Current value: <span>62</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Resource Helpers / Completeness</span></strong></p><p>Current value: <span>53</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Resource Helpers / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Compatibility / Quality</span></strong></p><p>Current value: <span>54</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Compatibility / Completeness</span></strong></p><p>Current value: <span>55</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Compatibility / Quality</span></strong></p><p>Current value: <span>50</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Compatibility / Completeness</span></strong></p><p>Current value: <span>50</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Compatibility / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     </details>
 
@@ -2334,14 +2336,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Gateway Access</span>
-          <span>5 capabilities</span>
+          <span>7 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [External Apps](/gateway/external-apps), [Protocol](/gateway/protocol), [Index](/gateway/security/index)
+    [External Apps](/gateway/external-apps), [Protocol](/gateway/protocol), [Index](/gateway/security/index), [Attach](/cli/attach)
 
     </div>
       </div>
@@ -2390,14 +2392,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Compatibility</span>
-          <span>5 capabilities</span>
+          <span>9 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [External Apps](/gateway/external-apps), [Typebox](/concepts/typebox), [Protocol](/gateway/protocol)
+    [External Apps](/gateway/external-apps), [Typebox](/concepts/typebox), [Protocol](/gateway/protocol), [Acp](/cli/acp), [Mcp](/cli/mcp), [Mcp](/tools/mcp), [A2a](/channels/a2a)
 
     </div>
       </div>
@@ -2936,95 +2938,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Docker and Podman hosting - M3 Beta - 4 areas">
-    <a id="docker-and-podman-hosting" />
-
-    Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
-
-    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Beta - 71%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
-
-    <details>
-    <summary>Decision context</summary>
-    <p>Missing history is unknown. Differences are non-gating and do not change current values.</p>
-    <div><p><strong><span>Level</span></strong></p><p>Current value: <span>beta</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>71</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Container Setup / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Container Setup / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Container Setup / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Container Operations / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Container Operations / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Container Operations / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Image Release and Validation / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Image Release and Validation / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Image Release and Validation / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Agent Sandbox and Tooling / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Agent Sandbox and Tooling / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Agent Sandbox and Tooling / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    </details>
-
-    <div className="maturity-category-list">
-      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Container Setup</span>
-          <span>6 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Docker](/install/docker), [Podman](/install/podman)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Container Operations</span>
-          <span>11 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Image Release and Validation</span>
-          <span>7 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Full Release Validation](/reference/full-release-validation)
-
-    </div>
-      </div>
-      <div className="maturity-category-row">
-        <div className="maturity-category-area">
-          <span className="maturity-category-title">Agent Sandbox and Tooling</span>
-          <span>3 capabilities</span>
-        </div>
-        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
-        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
-        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
-        <div className="maturity-category-docs">
-
-    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime)
-
-    </div>
-      </div>
-    </div>
-
-  </Accordion>
-
   <Accordion title="Windows via WSL2 - M3 Beta - 6 areas">
     <a id="windows-via-wsl2" />
 
@@ -3494,6 +3407,96 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div className="maturity-category-docs">
 
     [Linux](/platforms/linux), [OpenClaw](/start/openclaw), [Doctor](/gateway/doctor)
+
+    </div>
+      </div>
+    </div>
+
+  </Accordion>
+
+  <Accordion title="Fleet, containers, and cloud execution - M3 Beta - 4 areas">
+    <a id="fleet-containers-and-cloud-execution" />
+    <a id="docker-and-podman-hosting" />
+
+    OpenClaw supports local container hosting, isolated fleet cells, and cloud-worker execution. The main workflows exist, but fleet and cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
+
+    <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 67%</span><span>Completeness Beta - 71%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
+
+    <details>
+    <summary>Decision context</summary>
+    <p>Missing history is unknown. Differences are non-gating and do not change current values.</p>
+    <div><p><strong><span>Level</span></strong></p><p>Current value: <span>beta</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Quality</span></strong></p><p>Current value: <span>67</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Completeness</span></strong></p><p>Current value: <span>71</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Container Setup / Quality</span></strong></p><p>Current value: <span>66</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Container Setup / Completeness</span></strong></p><p>Current value: <span>74</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Container Setup / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Container Operations / Quality</span></strong></p><p>Current value: <span>64</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Container Operations / Completeness</span></strong></p><p>Current value: <span>70</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Container Operations / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Image Release and Validation / Quality</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Image Release and Validation / Completeness</span></strong></p><p>Current value: <span>72</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Image Release and Validation / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Agent Sandbox and Tooling / Quality</span></strong></p><p>Current value: <span>64</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Agent Sandbox and Tooling / Completeness</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Agent Sandbox and Tooling / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    </details>
+
+    <div className="maturity-category-list">
+      <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Container Setup</span>
+          <span>8 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>66%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "66%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>74%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "74%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Docker](/install/docker), [Podman](/install/podman), [Fleet](/cli/fleet), [Cloud Workers](/gateway/cloud-workers), [Setup And Bundle Installation](/gateway/cloud-workers/setup-and-bundle-installation)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Container Operations</span>
+          <span>13 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>70%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "70%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Podman](/install/podman), [Docker Vm Runtime](/install/docker-vm-runtime), [Docker](/install/docker), [Hetzner](/install/hetzner), [Hostinger](/install/hostinger), [Fleet](/cli/fleet), [Worker](/cli/worker), [Cloud Sessions](/gateway/cloud-sessions), [Session Lifecycle](/gateway/cloud-workers/session-lifecycle)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Image Release and Validation</span>
+          <span>9 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>72%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "72%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Full Release Validation](/reference/full-release-validation), [Warm Images](/gateway/cloud-workers/warm-images)
+
+    </div>
+      </div>
+      <div className="maturity-category-row">
+        <div className="maturity-category-area">
+          <span className="maturity-category-title">Agent Sandbox and Tooling</span>
+          <span>5 capabilities</span>
+        </div>
+        <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>64%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "64%" }} /></span></span></div>
+        <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
+        <div className="maturity-category-docs">
+
+    [Docker](/install/docker), [Docker Vm Runtime](/install/docker-vm-runtime), [Placement And Machine Selection](/gateway/cloud-workers/placement-and-machine-selection), [Per Project Default Profiles](/gateway/cloud-workers/per-project-default-profiles), [Desktop](/gateway/cloud-workers/desktop)
 
     </div>
       </div>
@@ -4992,10 +4995,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels - M2 Alpha - 4 areas">
+  <Accordion title="Regional channel cohort - M2 Alpha - 4 areas">
+    <a id="regional-channel-cohort" />
     <a id="feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels" />
 
     Important regional coverage, but public support level should be calibrated per account type, upstream approval, and maintainer proof.
+
+    **Current catalog members:** [Feishu](/channels/feishu), [QQ bot](/channels/qqbot), [WeChat](/channels/wechat), [WeCom](/channels/wecom), [Yuanbao](/channels/yuanbao), [Zalo](/channels/zalo), [Zalo ClawBot](/channels/zaloclawbot), [Zalo personal](/channels/zalouser)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 55%</span><span>Completeness Alpha - 58%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -5081,10 +5087,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat - M2 Alpha - 4 areas">
+  <Accordion title="Community channel cohort - M2 Alpha - 4 areas">
+    <a id="community-channel-cohort" />
     <a id="mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat" />
 
     Supported surfaces exist, but maturity likely varies by upstream and maintainer coverage. Score individually later.
+
+    **Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack), [IRC](/channels/irc), [LINE](/channels/line), [Mattermost](/channels/mattermost), [Nextcloud Talk](/channels/nextcloud-talk), [Nostr](/channels/nostr), [Raft](/channels/raft), [Reef](/channels/reef), [SMS](/channels/sms), [Synology Chat](/channels/synology-chat), [Tlon](/channels/tlon), [Twitch](/channels/twitch)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 53%</span><span>Completeness Alpha - 54%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 

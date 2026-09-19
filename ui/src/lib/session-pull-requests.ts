@@ -97,6 +97,8 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
   let syncRequestGeneration = 0;
+  let refreshingGeneration: number | null = null;
+  let refreshingKeys: readonly string[] = [];
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -152,8 +154,19 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
 
+  const retainRefreshIntent = (keys: readonly string[]) => {
+    for (const key of refreshingKeys) {
+      if (keys.includes(key)) {
+        pendingRefreshKeys.add(key);
+      }
+    }
+  };
+
   const retireConnection = () => {
+    retainRefreshIntent(watchedKeys());
     syncRequestGeneration += 1;
+    refreshingGeneration = null;
+    refreshingKeys = [];
     lastHello = null;
     lastSignature = null;
     const hadSnapshots = snapshots.size > 0;
@@ -225,15 +238,17 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       const current = snapshots.get(sessionKey);
       const repository = sessionGitHubRepository(snapshot);
       const currentRepository = sessionGitHubRepository(current);
+      const currentBranch = current?.branch?.branch ?? current?.pullRequests[0]?.branch;
       const canRetainCurrent =
-        !repository ||
-        (repository.owner === currentRepository?.owner &&
-          repository.repo === currentRepository?.repo);
+        (!repository ||
+          (repository.owner === currentRepository?.owner &&
+            repository.repo === currentRepository?.repo)) &&
+        (!snapshot.branch || !currentBranch || snapshot.branch.branch === currentBranch);
       let next = snapshot;
       if (
         current &&
         canRetainCurrent &&
-        snapshot.status === "rate-limited" &&
+        (snapshot.status === "rate-limited" || snapshot.status === "unavailable") &&
         snapshot.pullRequests.length === 0
       ) {
         next = {
@@ -241,19 +256,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           pullRequests: current.pullRequests,
           branch: snapshot.branch ?? current.branch,
           repository: snapshot.repository ?? current.repository,
-        };
-      } else if (
-        current &&
-        canRetainCurrent &&
-        snapshot.status === "unavailable" &&
-        (current.pullRequests.length > 0 ||
-          current.branch !== undefined ||
-          current.repository !== undefined)
-      ) {
-        next = {
-          ...current,
-          repository: snapshot.repository ?? current.repository,
-          status: "unavailable",
         };
       }
       snapshots.set(sessionKey, next);
@@ -275,6 +277,8 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     },
     onDetach: () => {
       syncRequestGeneration += 1;
+      refreshingGeneration = null;
+      refreshingKeys = [];
       lastHello = null;
       lastSignature = null;
       snapshots.clear();
@@ -301,11 +305,20 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
       return;
     }
+    const desiredKeys = watchedKeys();
     const sessionKeys =
-      typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : watchedKeys();
+      typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
+    const signature = JSON.stringify(sessionKeys.toSorted());
+    if (
+      refreshingGeneration !== null &&
+      (signature !== lastSignature || snapshot.hello !== lastHello)
+    ) {
+      // A replacement retires the old acknowledgement, not its retained intent.
+      // Hidden tabs keep desired keys so their refresh resumes when shown again.
+      retainRefreshIntent(desiredKeys);
+    }
     const sessionKeySet = new Set(sessionKeys);
     const refreshSessionKeys = [...pendingRefreshKeys].filter((key) => sessionKeySet.has(key));
-    const signature = JSON.stringify(sessionKeys.toSorted());
     if (
       snapshot.hello === lastHello &&
       signature === lastSignature &&
@@ -314,6 +327,15 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       if (!isActive()) {
         lifecycle.detach();
       }
+      return;
+    }
+    // Repeated hints for the same watched union coalesce behind its current
+    // request. Membership changes still supersede immediately (notably hide).
+    if (
+      refreshingGeneration !== null &&
+      snapshot.hello === lastHello &&
+      signature === lastSignature
+    ) {
       return;
     }
     lastHello = snapshot.hello;
@@ -326,6 +348,11 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       snapshot.hello === lastHello &&
       signature === lastSignature;
     retry.cancel();
+    refreshingGeneration = requestGeneration;
+    refreshingKeys = refreshSessionKeys;
+    for (const key of refreshSessionKeys) {
+      pendingRefreshKeys.delete(key);
+    }
     const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
       sessionKeys,
       ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
@@ -336,14 +363,14 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     void request
       .then(() => {
         if (isCurrentRequest()) {
-          for (const key of refreshSessionKeys) {
-            pendingRefreshKeys.delete(key);
-          }
           retry.reset();
         }
       })
       .catch(() => {
         if (isCurrentRequest()) {
+          for (const key of refreshSessionKeys) {
+            pendingRefreshKeys.add(key);
+          }
           lastSignature = null;
           retry.schedule(() => {
             if (lifecycle.attached && isActive()) {
@@ -352,6 +379,15 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           });
           for (const key of sessionKeys) {
             settle(key);
+          }
+        }
+      })
+      .finally(() => {
+        if (refreshingGeneration === requestGeneration) {
+          refreshingGeneration = null;
+          refreshingKeys = [];
+          if (isCurrentRequest() && pendingRefreshKeys.size > 0) {
+            lifecycle.schedule();
           }
         }
       });

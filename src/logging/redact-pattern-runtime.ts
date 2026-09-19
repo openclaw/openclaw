@@ -45,6 +45,34 @@ type RedactMatcher = {
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
 
+export function getIndexedCaptureStart(
+  pattern: ResolvedRedactPattern,
+  input: string,
+  match: string,
+  matchOffset: number,
+  captureIndex: number,
+): number | null {
+  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
+    return null;
+  }
+  try {
+    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
+    const indexedPattern = new RegExp(pattern.source, flags);
+    indexedPattern.lastIndex = matchOffset;
+    const indexedMatch = indexedPattern.exec(input);
+    const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
+    if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
+      return null;
+    }
+    if (!captureIndices) {
+      return null;
+    }
+    return captureIndices[0] - matchOffset;
+  } catch {
+    return null;
+  }
+}
+
 const globalPatterns = new WeakMap<RegExp, RegExp>();
 
 export function* iterateRedactMatches(

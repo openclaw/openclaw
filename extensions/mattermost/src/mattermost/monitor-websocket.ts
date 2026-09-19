@@ -7,12 +7,11 @@ import {
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import type { ClientOptions, RawData } from "ws";
+import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
-import { WebSocket } from "./ws-runtime.js";
 
 export type MattermostEventPayload = z.infer<typeof MattermostEventPayloadSchema>;
 

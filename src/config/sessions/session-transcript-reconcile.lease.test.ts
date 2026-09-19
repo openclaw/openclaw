@@ -1,6 +1,5 @@
-import { pathToFileURL } from "node:url";
-import { MessageChannel, Worker, type MessagePort, type WorkerOptions } from "node:worker_threads";
-import { afterEach, expect, it } from "vitest";
+import { MessageChannel, type Worker, type MessagePort } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { releaseOpenClawAgentDatabaseLease } from "../../state/openclaw-agent-db-lease.js";
 import {
@@ -17,11 +16,17 @@ import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
 } from "./session-transcript-reconcile.worker.js";
 
+vi.mock("node:worker_threads", async () =>
+  (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const options = { agentId: "main" };
 const scope = { ...options, sessionId: "lease-failure", sessionKey: "agent:main:lease-failure" };
@@ -35,7 +40,7 @@ it.each([
   "release-delete",
   "planner-ack",
 ] as const)(
-  "reports %s failure and joins every native worker",
+  "reports %s failure after joining failed workers and exact lease cleanup",
   async (fault) => {
     const stateDir = tempDirs.make("openclaw-reconcile-lease-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -58,27 +63,35 @@ it.each([
         const baseline = readLeases();
         let leasesAtNativeFault: ReturnType<typeof readLeases> | undefined;
         expect(baseline).toHaveLength(1);
-        const createWorker = (filename: string | URL, workerOptions: WorkerOptions) => {
-          const input = workerOptions.workerData as SessionTranscriptReconcileWorkerInput;
-          modes.push(input.mode);
-          if (input.mode === "disk") {
-            leaseId = input.leaseId;
+        let creations = 0;
+        observer.beforeCreate = (filename, workerOptions) => {
+          const planner = creations++ === 0;
+          if (fault === "startup" && planner) {
+            // Bun follow-up (oven-sh/bun#43222): Restore a missing entry once Bun closes ports
+            // transferred before worker entry resolution fails.
+            return {
+              filename: "throw new Error('planner startup fixture')",
+              options: { ...workerOptions, eval: true },
+            };
           }
-          let worker: Worker;
-          if (fault === "startup" && input.mode === "disk") {
-            worker = new Worker(new URL("./missing-worker.js", pathToFileURL(`${stateDir}/`)));
-          } else if (input.mode === "release" && fault === "release-exit") {
-            worker = new Worker("process.exit(0)", { eval: true });
-          } else if (input.mode === "release" && fault === "release-error") {
-            worker = new Worker("throw new Error('cleanup worker fixture')", { eval: true });
-          } else if (
-            input.mode === "disk" &&
-            (fault === "claim-before" || fault === "claim-after")
-          ) {
+          if (!planner && (fault === "release-exit" || fault === "release-error")) {
+            return {
+              filename:
+                fault === "release-exit"
+                  ? "process.exit(0)"
+                  : "throw new Error('cleanup worker fixture')",
+              options: { ...workerOptions, eval: true },
+            };
+          }
+          if (planner && (fault === "claim-before" || fault === "claim-after")) {
             const channel = new MessageChannel();
             ports.push(channel.port1, channel.port2);
-            worker = new Worker(
-              `const {workerData}=require('node:worker_threads');
+            channel.port1.once("message", () => {
+              leasesAtNativeFault = readLeases();
+              void workers[0]!.terminate();
+            });
+            return {
+              filename: `const {workerData}=require('node:worker_threads');
                const {DatabaseSync}=require('node:sqlite');
                const prepare=DatabaseSync.prototype.prepare, exec=DatabaseSync.prototype.exec;
                let leaseDatabase;
@@ -103,35 +116,38 @@ it.each([
                  return result;
                };
                void import(${JSON.stringify(String(filename))});`,
-              {
+              options: {
                 ...workerOptions,
-                workerData: { ...input, proofPort: channel.port2 },
+                workerData: { proofPort: channel.port2 },
                 transferList: [channel.port2],
                 eval: true,
               },
-            );
-            // Pause on either side of the real canonical INSERT/COMMIT, before any plan reply.
-            channel.port1.once("message", () => {
-              leasesAtNativeFault = readLeases();
-              void worker.terminate();
-            });
-          } else if (input.mode === "disk" && fault === "planner-ack") {
+            };
+          }
+          if (planner && fault === "planner-ack") {
             // Native exit after the canonical DELETE commits, immediately before its ACK.
-            worker = new Worker(
-              `const {parentPort}=require('node:worker_threads');
-               const post=parentPort.postMessage.bind(parentPort);
-               parentPort.postMessage=(message,...args)=>{
+            return {
+              filename: `const {MessagePort}=require('node:worker_threads');
+               const post=MessagePort.prototype.postMessage;
+               MessagePort.prototype.postMessage=function(message,...args){
                  if(message.type==='lease-released') process.exit(0);
-                 post(message,...args);
+                 return post.call(this,message,...args);
                };
                void import(${JSON.stringify(String(filename))});`,
-              { ...workerOptions, eval: true },
-            );
-          } else {
-            worker = new Worker(filename, workerOptions);
+              options: { ...workerOptions, eval: true },
+            };
           }
-          workers.push(worker);
-          worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
+          return { filename, options: workerOptions };
+        };
+        observer.onTask = ({ input, worker, observeMessage }) => {
+          modes.push(input.mode);
+          if (!workers.includes(worker)) {
+            workers.push(worker);
+          }
+          if (input.mode === "disk") {
+            leaseId = input.leaseId;
+          }
+          observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
             if (input.mode !== "disk" || message.type !== "plan-start") {
               return;
             }
@@ -146,9 +162,8 @@ it.each([
               triggerInstalled = true;
             }
           });
-          return worker;
         };
-        const result = await reconcileSessionTranscriptIndexes({ ...options, createWorker }).then(
+        const result = await reconcileSessionTranscriptIndexes(options).then(
           (value) => ({ status: "fulfilled" as const, value }),
           (error: unknown) => ({ status: "rejected" as const, error }),
         );
@@ -156,7 +171,16 @@ it.each([
         if (result.status !== "rejected") {
           throw new Error("native failure was reported as success");
         }
-        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+        if (fault === "release-delete") {
+          expect(workers[0]?.threadId).toBeGreaterThan(0);
+        } else {
+          expect(workers[0]?.threadId).toBe(-1);
+          if (fault === "release-exit" || fault === "release-error") {
+            expect(workers[1]?.threadId).toBe(-1);
+          } else {
+            expect(workers[1]?.threadId).toBeGreaterThan(0);
+          }
+        }
         expect(modes).toEqual(fault === "release-delete" ? ["disk"] : ["disk", "release"]);
         if (fault === "claim-before") {
           expect(leasesAtNativeFault).toEqual(baseline);

@@ -30,7 +30,10 @@ const gatewayRpcMock = vi.hoisted(() => {
     }
   }
   const connectImmediately = async (client: GatewayClient) => {
-    (client.options.onHelloOk as () => void)();
+    (client.options.onHelloOk as (hello: unknown) => void)({
+      protocol: 3,
+      server: { version: "fixture-version" },
+    });
     return { ready: true, aborted: false };
   };
   const startGatewayClientWhenEventLoopReady = vi.fn(connectImmediately);
@@ -61,7 +64,7 @@ function gatewayClientCallback(name: "onClose" | "onHelloOk") {
   if (typeof callback !== "function") {
     throw new Error(`expected Gateway client ${name} callback`);
   }
-  return callback as () => void;
+  return () => callback({ protocol: 3, server: { version: "fixture-version" } });
 }
 
 function pauseGatewayReconnect(info: GatewayReconnectPausedInfo) {
@@ -110,6 +113,25 @@ describe("startQaGatewayRpcClient", () => {
     const requestOptions = gatewayRpcMock.request.mock.calls[0]?.[2] as { timeoutMs: number };
     expect(requestOptions.timeoutMs).toBeGreaterThanOrEqual(44_900);
     expect(requestOptions.timeoutMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it("retains only observed hello identity and clears it across disconnect and stop", async () => {
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "",
+    });
+    expect(client.evidenceIdentity).toEqual({ protocol: 3, version: "fixture-version" });
+    const identity = client.evidenceIdentity!;
+    identity.version = "caller-mutation";
+    expect(client.evidenceIdentity?.version).toBe("fixture-version");
+    gatewayClientCallback("onClose")();
+    expect(client.evidenceIdentity).toBeNull();
+    const hello = gatewayRpcMock.clients[0]!.options.onHelloOk as (hello: unknown) => void;
+    hello({ protocol: 4, server: { version: "replacement" }, auth: { token: "never-retain" } });
+    expect(client.evidenceIdentity).toEqual({ protocol: 4, version: "replacement" });
+    await client.stop();
+    expect(client.evidenceIdentity).toBeNull();
   });
 
   it.each([{ scopes: ["operator.read", "operator.write"] }, { scopes: [] }])(
@@ -273,6 +295,7 @@ describe("startQaGatewayRpcClient", () => {
       detailCode: "AUTH_FAILED",
       reason: "authentication failed",
     });
+    expect(client.evidenceIdentity).toBeNull();
     gatewayClientCallback("onClose")();
 
     await expect(client.request("status")).rejects.toThrow(

@@ -53,6 +53,8 @@
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
       "@openclaw/llm-core/diagnostics": ["./packages/llm-core/src/utils/diagnostics.ts"],
       "@openclaw/llm-core/event-stream": ["./packages/llm-core/src/utils/event-stream.ts"],
+      "@openclaw/llm-core/model-contracts/anthropic": ["./packages/llm-core/src/model-contracts/anthropic.ts"],
+      "@openclaw/llm-core/types": ["./packages/llm-core/src/types.ts"],
       "@openclaw/llm-core/validation": ["./packages/llm-core/src/validation.ts"],
       "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
       "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
@@ -107,6 +109,7 @@
       "@openclaw/gateway-protocol/startup-unavailable": [
         "./packages/gateway-protocol/src/startup-unavailable.ts"
       ],
+      "@openclaw/gateway-protocol/system-agent-context": ["./packages/gateway-protocol/src/system-agent-context.ts"],
       "@openclaw/gateway-protocol/version": ["./packages/gateway-protocol/src/version.ts"],
       "@openclaw/gateway-protocol/*": ["./packages/gateway-protocol/src/*"],
       "@openclaw/media-generation-core": ["./packages/media-generation-core/src/index.ts"],
@@ -180,6 +183,7 @@
         "./packages/normalization-core/src/error-coercion.ts"
       ],
       "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
+      "@openclaw/normalization-core/grapheme": ["./packages/normalization-core/src/grapheme.ts"],
       "@openclaw/normalization-core/json-coercion": [
         "./packages/normalization-core/src/json-coercion.ts"
       ],
@@ -224,6 +228,9 @@
       ],
       "@openclaw/normalization-core/utf16-slice": [
         "./packages/normalization-core/src/utf16-slice.ts"
+      ],
+      "@openclaw/normalization-core/home-dir": [
+        "./packages/normalization-core/src/home-dir.ts"
       ],
       "@openclaw/normalization-core/*": ["./packages/normalization-core/src/*"],
       "@openclaw/retry": ["./packages/retry/src/index.ts"],

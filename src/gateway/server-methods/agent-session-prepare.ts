@@ -11,7 +11,7 @@ import {
   type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
-import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { hasSessionTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -218,15 +218,13 @@ export function prepareAgentSession(params: {
       return false;
     }
     try {
-      return (
-        readTranscriptStatsSync({
-          agentId: canonicalSessionAgentId,
-          sessionId: candidateEntry.sessionId,
-          sessionKey: canonicalKey,
-          storePath,
-          sessionEntry: candidateEntry,
-        }).eventCount === 0
-      );
+      return !hasSessionTranscriptEventsSync({
+        agentId: canonicalSessionAgentId,
+        sessionId: candidateEntry.sessionId,
+        sessionKey: canonicalKey,
+        storePath,
+        sessionEntry: candidateEntry,
+      });
     } catch {
       return true;
     }

@@ -22,6 +22,7 @@ type ConfiguredModelEntry = {
   tags: Set<string>;
   aliases: string[];
   aliasDisabled: boolean;
+  pickerRuntimes?: string[];
 };
 
 export function resolveConfiguredModelEntries(
@@ -73,15 +74,17 @@ export function resolveConfiguredModelEntries(
       existing.tags.add(tag);
       existing.aliases = [...new Set(aliases)];
       existing.aliasDisabled = aliasDisabled;
-      return;
+      return existing;
     }
-    entriesByKey.set(key, {
+    const entry: ConfiguredModelEntry = {
       key,
       ref: canonicalRef,
       tags: new Set([tag]),
       aliases: [...new Set(aliases)],
       aliasDisabled,
-    });
+    };
+    entriesByKey.set(key, entry);
+    return entry;
   };
 
   const addRaw = (raw: string, tag: string) => {
@@ -101,9 +104,7 @@ export function resolveConfiguredModelEntries(
       defaultProvider: inferredProvider ?? defaultProvider,
       aliasIndex,
     });
-    if (resolved) {
-      addEntry(resolved.ref, tag);
-    }
+    return resolved ? addEntry(resolved.ref, tag) : undefined;
   };
 
   addEntry(resolvedDefault, "default");
@@ -125,16 +126,19 @@ export function resolveConfiguredModelEntries(
   const agentModels = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.models
     : undefined;
-  const configuredRefs = new Set<string>();
+  const configuredRefs = new Map<string, string[] | undefined>();
   for (const models of [params.cfg.agents?.defaults?.models, agentModels]) {
-    for (const raw of Object.keys(models ?? {})) {
+    for (const [raw, settings] of Object.entries(models ?? {})) {
       if (!raw.trim().endsWith("/*")) {
-        configuredRefs.add(raw);
+        configuredRefs.set(raw, settings.pickerRuntimes ?? configuredRefs.get(raw));
       }
     }
   }
-  for (const raw of configuredRefs) {
-    addRaw(raw, "configured");
+  for (const [raw, pickerRuntimes] of configuredRefs) {
+    const entry = addRaw(raw, "configured");
+    if (entry && pickerRuntimes !== undefined) {
+      entry.pickerRuntimes = [...new Set(pickerRuntimes)];
+    }
   }
 
   return {

@@ -1,4 +1,4 @@
-/** Owns side-effect-sensitive retry and silent-reply recovery policy. */
+import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
@@ -18,7 +18,7 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
-  hasOnlySilentAssistantReply,
+  hasExplicitSilentAssistantReply,
   hasPositiveOutputTokenUsage,
   isOllamaIncompleteTurnProvider,
   isReasoningOnlyAssistantTurn,
@@ -72,11 +72,17 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
 
   const assistant = params.assistant;
-  if (!assistant || assistant.stopReason !== "error" || isTerminalAssistantError(assistant)) {
+  if (
+    !assistant ||
+    assistant.stopReason !== "error" ||
+    isTerminalAssistantError(assistant) ||
+    // Output-limit continuation has already consulted the shared recovery budget.
+    isResponsesOutputLimitToolCallError(assistant)
+  ) {
     return false;
   }
 
-  const content = (assistant as { content?: unknown }).content;
+  const { content } = assistant;
   if (!Array.isArray(content)) {
     return false;
   }
@@ -108,6 +114,8 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    params.attempt.itemLifecycle.activeCount > 0 ||
+    params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount ||
     hasAsyncActivity(params.attempt.toolMetas) ||
     (params.tolerateSideEffects !== true && params.attempt.replayMetadata.hadPotentialSideEffects),
   );
@@ -128,14 +136,11 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   // guard, or it becomes a false missing-summary warning (or a repeated tool).
   // Actual failures, aborts and pending work still pass through the guards below.
   const terminalReplyOptional = params.terminalReplyExpectation === "optional";
-  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   const explicitSilentReply =
-    params.payloadCount === 0 &&
-    assistant?.stopReason !== "error" &&
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts);
+    params.payloadCount === 0 && hasExplicitSilentAssistantReply(params.attempt);
   const tolerateSideEffects = terminalReplyOptional || explicitSilentReply;
   if (
-    !params.allowEmptyAssistantReplyAsSilent ||
+    (!params.allowEmptyAssistantReplyAsSilent && !explicitSilentReply) ||
     shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects })
   ) {
     return false;
@@ -332,7 +337,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
 }): string | null {
   const { attempt } = params;
   const {
-    assistant,
+    assistant: toolBatchAssistant,
     allToolsProvenSettled,
     failedToolNames,
     hasUnsettledToolError,
@@ -357,12 +362,14 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   );
   if (
     params.payloadCount !== 0 ||
-    (!params.allowEmptyStopContinuation && hasOnlySilentAssistantReply(attempt.assistantTexts)) ||
+    (!params.allowEmptyStopContinuation && hasExplicitSilentAssistantReply(attempt)) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
     (terminal.kind === "failed" && !attempt.settledTurnFinalizationContext) ||
-    (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
+    (toolBatchAssistant?.stopReason === "toolUse"
+      ? !allToolsProvenSettled
+      : !emptyStopAfterSettledTools) ||
     intentionalTermination ||
     hasUnsettledToolError ||
     hasAsyncActivity(attempt.toolMetas) ||

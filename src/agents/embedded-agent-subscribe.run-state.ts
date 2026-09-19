@@ -13,6 +13,7 @@ export function createEmbeddedAgentSubscribeState(
   const initialPendingToolMedia = collectAgentInternalEventMedia(params.internalEvents);
   return {
     assistantTexts: [],
+    answerSegments: [],
     toolMetas: [],
     acceptedSessionSpawns: [],
     toolMetaById: new Map(),

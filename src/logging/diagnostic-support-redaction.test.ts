@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  redactPublicSupportDiagnosticLine,
   redactSupportString,
   redactTextForSupport,
   sanitizeSupportConfigValue,
@@ -42,6 +43,61 @@ function fakeRepeatedToken(chars: readonly string[], length = 40): string {
 
 describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
+
+  it.each([
+    "EACCES",
+    "EPERM",
+    "ENOTEMPTY",
+    "EEXIST",
+    "ETARGET",
+    "E404",
+    "ENOTFOUND",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EOTP",
+    "E401",
+    "E403",
+    "ENOSPC",
+    "EINTEGRITY",
+  ])("keeps the npm error code %s without publishing its log", (code) => {
+    expect(
+      redactPublicSupportDiagnosticLine(
+        `npm warn private-package\nnpm ERR! code ${code}\nnpm ERR! log /private/example/npm.log at private-host.example`,
+        { env: {}, stateDir: tempDir },
+      ),
+    ).toBe(code);
+  });
+
+  it("keeps a closed cause from later npm stderr lines", () => {
+    expect(
+      redactPublicSupportDiagnosticLine(
+        "npm ERR! code EACCES\nnpm ERR! EACCES: permission denied, mkdir '/private/example/cache'\nnpm ERR! private-host.example",
+        { env: {}, stateDir: tempDir },
+      ),
+    ).toBe("EACCES; Permission denied");
+  });
+
+  it.each([
+    "ERR_PNPM_PRIVATE_CUSTOMER",
+    "ERR_OSSL_PRIVATE_CUSTOMER",
+    "EPRIVATE_CUSTOMER",
+    "EOTP_PRIVATE_CUSTOMER",
+  ])("does not allow arbitrary npm error identifiers (%s)", (code) => {
+    expect(
+      redactPublicSupportDiagnosticLine(`npm ERR! code ${code}`, { env: {}, stateDir: tempDir }),
+    ).toBe("[redacted-diagnostic]");
+  });
+
+  it.each(["", " private-customer-text"])(
+    "recognizes only the fixed npm layout refusal (%s)",
+    (suffix) => {
+      const message =
+        "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
+      expect(
+        redactPublicSupportDiagnosticLine(message + suffix, { env: {}, stateDir: tempDir }),
+      ).toBe(suffix ? "[redacted-diagnostic]" : message);
+    },
+  );
 
   it("redacts numeric private fields in support snapshots and config", () => {
     const redaction = {

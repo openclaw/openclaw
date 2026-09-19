@@ -434,12 +434,13 @@ export function registerBrowserAgentActRoutes(
                   );
                   clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
                   return await jsonOk();
+                case "insertText":
                 case "batch":
                   return jsonActError(
                     res,
                     501,
                     ACT_ERROR_CODES.unsupportedForExistingSession,
-                    EXISTING_SESSION_LIMITS.act.batch,
+                    EXISTING_SESSION_LIMITS.act[action.kind],
                   );
               }
             }

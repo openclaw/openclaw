@@ -139,15 +139,15 @@ function requireTrustedXaiOAuthEndpoint(endpoint: string, label: string): string
   return endpoint;
 }
 
-async function readResponseBody({
-  response,
-  release,
-}: Awaited<ReturnType<typeof fetchXaiOAuth>>): Promise<XaiOAuthResponseBody> {
+async function readResponseBody(
+  { response, release }: Awaited<ReturnType<typeof fetchXaiOAuth>>,
+  options: { fatalUtf8?: boolean } = {},
+): Promise<XaiOAuthResponseBody> {
   try {
     const buffer = await readResponseWithLimit(response, XAI_OAUTH_RESPONSE_MAX_BYTES, {
       onOverflow: ({ maxBytes }) => new Error(`xAI OAuth response exceeds ${maxBytes} bytes`),
     });
-    const text = new TextDecoder().decode(buffer);
+    const text = new TextDecoder("utf-8", { fatal: options.fatalUtf8 }).decode(buffer);
     let json: unknown;
     try {
       json = JSON.parse(text);
@@ -453,7 +453,7 @@ async function pollXaiDeviceCodeToken(
     const { response } = result;
     let body: unknown;
     try {
-      body = (await readResponseBody(result)).json;
+      body = (await readResponseBody(result, { fatalUtf8: true })).json;
     } catch {
       body = null;
     }
@@ -581,7 +581,7 @@ async function noteXaiDeviceCode(
       title: "xAI OAuth",
       code: deviceCode.userCode,
       expiresInMinutes,
-      message: `Open ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri} and enter this one-time code.`,
+      message: "Enter this one-time code on the sign-in page.",
     });
     return;
   }

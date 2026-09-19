@@ -28,18 +28,29 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const maxSize = resolveNonNegativeIntegerOption(options.maxSize, 0);
   const cache = new Map<string, { ownerToken?: object; recordedAt: number }>();
+  // Removals may leave an earlier bound, which only causes an extra expiry scan.
+  let oldestRecordedAt = Number.POSITIVE_INFINITY;
+  let newestRecordedAt = Number.NEGATIVE_INFINITY;
+  let timestampsOrdered = true;
 
   const prune = (now: number) => {
     const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
-    if (cutoff !== undefined) {
+    if (cutoff !== undefined && cutoff >= oldestRecordedAt) {
+      oldestRecordedAt = Number.POSITIVE_INFINITY;
       for (const [entryKey, entry] of cache) {
         if (entry.recordedAt <= cutoff) {
           cache.delete(entryKey);
+        } else if (entry.recordedAt < oldestRecordedAt) {
+          oldestRecordedAt = entry.recordedAt;
+          if (timestampsOrdered) {
+            break;
+          }
         }
       }
     }
     if (maxSize <= 0) {
       cache.clear();
+      oldestRecordedAt = Number.POSITIVE_INFINITY;
       return;
     }
     pruneMapToMaxSize(cache, maxSize);
@@ -69,6 +80,16 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
         return false;
       }
       const checkedAt = now ?? Date.now();
+      if (ttlMs > 0) {
+        if (checkedAt < oldestRecordedAt) {
+          oldestRecordedAt = checkedAt;
+        }
+        if (timestampsOrdered) {
+          // Touches move entries to the end; backward or NaN clocks need a full scan.
+          timestampsOrdered = checkedAt >= newestRecordedAt;
+          newestRecordedAt = checkedAt;
+        }
+      }
       if (hasUnexpired(key, checkedAt, true)) {
         return true;
       }
@@ -93,6 +114,9 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     },
     clear: () => {
       cache.clear();
+      oldestRecordedAt = Number.POSITIVE_INFINITY;
+      newestRecordedAt = Number.NEGATIVE_INFINITY;
+      timestampsOrdered = true;
     },
     size: () => cache.size,
   };

@@ -1,5 +1,6 @@
 // Focused public test contracts for native agent-runtime adapters.
 
+export { setHostToolFactoryForTest } from "./test-helpers/agents/host-tool-factory.js";
 export {
   AUTH_PROFILE_RUNTIME_CONTRACT,
   createAuthAliasManifestRegistry,

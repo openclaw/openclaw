@@ -26,8 +26,6 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   normalizeExecApprovalUnavailableDecisions,
   resolveExecApprovalRequestAllowedDecisions,
-  type ExecApprovalRequest,
-  type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
 import {
   buildSystemRunApprovalBinding,
@@ -43,13 +41,10 @@ import {
   revokeCronStandingGrant,
 } from "../operator-approval-standing-grants.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
-import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   handleApprovalWaitDecision,
-  handlePendingApprovalRequest,
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
-  buildRequestedApprovalEvent,
   handleApprovalResolve,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
@@ -57,7 +52,8 @@ import {
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { handlePendingExecApprovalRequest } from "./exec-approval-request-delivery.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
@@ -65,16 +61,9 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
 } as const;
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
-type ExecApprovalIosPushDelivery = {
-  handleRequested?: (
-    request: ExecApprovalRequest,
-    opts?: {
-      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-    },
-  ) => Promise<boolean>;
-  handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
-  handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
-};
+type ExecApprovalIosPushDelivery = NonNullable<
+  GatewayRequestContext["execApprovalIosPushDelivery"]
+>;
 
 function normalizeCommandSpans(
   spans: { startIndex: number; endIndex: number }[] | undefined,
@@ -452,45 +441,21 @@ export function createExecApprovalHandlers(
       if (!decisionPromise) {
         return;
       }
-      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record, "exec");
-      const forwardRequest = opts?.forwarder?.handleRequested.bind(opts.forwarder);
-      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
-      await handlePendingApprovalRequest({
+      await handlePendingExecApprovalRequest({
         manager,
         record,
         respond,
         context,
         clientConnId: client?.connId,
-        requestEventName: "exec.approval.requested",
-        requestEvent,
         twoPhase,
-        approvalKind: "exec",
         requireDeliveryRoute: p.requireDeliveryRoute,
         suppressDelivery: p.suppressDelivery,
         // The gateway-derived cron fact wins even when an older in-process
         // caller omits the flag: cron cards belong on approval surfaces only.
         deliverToApprovalClientsOnly:
           p.deliverToApprovalClientsOnly === true || cronExecutionSource !== null,
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context,
-            record,
-            forward: forwardRequest
-              ? [() => forwardRequest(requestEvent), "exec approvals: forward request failed"]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "exec approvals: iOS push request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "exec approvals: iOS push expire failed",
+        forwardRequest: opts?.forwarder?.handleRequested.bind(opts.forwarder),
+        getIosPushDelivery: () => opts?.iosPushDelivery,
       });
     },
     "exec.approval.waitDecision": async ({ params, respond, client, context }) => {

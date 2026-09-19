@@ -22,6 +22,7 @@ import {
   type LegacyCronRepairResult,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
+import { collectCronNativeToolAdvisories } from "./native-tool-advisory.js";
 import {
   formatLegacyIssuePreview,
   formatIncompleteInheritedAuthorityAdvisory,
@@ -251,6 +252,17 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
+  for (const message of collectCronNativeToolAdvisories({ cfg: params.cfg, jobs: rawJobs })) {
+    findings.push(
+      legacyCronStoreFinding({
+        message,
+        path: sqliteStorePath,
+        requirement: "cron-native-tool-cap-review",
+        fixHint:
+          "Review the job's tools from an authorized session; Doctor will not add native tools.",
+      }),
+    );
+  }
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
@@ -474,6 +486,9 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
   noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
+  for (const message of collectCronNativeToolAdvisories({ cfg: params.cfg, jobs: rawJobs })) {
+    note(message, "Cron");
+  }
 
   const inFlightCount = countInFlightCronJobs(rawJobs);
   if (inFlightCount > 0) {

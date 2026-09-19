@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isReportableUpdateRun } from "../shared/update-outcome.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
@@ -35,6 +36,66 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 afterEach(() => vi.restoreAllMocks());
 
 describe("update run report", () => {
+  it.each([
+    ["external-supervisor-update-required", "Use your server or deployment's update workflow"],
+    ["container-image-install", "Pull or build the target Docker/container image"],
+    ["unmanaged-package-install", "Reinstall using the original method"],
+    ["package-update-requires-cli", "through this install's npm, pnpm, or Bun global launcher"],
+  ])("explains %s without treating it as a failed install", (reason, nextAction) => {
+    const record = run({
+      status: "skipped",
+      reason,
+      origin: { doctorHint: "Run openclaw doctor --non-interactive" },
+      after: {},
+      steps: [],
+    });
+
+    const report = renderUpdateRunReport(record);
+    expect(report.markdown).toContain(nextAction);
+    expect(report.markdown).toContain("No package changes or Gateway restart were attempted");
+    expect(report.markdown).not.toContain("openclaw triage");
+    expect(report.markdown).not.toContain("openclaw doctor");
+    expect(isReportableUpdateRun(record)).toBe(false);
+  });
+
+  it.each(["abandoned", "legacy-driver-expired"])(
+    "shows acknowledged %s recovery without discarding historical failure facts",
+    (reason) => {
+      const record = run({
+        status: "failed",
+        reason,
+        origin: { doctorHint: "Run openclaw doctor --fix", nextAction: "Run openclaw triage" },
+        steps: [
+          { step: "reconcile:abandoned", status: "failed", detail: "inactive-driver-dead" },
+          { step: "reconcile:acknowledged", status: "completed", endedAtMs: 301 },
+        ],
+      });
+      const before = structuredClone(record);
+      const report = renderUpdateRunReport(record);
+
+      expect(report.headline).toBe("ℹ️ OpenClaw abandoned update reconciled.");
+      expect(report.lines).toContain("Failed: reconcile:abandoned — inactive-driver-dead");
+      expect(report.markdown).not.toContain("Run openclaw");
+      expect(report.markdown).not.toContain("to retry");
+      expect(record).toEqual(before);
+    },
+  );
+
+  it.each(["in_progress", "failed"] as const)(
+    "does not report an abandoned update as reconciled after %s acknowledgement",
+    (status) => {
+      const report = renderUpdateRunReport(
+        run({
+          status: "failed",
+          reason: "abandoned",
+          steps: [{ step: "reconcile:acknowledged", status }],
+        }),
+      );
+      expect(report.headline).toBe("⚠️ OpenClaw update failed: abandoned.");
+      expect(report.markdown).toContain("Run openclaw triage");
+    },
+  );
+
   it.each(["private-customer-build", "2026.9.4-private-customer"])(
     "redacts the private current version %s in public reports",
     async (version) => {
@@ -344,6 +405,36 @@ describe("update run report", () => {
     expect(report.lines.filter((line) => line.startsWith("Failed:"))).toEqual([
       "Failed: build — timeout; last build diagnostic; last error diagnostic",
     ]);
+  });
+
+  it.each([
+    "Update refused: agent database /state/agents/main/agent.sqlite has schema 20; target supports 19; writer build 2026.9.4.",
+    "Update refused: could not inspect state database /state/state.sqlite: ENOSPC: no space left on device; retry once the gateway releases it.",
+  ])("keeps the schema preflight cause instead of its generic footer: %s", (cause) => {
+    const report = renderUpdateRunReport(
+      updateRunReportInputFromResult({
+        status: "error",
+        reason: "database-schema-preflight",
+        mode: "npm",
+        durationMs: 1,
+        steps: [
+          {
+            name: "database-schema-preflight",
+            command: "openclaw update",
+            cwd: "/tmp",
+            durationMs: 1,
+            exitCode: 1,
+            stderrTail: [
+              cause,
+              "https://docs.openclaw.ai/reference/database-schemas",
+              "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
+            ].join("\n"),
+          },
+        ],
+      }),
+    );
+    expect(report.markdown).toContain(cause);
+    expect(report.markdown).not.toContain("Installing manually via npm");
   });
 
   it("reports pending work, verification, and repair facts without inferring success", () => {

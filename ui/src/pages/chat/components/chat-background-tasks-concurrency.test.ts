@@ -91,6 +91,36 @@ afterEach(() => {
 });
 
 describe("background tasks concurrent snapshots", () => {
+  it("keeps one pending entry for repeated task updates before initial admission", async () => {
+    let admitted = false;
+    const request = vi.fn().mockResolvedValue({ tasks: [] });
+    const host: BackgroundTasksHost = {
+      sessionKey: "agent:main:current",
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      hello: null,
+      chatSecondaryReadsReady: () => admitted,
+    };
+    createBackgroundTasksProps(host);
+    for (let update = 1; update <= 10_000; update += 1) {
+      handleBackgroundTasksEvent(host, {
+        action: "upserted",
+        task: makeTask({ id: "frequent-task", updatedAt: update, toolUseCount: update }),
+      });
+    }
+    expect(request).not.toHaveBeenCalled();
+    expect(Array.from(host.backgroundTasksState?.pendingTaskEvents?.events ?? []).length).toBe(1);
+
+    admitted = true;
+    createBackgroundTasksProps(host);
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).tasks).toEqual([
+      makeTask({ id: "frequent-task", updatedAt: 10_000, toolUseCount: 10_000 }),
+    ]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(host.backgroundTasksState?.pendingTaskEvents).toBeNull();
+  });
+
   it("does not retry a transient snapshot after the pane switches sessions", async () => {
     vi.useFakeTimers();
     try {

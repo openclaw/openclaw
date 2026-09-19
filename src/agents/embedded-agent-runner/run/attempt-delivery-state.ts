@@ -49,8 +49,6 @@ export function copyAttemptDeliveryState(
     hasAsyncActivity(attempt.toolMetas)
       ? { asyncWorkStarted: true as const }
       : {}),
-    requesterContinuationSettled:
-      previous?.requesterContinuationSettled || attempt.requesterContinuationSettled,
   };
 }
 

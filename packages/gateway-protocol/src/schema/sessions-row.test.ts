@@ -9,7 +9,10 @@ describe("SessionRowSchema", () => {
       key: "agent:main:main",
       kind: "global",
       lastRunId: "run-settled",
+      snapshotAt: 200,
       activeLeafEntryId: "leaf-rendered",
+      parentSessionKey: "agent:main:dashboard:parent",
+      parentSessionId: "sess-parent",
       createdActor: {
         type: "human",
         id: "profile-ada",
@@ -42,7 +45,10 @@ describe("SessionRowSchema", () => {
     expect(SessionRowSchema.properties.activeModel).toBeDefined();
     expect(SessionRowSchema.properties.activeModelProvider).toBeDefined();
     expect(SessionRowSchema.properties.lastRunId).toBeDefined();
+    expect(SessionRowSchema.properties.parentSessionId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
+    expect(Value.Check(SessionRowSchema, { key: "agent:main:main", kind: "global" })).toBe(true);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, parentSessionId: 42 })).toBe(false);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
     expect(
       Value.Check(SessionRowSchema, {
@@ -70,7 +76,10 @@ describe("SessionRowSchema", () => {
     ).toBe(false);
     expect(roundTripped).toMatchObject({
       activeLeafEntryId: "leaf-rendered",
+      snapshotAt: 200,
       lastRunId: "run-settled",
+      parentSessionKey: "agent:main:dashboard:parent",
+      parentSessionId: "sess-parent",
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },

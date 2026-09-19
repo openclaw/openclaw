@@ -2,6 +2,11 @@
 // Adapts gateway credential precedence for local/remote reachability checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  describeSecretResolutionOperatorDiagnostic,
+  describeSecretResolutionOperatorRecovery,
+  isSecretResolutionError,
+} from "../secrets/resolve-errors.js";
 import { resolveGatewayProbeSurfaceAuth } from "./auth-surface-resolution.js";
 import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
@@ -11,6 +16,7 @@ import {
   isGatewaySecretRefUnavailableError,
   resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
+import { getTrustedProxyPasswordRedactionWarning } from "./known-weak-gateway-secrets.js";
 export { resolveGatewayProbeTarget } from "./probe-target.js";
 export type { GatewayProbeTargetResolution } from "./probe-target.js";
 
@@ -121,6 +127,7 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
 ): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
+  warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
   const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
@@ -145,6 +152,7 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
             ? { token: resolved.token, password: resolved.password }
             : {},
         warning,
+        ...(resolved.warningCode ? { warningCode: resolved.warningCode } : {}),
       };
     }
     return {
@@ -177,6 +185,7 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
 ): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
+  warningCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
   const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
   if (hasExplicitProbeAuth(explicitAuth)) {
@@ -186,8 +195,30 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(
   }
 
   try {
-    return await resolveGatewayProbeAuthResolutionWithSecretInputs(params);
+    const resolution = await resolveGatewayProbeAuthResolutionWithSecretInputs(params);
+    if (params.mode === "local" && params.cfg.gateway?.auth?.mode === "trusted-proxy") {
+      const warning = getTrustedProxyPasswordRedactionWarning({
+        mode: "trusted-proxy",
+        password: resolution.auth.password,
+      });
+      if (warning) {
+        return { auth: {}, warning, warningCode: "SECRET_REF_REDACTED_VALUE" };
+      }
+    }
+    return resolution;
   } catch (error) {
+    if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
+      return {
+        auth: {},
+        warning: [
+          describeSecretResolutionOperatorDiagnostic(error),
+          describeSecretResolutionOperatorRecovery(error),
+        ]
+          .filter(Boolean)
+          .join(". "),
+        warningCode: error.code,
+      };
+    }
     return {
       auth: {},
       warning: resolveGatewayProbeWarning(error),

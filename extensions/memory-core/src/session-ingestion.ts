@@ -242,7 +242,10 @@ async function statSessionSource(source: SessionIngestionSource) {
     try {
       const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
       return stat
-        ? { mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)), size: Math.floor(stat.size) }
+        ? {
+            mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),
+            size: Math.floor(stat.size),
+          }
         : null;
     } catch {
       return undefined;
@@ -299,7 +302,7 @@ export async function scanSessionIngestionSource(params: {
     return emptyScan("unavailable", params.previous);
   }
   const fileFingerprint = {
-    mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+    mtimeMs: Math.floor(Math.max(0, entry.revisionMs ?? entry.mtimeMs)),
     size: Math.floor(Math.max(0, entry.size)),
   };
   const lines = entry.content ? entry.content.split("\n") : [];

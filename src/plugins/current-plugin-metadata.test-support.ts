@@ -73,6 +73,7 @@ export function makeEmptyPluginMetadataOwners(): PluginMetadataSnapshot["owners"
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   };
 }

@@ -1,5 +1,5 @@
 /** Regression coverage for ACP background-task summary truncation boundaries. */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,7 +8,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { findTaskByRunId } from "../../tasks/task-registry.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.test-support.js";
+import { findTaskByRunId, getTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import {
   resetTaskRegistryForTests,
@@ -20,6 +25,8 @@ import {
   appendBackgroundTaskProgressSummary,
   bindBackgroundTaskExecution,
   createBackgroundTaskRecord,
+  markBackgroundTaskRunning,
+  markBackgroundTaskTerminal,
   resolveBackgroundTaskContext,
   resolveBackgroundTaskFailureStatus,
 } from "./manager.background-task.js";
@@ -33,6 +40,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
+  resetDetachedTaskLifecycleRuntimeForTests();
 });
 
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
@@ -111,6 +119,89 @@ describe("resolveBackgroundTaskFailureStatus", () => {
 });
 
 describe("ACP background task execution binding", () => {
+  it("keeps distinct execution tasks and routes late same-instance mirrors to the original task", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const runtime = getDetachedTaskLifecycleRuntime();
+      const start = vi.fn(runtime.startTaskRunByRunId);
+      const fail = vi.fn(runtime.failTaskRunByRunId);
+      const complete = vi.fn(runtime.completeTaskRunByRunId);
+      setDetachedTaskLifecycleRuntime({
+        ...runtime,
+        startTaskRunByRunId: start,
+        failTaskRunByRunId: fail,
+        completeTaskRunByRunId: complete,
+      });
+      const context = {
+        agentId: "qa",
+        requesterAgentId: "main",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:qa:child",
+        runId: "run-reused-acp",
+        task: "Identical request text",
+      };
+      const first = createBackgroundTaskRecord(context, 100, "instance-first");
+      if (!first) {
+        throw new Error("Expected the first ACP task");
+      }
+      markBackgroundTaskTerminal(first, { status: "cancelled", endedAt: 200 });
+      const original = getTaskById(first.taskId);
+      const second = createBackgroundTaskRecord(context, 300, "instance-second");
+      if (!second) {
+        throw new Error("Expected the second ACP task");
+      }
+      expect(second.taskId).not.toBe(first.taskId);
+      expect(second.parentFlowId).not.toBe(first.parentFlowId);
+      expect(getTaskById(second.taskId)).toMatchObject({
+        status: "running",
+        task: context.task,
+        detail: { instanceId: "instance-second", generation: 2 },
+      });
+      expect(findTaskByRunId(context.runId)?.taskId).toBe(second.taskId);
+      expect(createBackgroundTaskRecord(context, 400, "instance-first")).toEqual(first);
+      expect(getTaskById(first.taskId)).toEqual(original);
+      expect(getTaskById(first.taskId)?.detail).toMatchObject({ generation: 1 });
+      markBackgroundTaskRunning(first, { progressSummary: "late predecessor output" });
+      markBackgroundTaskRunning(second, { progressSummary: "current output" });
+      markBackgroundTaskTerminal(second, { status: "succeeded", endedAt: 500 });
+      expect(getTaskById(first.taskId)).toEqual(original);
+      expect(getTaskById(second.taskId)).toMatchObject({
+        status: "succeeded",
+        progressSummary: "current output",
+      });
+      expect(listTaskRecords().filter((task) => task.runId === context.runId)).toHaveLength(2);
+      expect(start).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          taskId: second.taskId,
+          runId: context.runId,
+          runtime: "acp",
+          sessionKey: context.childSessionKey,
+        }),
+      );
+      expect(fail).toHaveBeenCalledWith(expect.objectContaining({ taskId: first.taskId }));
+      expect(complete).toHaveBeenCalledWith(expect.objectContaining({ taskId: second.taskId }));
+
+      const otherScope = createBackgroundTaskRecord(
+        {
+          ...context,
+          agentId: "other",
+          childSessionKey: "agent:other:child",
+        },
+        600,
+        "instance-other",
+      );
+      expect(otherScope).toBeDefined();
+      expect(findTaskByRunId(context.runId)?.taskId).toBe(second.taskId);
+      const otherRun = createBackgroundTaskRecord(
+        { ...context, runId: "run-later-acp" },
+        700,
+        "instance-later",
+      );
+      expect(findTaskByRunId("run-later-acp")?.taskId).toBe(otherRun?.taskId);
+      expect(findTaskByRunId(context.runId)?.taskId).toBe(second.taskId);
+      expect(getTaskById(first.taskId)).toEqual(original);
+    });
+  });
+
   it("binds the exact admitted execution only at prompt submission", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-acp-execution-binding-" },

@@ -16,7 +16,7 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 type ProviderErrorPayloadFailoverReason = Extract<
   FailoverReason,
-  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded"
+  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded" | "timeout"
 >;
 
 /**
@@ -183,6 +183,7 @@ function classifyProviderErrorPayloadReason(
     case "rate_limit":
     case "server_error":
     case "overloaded":
+    case "timeout":
       return failoverReason;
     default:
       return null;

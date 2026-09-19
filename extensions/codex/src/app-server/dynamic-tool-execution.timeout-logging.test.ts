@@ -1,11 +1,62 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleDynamicToolCallWithTimeout } from "./dynamic-tool-execution.js";
+import {
+  handleDynamicToolCallWithTimeout,
+  toCodexDynamicToolProtocolResponse,
+} from "./dynamic-tool-execution.js";
 
-describe("dynamic tool timeout logging", () => {
+describe("dynamic tool timeout diagnostics", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("preserves partial search timeout details through terminal reply generation", async () => {
+    const details = {
+      results: [{ path: "memory/first.md" }, { path: "memory/second.md" }],
+      partial: true,
+      timedOut: true,
+      timeoutMs: 30_000,
+      error: "memory_search timed out after 30s",
+    };
+    const bridgeResponse = {
+      success: false,
+      contentItems: [{ type: "inputText" as const, text: JSON.stringify(details) }],
+      transcriptDetails: details,
+    };
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        namespace: null,
+        callId: "call-partial-memory-timeout",
+        tool: "memory_search",
+        arguments: { query: "coding session categories" },
+      },
+      toolBridge: { handleToolCall: vi.fn(async () => bridgeResponse) },
+      signal: new AbortController().signal,
+      timeoutMs: 90_000,
+      observeToolTerminal: createContractToolTerminalObserver("run-partial-memory-timeout"),
+    });
+
+    expect(
+      buildContractReplyPayloads({
+        assistantText: "",
+        lastToolError: response.terminalResolution?.lastToolError,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        text: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
+      }),
+    ]);
+    expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
+      contentItems: bridgeResponse.contentItems,
+      success: false,
+    });
   });
 
   it("logs process poll timeout context separately from session idle", async () => {
@@ -35,7 +86,7 @@ describe("dynamic tool timeout logging", () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    await expect(response).resolves.toEqual({
+    expect(toCodexDynamicToolProtocolResponse(await response)).toEqual({
       success: false,
       contentItems: [
         {

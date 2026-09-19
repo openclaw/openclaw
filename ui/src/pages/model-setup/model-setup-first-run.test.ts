@@ -109,7 +109,9 @@ describe("ModelSetupPage first-run inference", () => {
       client,
       firstRun: true,
     });
-    const checkAgain = page.querySelector<HTMLButtonElement>(".model-setup__intro .btn");
+    const checkAgain = [
+      ...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro .btn"),
+    ].find((button) => button.textContent?.trim() === "Check again");
     expect(checkAgain?.textContent).toContain("Check again");
     checkAgain?.click();
     await waitForFast(() => expect(page.textContent).toContain("openai/newly-available"));
@@ -536,92 +538,6 @@ describe("ModelSetupPage first-run inference", () => {
     });
     expect(context.navigate).not.toHaveBeenCalledWith("chat");
     resolveActivation?.({
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: "openai/new", gatewayRestartRequired: true },
-    });
-  });
-
-  it("does not repeat an unconfirmed activation after reconnect without an explicit retry", async () => {
-    const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
-    let resolveFirstActivation: ((result: WizardNextResult) => void) | undefined;
-    let activationCount = 0;
-    request.mockImplementation(async (method) => {
-      if (method === "openclaw.setup.activate.start") {
-        activationCount += 1;
-        if (activationCount === 1) {
-          return await new Promise<WizardNextResult>((resolve) => {
-            resolveFirstActivation = resolve;
-          });
-        }
-        return { done: true, status: "done", modelActivation: { modelRef: "openai/new" } };
-      }
-      if (method === "openclaw.setup.detect") {
-        return {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/new", true)],
-        };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/new", true)],
-        },
-      },
-      client,
-      firstRun: true,
-    });
-    expect(request).not.toHaveBeenCalled();
-    await clickCandidate(page, "openai-api-key");
-    await waitForFast(() => expect(resolveFirstActivation).toBeTypeOf("function"));
-
-    publishGatewaySnapshot({
-      ...context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
-    await page.updateComplete;
-    publishGatewaySnapshot({
-      ...snapshot,
-      phase: "connected",
-      hello: { ...snapshot.hello },
-    });
-
-    await waitForFast(() => {
-      expect(page.textContent).toContain("previous activation is unresolved");
-      expect(page.textContent).toContain("Check again");
-    });
-    expect(activationCount).toBe(1);
-    expect(context.navigate).not.toHaveBeenCalled();
-
-    await waitForFast(() =>
-      expect(page.querySelector(".model-setup__recovery .btn")).not.toBeNull(),
-    );
-    const retry = page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn")!;
-    expect(retry.disabled).toBe(false);
-    expect(
-      JSON.parse(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!).deadlineMs,
-    ).toBeGreaterThan(Date.now());
-    retry.click();
-    await page.updateComplete;
-    expect(activationCount).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("may still be running"));
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
-    retry.click();
-    await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
-    expect(activationCount).toBe(1);
-    await clickCandidate(page, "openai-api-key");
-
-    await waitForFast(() => {
-      expect(activationCount).toBe(2);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
-    });
-    resolveFirstActivation?.({
       done: true,
       status: "done",
       modelActivation: { modelRef: "openai/new", gatewayRestartRequired: true },

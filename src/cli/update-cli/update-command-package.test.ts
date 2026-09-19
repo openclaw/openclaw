@@ -10,6 +10,7 @@ import {
 import * as processRunner from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -70,6 +71,77 @@ async function createPackageInstallFixture(
   return { root, target, launcher, installedPrefixes, expectOriginalInstallation };
 }
 
+it.each(["guidance", "staging"])(
+  "carries the owner's permission retry outcome through %s",
+  async (consumer) => {
+    await withTestDir({ prefix: "update-permission-retry-" }, async (base) => {
+      const { root, target, expectOriginalInstallation } = await createPackageInstallFixture(base);
+      const globalRoot = path.dirname(root);
+      let attempts = 0;
+      vi.mocked(processRunner.runCommandWithTimeout).mockImplementation(async (argv) => {
+        expect(argv.slice(0, 3)).toEqual(["npm", "i", "-g"]);
+        attempts++;
+        expect(argv.includes("--omit=optional")).toBe(attempts === 2);
+        return {
+          stdout: "",
+          stderr:
+            attempts === 1
+              ? "npm error code ERESOLVE\nInitial dependency resolution failed"
+              : `npm error code EACCES\nnpm error syscall rename\nnpm error path ${root}\nnpm error EACCES: permission denied, rename '${root}'`,
+          code: attempts === 1 ? 1 : 243,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+      const env = {
+        OPENCLAW_STATE_DIR: path.join(base, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+      };
+      const params = {
+        root,
+        installKind: "package" as const,
+        tag: "2.0.0",
+        timeoutMs: 1000,
+        startedAt: Date.now(),
+        progress: {},
+        installEnv: env,
+        managedServiceEnv: env,
+        installTarget: target,
+      };
+      const permissionFacts = [
+        expect.objectContaining({ code: "global-install-permission-denied" }),
+      ];
+      if (consumer === "staging") {
+        await expect(stagePackageInstallUpdate(params)).rejects.toMatchObject({
+          reason: "global-install-permission-denied",
+          message: expect.stringContaining(globalRoot),
+          failureFacts: permissionFacts,
+        });
+      } else {
+        const result = await runPackageInstallUpdate({
+          ...params,
+          validateCandidate: vi.fn(),
+          beforeActivate: vi.fn(),
+          onTransaction: vi.fn(),
+        });
+        const nextAction = resolveUpdateResultNextAction({ result, env });
+        expect(nextAction).toContain(globalRoot);
+        expect(nextAction).toContain("rerun `openclaw update`");
+        expect(nextAction).not.toContain("Initial dependency resolution failed");
+        expect(result).toMatchObject({
+          reason: "global-install-permission-denied",
+          failedStep: { name: "global update (omit optional)", failureFacts: permissionFacts },
+          recovery: { serviceRestartSafe: true, version: "1.0.0" },
+        });
+      }
+      expect(attempts).toBe(2);
+      expect(await fs.readdir(globalRoot)).toEqual(["openclaw"]);
+      await expectOriginalInstallation();
+    });
+  },
+);
+
 it.each([
   "1.0.0",
   "file:/owned/candidate.tgz",
@@ -99,7 +171,6 @@ it.each([
         timeoutMs: 1000,
         startedAt: Date.now(),
         progress: {},
-        jsonMode: true,
         installEnv: tag.startsWith("openclaw@") ? { OPENCLAW_UPDATE_PACKAGE_SPEC: tag } : {},
         installTarget: target,
         validateCandidate,
@@ -142,7 +213,6 @@ it.each(["package", "git"] as const)(
         timeoutMs: 1000,
         startedAt: Date.now(),
         progress: {},
-        jsonMode: true,
         installEnv: {},
         installTarget: target,
         validateCandidate,
@@ -190,7 +260,6 @@ it.each(
         timeoutMs: 1000,
         startedAt: Date.now(),
         progress: {},
-        jsonMode: true,
         installEnv: {},
         installTarget: target,
       };
@@ -290,7 +359,6 @@ it("runs package post-update doctor from the verified package root after a stage
         timeoutMs: 1000,
         startedAt: Date.now(),
         progress: {},
-        jsonMode: true,
         validateCandidate: async () => [],
         beforeActivate: async () => {},
         onTransaction: (retained) => {

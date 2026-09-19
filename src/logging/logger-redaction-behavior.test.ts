@@ -7,15 +7,15 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import {
   getChildLogger,
   getLogger,
   resetLogger,
   setLoggerOverride,
   toPinoLikeLogger,
-} from "../logging.js";
-import { withEnv, withEnvAsync } from "../test-utils/env.js";
-import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+} from "./logger.js";
 import { testApi as loggerTest } from "./logger.test-support.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 

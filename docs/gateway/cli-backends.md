@@ -430,6 +430,18 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config or settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+With the Gateway's MCP bridge, channel-origin CLI turns can use the `message`
+tool for permitted reads and same-conversation actions, including reactions. The
+bridge retains the admitted sender, account, and conversation; channel access and
+write permissions still apply. That authority ends with the turn or its
+cancellation, including when a warm CLI process is reused for a later turn.
+
+Automations created through the bridge inherit its final permitted tool set and
+supported native tool capabilities. When Claude's native `Bash` supplies `exec`,
+the saved automation retains its Gateway host target, including with an explicit
+`toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
+still apply; capturing the target does not grant broader execution permission.
+
 The node-only `exec` tool is offered only when policy permits it and a connected
 node advertises `system.run`. Offline paired devices and approval-only phones do
 not make remote execution available. A configured node binding must identify an

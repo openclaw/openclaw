@@ -1,6 +1,9 @@
 import path from "node:path";
 import { vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -273,7 +276,10 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     bootstrapReceipt: {
       bundleHash: BUNDLE_HASH,
       openclawVersion: "2026.7.2",
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
       installKind: "bundle",
     },
     ownerEpoch: OWNER_EPOCH,
@@ -443,11 +449,12 @@ export async function withWorkerCompactionAdoption<T>(
       admittedRunContext,
       sessionTarget: { ...sessionTarget, ...writerFence },
     };
-    const sessionPromptState = createEmbeddedRunSessionPromptState({
+    await using sessionPromptState = await createEmbeddedRunSessionPromptState({
       runParams,
       sessionAgentId: sessionTarget.agentId,
       resolvedSessionKey: sessionTarget.sessionKey,
       lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      onInterrupt: () => {},
     });
     const unexpected = async (): Promise<never> => {
       throw new Error("unexpected context-engine execution during successor acceptance");

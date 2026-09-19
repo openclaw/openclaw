@@ -77,6 +77,7 @@ describe("plugin runtime refresh admission", () => {
       makeAttemptResult({ assistantTexts: [payload.text ?? "The requested image is ready."] }),
     );
     mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
+    const onAttemptStart = vi.fn();
     try {
       const result = await runEmbeddedAgent({
         ...createOverflowRunParams(state),
@@ -85,9 +86,12 @@ describe("plugin runtime refresh admission", () => {
         provider: "fixture-provider",
         model: "fixture-model",
         sessionKey: undefined,
+        onAttemptStart,
       });
       expect(result.meta.error).toBeUndefined();
+      expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(onAttemptStart).toHaveBeenCalledTimes(2);
       const final = await buildReplyPayloads({
         payloads: result.payloads ?? [],
         messagingToolSentTexts: result.messagingToolSentTexts,

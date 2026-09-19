@@ -13,6 +13,7 @@ import fs, {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -69,8 +70,9 @@ import {
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const realDelay = delay;
@@ -180,6 +182,82 @@ function captureSyncError(action: () => void): Error {
 }
 
 describe("kitchen-sink RPC isolated state", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.for([
+    { runtime: "Node", entry: "entry.mjs", files: ["entry.mjs"], selected: "entry.mjs" },
+    {
+      runtime: "Bun",
+      entry: "entry.mjs",
+      files: ["entry.mjs", "dist/index.mjs"],
+      selected: "entry.mjs",
+    },
+    {
+      runtime: "Bun",
+      entry: "",
+      files: ["dist/index.mjs", "dist/index.js"],
+      selected: "dist/index.mjs",
+    },
+    { runtime: "Bun", entry: "", files: ["dist/index.js"], selected: "dist/index.js" },
+    { runtime: "Node", entry: "missing.mjs", files: ["dist/index.mjs"], selected: null },
+  ])("preserves $runtime entry selection for $entry with $files", async (row, context) => {
+    let executable = row.runtime === "Node" ? resolveTestNodeExecPath() : process.execPath;
+    if (row.runtime === "Bun") {
+      try {
+        executable = (await runCommand("bun", ["-p", "process.execPath"])).stdout.trim();
+      } catch (error) {
+        // Ordinary Node CI does not install Bun; dedicated Bun proof must run every row.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          context.skip("Bun is not installed; Bun runtime qualification is required separately");
+        }
+        throw error;
+      }
+    }
+    const root = tempDirs.make("openclaw-kitchen-rpc-runtime-");
+    // Do not inherit repository aliases when the temp parent is inside the checkout.
+    writeFileSync(path.join(root, "tsconfig.json"), "{}\n");
+    const receiptPath = path.join(root, "entry.json");
+    const fixture = `
+import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({
+  execPath: process.execPath, bun: process.versions.bun, argv: process.argv, pid: process.pid
+}));
+process.exit(17);
+`;
+    for (const file of row.files) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      writeFileSync(path.join(root, file), fixture);
+    }
+    const preload = new URL("../../scripts/tsx.mjs", import.meta.url).href;
+    const walker = fileURLToPath(
+      new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mts", import.meta.url),
+    );
+    await expect(
+      runCommand(executable, [...(row.runtime === "Node" ? ["--import", preload] : []), walker], {
+        cwd: root,
+        env: { ...process.env, OPENCLAW_ENTRY: row.entry, TMPDIR: root, TEMP: root, TMP: root },
+      }),
+    ).rejects.toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining(row.selected ? "failed with 17" : row.entry),
+    });
+    if (!row.selected) {
+      expect(existsSync(receiptPath)).toBe(false);
+      return;
+    }
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    expect(fs.realpathSync(receipt.execPath)).toBe(fs.realpathSync(executable));
+    expect(receipt.bun).toEqual(row.runtime === "Bun" ? expect.any(String) : undefined);
+    expect(receipt.argv.slice(1)).toEqual([
+      path.join(root, row.selected),
+      "plugins",
+      "install",
+      "--help",
+    ]);
+    expect(Number.isSafeInteger(receipt.pid) && receipt.pid > 0).toBe(true);
+    expect(isProcessAlive(receipt.pid)).toBe(false);
+  });
+
   it("prints help without creating temp state or installing the plugin", async () => {
     const result = await runCommand(process.execPath, [
       "--import",
@@ -1046,8 +1124,13 @@ setInterval(() => {}, 1000);
       });
 
     try {
-      await waitFor(() => existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      await waitFor(() => {
+        if (!existsSync(grandchildPidPath)) {
+          return false;
+        }
+        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        return Number.isInteger(grandchildPid);
+      });
       const parentPid = Number.parseInt(readText(parentPidPath), 10);
       await waitFor(() => existsSync(grandchildReadyPath));
       expect(Number.isInteger(grandchildPid)).toBe(true);

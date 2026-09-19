@@ -4,7 +4,7 @@ const SCENARIO_KEYS = new Set(["actions", "health"]);
 const HEALTH_KEYS = new Set(["intervalMs", "timeoutMs"]);
 const RECORDER_READY_KEYS = new Set(["schemaVersion", "startedAtUnixMs", "chatId"]);
 const ACTION_KEYS = {
-  send: new Set(["type", "atMs", "text"]),
+  send: new Set(["type", "atMs", "text", "forumTopicId", "photo", "replyToPrevious"]),
   click: new Set(["type", "atMs", "messageText", "buttonText", "timeoutMs"]),
   restartGateway: new Set(["type", "atMs", "graceMs"]),
   patchConfig: new Set(["type", "atMs", "patch"]),
@@ -74,7 +74,32 @@ export function parseScenario(value) {
     assertKnownKeys(action, allowed, label);
     const atMs = nonNegativeInteger(action.atMs, `${label}.atMs`, 0);
     if (action.type === "send" || action.type === "systemEvent") {
-      return { type: action.type, atMs, text: nonEmptyString(action.text, `${label}.text`) };
+      // A photo send may carry an empty caption; every other send needs text.
+      const photo =
+        action.type === "send" && action.photo !== undefined
+          ? nonEmptyString(action.photo, `${label}.photo`)
+          : undefined;
+      const text =
+        photo !== undefined && action.text === undefined
+          ? ""
+          : nonEmptyString(action.text, `${label}.text`);
+      if (action.type === "send" && action.replyToPrevious !== undefined) {
+        if (action.replyToPrevious !== true) {
+          throw new Error(`${label}.replyToPrevious must be true when present.`);
+        }
+      }
+      return {
+        type: action.type,
+        atMs,
+        text,
+        ...(action.type === "send" && action.forumTopicId !== undefined
+          ? { forumTopicId: positiveInteger(action.forumTopicId, `${label}.forumTopicId`) }
+          : {}),
+        ...(photo !== undefined ? { photo } : {}),
+        ...(action.type === "send" && action.replyToPrevious === true
+          ? { replyToPrevious: true }
+          : {}),
+      };
     }
     if (action.type === "cron") {
       if (action.bestEffort !== undefined && typeof action.bestEffort !== "boolean") {
@@ -167,8 +192,17 @@ export function parseScenario(value) {
       timeoutMs: positiveInteger(value.health.timeoutMs, "scenario.health.timeoutMs", 1_000),
     };
   }
+  const orderedActions = actions.toSorted((left, right) => left.atMs - right.atMs);
+  let hasSent = false;
+  for (const action of orderedActions) {
+    if (action.type !== "send") continue;
+    if (action.replyToPrevious && !hasSent) {
+      throw new Error("replyToPrevious needs an earlier send action.");
+    }
+    hasSent = true;
+  }
   return {
-    actions: actions.toSorted((left, right) => left.atMs - right.atMs),
+    actions: orderedActions,
     ...(health ? { health } : {}),
   };
 }

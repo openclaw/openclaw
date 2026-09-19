@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import * as fsSafe from "../infra/fs-safe.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
+import { resolveMediaAttachmentLocalRoots } from "./runner.attachments.js";
 
 const { buildRandomTempFilePathMock, readRemoteMediaBufferMock } = vi.hoisted(() => ({
   buildRandomTempFilePathMock: vi.fn(),
@@ -36,6 +38,102 @@ const PNG_1X1 = Buffer.from(
 const AMBIGUOUS_WEBM = Buffer.from("1a45dfa3874282847765626d", "hex");
 
 describe("media understanding attachment cache", () => {
+  it.each(["canonical", "directory alias"] as const)(
+    "keeps session-scoped roots authoritative for %s attachment paths",
+    async (spelling) => {
+      await withTestDir({ prefix: "openclaw-media-cache-session-scoped-" }, async (base) => {
+        const stateDir = path.join(base, "state");
+        const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "session-a");
+        const siblingDir = path.join(stateDir, "sandboxes", "session-b");
+        const sharedWorkspaceDir = path.join(stateDir, "workspace");
+        for (const dir of [sessionWorkspaceDir, siblingDir, sharedWorkspaceDir]) {
+          await fs.mkdir(dir, { recursive: true });
+        }
+        const ownFile = path.join(sessionWorkspaceDir, "own.txt");
+        const siblingFile = path.join(siblingDir, "sibling.txt");
+        const hostWorkspaceFile = path.join(sharedWorkspaceDir, "host-secret.txt");
+        await fs.writeFile(ownFile, "OWN-SANDBOX-CONTENT");
+        await fs.writeFile(siblingFile, "SIBLING-SANDBOX-CONTENT");
+        await fs.writeFile(hostWorkspaceFile, "SHARED-HOST-WORKSPACE-CONTENT");
+        let sourceStateDir = stateDir;
+        if (spelling === "directory alias") {
+          sourceStateDir = path.join(base, "state-alias");
+          await fs.symlink(
+            stateDir,
+            sourceStateDir,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        }
+        const sourcePath = (file: string) =>
+          path.join(sourceStateDir, path.relative(stateDir, file));
+
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        try {
+          const roots = resolveMediaAttachmentLocalRoots({
+            cfg: {} as never,
+            ctx: {} as never,
+            workspaceDir: sessionWorkspaceDir,
+          });
+          // Production construction (apply.ts / file-context.ts): the scoped root set is
+          // authoritative — merging sessionless defaults back in would restore the shared
+          // workspace/sandbox parents for sandboxed sessions.
+          const cache = new MediaAttachmentCache(
+            [
+              { index: 0, path: sourcePath(ownFile) },
+              { index: 1, path: sourcePath(siblingFile) },
+              { index: 2, path: sourcePath(hostWorkspaceFile) },
+            ],
+            { localPathRoots: roots, includeDefaultLocalPathRoots: false },
+          );
+
+          const own = await cache.getBuffer({
+            attachmentIndex: 0,
+            maxBytes: 1024,
+            timeoutMs: 1000,
+          });
+          expect(own.buffer.toString()).toBe("OWN-SANDBOX-CONTENT");
+          await expect(
+            cache.getBuffer({ attachmentIndex: 1, maxBytes: 1024, timeoutMs: 1000 }),
+          ).rejects.toThrow(/outside allowed roots/i);
+          await expect(
+            cache.getBuffer({ attachmentIndex: 2, maxBytes: 1024, timeoutMs: 1000 }),
+          ).rejects.toThrow(/outside allowed roots/i);
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      });
+    },
+  );
+
+  it("rejects an alias retargeted outside the granted root before opening", async () => {
+    await withTestDir({ prefix: "openclaw-media-cache-alias-retarget-" }, async (base) => {
+      const allowedRoot = path.join(base, "allowed");
+      const outsideRoot = path.join(base, "outside");
+      const alias = path.join(base, "alias");
+      for (const root of [allowedRoot, outsideRoot]) {
+        await fs.mkdir(root);
+        await fs.writeFile(path.join(root, "note.txt"), path.basename(root));
+      }
+      const aliasType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(allowedRoot, alias, aliasType);
+      const openLocalFileSafely = fsSafe.openLocalFileSafely;
+      const openSpy = vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
+        await fs.unlink(alias);
+        await fs.symlink(outsideRoot, alias, aliasType);
+        return await openLocalFileSafely(params);
+      });
+      const cache = new MediaAttachmentCache([{ index: 0, path: path.join(alias, "note.txt") }], {
+        localPathRoots: [allowedRoot],
+        includeDefaultLocalPathRoots: false,
+      });
+
+      await expect(
+        cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+      ).rejects.toMatchObject({ reason: "blocked" });
+      expect(openSpy).toHaveBeenCalledOnce();
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     buildRandomTempFilePathMock.mockReset();

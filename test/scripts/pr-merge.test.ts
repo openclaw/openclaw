@@ -189,13 +189,13 @@ set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
 PREP_HEAD_SHA="$BODY_HEAD"
 LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
-git() {
+pr_git() {
   if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
   command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
-gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
-gh() {
+pr_gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
+pr_gh() {
   if [ "$1" = api ]; then
     [ "$BODY_AUTHOR_READ_ERROR" = false ] || return 1
     printf '%s\\n' "$BODY_COMMITS" | jq -ce --arg sha "\${2##*/}" '.[$sha]'
@@ -459,6 +459,7 @@ describePosix("native squash attribution", () => {
   it.each([
     { name: "Codex", email: "codex@openai.com" },
     { name: "roboclaw-bot", email: "309084314+roboclaw-bot@users.noreply.github.com" },
+    { name: "RoboClaw", email: "services+roboclaw@openclaw.org" },
     { name: "clawsweeper", email: "274271284+clawsweeper[bot]@users.noreply.github.com" },
   ])(
     "omits machine author preview credit from a reviewed body while retaining human authors: %j",
@@ -601,6 +602,9 @@ describePosix("native squash attribution", () => {
     "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
     "co-authored-by: RoboClaw <309084314+ROBOCLAW-BOT@USERS.NOREPLY.GITHUB.COM>",
     "Co-Authored-By: RoboClaw\n <309084314+roboclaw-bot@users.noreply.github.com>",
+    "Co-authored-by: RoboClaw <services+roboclaw@openclaw.org>",
+    "co-authored-by: RoboClaw <SERVICES+ROBOCLAW@OPENCLAW.ORG>",
+    "Co-Authored-By: RoboClaw\n <services+roboclaw@openclaw.org>",
     "Co-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
     "co-authored-by: ClawSweeper <274271284+CLAWSWEEPER[BOT]@USERS.NOREPLY.GITHUB.COM>",
     "Co-Authored-By: clawsweeper\n <274271284+clawsweeper[bot]@users.noreply.github.com>",
@@ -630,6 +634,8 @@ describePosix("native squash attribution", () => {
       "Co-authored-by: Human <person@trae.ai>",
       "Co-authored-by: Other <solo-agent@trae.ai.example.org>",
       "Co-authored-by: roboclaw-bot <human@example.com>",
+      "Co-authored-by: RoboClaw <person@openclaw.org>",
+      "Co-authored-by: Other <services+roboclaw@openclaw.org.example.org>",
       "Co-authored-by: Human <781889+Takhoffman@users.noreply.github.com>",
       "Co-authored-by: Other <309084314+roboclaw-bot@users.noreply.github.com.example.org>",
       "Co-authored-by: Other <1309084314+roboclaw-bot@users.noreply.github.com>",
@@ -667,6 +673,7 @@ describePosix("native squash attribution", () => {
     "Reviewed correction.\n\nCo-authored-by: Codex <codex@openai.com>\n",
     "Reviewed correction.\n\nCo-authored-by: Trae Solo <solo-agent@trae.ai>\n",
     "Reviewed correction.\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>\n",
+    "Reviewed correction.\n\nCo-authored-by: RoboClaw <services+roboclaw@openclaw.org>\n",
     "Reviewed correction.\n\nCo-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>\n",
   ])("rejects a reviewed body that contains machine credit: %j", (overrideBody) => {
     const machineCredit = "Co-authored-by: Claude <noreply@anthropic.com>";

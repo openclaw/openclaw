@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -131,6 +132,7 @@ suite.define(() => {
       role: "toolResult",
       toolName: "bash",
       toolCallId: "successful-tool",
+      isError: false,
       content: "ok",
       timestamp: firstStartedAt + 982_000,
       __openclaw: { id: "successful-tool-result", runId },
@@ -157,7 +159,7 @@ suite.define(() => {
     // The same canonical history must survive a full page reload, not just
     // the live terminal projection or its retained local timestamps.
     await gateway.setMethodResponse("chat.history", {
-      messages,
+      ...prepareChatHistoryFixture(messages),
       sessionId: `session:${sessionKey}`,
       sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
     });
@@ -169,7 +171,7 @@ suite.define(() => {
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
     await elapsedLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Ran a command");
+    await expect.poll(() => operationLabel.textContent()).toBe("Bash");
     expect.soft(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
@@ -177,7 +179,7 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await elapsedLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Ran a command");
+    expect(await operationLabel.textContent()).toBe("Bash");
     expect(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });

@@ -15,11 +15,9 @@ const describeCornerShape = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-// The `@supports` condition base.css gates the whole refinement on. Rewriting
-// its value to one no engine implements is how this file reproduces Firefox
-// and Safari from the shipped stylesheet instead of a hand-copied fallback.
+// Rewrite the property in both feature queries and declarations: unsupported
+// engines also ignore corner-shape outside an @supports block.
 const SUPPORTS_CONDITION = "@supports (corner-shape: superellipse(1.5))";
-const UNSUPPORTED_CONDITION = "@supports (corner-shape: openclaw-unsupported-shape)";
 
 type CornerCase = {
   /** Corner radius an engine without `corner-shape` keeps drawing. */
@@ -227,8 +225,10 @@ function readUiCss(): string {
     "ui/src/styles/components.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
+    "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
     "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer-surface.css",
     "ui/src/styles/chat/composer.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
@@ -310,7 +310,7 @@ beforeAll(async () => {
   fs.writeFileSync(superellipticalFixture, fixtureDocument(css), "utf8");
   fs.writeFileSync(
     circularFixture,
-    fixtureDocument(css.replaceAll(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION)),
+    fixtureDocument(css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:")),
     "utf8",
   );
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });

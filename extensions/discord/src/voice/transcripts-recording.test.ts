@@ -198,9 +198,10 @@ defineDiscordVoiceTests((harness) => {
       }
       const writeWav = voiceAudio.writeVoiceWavFile;
       const wavSpy = vi.spyOn(voiceAudio, "writeVoiceWavFile").mockImplementation(async (pcm) => {
+        const wav = await writeWav(pcm);
         // Admission has completed; change the observed member roles before the chunk's queue check.
-        allowed = pcm[0] !== excluded;
-        return writeWav(pcm);
+        allowed = (await fs.readFile(wav.path))[44] !== excluded;
+        return wav;
       });
       transcribeAudioFileMock.mockImplementation(async ({ filePath }) => {
         const wav = await fs.readFile(filePath);
@@ -409,11 +410,12 @@ defineDiscordVoiceTests((harness) => {
         middle === "cleanup failure"
           ? vi.spyOn(voiceAudio, "writeVoiceWavFile").mockImplementation(async (pcm) => {
               const wav = await writeWav(pcm);
+              const failsCleanup = (await fs.readFile(wav.path))[44] === 2;
               return {
                 ...wav,
                 cleanup: async () => {
                   await wav.cleanup();
-                  if (pcm[0] === 2) {
+                  if (failsCleanup) {
                     throw new Error("synthetic cleanup failure after disposal");
                   }
                 },

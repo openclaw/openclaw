@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements connection controller behavior.
 import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { info } from "openclaw/plugin-sdk/runtime-env";

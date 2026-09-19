@@ -8,13 +8,17 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 

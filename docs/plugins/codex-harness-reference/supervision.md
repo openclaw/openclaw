@@ -66,6 +66,10 @@ Sessions in these stores support the same view, continue, and archive actions,
 and the selected OpenClaw agent still owns the resulting connection; `homes`
 only adds catalog sources.
 
+Discovery caches native pages for 32 seconds separately for each agent and
+Codex home, so listing one store does not evict another store's pages. Expired
+pages remain visible during background refresh.
+
 Fresh native terminal sessions use the primary local profile, shown as
 `Local Codex`, or an eligible paired node. Additional local homes are session
 discovery and resume sources, not separate fresh-start destinations. The selected

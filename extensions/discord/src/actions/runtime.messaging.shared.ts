@@ -17,6 +17,7 @@ import {
   type DiscordGuildEntryResolved,
 } from "../monitor/allow-list.js";
 import type { DiscordReactOpts } from "../send.types.js";
+import { parseDiscordTarget } from "../targets.js";
 import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
@@ -34,6 +35,8 @@ export type DiscordMessagingActionOptions = {
     requesterAccountId?: string | null;
     currentChannelProvider?: string | null;
     currentChannelId?: string | null;
+    currentChatType?: NonNullable<ChannelMessageActionContext["toolContext"]>["currentChatType"];
+    currentMessagingTarget?: string | null;
   };
 };
 
@@ -664,6 +667,25 @@ export function createDiscordMessagingActionContext(params: {
       const target =
         readStringParam(params.input, "channelId") ??
         readStringParam(params.input, "to", { required: true });
+      if (params.action === "reactions" && !directOperator) {
+        const reactionTarget = parseDiscordTarget(target, { defaultKind: "channel" });
+        if (reactionTarget?.kind === "user" && currentReadContext?.currentChatType === "direct") {
+          const currentTarget = parseDiscordTarget(
+            currentReadContext.currentMessagingTarget ?? "",
+            { defaultKind: "channel" },
+          );
+          if (currentTarget?.kind === "user" && currentTarget.id === reactionTarget.id) {
+            const currentChannelId = discordMessagingActionRuntime.resolveDiscordChannelId(
+              currentReadContext.currentChannelId ?? "",
+            );
+            if (isCurrentReadTarget(currentChannelId)) {
+              return currentChannelId;
+            }
+          }
+        }
+        // Resolving a user through the send path can create a DM before read policy runs.
+        return discordMessagingActionRuntime.resolveDiscordChannelId(target);
+      }
       return await discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId({
         target,
         cfg: params.cfg,

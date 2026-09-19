@@ -253,11 +253,19 @@ suite.define(() => {
               },
             },
           });
-          const peer = page.locator(".chat-group--peer", {
-            hasText: "Riley joined this conversation.",
-          });
-          await expect(peer.locator(".chat-sender-name")).toHaveText("Riley");
-          await expect(peer.locator(".chat-group-footer")).toHaveCSS("opacity", "1");
+          if (profiled) {
+            const peer = page.locator(".chat-group--peer", {
+              hasText: "Riley joined this conversation.",
+            });
+            await expect(peer.locator(".chat-sender-name")).toHaveText("Riley");
+            await expect(peer.locator(".chat-group-footer")).toHaveCSS("opacity", "1");
+          } else {
+            const own = page.locator(".chat-group.user", {
+              hasText: "Keep the phone transcript readable.",
+            });
+            await expect(own).not.toHaveClass(/chat-group--peer/u);
+            await expect(own).toHaveCSS("justify-content", "end");
+          }
           if (height === 430) {
             const thread = page.locator(".chat-thread");
             await thread.focus();
@@ -720,8 +728,9 @@ suite.define(() => {
       await expect(page.locator(".agent-chat__composer-combobox textarea")).toHaveValue("");
       const status = group.locator(".chat-send-status");
       await expect(status).toHaveText("· Not sent · Retry");
-      const footerLineCenters = await group
-        .locator(".chat-sender-name, .chat-send-status")
+      await expect(group.locator(".chat-sender-name")).toHaveCount(0);
+      const footerLineCenters = await status
+        .locator("span:not([aria-hidden]), button")
         .evaluateAll((elements) =>
           elements.map((element) => {
             const rect = element.getBoundingClientRect();

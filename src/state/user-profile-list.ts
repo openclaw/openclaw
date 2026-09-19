@@ -1,21 +1,31 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  deferSqlitePostCommitPublication,
+  stageSqliteTransactionState,
+} from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { readUserProfileVersion } from "./user-profile-events.js";
+import { emitUserProfilesChanged } from "./user-profile-events.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   selectResolvedUserProfile,
-  selectResolvedUserProfileById,
+  selectResolvedUserProfileMetadataById,
   normalizeUserProfileAvatarMime,
   userProfileAvatarPresence,
   userProfilesDb,
@@ -26,7 +36,7 @@ import {
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
 
-export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
+export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {}) {
   ensureUserProfilesSchema(options);
   const database = openOpenClawStateDatabase(options);
   return runSqliteDeferredTransactionSync(
@@ -38,14 +48,13 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
         kysely
           .selectFrom("user_profiles")
           .select([
-            "id",
-            "display_name",
-            "avatar_mime",
-            "merged_into",
-            ...(hasEnsuredUserProfileRoleSchema(database.db) ? (["role"] as const) : []),
+            ...userProfileDisplaySelection,
             "created_at",
-            "updated_at",
-            userProfileAvatarPresence,
+            // The native role writer can add this column after a worker has opened.
+            ...(hasEnsuredUserProfileRoleSchema(database.db) ||
+            tableHasColumn(database.db, "user_profiles", "role")
+              ? (["role"] as const)
+              : []),
           ])
           .orderBy("created_at", "asc")
           .orderBy("id", "asc"),
@@ -58,11 +67,9 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
           .orderBy("email", "asc"),
       ).rows;
       const githubIdentities = selectUserProfileGitHubIdentities(database.db);
-      const emailsByProfile = new Map<string, string[]>();
-      for (const email of emails) {
-        const list = emailsByProfile.get(email.profile_id) ?? [];
-        list.push(email.email);
-        emailsByProfile.set(email.profile_id, list);
+      const emailsByProfile = new Map<string, string[]>(profiles.map(({ id }) => [id, []]));
+      for (const { profile_id, email } of emails) {
+        emailsByProfile.get(profile_id)?.push(email);
       }
       return profiles.map((profile) =>
         Object.assign(
@@ -85,6 +92,27 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
   );
 }
 
+/** Disclosure scopes need current aliases, never the resident display catalog. */
+export function readCurrentUserProfileAliases(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): ReadonlySet<string> {
+  ensureUserProfilesSchema(options);
+  const database = openOpenClawStateDatabase(options);
+  return runSqliteDeferredTransactionSync(database.db, () => {
+    const canonicalId =
+      selectResolvedUserProfileMetadataById(database.db, profileId)?.id ?? profileId;
+    const aliases = executeSqliteQuerySync(
+      database.db,
+      userProfilesDb(database.db)
+        .selectFrom("user_profiles")
+        .select("id")
+        .where("merged_into", "=", canonicalId),
+    ).rows;
+    return new Set([canonicalId, ...aliases.map((row) => row.id)]);
+  });
+}
+
 /** True when session-sharing policy can distinguish at least two durable people. */
 export function hasMultipleSessionSharingIdentities(
   options: OpenClawStateDatabaseOptions = {},
@@ -103,75 +131,56 @@ export function hasMultipleSessionSharingIdentities(
   return profiles.length >= 2;
 }
 
-type UserProfileDisplay = {
-  id: string;
-  displayName: string | null;
-  avatarRevision: string;
-  hasAvatar: boolean;
-};
-
-// Profile writers publish a version after commit; handle replacement drops the whole snapshot.
-// Bound callers per handle so lists and broadcasts share facts without retaining past users forever.
-const profileAliasSnapshots = new WeakMap<
-  DatabaseSync,
-  {
-    version: number;
-    callers: Map<string, ReadonlySet<string>>;
-  }
->();
+/** Exact durable identity facts; never use display-reference prefix matching for authority. */
+export function readUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  return readProfileCatalog(
+    options,
+    (resident) => {
+      const profile = resolveCatalogProfile(resident, profileId);
+      return (
+        profile && {
+          profileId: profile.id,
+          role: profile.role ?? null,
+          aliases: new Set(
+            [...resident.values()]
+              .filter((row) => row.id === profile.id || row.merged_into === profile.id)
+              .map((row) => row.id),
+          ),
+        }
+      );
+    },
+    (db) => {
+      const profile = selectResolvedUserProfileMetadataById(db, profileId);
+      return (
+        profile && {
+          profileId: profile.id,
+          role: profile.role ?? null,
+          aliases: new Set(
+            executeSqliteQuerySync(
+              db,
+              userProfilesDb(db)
+                .selectFrom("user_profiles")
+                .select("id")
+                .where((eb) =>
+                  eb.or([eb("id", "=", profile.id), eb("merged_into", "=", profile.id)]),
+                ),
+            ).rows.map((row) => row.id),
+          ),
+        }
+      );
+    },
+  );
+}
 
 /** Existing one-hop aliases are identity facts; this read never creates profile storage. */
 export function readUserProfileAliases(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): ReadonlySet<string> {
-  const opened = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
-  const version = readUserProfileVersion();
-  let snapshot =
-    opened && !opened.db.isTransaction ? profileAliasSnapshots.get(opened.db) : undefined;
-  if (snapshot?.version !== version) {
-    snapshot = undefined;
-  }
-  const cached = snapshot?.callers.get(profileId);
-  if (cached) {
-    return cached;
-  }
-  const aliases =
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "user_profiles")) {
-        return new Set([profileId]);
-      }
-      const canonicalId = selectResolvedUserProfileById(db, profileId)?.id;
-      if (!canonicalId) {
-        return new Set([profileId]);
-      }
-      return new Set([
-        profileId,
-        ...executeSqliteQuerySync(
-          db,
-          userProfilesDb(db)
-            .selectFrom("user_profiles")
-            .select("id")
-            .where((eb) =>
-              eb.or([eb("id", "=", canonicalId), eb("merged_into", "=", canonicalId)]),
-            ),
-        ).rows.map((row) => row.id),
-      ]);
-    }, options) ?? new Set([profileId]);
-  if (opened && !opened.db.isTransaction) {
-    snapshot ??= { version, callers: new Map() };
-    snapshot.callers.set(profileId, aliases);
-    if (snapshot.callers.size > 128) {
-      const oldest = snapshot.callers.keys().next().value;
-      if (oldest !== undefined) {
-        snapshot.callers.delete(oldest);
-      }
-    }
-    profileAliasSnapshots.set(opened.db, snapshot);
-  }
-  return aliases;
+  return new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 }
 
 const userProfileDisplaySelection = [
@@ -184,35 +193,237 @@ const userProfileDisplaySelection = [
   userProfileAvatarPresence,
 ] as const;
 
+function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
+  const query = userProfilesDb(db)
+    .selectFrom("user_profiles")
+    .select([
+      ...userProfileDisplaySelection,
+      ...(hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")
+        ? (["role"] as const)
+        : []),
+    ]);
+  const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
+  return rows.map((row): [string, typeof row] => [row.id, row]);
+}
+type ProfileDisplayRow = ReturnType<typeof selectProfileDisplayEntries>[number][1];
+function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: string) {
+  const raw = rows.get(id);
+  return rows.get(raw?.merged_into ?? id) ?? raw;
+}
+type ProfileCatalog = {
+  rows: Map<string, ProfileDisplayRow>;
+  identity: DatabasePathIdentity;
+  valid: boolean;
+  leases: Set<symbol>;
+};
+const profileCatalogs = new Map<string, ProfileCatalog>();
+let stopCatalogEvents: (() => void) | undefined;
+let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
+const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
+  path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+
+function readProfileCatalog<T>(
+  options: OpenClawStateDatabaseOptions,
+  resident: (rows: Map<string, ProfileDisplayRow>) => T,
+  stored: (db: DatabaseSync) => T,
+): T | undefined {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  return catalog
+    ? resident(catalog.rows)
+    : withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => (tableExists(db, "user_profiles") ? stored(db) : undefined),
+        options,
+      );
+}
+
+function loadProfileCatalog(
+  catalog: ProfileCatalog,
+  db: DatabaseSync,
+  identity: DatabasePathIdentity,
+) {
+  if (!catalog.valid || catalog.identity.key !== identity.key) {
+    const shared = [...profileCatalogs.values()].find(
+      (candidate) => candidate.valid && candidate.identity.key === identity.key,
+    );
+    catalog.rows =
+      shared?.rows ??
+      new Map(tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : []);
+    Object.assign(catalog, { identity, valid: true });
+    return true;
+  }
+  return false;
+}
+
+/** Retain exact identity and display/navigation facts; physical admission updates every locator before observers. */
+export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}): () => void {
+  const pathname = profileCatalogPath(options);
+  const catalog: ProfileCatalog = profileCatalogs.get(pathname) ?? {
+    rows: new Map(),
+    identity: readDatabasePathIdentitySync(pathname),
+    valid: false,
+    leases: new Set<symbol>(),
+  };
+  if (!profileCatalogs.has(pathname)) {
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => loadProfileCatalog(catalog, db, readDatabasePathIdentitySync(pathname)),
+      { ...options, path: pathname },
+    );
+    profileCatalogs.set(pathname, catalog);
+  }
+  stopCatalogEvents?.();
+  stopCatalogEvents = registerOpenClawStateDatabaseLifecycleListener((event) => {
+    let changed = false;
+    for (const [locator, current] of profileCatalogs) {
+      if (event.kind === "opened") {
+        if (
+          event.database.path !== locator &&
+          event.identity.key !== current.identity.key &&
+          event.identity.canonicalPath !== current.identity.canonicalPath
+        ) {
+          continue;
+        }
+        changed = loadProfileCatalog(current, event.database.db, event.identity) || changed;
+        profileCatalogHandles.set(event.database.db, current.rows);
+      } else if (
+        event.kind !== "closed" &&
+        (event.path === locator || event.identity?.key === current.identity.key)
+      ) {
+        current.rows.clear();
+        current.valid = false;
+        changed = true;
+      }
+    }
+    if (changed) {
+      emitUserProfilesChanged();
+    }
+  });
+  const lease = Symbol("profile catalog lease");
+  catalog.leases.add(lease);
+  return () => {
+    if (catalog.leases.delete(lease) && catalog.leases.size === 0) {
+      profileCatalogs.delete(pathname);
+    }
+    if (profileCatalogs.size === 0) {
+      stopCatalogEvents?.();
+      stopCatalogEvents = undefined;
+      profileCatalogHandles = new WeakMap();
+    }
+  };
+}
+
+/** Stage exact changed keys before commit so observers always see the whole committed catalog. */
+export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: string[]): void {
+  const catalog = profileCatalogHandles.get(db);
+  if (catalog) {
+    const rows = selectProfileDisplayEntries(db, profileIds);
+    stageSqliteTransactionState(db, {
+      stage: () => {},
+      rollback: () => {},
+      commit: () => rows.forEach(([id, row]) => catalog.set(id, row)),
+    });
+  }
+}
+
+export function publishUserProfilesChange(db: DatabaseSync, ...profileIds: string[]): void {
+  stageUserProfileCatalogChange(db, profileIds);
+  deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
+}
+
 /** Reads merge-aware display data without loading avatar bytes. */
 export function getUserProfileDisplay(
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
-): UserProfileDisplay {
-  const profile = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    if (!tableExists(db, "user_profiles")) {
-      return undefined;
-    }
-    return selectResolvedUserProfile(
-      db,
-      profileId,
-      userProfilesDb(db).selectFrom("user_profiles").select(userProfileDisplaySelection),
-    );
-  }, options);
+) {
+  const profile = readProfileCatalog(
+    options,
+    (resident) => resolveCatalogProfile(resident, profileId),
+    (db) =>
+      selectResolvedUserProfile(
+        db,
+        profileId,
+        userProfilesDb(db).selectFrom("user_profiles").select(userProfileDisplaySelection),
+      ),
+  );
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
+  return projectUserProfileDisplay(profile);
+}
+
+function projectUserProfileDisplay(profile: Omit<ProfileDisplayRow, "role">) {
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
-  const avatarRevision =
-    profile.avatar_sha256 && avatarMime
-      ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
-      : String(profile.updated_at);
   return {
     id: profile.id,
     displayName: profile.display_name,
-    avatarRevision,
+    avatarRevision:
+      profile.avatar_sha256 && avatarMime
+        ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
+        : String(profile.updated_at),
     hasAvatar: profile.has_avatar === 1,
   };
+}
+
+/** Read a bounded display cohort and its one-hop merge targets without initializing storage. */
+export function getUserProfileDisplays(
+  profileIds: readonly string[],
+  options: OpenClawStateDatabaseOptions = {},
+): Map<string, ReturnType<typeof getUserProfileDisplay>> {
+  const ids = [...new Set(profileIds)];
+  if (ids.length === 0) {
+    return new Map();
+  }
+  const project = (resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined) =>
+    new Map(
+      ids.flatMap((id) => {
+        const profile = resolve(id);
+        return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
+      }),
+    );
+  return (
+    readProfileCatalog(
+      options,
+      (resident) => project((id) => resolveCatalogProfile(resident, id)),
+      (db) => {
+        const profiles = userProfilesDb(db).selectFrom("user_profiles");
+        const rows = executeSqliteQuerySync(
+          db,
+          profiles
+            .select(userProfileDisplaySelection)
+            .where((eb) =>
+              eb.or([
+                eb("id", "in", ids),
+                eb(
+                  "id",
+                  "in",
+                  profiles
+                    .select("merged_into")
+                    .where("id", "in", ids)
+                    .where("merged_into", "!=", ""),
+                ),
+              ]),
+            ),
+        ).rows;
+        if (
+          rows.some(
+            (row) =>
+              typeof row.id !== "string" ||
+              (row.merged_into !== null && typeof row.merged_into !== "string"),
+          )
+        ) {
+          // Native BLOB keys compare by value in SQLite, not by Map object identity.
+          return project((id) =>
+            selectResolvedUserProfile(db, id, profiles.select(userProfileDisplaySelection)),
+          );
+        }
+        const byId = new Map(rows.map((row) => [row.id, row]));
+        return project((id) => {
+          // Match native text binding before indexing the returned SQLite rows.
+          const raw = byId.get(toUSVString(id));
+          return raw?.merged_into ? (byId.get(raw.merged_into) ?? raw) : raw;
+        });
+      },
+    ) ?? new Map()
+  );
 }
 
 /** Activity references are display navigation, never authentication identifiers. */
@@ -224,48 +435,54 @@ export function resolveUserProfileReference(
   if (allowedProfileIds?.size === 0) {
     return ok(undefined);
   }
+  const finish = (exact: string | undefined, readMatches: (prefix: string) => string[]) => {
+    if (exact !== undefined || !/^[0-9a-f]{8,32}$/.test(reference)) {
+      return ok<string | undefined, "ambiguous">(exact);
+    }
+    const prefix = [0, 8, 12, 16, 20]
+      .map((start, index, offsets) => reference.slice(start, offsets[index + 1]))
+      .filter(Boolean)
+      .join("-");
+    const matches = new Set(readMatches(prefix));
+    return matches.size > 1
+      ? err<string | undefined, "ambiguous">("ambiguous")
+      : ok<string | undefined, "ambiguous">(matches.values().next().value);
+  };
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }): Result<string | undefined, "ambiguous"> => {
-      if (!tableExists(db, "user_profiles")) {
-        return ok(undefined);
-      }
-      let profiles = userProfilesDb(db).selectFrom("user_profiles");
-      if (allowedProfileIds) {
-        profiles = profiles.where((eb) =>
-          eb(eb.fn.coalesce("merged_into", "id"), "in", [...allowedProfileIds]),
+    readProfileCatalog(
+      options,
+      (resident) => {
+        const allowed = (row: ProfileDisplayRow) =>
+          !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
+        const raw = resident.get(reference);
+        return finish(
+          raw && allowed(raw) ? resolveCatalogProfile(resident, reference)?.id : undefined,
+          (prefix) =>
+            [...resident.values()]
+              .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
+              .map((row) => row.merged_into ?? row.id),
         );
-      }
-      const exact = selectResolvedUserProfile(
-        db,
-        reference,
-        profiles.select(["id", "merged_into"]),
-      );
-      if (exact) {
-        return ok(exact.id);
-      }
-      if (!/^[0-9a-f]{8,32}$/.test(reference)) {
-        return ok(undefined);
-      }
-      const uuidPrefix = [
-        reference.slice(0, 8),
-        reference.slice(8, 12),
-        reference.slice(12, 16),
-        reference.slice(16, 20),
-        reference.slice(20),
-      ]
-        .filter(Boolean)
-        .join("-");
-      // Tombstones retain old links; aliases of one allowed merge head are one match.
-      // Time, search, and facet caps must not choose a person within that visibility scope.
-      const matches = executeSqliteQuerySync(
-        db,
-        profiles
-          .select((eb) => eb.fn.coalesce("merged_into", "id").as("id"))
-          .where("id", "like", `${uuidPrefix}%`)
-          .distinct()
-          .limit(2),
-      ).rows;
-      return matches.length > 1 ? err("ambiguous") : ok(matches[0]?.id);
-    }, options) ?? ok(undefined)
+      },
+      (db) => {
+        let profiles = userProfilesDb(db).selectFrom("user_profiles");
+        if (allowedProfileIds) {
+          profiles = profiles.where((eb) =>
+            eb(eb.fn.coalesce("merged_into", "id"), "in", [...allowedProfileIds]),
+          );
+        }
+        return finish(
+          selectResolvedUserProfile(db, reference, profiles.select(["id", "merged_into"]))?.id,
+          (prefix) =>
+            executeSqliteQuerySync(
+              db,
+              profiles
+                .select((eb) => eb.fn.coalesce("merged_into", "id").as("id"))
+                .where("id", "like", `${prefix}%`)
+                .distinct()
+                .limit(2),
+            ).rows.map((row) => row.id),
+        );
+      },
+    ) ?? ok(undefined)
   );
 }

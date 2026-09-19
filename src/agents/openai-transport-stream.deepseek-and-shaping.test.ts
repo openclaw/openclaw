@@ -138,6 +138,63 @@ describe("openai transport stream", () => {
     expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 
+  it.each([
+    { intent: "omitted", options: undefined, reasoning: undefined, include: undefined },
+    {
+      intent: "logical off",
+      options: { reasoning: "off" },
+      reasoning: { effort: "low", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    },
+    {
+      intent: "native none",
+      options: { reasoningEffort: "none" },
+      reasoning: { effort: "none" },
+      include: undefined,
+    },
+  ] as const)("preserves custom Responses $intent intent", ({ options, reasoning, include }) => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "synthetic-reasoner",
+        provider: "custom-provider",
+        baseUrl: "https://reasoning.example/v1",
+        compat: { supportedReasoningEfforts: ["none", "low", "high"] },
+        thinkingLevelMap: { off: "low" },
+      }),
+      { systemPrompt: "system", messages: [], tools: [] },
+      options,
+    );
+
+    if (reasoning === undefined) {
+      expect(params).not.toHaveProperty("reasoning");
+    } else {
+      expect(params.reasoning).toEqual(reasoning);
+    }
+    if (include === undefined) {
+      expect(params).not.toHaveProperty("include");
+    } else {
+      expect(params.include).toEqual(include);
+    }
+  });
+
+  it.each(["openai", "github-copilot"])(
+    "preserves the %s managed Responses default on a native endpoint",
+    (provider) => {
+      const params = buildOpenAIResponsesParams(
+        makeResponsesModel({ id: "gpt-5.4", provider }),
+        { systemPrompt: "system", messages: [], tools: [] },
+        undefined,
+      );
+
+      if (provider === "openai") {
+        expect(params.reasoning).toEqual({ effort: "none" });
+      } else {
+        expect(params).not.toHaveProperty("reasoning");
+      }
+      expect(params).not.toHaveProperty("include");
+    },
+  );
+
   it("carries the system prompt via top-level instructions for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({

@@ -27,8 +27,8 @@ describe("readRestoredSessionTranscript", () => {
     await expect(readRestoredSessionTranscript(scope, read)).resolves.toBe("retained text");
     expect(read).toHaveBeenCalledTimes(2);
     expect(restoreSessionColdTranscript).toHaveBeenCalledTimes(2);
-    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(1, scope);
-    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(2, scope);
+    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(1, scope, undefined);
+    expect(restoreSessionColdTranscript).toHaveBeenNthCalledWith(2, scope, undefined);
   });
 
   it.each([new Error("read unavailable"), new SessionTranscriptColdError("another-transcript")])(
@@ -40,7 +40,7 @@ describe("readRestoredSessionTranscript", () => {
 
       await expect(readRestoredSessionTranscript(scope, read)).rejects.toBe(failure);
       expect(read).toHaveBeenCalledOnce();
-      expect(restoreSessionColdTranscript).toHaveBeenCalledExactlyOnceWith(scope);
+      expect(restoreSessionColdTranscript).toHaveBeenCalledExactlyOnceWith(scope, undefined);
     },
   );
 

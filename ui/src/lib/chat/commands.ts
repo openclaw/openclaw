@@ -1,6 +1,5 @@
-// Control UI chat domain owns pure slash command rules.
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+// Control UI chat domain owns pure slash command rules.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
@@ -16,6 +15,9 @@ import {
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+
+registerCommandPaletteEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -111,6 +113,7 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
 const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
+  "btw",
   "help",
   "new",
   "reset",

@@ -273,17 +273,23 @@ describe("cli json stdout contract", () => {
         const args = testCase.args.map((argument) =>
           argument === "$WORKSPACE" ? workspace : argument,
         );
-        const result = runBuiltCli(tempHome, args, {
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: configPath,
-          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          args,
+          {
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: configPath,
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          },
+          { execArgv: "tty" in testCase ? [`--import=${preload}`] : [] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         if ("human" in testCase) {
           expect(result.stdout).toBe("");
         } else {
-          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+          expect(result.stdout, result.stderr).not.toContain("\u001B");
+          expect(result.stdout, result.stderr).not.toContain("\u0007");
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
             error: { type: "cli_error", message: testCase.message },

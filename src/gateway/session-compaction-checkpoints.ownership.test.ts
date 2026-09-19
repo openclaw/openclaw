@@ -11,7 +11,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
-import { createFileBackedCompactionCheckpointStore } from "./session-compaction-checkpoints.js";
+import { persistSessionCompactionCheckpoint } from "./session-compaction-checkpoints.js";
 
 const tempDirs: string[] = [];
 const MAIN_AGENT_ID = "main";
@@ -86,11 +86,8 @@ describe("session-compaction-checkpoints", () => {
           withTranscriptWrite: async (run) => await run(),
         },
         () =>
-          createFileBackedCompactionCheckpointStore().persistCheckpoint({
-            cfg,
-            agentId: MAIN_AGENT_ID,
-            sessionKey,
-            sessionId,
+          persistSessionCompactionCheckpoint({
+            sessionTarget: scope,
             reason: "manual",
             snapshot: { sessionId, sessionFile: snapshotFile, leafId: "pre-leaf" },
             postLeafId: "post-leaf",
@@ -183,11 +180,8 @@ describe("session-compaction-checkpoints", () => {
           withTranscriptWrite: async (run) => await run(),
         },
         () =>
-          createFileBackedCompactionCheckpointStore().persistCheckpoint({
-            cfg,
-            agentId,
-            sessionKey,
-            sessionId,
+          persistSessionCompactionCheckpoint({
+            sessionTarget: scope,
             reason: "manual",
             snapshot: { sessionId, leafId: "pre-leaf" },
             postLeafId: "post-leaf",

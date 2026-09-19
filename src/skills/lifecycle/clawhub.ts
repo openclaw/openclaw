@@ -15,11 +15,6 @@ import { pathExists } from "../../infra/fs-safe.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
 import {
-  normalizeTrackedSkillSlug,
-  resolveWorkspaceSkillInstallDir,
-  validateRequestedSkillSlug,
-} from "./archive-install.js";
-import {
   checkClawHubSkillTrust,
   isDefaultOfficialClawHubSkillSource,
   normalizeExpectedArtifactIntegrity,
@@ -43,23 +38,19 @@ import {
   planTrackedClawHubSkillState,
   type ClawHubSkillUninstallPlan,
 } from "./clawhub-uninstall.js";
+import {
+  normalizeTrackedSkillSlug,
+  resolveWorkspaceSkillInstallDir,
+  validateRequestedSkillSlug,
+} from "./install-paths.js";
 
 export { readVerifiedClawHubSkillSourceUrl } from "./clawhub-install-core.js";
 export {
   readLocalSkillCardContentSync,
-  resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
-  resolveLocalSkillCardStatusSync,
   searchSkillsFromClawHub,
-  type ClawHubSkillStatusLink,
-  type LocalSkillCardStatus,
 } from "./clawhub-status.js";
-export {
-  readClawHubSkillsLockfileStatusSync,
-  readTrackedClawHubSkillSlugs,
-  untrackClawHubSkill,
-  type ClawHubSkillsLockfileStatusRead,
-} from "./clawhub-store.js";
+export { readTrackedClawHubSkillSlugs, untrackClawHubSkill } from "./clawhub-store.js";
 
 export async function verifySkillWithClawHub(
   params: Parameters<typeof fetchClawHubSkillVerification>[0],

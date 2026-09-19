@@ -9,13 +9,20 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as configFile from "../../config/config.js";
 import * as gatewayService from "../../daemon/service.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as gatewayCall from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import * as portInspection from "../../infra/ports-inspect.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  updateRunStepsFromResultStep,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
+import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
@@ -31,6 +38,64 @@ const { executionParams, inspectOrStopService, mocks, schemaContext, successfulU
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
+  it.each(["package", "git"] as const)(
+    "continues the %s update with the recorded readiness warning instead of inference repair",
+    async (kind) => {
+      const message =
+        "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
+      const step: UpdateStepResult = {
+        name: "candidate gateway canary",
+        command: "gateway run",
+        cwd: "/candidate",
+        durationMs: 1,
+        exitCode: null,
+        advisory: { kind: "candidate-runtime-unavailable", message },
+        failureFacts: [{ check: "readyz", code: "candidate-readiness-probe-failed", message }],
+      };
+      mocks.validateCanary.mockImplementation(async ({ onStep }) => {
+        onStep(step);
+        return {
+          status: "ok",
+          phase: "readiness",
+          steps: [step],
+          durationMs: 1,
+          logTail: [message],
+        };
+      });
+      const repair = await import("./update-command-repair.js");
+      const runRepair = vi.spyOn(repair, "runUpdateCommandRepair");
+      const accepted = vi.fn();
+      const runStagedUpdate = async ({
+        validateCandidate,
+      }: {
+        validateCandidate?: (root: string) => Promise<unknown>;
+      }) => {
+        expect(validateCandidate).toBeTypeOf("function");
+        await validateCandidate?.("/candidate");
+        accepted();
+        return successfulUpdate;
+      };
+      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
+      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
+      const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>();
+
+      const execution = await executeMutableUpdate({
+        ...executionParams(kind),
+        progress: { onStepComplete },
+      });
+
+      expect(execution?.result.status).toBe("ok");
+      expect(accepted).toHaveBeenCalledOnce();
+      expect(runRepair).not.toHaveBeenCalled();
+      expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
+      const recorded = onStepComplete.mock.calls.flatMap(([completed]) =>
+        updateRunStepsFromResultStep(completed),
+      );
+      expect(updateRunWarningMessages(recorded)).toEqual([message]);
+      expect(recorded.every((entry) => entry.status === "completed")).toBe(true);
+    },
+  );
+
   it.each(
     (["package", "git"] as const).flatMap((kind) =>
       [undefined, 30_000, 600_000].map((timeoutMs) => ({ kind, timeoutMs })),
@@ -133,7 +198,13 @@ describe("mutable update execution", () => {
           });
           const service = gatewayService.resolveGatewayService();
           vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-          vi.spyOn(service, "readRuntime").mockResolvedValue({ status: "running", pid: 8000 });
+          vi.spyOn(service, "isAbsent").mockResolvedValue(false);
+          vi.spyOn(service, "isLoaded").mockResolvedValue(true);
+          vi.spyOn(service, "readRuntime").mockResolvedValue({
+            status: "running",
+            pid: 8000,
+            systemd: { managerUid: 1000 },
+          });
           vi.spyOn(service, "readCommand").mockResolvedValue({
             programArguments: [process.execPath, path.join(root, "dist", "index.js"), "gateway"],
           });
@@ -159,7 +230,7 @@ describe("mutable update execution", () => {
             logTail: [],
             steps: [
               {
-                name: "candidate gateway canary",
+                name: "Checking Gateway startup",
                 command: "gateway run",
                 cwd: root,
                 durationMs: 70_000,
@@ -228,68 +299,6 @@ describe("mutable update execution", () => {
         }
       }),
   );
-  it.each(["package", "staged", "git"] as const)(
-    "refuses an unsupported native receiver before activation: %s",
-    async (route) =>
-      withTestDir({ prefix: "native-before-activation-" }, async (dir) => {
-        const control = path.join(dir, "leases");
-        await fs.mkdir(control);
-        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-        const env = { OPENCLAW_STATE_DIR: dir };
-        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-        const params = executionParams(route === "git" ? "git" : "package");
-        params.root = dir;
-        params.updateStepTimeoutMs = 600_000;
-        params.opts.run = { runId, env };
-        if (route === "staged") {
-          params.packageInstallSpec = path.join(dir, "candidate.tgz");
-        }
-        const events: string[] = [];
-        mocks.nativeSupport.mockImplementation(async ({ executor }) => {
-          executor.assertCurrent();
-          events.push("native-admission");
-          return false;
-        });
-        const candidate = async ({
-          validateCandidate,
-        }: {
-          validateCandidate: (root: string) => Promise<unknown>;
-        }) => {
-          await validateCandidate(dir);
-          // Models the package/Git publisher which follows successful validation.
-          events.push("publish");
-          return successfulUpdate;
-        };
-        mocks.runPackageUpdate.mockImplementation(candidate);
-        mocks.runGitUpdate.mockImplementation(
-          async (
-            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
-          ) => {
-            if (!options.inspectGitTarget || !options.validateCandidate) {
-              throw new Error("Missing actual Git admission callbacks");
-            }
-            await options.inspectGitTarget({ schemaVersions: { state: 15, agent: 19 } });
-            return candidate({ validateCandidate: options.validateCandidate });
-          },
-        );
-        const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async () => {
-            params.opts.run!.executorFence = await executor.enter(dir);
-          });
-          return executeMutableUpdate(params);
-        });
-        expect(result?.result).toMatchObject({
-          status: "error",
-          reason: "target-native-unsupported",
-        });
-        expect(events).toEqual(["native-admission"]);
-        expect(mocks.nativeSupport.mock.calls[0]?.[0]).toMatchObject({
-          timeoutMs: params.updateStepTimeoutMs,
-        });
-        expect(mocks.serviceStopped).toBe(false);
-        expect(mocks.validateCanary).not.toHaveBeenCalled();
-      }),
-  );
   it("retains the live update run when stopped-service context capture fails", async () => {
     await withTestDir({ prefix: "partial-stop-recovery-owner-" }, async (dir) => {
       const control = path.join(dir, "leases");
@@ -348,8 +357,47 @@ describe("mutable update execution", () => {
     expect(mocks.serviceStopped).toBe(false);
   });
 
+  it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      [false, true].map((shouldRestart) => ({ kind, shouldRestart })),
+    ),
+  )(
+    "admits FreeBSD $kind with a service advisory and restart=$shouldRestart",
+    async ({ kind, shouldRestart }) =>
+      withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: undefined }, async () => {
+        mockProcessPlatform("freebsd");
+        mockSystemAccountHome();
+        const maintenance = await vi.importActual<
+          typeof import("./update-command-service-maintenance.js")
+        >("./update-command-service-maintenance.js");
+        mocks.maybeStopService.mockImplementation(
+          maintenance.maybeStopManagedServiceBeforeMutableUpdate,
+        );
+
+        const execution = await executeMutableUpdate({
+          ...executionParams(kind),
+          shouldRestart,
+          opts: { json: true, restart: shouldRestart },
+        });
+
+        expect(execution?.result.status).toBe("ok");
+        if (kind === "package") {
+          expect(execution?.preManagedServiceStop).toMatchObject({
+            serviceMutationAllowed: false,
+            serviceUpdateVerdict: { kind: "unavailable" },
+            serviceMutationSkipMessage: expect.stringContaining("rc.d or foreground process owner"),
+          });
+          expect(execution?.preManagedServiceStop?.serviceMutationSkipMessage).toContain(
+            "Restart the Gateway you launched manually",
+          );
+        }
+        expect(mocks.serviceStopped).toBe(false);
+        expect(kind === "package" ? mocks.runPackageUpdate : mocks.runGitUpdate).toHaveBeenCalled();
+      }),
+  );
+
   it.each(["admission", "execution"] as const)(
-    "preserves native inspection reasons through %s refusal",
+    "preserves native inspection reasons through admitted %s",
     async (phase) => {
       mocks.maybeStopService.mockImplementation(async ({ handoffFromGateway }) => {
         if (phase === "admission" || handoffFromGateway) {
@@ -364,29 +412,19 @@ describe("mutable update execution", () => {
               message: "The systemd user session bus is unavailable.",
               inspectionReason: "systemd-user-bus-unavailable",
             },
-            blockMessage: "The systemd user session bus is unavailable.",
+            serviceMutationSkipMessage: "The systemd user session bus is unavailable.",
           };
         }
         return inspectOrStopService("inspect");
       });
       const execution = await executeMutableUpdate(executionParams("package"));
-      expect(execution?.result).toMatchObject({
-        status: "error",
-        reason: "managed-service-preflight",
-        steps: [
-          {
-            failureFacts: [
-              {
-                check: "managed-service",
-                code: "systemd-user-bus-unavailable",
-                message: "The systemd user session bus is unavailable.",
-              },
-            ],
-          },
-        ],
+      expect(execution?.result.status).toBe("ok");
+      expect(execution?.preManagedServiceStop?.serviceUpdateVerdict).toMatchObject({
+        kind: "unavailable",
+        inspectionReason: "systemd-user-bus-unavailable",
       });
       expect(mocks.serviceStopped).toBe(false);
-      expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      expect(mocks.runPackageUpdate).toHaveBeenCalled();
     },
   );
 
@@ -844,7 +882,7 @@ describe("mutable update execution", () => {
     },
   );
 
-  it("keeps Git candidate selection online and delegates its later activation", async () => {
+  it("keeps Git selection online and reserves service rewrites for finalization", async () => {
     const events: string[] = [];
     mocks.maybeStopService.mockImplementation(async ({ phase }) => {
       if (phase === "prepare") {
@@ -863,14 +901,25 @@ describe("mutable update execution", () => {
         const target = { schemaVersions: { state: 15, agent: 19 } };
         await params.inspectGitTarget(target);
         events.push("git");
+        expect(mocks.serviceStopped).toBe(false);
+        expect(await params.beforeGitMutation(target)).toEqual({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+        });
         return { ...successfulUpdate, mode: "git" };
       },
     );
 
     const execution = await executeMutableUpdate(executionParams("git"));
 
-    expect(events).toEqual(["mutable-prepare", "git"]);
-    expect(mocks.serviceStopped).toBe(false);
+    expect(events).toEqual([
+      "mutable-prepare",
+      "git",
+      "mutable-prepare",
+      "mutable-prepare",
+      "stop",
+    ]);
+    expect(mocks.serviceStopped).toBe(true);
     expect(execution?.result.mode).toBe("git");
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
   });

@@ -29,9 +29,7 @@ describe("pw-session page-scoped CDP client", () => {
     };
 
     await withPageScopedCdpClient({
-      cdpUrl: "http://127.0.0.1:9222",
       page: page as never,
-      targetId: "tab-1",
       fn: async (pageSend) => {
         await pageSend("Emulation.setLocaleOverride", { locale: "en-US" });
       },

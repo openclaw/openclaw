@@ -19,74 +19,15 @@ type ChannelCapabilitiesDisplayLine = {
   tone?: "default" | "muted" | "success" | "warn" | "error";
 };
 
-type SmsTwilioWebhookProbe =
-  | {
-      status: "skipped";
-      reason: string;
-    }
-  | {
-      status: "unavailable";
-      reason: string;
-    }
-  | {
-      status: "number-not-found";
-      expectedNumber: string;
-    }
-  | {
-      status: "missing";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "method-mismatch";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "url-mismatch";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "matches";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-      voiceUrl: string;
-    }
-  | {
-      status: "messaging-service-missing";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "messaging-service-method-mismatch";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "messaging-service-url-mismatch";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "messaging-service-matches";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    };
+type WidenProbeStrings<T extends { status: string }> = T extends unknown
+  ? { [K in keyof T]: K extends "status" ? T[K] : T[K] extends string ? string : T[K] }
+  : never;
+
+type SmsTwilioWebhookProbe = WidenProbeStrings<
+  | ReturnType<typeof compareTwilioWebhook>
+  | ReturnType<typeof compareTwilioMessagingService>
+  | { status: "unavailable"; reason: string }
+>;
 
 export type SmsProbe = {
   ok: boolean;
@@ -152,15 +93,15 @@ function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
 function compareTwilioWebhook(
   account: ResolvedSmsAccount,
   phoneNumber: TwilioIncomingPhoneNumber | undefined,
-): SmsTwilioWebhookProbe {
+) {
   if (!account.fromNumber) {
     return {
       status: "skipped",
       reason: "Messaging Service senders do not have one phone-number SMS webhook to inspect.",
-    };
+    } as const;
   }
   if (!phoneNumber) {
-    return { status: "number-not-found", expectedNumber: account.fromNumber };
+    return { status: "number-not-found", expectedNumber: account.fromNumber } as const;
   }
   const configuredMethod = phoneNumber.smsMethod.toUpperCase();
   if (!phoneNumber.smsUrl) {
@@ -169,7 +110,7 @@ function compareTwilioWebhook(
       phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
       expectedUrl: account.publicWebhookUrl,
       configuredMethod,
-    };
+    } as const;
   }
   if (configuredMethod && configuredMethod !== "POST") {
     return {
@@ -178,7 +119,7 @@ function compareTwilioWebhook(
       expectedUrl: account.publicWebhookUrl,
       configuredUrl: phoneNumber.smsUrl,
       configuredMethod,
-    };
+    } as const;
   }
   if (phoneNumber.smsUrl !== account.publicWebhookUrl) {
     return {
@@ -187,7 +128,7 @@ function compareTwilioWebhook(
       expectedUrl: account.publicWebhookUrl,
       configuredUrl: phoneNumber.smsUrl,
       configuredMethod,
-    };
+    } as const;
   }
   return {
     status: "matches",
@@ -196,19 +137,19 @@ function compareTwilioWebhook(
     configuredUrl: phoneNumber.smsUrl,
     configuredMethod,
     voiceUrl: phoneNumber.voiceUrl,
-  };
+  } as const;
 }
 
 function compareTwilioMessagingService(
   account: ResolvedSmsAccount,
   service: TwilioMessagingService,
-): SmsTwilioWebhookProbe {
+) {
   if (service.useInboundWebhookOnNumber) {
     return {
       status: "unavailable",
       reason:
         "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
-    };
+    } as const;
   }
   const configuredMethod = service.inboundMethod.toUpperCase();
   if (!service.inboundRequestUrl) {
@@ -217,7 +158,7 @@ function compareTwilioMessagingService(
       serviceSid: service.sid || account.messagingServiceSid,
       expectedUrl: account.publicWebhookUrl,
       configuredMethod,
-    };
+    } as const;
   }
   if (configuredMethod && configuredMethod !== "POST") {
     return {
@@ -226,7 +167,7 @@ function compareTwilioMessagingService(
       expectedUrl: account.publicWebhookUrl,
       configuredUrl: service.inboundRequestUrl,
       configuredMethod,
-    };
+    } as const;
   }
   if (service.inboundRequestUrl !== account.publicWebhookUrl) {
     return {
@@ -235,7 +176,7 @@ function compareTwilioMessagingService(
       expectedUrl: account.publicWebhookUrl,
       configuredUrl: service.inboundRequestUrl,
       configuredMethod,
-    };
+    } as const;
   }
   return {
     status: "messaging-service-matches",
@@ -243,7 +184,7 @@ function compareTwilioMessagingService(
     expectedUrl: account.publicWebhookUrl,
     configuredUrl: service.inboundRequestUrl,
     configuredMethod,
-  };
+  } as const;
 }
 
 function recentInboundSummary(

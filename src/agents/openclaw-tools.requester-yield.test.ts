@@ -5,7 +5,11 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { addSession, markExited } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { markRequesterTurnYieldedInRuns } from "./subagents/registry/subagent-registry-requester-yield.js";
 import {
   addSubagentRunForTests,
@@ -51,8 +55,14 @@ function createTestOpenClawTools(
 }
 
 describe("requester yield ownership", () => {
-  beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
-  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+  beforeEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    resetProcessRegistryForTests();
+  });
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    resetProcessRegistryForTests();
+  });
 
   it("models an owned child the old cron claim could mark", () => {
     const childRun = seedRequiredChild();
@@ -155,7 +165,20 @@ describe("requester yield ownership", () => {
 
   it.each([
     { requesterSessionKey: "agent:main:main", runtimeClaim: true, accepted: true },
-    { requesterSessionKey: "agent:main:subagent:worker", runtimeClaim: false, accepted: true },
+    { requesterSessionKey: "agent:main:subagent:worker", runtimeClaim: false, accepted: false },
+    {
+      requesterSessionKey: "agent:main:subagent:worker",
+      runtimeClaim: false,
+      waitFor: "message",
+      accepted: true,
+    },
+    {
+      requesterSessionKey: "agent:main:main",
+      runtimeClaim: false,
+      waitFor: "message",
+      accepted: false,
+    },
+    { requesterSessionKey: CRON_RUN_KEY, runtimeClaim: true, waitFor: "message", accepted: false },
     { requesterSessionKey: "agent:main:main", runtimeClaim: false, accepted: false },
   ])(
     "preserves claim without a registry child: $requesterSessionKey/$runtimeClaim",
@@ -170,12 +193,198 @@ describe("requester yield ownership", () => {
         }),
         onYield,
       });
-      expect((await tool.execute("yield-call", {})).details).toMatchObject({
+      expect((await tool.execute("yield-call", { waitFor: test.waitFor })).details).toMatchObject({
         status: test.accepted ? "yielded" : "error",
       });
       expect(onYield).toHaveBeenCalledTimes(test.accepted ? 1 : 0);
     },
   );
+
+  it("keeps a completed worker active so it can return its result instead of stranding the task", async () => {
+    const onYield = vi.fn();
+    const tool = createTestOpenClawTools({
+      sessionKey: "agent:main:subagent:finished-worker",
+      sessionId: "finished-worker-session",
+      runId: "finished-worker-run",
+      onYield,
+    }).find((candidate) => candidate.name === "sessions_yield");
+    assert.isDefined(tool);
+    const result = await tool.execute("yield-completed-command", {
+      message:
+        "The assigned command completed and returned RESULT_17; process list has no active sessions.",
+    });
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("return its result normally"),
+    });
+    expect(onYield).not.toHaveBeenCalled();
+    expect(
+      (
+        await tool.execute("wait-for-incoming-message", {
+          waitFor: "message",
+          message: "Wait for an operator continuation.",
+        })
+      ).details,
+    ).toMatchObject({ status: "yielded" });
+    expect(onYield).toHaveBeenCalledExactlyOnceWith(
+      "Wait for an operator continuation.",
+      undefined,
+    );
+  });
+
+  it.each([
+    {
+      label: "session scope",
+      controllerKey: "agent:main:subagent:watcher",
+      runKey: undefined,
+      scopeKey: undefined,
+    },
+    {
+      label: "split execution session",
+      controllerKey: "agent:main:main",
+      runKey: "agent:main:subagent:watcher",
+      scopeKey: undefined,
+    },
+    {
+      label: "explicit process scope",
+      controllerKey: "agent:main:main",
+      runKey: "agent:main:subagent:watcher",
+      scopeKey: "worker-process-scope",
+    },
+  ])(
+    "keeps a subagent active until its background exec result is collected ($label)",
+    async ({ controllerKey, runKey, scopeKey }) => {
+      const sessionKey = runKey ?? controllerKey;
+      const process = createProcessSessionFixture({ id: "watch-ci", backgrounded: true });
+      process.sessionKey = sessionKey;
+      process.scopeKey = scopeKey ?? sessionKey;
+      addSession(process);
+      const onYield = vi.fn();
+      const tools = createTestOpenClawTools({
+        sessionKey: controllerKey,
+        runSessionKey: runKey,
+        exec: { scopeKey },
+        sessionId: "watcher-session",
+        runId: "run-watcher",
+        onYield,
+      });
+      const yieldTool = tools.find((tool) => tool.name === "sessions_yield");
+      const processTool = tools.find((tool) => tool.name === "process");
+      assert.isDefined(yieldTool);
+      assert.isDefined(processTool);
+      const expectStillActive = async () => {
+        for (const waitFor of [undefined, "message"] as const) {
+          expect((await yieldTool.execute("yield-watcher", { waitFor })).details).toMatchObject({
+            status: "error",
+            error: expect.stringContaining("Use process to poll and collect"),
+          });
+        }
+        expect(onYield).not.toHaveBeenCalled();
+      };
+
+      await expectStillActive();
+      markExited(process, 2, null, "failed");
+      delete process.sessionKey;
+      await expectStillActive();
+      const result = await processTool.execute("poll-watcher", {
+        action: "poll",
+        sessionId: process.id,
+      });
+      await expectStillActive();
+      acknowledgeInternalToolResult(result);
+      expect((await yieldTool.execute("yield-collected", {})).details).toMatchObject({
+        status: "error",
+        error: expect.stringContaining("return its result normally"),
+      });
+      expect(
+        (await yieldTool.execute("yield-collected-message", { waitFor: "message" })).details,
+      ).toMatchObject({
+        status: "yielded",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["running", "finished"])(
+    "ignores another session's %s background exec for subagent self-yield",
+    async (state) => {
+      const process = createProcessSessionFixture({ id: "other-command", backgrounded: true });
+      process.sessionKey = "agent:main:subagent:other";
+      process.scopeKey = process.sessionKey;
+      addSession(process);
+      if (state === "finished") {
+        markExited(process, 2, null, "failed");
+        delete process.sessionKey;
+      }
+      const onYield = vi.fn();
+      const tool = createTestOpenClawTools({
+        sessionKey: "agent:main:subagent:watcher",
+        sessionId: "watcher-session",
+        runId: "run-watcher",
+        onYield,
+      }).find((candidate) => candidate.name === "sessions_yield");
+      assert.isDefined(tool);
+
+      expect((await tool.execute("yield-watcher", { waitFor: "message" })).details).toMatchObject({
+        status: "yielded",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["registry", "runtime"])(
+    "preserves a %s completion claim with an owned background exec",
+    async (owner) => {
+      const sessionKey = "agent:main:subagent:watcher";
+      const process = createProcessSessionFixture({ id: "watch-ci", backgrounded: true });
+      process.sessionKey = sessionKey;
+      process.scopeKey = sessionKey;
+      addSession(process);
+      if (owner === "registry") {
+        seedRequiredChild(sessionKey);
+      }
+      const onYield = vi.fn();
+      const tool = createTestOpenClawTools({
+        sessionKey,
+        sessionId: "watcher-session",
+        runId: "run-requester",
+        claimYieldCompletion: () => owner === "runtime",
+        onYield,
+      }).find((candidate) => candidate.name === "sessions_yield");
+      assert.isDefined(tool);
+
+      expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
+        status: "yielded",
+      });
+      expect(onYield).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("checks background exec after an awaited runtime completion claim", async () => {
+    const sessionKey = "agent:main:subagent:watcher";
+    const onYield = vi.fn();
+    const tool = createTestOpenClawTools({
+      sessionKey,
+      sessionId: "watcher-session",
+      runId: "run-watcher",
+      claimYieldCompletion: async () => {
+        await Promise.resolve();
+        const process = createProcessSessionFixture({ id: "watch-ci", backgrounded: true });
+        process.sessionKey = sessionKey;
+        process.scopeKey = sessionKey;
+        addSession(process);
+        return false;
+      },
+      onYield,
+    }).find((candidate) => candidate.name === "sessions_yield");
+    assert.isDefined(tool);
+
+    expect((await tool.execute("yield-watcher", {})).details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Use process to poll and collect"),
+    });
+    expect(onYield).not.toHaveBeenCalled();
+  });
 
   it.each([
     { name: "with a registry turn", requesterTurnRunId: "run-collector-turn" },

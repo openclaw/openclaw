@@ -130,8 +130,20 @@ to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
 Context engines selected by an admitted turn remain owned through that turn's
-commit and engine disposal. Reload can report their cleanup as deferred; starting
-engine disposal closes normal engine callbacks while cleanup finishes.
+commit and engine disposal. Replacing an enabled plugin waits for those consumers
+to close before registering its successor. Disabling or removing a plugin can
+report their cleanup as deferred; starting engine disposal closes normal engine
+callbacks while cleanup finishes.
+
+Replacement validates metadata and configuration first, then stops services and
+channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
+before invoking the new registration. Pre-publication failure triggers automatic
+recovery by registering the captured previous code with its previous config;
+a stopped instance is not assumed to be restartable. A plugin cannot synchronously
+replace itself from its own active call: the operation rejects before shutdown
+and can be retried after that call finishes. Cleanup that cannot finish within
+its budget can prevent safe replacement or recovery. Unaffected instances remain
+active, and the Gateway process stays running.
 
 Managed instances expose `api.lifecycle.signal` and
 `api.lifecycle.onDispose(cleanup)`. The signal aborts when disposal reaches
@@ -151,6 +163,19 @@ prove that they have stopped when managed retirement completes. Native plugins
 remain trusted, in-process code. Plain data and native byte buffers retain their
 normal identities; lifecycle fencing applies to the managed callable surfaces,
 not every object a plugin can retain.
+
+Release the stored handle as well as canceling a timer. On Node, a canceled
+timer object can still retain the async context in which it was created:
+
+```ts
+clearInterval(timer);
+timer = undefined;
+```
+
+This matters for module-level state in native ESM plugins: Node can retain an
+evaluated module after replacement. Removing the captured files and closing its
+managed callbacks does not unload that native module or clear its variables.
+Drop references to stopped resources and other disposable state in cleanup.
 
 Opaque values returned by a plugin can be passed back directly or in data-only
 records and arrays. Caller-owned objects with methods or accessors are passed
@@ -181,6 +206,28 @@ method, when provided, if the runtime or an embedding adapter retires. This clos
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
 
+## Worker provider allocation authority
+
+The Gateway supplies `assertCurrent()` in the options passed to worker providers'
+`provision` and `prepareProvision` methods. This required runtime callback binds
+the operation to the live environment owner and any requesting run. Invoke it
+after awaited preparation and immediately before an allocation, checkpoint fork,
+or adoption. A non-aborted `signal` does not prove that the caller still has
+authority. Providers with project preparation must compose this callback with
+`project.assertCurrent()` so both owners remain current.
+
+The callback belongs to the provision attempt. Carry it into a returned prepared
+allocation closure, but never serialize it or retain it in a durable or reusable
+preparation record. After the attempt closes, the callback rejects retained work.
+Teardown keeps its existing cleanup authority and must still settle an owned
+lease when the requesting run has ended.
+
+The legacy optional parameter shape remains source-compatible until the next
+declared breaking Plugin SDK revision. It is not a capability-free runtime path:
+current hosts supply this assertion, and bundled providers reject missing
+allocation authority before performing work. An older host must be updated to
+use these providers.
+
 ## Other top-level `api` fields
 
 Beyond `api.runtime`, the API object also provides:
@@ -192,7 +239,7 @@ Beyond `api.runtime`, the API object also provides:
   Plugin display name.
 </ParamField>
 <ParamField path="api.config" type="OpenClawConfig">
-  Config snapshot supplied when this instance registers. With the default hybrid
+  Read-only config snapshot supplied when this instance registers. With the default hybrid
   reload mode, changes to this plugin's `plugins.entries.<id>` replace its instance
   by default and rerun registration. A retained instance keeps its snapshot across unrelated
   config changes. In long-lived callbacks, prefer the supplied `cfg`, or use

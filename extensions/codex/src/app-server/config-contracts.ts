@@ -76,6 +76,8 @@ export type ResolvedCodexAppServerNetworkProxyConfig = {
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   homeScope?: CodexAppServerHomeScope;
+  /** Lifecycle-captured local home; does not change requested home ownership. */
+  codexHome?: string;
   command: string;
   commandSource?: CodexAppServerCommandSource;
   /** Desktop-first is reserved for the macOS app process that owns Computer Use permissions. */

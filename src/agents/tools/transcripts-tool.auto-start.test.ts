@@ -15,7 +15,10 @@ import {
   closeOpenClawStateDatabaseByPath,
   openClawStateDatabaseCache,
 } from "../../state/openclaw-state-db-cache.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import type {
@@ -33,7 +36,8 @@ const obstruction = "existing file; do not overwrite\n";
 const credential = "fixture-secret-value-1234567890";
 const providerError = `fixture stop failure\n\u001b[31mred\u001b[0m\u0085 token=${credential} ${"🦞".repeat(2_000)}`;
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });

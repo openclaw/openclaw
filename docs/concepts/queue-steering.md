@@ -20,10 +20,14 @@ Steering does not interrupt a tool call that is already running. The OpenClaw ru
 2. In sequential mode, OpenClaw checks immediately before each call starts, including after asynchronous resolution, validation, and pre-execution hooks.
 3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped.
 4. In parallel mode, OpenClaw prepares calls first, then checks once immediately before launching the prepared calls. Calls that have crossed that checkpoint continue together.
-5. Every skipped call receives paired tool start/end events and a synthetic error result (`Skipped due to queued user message.`), in assistant source order.
+5. Every skipped call receives paired tool start/end events and a synthetic result (`Skipped to process an incoming message.`), in assistant source order. The result tells the model that the tool did not run, and the Control UI labels it **Skipped**.
 6. OpenClaw appends the exact drained steering message before the next LLM call.
 
 This keeps every requested tool call paired with a result while ensuring accepted steering is model-visible before any later tool can start.
+
+Internal updates, including subagent completion reports, also use this steering boundary. These updates can be hidden from the chat transcript and do not appear in the user message queue. A skipped tool therefore does not necessarily mean a user message is waiting; the agent processes the incoming update before deciding which tools to call next.
+
+In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
 The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order. Codex's upstream turn scheduler owns its tool scheduling and consumes accepted steering at the next model boundary; OpenClaw does not add per-tool preemption to that runtime.
 

@@ -21,13 +21,14 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  recordMemoryEntryOrigins,
-  recordMemorySessionTombstones,
-} from "../memory-entry-origins.js";
+import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
+import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  readPublishedSessionIndex,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -103,23 +104,7 @@ describe("memory session update sync", () => {
     const observer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), {
       readOnly: true,
     });
-    const snapshot = () => ({
-      source: observer
-        .prepare(
-          "SELECT path, hash, mtime, size FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
-        )
-        .get(sessionPath),
-      chunks: observer
-        .prepare(
-          "SELECT id, hash, text, embedding, updated_at FROM memory_index_chunks WHERE path = ? AND source = 'sessions' ORDER BY id",
-        )
-        .all(sessionPath),
-      search: observer
-        .prepare(
-          "SELECT text, id, path, model, start_line, end_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ? AND path = ? ORDER BY id",
-        )
-        .all("violet", sessionPath),
-    });
+    const snapshot = () => readPublishedSessionIndex(observer, sessionPath, "violet");
     const before = snapshot();
     expect(before.source).toBeDefined();
     expect(before.chunks).toHaveLength(1);
@@ -221,7 +206,7 @@ describe("memory session update sync", () => {
         },
       });
       const unchangedTranscript = await readSessionTranscriptEvents(target);
-      let legacySourceHash: string | undefined;
+      let expectedSourceHash: string | undefined;
       if (mode === "unchanged legacy index") {
         const corpus = (await listSessionTranscriptCorpusEntriesForAgent("main")).find(
           (entry) => entry.sessionId === sessionId,
@@ -257,7 +242,7 @@ describe("memory session update sync", () => {
             "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 4) WHERE key = 'memory_index_meta_v1'",
           )
           .run();
-        legacySourceHash = entry.hash;
+        expectedSourceHash = `sqlite:${entry.revisionMs}:${entry.hash}`;
         await manager.close();
         manager = await getFreshManager(cfg, "cli");
         await manager.sync({ reason: "watch" });
@@ -286,14 +271,14 @@ describe("memory session update sync", () => {
             text: "User: Retained owner preference.\nAssistant: Retained derived answer.",
           },
         ]);
-        if (legacySourceHash !== undefined) {
+        if (expectedSourceHash !== undefined) {
           expect(
             observer
               .prepare(
                 "SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
               )
               .get(`sessions/main/${sessionId}.jsonl`)?.hash,
-          ).toBe(legacySourceHash);
+          ).toBe(expectedSourceHash);
           expect(
             observer
               .prepare(
@@ -557,7 +542,7 @@ describe("memory session update sync", () => {
       database.prepare("SELECT path FROM memory_index_chunks WHERE path = ?").get(sessionPath),
     ).toEqual({ path: sessionPath });
 
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     await manager.sync({ reason: "forced-reindex-after-forget", force: true });
 
     expectSessionIndexRemoved(database, sessionPath);
@@ -665,7 +650,7 @@ describe("memory session update sync", () => {
     if (repeatPurge) {
       // An earlier purge persisted its tombstone but failed before rewriting
       // this previously unindexed file. Retrying must fence a completed shadow.
-      recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     }
     const manager = await getFreshManager(cfg, "cli", true);
     let releaseEmbedding = () => {};

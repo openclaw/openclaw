@@ -273,19 +273,11 @@ export async function executeSnapshotAction(params: {
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
-    proxyRequest
-      ? ((await proxyRequest({
-          method: "GET",
-          path: "/snapshot",
-          profile,
-          query,
-          timeoutMs: snapshotTimeoutMs,
-        })) as Awaited<ReturnType<typeof browserSnapshot>>)
-      : await browserSnapshot(baseUrl, {
-          ...query,
-          profile,
-          signal: params.signal,
-        });
+    await browserSnapshot(proxyRequest ?? baseUrl, {
+      ...query,
+      profile,
+      signal: params.signal,
+    });
   let snapshot: Awaited<ReturnType<typeof browserSnapshot>>;
   try {
     snapshot = await readSnapshot(snapshotQuery);

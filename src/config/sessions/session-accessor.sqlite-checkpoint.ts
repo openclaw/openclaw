@@ -5,6 +5,8 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearAllCliSessions } from "./cli-session-binding.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
@@ -25,6 +27,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
+import {
+  COMPACTION_RUN_USAGE_CLEAR_PATCH,
+  SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
+} from "./session-entry-projection.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
@@ -392,8 +398,14 @@ function cloneSqliteCheckpointSessionEntry(params: {
 }): SessionEntry {
   const hasTotalTokens =
     typeof params.totalTokens === "number" && Number.isFinite(params.totalTokens);
-  return {
+  const next: SessionEntry = {
     ...params.currentEntry,
+    ...SESSION_ENTRY_PRIVATE_CLEAR_PATCH,
+    ...COMPACTION_RUN_USAGE_CLEAR_PATCH,
+    ...buildRestartRecoveryClaimCleanupPatch({
+      entry: params.currentEntry,
+      recordTerminalSource: false,
+    }),
     // A new branch belongs to its requester, including an explicitly absent
     // sandbox floor. Restore and actorless branches retain the source stamp.
     ...(params.creation
@@ -407,18 +419,22 @@ function cloneSqliteCheckpointSessionEntry(params: {
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
+    lastRunError: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
     status: undefined,
-    inputTokens: undefined,
-    outputTokens: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    estimatedCostUsd: undefined,
-    transcriptByteCompactionLatch: undefined,
+    // A checkpoint prefix cannot resume native history or work from the discarded tail.
+    cliHistoryBoundary: undefined,
+    agentHarnessId: undefined,
+    restartRecoveryRuns: undefined,
+    pendingFinalDelivery: undefined,
+    pendingDeliveryNotice: undefined,
+    pendingTranscriptRepair: undefined,
+    contextTokens: undefined,
+    contextTokensSource: undefined,
+    contextBudgetStatus: undefined,
+    memoryFlush: undefined,
     totalTokens: hasTotalTokens ? params.totalTokens : undefined,
     totalTokensFresh: hasTotalTokens ? true : undefined,
     totalTokensVersion: hasTotalTokens ? SESSION_TOTAL_TOKENS_VERSION : undefined,
@@ -428,6 +444,8 @@ function cloneSqliteCheckpointSessionEntry(params: {
       ? params.currentEntry.compactionCheckpoints
       : undefined,
   };
+  clearAllCliSessions(next);
+  return next;
 }
 
 function readTranscriptHeaderCwd(events: readonly TranscriptEvent[]): string | undefined {

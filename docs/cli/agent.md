@@ -10,6 +10,11 @@ title: "Agent"
 
 Run one agent turn through the Gateway. The explicit `--local` flag and `agent exec` are the embedded execution paths.
 
+Gateway-backed turns are operator input. An agent's `exec` subprocess carrying
+`OPENCLAW_SHELL=exec` cannot use this command to report back to another session;
+use its attributed session tool or normal subagent completion instead. This
+does not change operator terminal use or the separate embedded execution paths.
+
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
@@ -26,7 +31,7 @@ openclaw agent exec --message-file task.md --cwd ./repo
 cat task.md | openclaw agent exec --message-file - --json
 ```
 
-By default, the command creates a temporary state directory and removes it after confirmed cleanup. It runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
+By default, the command creates a temporary state directory and removes it after confirmed cleanup, including accepted database work and the run's database resources. It runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
 
 Config is layered in three parts, entirely in memory: exec composes the run config and publishes it as this process's runtime config rather than writing a copy to disk. Exec defaults apply only where your config leaves a setting unset: workspace bootstrap files are skipped, the agent sandbox is off, the `coding` tool profile is selected, filesystem tools are restricted to `--cwd`, and exec runs under the full execution policy a headless turn needs. Anything your config sets wins over those defaults, so a configured sandbox, shell env, or tool profile is never downgraded, and exec host routing stays with the sandbox when your config enables one. The invocation itself always wins last: the run is scoped to `--cwd` and never bootstraps.
 
@@ -179,7 +184,11 @@ pnpm qa:code-mode-models -- --model openai/gpt-5.6-luna --mode code \
 ```
 
 `--runtime-dir` uses existing build artifacts without rebuilding. It requires a
-clean committed checkout and build stamps matching that commit. The matrix
+clean committed checkout and both build stamps matching that commit and recording
+clean build inputs. On a revision with provenance-capable stamp writers, run
+`pnpm build` in the clean checkout to refresh stale or older stamps. Historical
+revisions without those writers are unsupported as frozen runtimes; rebuilding
+them alone cannot add this provenance. The matrix
 records source and artifact hashes and refuses a comparison when paired cells
 or their workload fingerprints differ. Add `--model` for another model and
 repeat task selectors to include more scenarios. Failed trials remain in the
@@ -249,7 +258,7 @@ measurements because model latency and worker-pool routing obscure cache hits.
 - `--session-id <id>`: explicit session id
 - `--agent <id>`: agent id; overrides routing bindings
 - `--model <id>`: model override for this run (`provider/model` or model id)
-- `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)
+- `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider/runtime-supported levels such as `xhigh`, `adaptive`, `max`, or `ultra`)
 - `--verbose <on|off>`: persist verbose level for the session
 - `--channel <channel>`: delivery channel; omit to use the main session channel
 - `--reply-to <target>`: delivery target override

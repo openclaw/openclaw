@@ -4,6 +4,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  hasRegisteredNodeHostCommandActiveWork,
   invokeRegisteredNodeHostCommand,
   listRegisteredNodeHostCapsAndCommands,
   notifyRegisteredNodeHostCommandDisconnect,
@@ -256,6 +257,64 @@ describe("plugin node-host registry", () => {
     await notifyRegisteredNodeHostCommandDisconnect();
 
     expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it("retains plugin work after invocation and availability end until its owner cleans up", async () => {
+    let busy = false;
+    let available = true;
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          isAvailable: () => available,
+          handle: async () => {
+            busy = true;
+            return "{}";
+          },
+          hasActiveWork: () => {
+            expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
+            return busy;
+          },
+          onDisconnect: () => {
+            busy = false;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+    await invokeRegisteredNodeHostCommand("meeting.start");
+    available = false;
+    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).commands).toEqual([]);
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
+    await notifyRegisteredNodeHostCommandDisconnect();
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+  });
+
+  it("keeps uncertain plugin work busy when its owner query throws", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "meeting",
+        pluginName: "Meeting",
+        source: "test",
+        command: {
+          command: "meeting.start",
+          handle: async () => "{}",
+          hasActiveWork: () => {
+            throw new Error("work state unavailable");
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
   });
 
   it("dispatches plugin-declared node-host commands", async () => {

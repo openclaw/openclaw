@@ -7,13 +7,13 @@ import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts"
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
+import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
   clearWorkspaceTimer,
   getSessionWorkspace,
-  isCurrentSessionWorkspace,
   loadSessionWorkspace,
   openSessionCheckoutSidebar,
-  openSessionWorkspacePreview,
   refreshSessionWorkspaceState,
   requestWorkspaceUpdate,
   trackSessionCheckoutSidebar,
@@ -158,122 +158,6 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.handleOpenSidebar(resolveSessionDiffSidebarContent(state));
   }
-}
-
-function openWorkspaceItem<T>(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-  itemId: string,
-  load: () => Promise<T | null | undefined>,
-  render: (result: T) => SidebarContent | null,
-  missingMessage: string,
-  options: {
-    line?: number | null;
-    label?: string;
-    resolveLabel?: (result: T) => string | undefined;
-    resolveKey?: (result: T) => string | undefined;
-  } = {},
-) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const request = {
-    kind: "loading",
-    fileTab: {
-      id: itemId,
-      label: options.label ?? basenameForPath(itemId.slice(itemId.indexOf(":") + 1)),
-    },
-  } as const;
-  const preview = openSessionWorkspacePreview(state, itemId, request.fileTab.label, request);
-  workspace.activeId = itemId;
-  if (options.line != null) {
-    preview.navigation = { line: options.line };
-    workspace.navigationOrder = (workspace.navigationOrder ?? 0) + 1;
-    preview.navigationOrder = workspace.navigationOrder;
-    if (preview.content.kind === "file") {
-      preview.content.navigation = preview.navigation;
-    }
-    workspace.previews = [...workspace.previews];
-  }
-  // Reopening an unavailable file retries its read without creating another tab.
-  if (preview.content.kind === "unavailable") {
-    preview.content = request;
-    workspace.previews = [...workspace.previews];
-  }
-  state.handleOpenSidebar(request);
-  if (preview.content !== request) {
-    return;
-  }
-  const isCurrent = () =>
-    workspace.previews.includes(preview) &&
-    preview.content === request &&
-    isCurrentSessionWorkspace(state, workspace);
-  const fail = (message: string) => {
-    if (!isCurrent()) {
-      return;
-    }
-    workspace.error = message;
-    const unavailable = { kind: "unavailable" as const, message };
-    preview.content = unavailable;
-    workspace.previews = [...workspace.previews];
-  };
-  void (async () => {
-    workspace.error = null;
-    try {
-      const result = await load();
-      const content = result == null ? null : render(result);
-      const label = result == null ? undefined : options.resolveLabel?.(result);
-      const canonicalKey = result == null ? undefined : options.resolveKey?.(result);
-      if (!content) {
-        fail(missingMessage);
-        return;
-      }
-      if (isCurrent()) {
-        const canonical = canonicalKey
-          ? workspace.previews.find(
-              (entry) => entry !== preview && entry.canonicalKey === canonicalKey,
-            )
-          : undefined;
-        if (canonical) {
-          canonical.requestIds = [
-            ...new Set([
-              ...(canonical.requestIds ?? []),
-              preview.id,
-              ...(preview.requestIds ?? []),
-            ]),
-          ];
-          if (
-            preview.navigation &&
-            (preview.navigationOrder ?? 0) > (canonical.navigationOrder ?? 0)
-          ) {
-            canonical.navigation = preview.navigation;
-            canonical.navigationOrder = preview.navigationOrder;
-            if (canonical.content.kind === "file") {
-              canonical.content.navigation = canonical.navigation;
-            }
-          }
-          // Keep the existing editor and draft; the alias read only resolves identity.
-          workspace.previews = workspace.previews.filter((entry) => entry !== preview);
-          if (workspace.activePreviewId === preview.id) {
-            workspace.activePreviewId = canonical.id;
-          }
-          return;
-        }
-        preview.canonicalKey = canonicalKey;
-        if (content.kind === "file" && preview.navigation) {
-          content.line = preview.navigation.line;
-          content.navigation = preview.navigation;
-        }
-        preview.content = content;
-        preview.label = label || preview.label;
-        workspace.previews = [...workspace.previews];
-      }
-    } catch (error) {
-      fail(formatUiError(error));
-    } finally {
-      requestWorkspaceUpdate(state);
-    }
-  })();
 }
 
 function openFile(
@@ -423,12 +307,12 @@ function openFile(
     `Failed to load ${path}`,
     {
       line: opts.line,
+      label: basenameForPath(path),
+      revalidate: true,
       resolveLabel: (result) => result.file?.name,
       resolveKey: (result) => {
         const canonicalPath = result.file?.workspacePath || result.file?.path;
-        return canonicalPath
-          ? JSON.stringify(["file", result.root ?? "", canonicalPath])
-          : undefined;
+        return canonicalPath ? sessionWorkspaceFileKey(result.root, canonicalPath) : undefined;
       },
     },
   );
@@ -535,6 +419,7 @@ export function createSessionWorkspaceProps(
     state.connected &&
     state.agentsList &&
     !workspace.loading &&
+    !workspace.browserSearchTimer &&
     (!workspace.error || workspace.pendingReload) &&
     (workspace.pendingReload || workspace.list?.sessionKey !== state.sessionKey)
   ) {
@@ -551,6 +436,7 @@ export function createSessionWorkspaceProps(
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
     filter: workspace.filter,
+    browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
     onSetFilter: (filter) => {
       workspace.filter = filter;

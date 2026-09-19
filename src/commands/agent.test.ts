@@ -7,6 +7,7 @@ import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
+import "./agent-command-attempt.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
@@ -17,13 +18,17 @@ import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
-import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import {
+  loadProviderScopedThinkingCatalog,
+  readPreparedModelCatalog,
+} from "../agents/prepared-model-catalog.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
 } from "../agents/run-termination.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -50,6 +55,7 @@ import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
+import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -73,16 +79,13 @@ import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
 } from "../utils/delivery-context.shared.js";
+import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
-}));
-
-const attemptExecutionMocks = vi.hoisted(() => ({
-  useRealRunAgentAttempt: false,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -179,7 +182,7 @@ vi.mock("../agents/thinking-runtime.js", () => ({
   normalizeThinkingCatalogProviders: <T extends { provider: string }>(catalog: T[]) =>
     catalog.map((entry) => ({ ...entry, provider: entry.provider.toLowerCase() })),
   resolveCandidateThinkingLevel: ({ level }: { level?: string }) => level,
-  resolveEffectiveAgentRuntime: () => "openclaw",
+  resolveEffectiveAgentRuntime: vi.fn(() => "openclaw"),
 }));
 
 vi.mock("../agents/main-session-recovery/main-session-recovery-store.js", () => ({
@@ -204,6 +207,7 @@ vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
   // Every channel fixture in this suite is already active. Bootstrap discovery
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),
+  bootstrapOutboundChannelPluginAsync: vi.fn(() => undefined),
   resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
@@ -220,112 +224,6 @@ vi.mock("../agents/command/assistant-transcript-repair.js", () => ({
   persistAssistantTranscriptRepairRecord: vi.fn(async () => undefined),
   repairPendingAssistantTranscriptTurns: vi.fn(async () => undefined),
 }));
-
-vi.mock("../agents/command/session-store.runtime.js", async () => {
-  const accessor = await import("../config/sessions/session-accessor.js");
-  return {
-    loadSessionEntry: accessor.loadSessionEntry,
-    loadSessionEntryReadOnly: accessor.loadSessionEntryReadOnly,
-    updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
-  };
-});
-
-vi.mock("../agents/command/cli-compaction.js", () => {
-  return {
-    runCliTurnCompactionLifecycle: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
-  };
-});
-
-vi.mock("../agents/command/attempt-execution.runtime.js", () => {
-  return {
-    buildAcpResult: vi.fn(),
-    createAcpToolLifecycleTracker: () => ({
-      active: new Map(),
-      terminalToolCallIds: new Set(),
-      saturated: false,
-    }),
-    createAcpVisibleTextAccumulator: vi.fn(),
-    emitAcpAssistantDelta: vi.fn(),
-    emitAcpLifecycleEnd: vi.fn(),
-    emitAcpLifecycleError: vi.fn(),
-    emitAcpLifecycleStart: vi.fn(),
-    persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
-      kind: "persisted",
-      sessionEntry: params.sessionEntry,
-    })),
-    persistCliTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
-      kind: "persisted",
-      sessionEntry: params.sessionEntry,
-    })),
-    runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
-      if (attemptExecutionMocks.useRealRunAgentAttempt) {
-        const actual = await vi.importActual<
-          typeof import("../agents/command/attempt-execution.js")
-        >("../agents/command/attempt-execution.js");
-        return await actual.runAgentAttempt(params as never);
-      }
-      const opts = params.opts as Record<string, unknown>;
-      const runContext = params.runContext as Record<string, unknown>;
-      const sessionEntry = params.sessionEntry as
-        | {
-            authProfileOverride?: string;
-            authProfileOverrideSource?: string;
-          }
-        | undefined;
-      const providerOverride = params.providerOverride as string;
-      const authProfileProvider = params.authProfileProvider as string;
-      const authProfileId =
-        providerOverride === authProfileProvider ? sessionEntry?.authProfileOverride : undefined;
-
-      return await runEmbeddedAgent({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: params.sessionAgentId,
-        trigger: "user",
-        messageChannel: params.messageChannel,
-        agentAccountId: runContext.accountId,
-        messageTo: opts.replyTo ?? opts.to,
-        messageThreadId: opts.threadId,
-        sessionFile: params.sessionFile,
-        workspaceDir: params.workspaceDir,
-        config: params.cfg,
-        skillsSnapshot: params.skillsSnapshot,
-        prompt: params.body,
-        images: opts.images,
-        imageOrder: opts.imageOrder,
-        clientTools: opts.clientTools,
-        provider: providerOverride,
-        model: params.modelOverride,
-        authProfileId,
-        authProfileIdSource: authProfileId ? sessionEntry?.authProfileOverrideSource : undefined,
-        thinkLevel: params.resolvedThinkLevel,
-        fastMode: params.fastMode,
-        verboseLevel: params.resolvedVerboseLevel,
-        timeoutMs: params.timeoutMs,
-        runId: params.runId,
-        lane: opts.lane,
-        abortSignal: opts.abortSignal,
-        extraSystemPrompt: opts.extraSystemPrompt,
-        bootstrapContextMode: opts.bootstrapContextMode,
-        bootstrapContextRunKind: opts.bootstrapContextRunKind,
-        internalEvents: opts.internalEvents,
-        inputProvenance: opts.inputProvenance,
-        streamParams: opts.streamParams,
-        agentDir: params.agentDir,
-        allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-        cleanupBundleMcpOnRunEnd: opts.cleanupBundleMcpOnRunEnd,
-        cleanupCliLiveSessionOnRunEnd: opts.cleanupCliLiveSessionOnRunEnd,
-        modelRun: opts.modelRun,
-        promptMode: opts.promptMode,
-        disableTools: opts.modelRun === true,
-        onAgentEvent: params.onAgentEvent,
-      } as never);
-    }),
-    sessionTranscriptHasContent: vi.fn(async () => false),
-  };
-});
 
 vi.mock("../agents/command/delivery.runtime.js", () => {
   return {
@@ -406,6 +304,8 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
     ),
   };
 });
+
+const attemptExecutionMocks = getAgentAttemptExecutionMocks();
 
 const runtime = createThrowingTestRuntime();
 
@@ -511,8 +411,7 @@ function createDefaultAgentResult(params?: {
 }
 
 function getLastEmbeddedCall() {
-  const calls = vi.mocked(runEmbeddedAgent).mock.calls;
-  return calls[calls.length - 1]?.[0];
+  return vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0];
 }
 
 function expectLastRunProviderModel(provider: string, model: string): void {
@@ -604,7 +503,9 @@ beforeEach(() => {
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
+  vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([]);
   vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(resolveEffectiveAgentRuntime).mockReturnValue("openclaw");
   vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
@@ -1821,13 +1722,105 @@ describe("agentCommand", () => {
 
       expect(readPreparedModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
-      const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
-        .calls[0]?.[0];
-      expect(thinkingDefaultCall?.provider).toBe("openrouter");
-      expect(thinkingDefaultCall?.model).toBe("openrouter/auto");
-      expect(thinkingDefaultCall?.catalog).toBeUndefined();
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
     });
   });
+
+  it("validates an unconfigured model against manifest thinking capabilities without live discovery", async () => {
+    await withTempHome(async (home) => {
+      mockConfig(home, path.join(home, "sessions.json"), { models: {} });
+      vi.mocked(loadManifestModelCatalog).mockReturnValue([
+        {
+          provider: "reasoning-test",
+          id: "catalog-max",
+          name: "Catalog reasoning model",
+          api: "openai-completions",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["max"] },
+        },
+      ]);
+
+      await agentCommand(
+        {
+          message: "ping",
+          to: "+1222",
+          model: "reasoning-test/catalog-max",
+          thinking: "max",
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("max");
+      expect(readPreparedModelCatalog).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["off", "max"] as const)(
+    "validates native %s against observed capabilities despite manifest reasoning",
+    async (thinking) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"), {
+          model: { primary: "openai/account-reasoner" },
+          models: { "openai/account-reasoner": {} },
+        });
+        const registry = createTestRegistry();
+        registry.providers.push({
+          pluginId: "openai",
+          source: "test",
+          provider: {
+            id: "openai",
+            label: "OpenAI",
+            auth: [],
+            resolveThinkingProfile: expectDefined(
+              resolveProviderPolicySurface("openai")?.resolveThinkingProfile,
+              "OpenAI thinking policy",
+            ),
+          },
+        });
+        setActivePluginRegistry(registry);
+        vi.mocked(loadManifestModelCatalog).mockReturnValue([
+          {
+            provider: "openai",
+            id: "account-reasoner",
+            name: "Catalog reasoning model",
+            api: "openai-chatgpt-responses",
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["none", "high", "max"] },
+          },
+        ]);
+        vi.mocked(resolveEffectiveAgentRuntime).mockReturnValue("codex");
+        vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
+          {
+            provider: "openai",
+            id: "account-reasoner",
+            name: "Native reasoning model",
+            nativeRuntime: "codex",
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["high"] },
+          },
+        ]);
+
+        await expect(
+          agentCommand(
+            { message: "ping", to: "+1222", model: "openai/account-reasoner", thinking },
+            runtime,
+          ),
+        ).rejects.toThrow(
+          `Thinking level "${thinking}" is not supported for openai/account-reasoner.`,
+        );
+
+        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            provider: "openai",
+            model: "account-reasoner",
+            agentRuntime: "codex",
+          }),
+        );
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(readPreparedModelCatalog).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("bypasses ACP sessions for one-shot model runs", async () => {
     await withTempHome(async (home) => {

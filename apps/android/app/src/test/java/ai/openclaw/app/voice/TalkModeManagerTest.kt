@@ -64,7 +64,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -1044,6 +1046,35 @@ class TalkModeManagerTest {
         assertFalse(proof.manager.isSpeaking.value)
         assertTrue(currentRecognizer() !== recognizer)
         assertFalse(currentRecognizer().isDestroyed)
+      }
+    }
+
+  @Test
+  fun nativeTalkKeepsRecognitionOpenFromEndOfSpeechUntilResults() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val recognizer = currentRecognizer()
+        val session = recognizer.lastRecognizerIntent
+        recognizer.triggerOnReadyForSpeech(Bundle())
+        // Google's recognizer delivers the final hypothesis as a partial at end of speech and
+        // reports onResults only when the session closes, after the Talk silence window.
+        recognizer.triggerOnPartialResults(recognitionResults("Synthetic end-of-speech phrase"))
+        recognizer.triggerOnEndOfSpeech()
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { sends.isNotEmpty() }
+
+        assertSame(
+          "End of speech must not cancel and restart the session before its results arrive",
+          session,
+          recognizer.lastRecognizerIntent,
+        )
+        assertTrue(
+          sends
+            .single()
+            .getValue("message")
+            .jsonPrimitive.content
+            .endsWith("Synthetic end-of-speech phrase"),
+        )
       }
     }
 
@@ -2540,6 +2571,262 @@ class TalkModeManagerTest {
       }
     }
 
+  @Test
+  fun realtimeStartupNegotiatesVoiceSelectionFromTheConnectedGatewayHello() =
+    runBlocking {
+      val voiceMethods = listOf("talk.voice.get", "talk.voice.set", "talk.voice.complete")
+      for ((methods, expectedCapability) in listOf(
+        null to false,
+        emptyList<String>() to false,
+        voiceMethods.dropLast(1) to false,
+        voiceMethods to true,
+      )) {
+        val creates = ConcurrentLinkedQueue<JsonObject>()
+        val hello =
+          buildJsonObject {
+            put("snapshot", buildJsonObject { put("sessionDefaults", buildJsonObject { put("mainSessionKey", "main") }) })
+            methods?.let { put("features", buildJsonObject { put("methods", JsonArray(it.map(::JsonPrimitive))) }) }
+          }.toString()
+        withStartedTalk(
+          responseForRequest = { request, _ ->
+            hello.takeIf { request["method"]?.jsonPrimitive?.content == "connect" }
+          },
+          interceptRequest = { request, socket ->
+            if (request["method"]?.jsonPrimitive?.content == "talk.session.create") {
+              val params = request.getValue("params").jsonObject
+              creates += params
+              val allowed = setOf("sessionKey", "mode", "transport", "brain", "language") + if (expectedCapability) setOf("capabilities") else emptySet()
+              if (params.keys.any { it !in allowed }) {
+                val id = request.getValue("id").jsonPrimitive.content
+                socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"invalid talk.session.create params: unexpected capabilities"}}""")
+                return@withStartedTalk true
+              }
+            }
+            false
+          },
+        ) { proof ->
+          assertTrue(proof.manager.isListening.value)
+          val create = creates.single()
+          assertEquals(expectedCapability, create.containsKey("capabilities"))
+          if (expectedCapability) assertEquals(JsonArray(listOf(JsonPrimitive("voice-selection"))), create["capabilities"])
+          assertEquals("gateway-relay", create.getValue("transport").jsonPrimitive.content)
+          assertEquals("main", create.getValue("sessionKey").jsonPrimitive.content)
+        }
+      }
+    }
+
+  @Test
+  fun voiceChangeHandoffUsesItsOriginalLeaseAndWaitsForLocalReadiness() =
+    runBlocking {
+      for ((boundary, outcome) in listOf(
+        "complete" to "ptt-resumed",
+        "complete" to "ready",
+        "complete" to "stop",
+        "complete" to "cancelled",
+        "complete" to "unconfirmed",
+        "close" to "stop",
+        "close" to "cancelled",
+        "close" to "error",
+        "close" to "retirement",
+        "create" to "stop",
+        "create" to "cancelled",
+        "create" to "gateway",
+      )) {
+        val requests = ConcurrentLinkedQueue<JsonObject>()
+        val held = CompletableDeferred<Pair<String, WebSocket>>()
+        val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+        org.robolectric.shadows.ShadowAudioRecord.setSourceProvider {
+          object : org.robolectric.shadows.ShadowAudioRecord.AudioRecordSource {
+            override fun readInByteArray(
+              bytes: ByteArray,
+              offset: Int,
+              size: Int,
+              blocking: Boolean,
+            ): Int {
+              val frame = checkNotNull(frames.poll(10, TimeUnit.SECONDS)) { "Voice change capture did not stop" }
+              frame.copyInto(bytes, destinationOffset = offset)
+              return frame.size
+            }
+          }
+        }
+        try {
+          withStartedTalk(
+            responseForRequest = { request, _ ->
+              if (request["method"]?.jsonPrimitive?.content == "talk.session.create" && request["params"]?.jsonObject?.containsKey("voiceChangeId") == true) {
+                """{"relaySessionId":"replacement-relay"}"""
+              } else if (request["method"]?.jsonPrimitive?.content == "talk.session.cancelOutput") {
+                """{"ok":true,"status":"idle","turnId":"finished-turn"}"""
+              } else {
+                null
+              }
+            },
+            interceptRequest = { request, socket ->
+              requests += request
+              val method = request.getValue("method").jsonPrimitive.content
+              val params = request["params"]?.jsonObject
+              val atBoundary =
+                when (boundary) {
+                  "close" -> method == "talk.session.close" && params?.get("sessionId")?.jsonPrimitive?.content == "playback-relay"
+                  "create" -> method == "talk.session.create" && params?.containsKey("voiceChangeId") == true
+                  else -> method == "talk.voice.complete" && params?.get("outcome")?.jsonPrimitive?.content == "ready"
+                }
+              if (atBoundary && !held.isCompleted) {
+                held.complete(request.getValue("id").jsonPrimitive.content to socket)
+                true
+              } else {
+                false
+              }
+            },
+          ) { proof ->
+            var capture: Thread? = null
+
+            suspend fun awaitState(
+              progress: () -> Unit = { proof.scheduler.runCurrent() },
+              condition: () -> Boolean,
+            ) {
+              val deadline = System.nanoTime() + 5_000_000_000L
+              while (!condition()) {
+                progress()
+                check(System.nanoTime() < deadline) { "Voice change did not reach $boundary/$outcome: ${proof.manager.statusText.value}" }
+                withContext(Dispatchers.Default) { delay(10) }
+              }
+            }
+
+            fun changes() = requests.filter { it["method"]?.jsonPrimitive?.content == "talk.session.create" }
+
+            fun completions() = requests.filter { it["method"]?.jsonPrimitive?.content == "talk.voice.complete" }
+            val change = """{"changeId":"change-1","voiceSessionId":"playback-relay","sessionKey":"main","voice":"cedar","phase":"requested"}"""
+            try {
+              assertTrue(
+                changes()
+                  .single()
+                  .getValue("params")
+                  .jsonObject
+                  .getValue("capabilities")
+                  .toString()
+                  .contains("voice-selection"),
+              )
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Keep the agenda.","final":true}""")
+              proof.manager.handleGatewayEvent("talk.voice.change", change.replace("playback-relay", "foreign-relay"))
+              proof.manager.handleGatewayEvent("talk.voice.change", change.replace("main", "other-chat"))
+              proof.scheduler.runCurrent()
+              assertEquals(1, changes().size)
+              assertFalse(requests.any { it["method"]?.jsonPrimitive?.content == "talk.session.close" })
+              if (outcome == "retirement") {
+                proof.manager.audioRetirement.retire(cleanup = CompletableDeferred<Unit>().apply { completeExceptionally(IllegalStateException("Device cleanup failed")) })
+              }
+              proof.manager.handleGatewayEvent("talk.voice.change", change)
+              proof.manager.handleGatewayEvent("talk.voice.change", change)
+              proof.manager.setMainSessionKey("another-chat")
+              proof.scheduler.runCurrent()
+              proof.drainCancelledCapture()
+              if (boundary == "complete") {
+                awaitState { readPrivateField(proof.manager, "realtimeSessionId") == "replacement-relay" }
+                assertTrue("Local media is not ready while its capture is queued", completions().isEmpty())
+                if (outcome == "ptt-resumed") {
+                  proof.manager.realtimeEvent("""{"relaySessionId":"replacement-relay","type":"responseStarted","turnId":"finished-turn"}""")
+                  val finishPause = proof.manager.prepareRealtimeCapturePause("voice-change-ptt", proof.session.captureRequestLease())
+                  proof.drainCancelledCapture()
+                  val paused = async(start = CoroutineStart.UNDISPATCHED) { finishPause() }
+                  awaitState(progress = proof.drainCancelledCapture) { paused.isCompleted }
+                  paused.await()
+                  proof.manager.resumeRealtimeCaptureAfterPushToTalk("voice-change-ptt")
+                  // Recorder A has settled, but recorder B is still queued behind this continuation.
+                  proof.scheduler.runCurrent()
+                  assertTrue("PTT resume must not tear down the replacement", proof.manager.isEnabled.value)
+                  assertTrue("The new recorder must be ready before confirming", completions().isEmpty())
+                }
+                capture = Thread { proof.drainCancelledCapture() }.also { it.start() }
+              }
+              awaitState { held.isCompleted }
+              assertEquals(if (boundary == "close") 1 else 2, changes().size)
+              if (boundary != "close") {
+                val replacement = changes().last().getValue("params").jsonObject
+                assertEquals("change-1", replacement.getValue("voiceChangeId").jsonPrimitive.content)
+                assertEquals("main", replacement.getValue("sessionKey").jsonPrimitive.content)
+                assertEquals("cedar", replacement.getValue("voice").jsonPrimitive.content)
+              }
+              assertFalse(requests.any { it["method"]?.jsonPrimitive?.content == "chat.abort" })
+              assertEquals(if (outcome == "ptt-resumed") 1 else 0, requests.count { it["method"]?.jsonPrimitive?.content == "talk.session.cancelOutput" })
+              when (outcome) {
+                "stop" -> proof.manager.stopAllCapture()
+                "gateway" -> proof.manager.onGatewayScopeChanging()
+                "cancelled" -> proof.manager.handleGatewayEvent("talk.voice.change", change.replace("requested", "cancelled"))
+              }
+              val (id, socket) = held.await()
+              if (outcome == "error") {
+                socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"close failed"}}""")
+              } else {
+                val payload =
+                  when {
+                    boundary == "create" -> """{"relaySessionId":"replacement-relay"}"""
+                    outcome == "unconfirmed" -> "{}"
+                    else -> """{"ok":true}"""
+                  }
+                socket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+              }
+              if (outcome == "ready" || outcome == "ptt-resumed") {
+                awaitState { proof.manager.statusText.value == "Listening" && readPrivateField(proof.manager, "realtimeVoiceChange") == null }
+                assertTrue(proof.manager.isEnabled.value)
+                assertEquals("replacement-relay", readPrivateField(proof.manager, "realtimeSessionId"))
+                assertEquals(
+                  "replacement-relay",
+                  completions()
+                    .single()
+                    .getValue("params")
+                    .jsonObject
+                    .getValue("voiceSessionId")
+                    .jsonPrimitive.content,
+                )
+                assertEquals(
+                  "Keep the agenda.",
+                  proof.manager.conversation.value
+                    .single()
+                    .text,
+                )
+              } else {
+                awaitState { if (outcome == "gateway") readPrivateField(proof.manager, "realtimeSessionId") == null else !proof.manager.isEnabled.value }
+                assertNull(readPrivateField(proof.manager, "realtimeSessionId"))
+                if (outcome != "gateway") assertFalse(proof.manager.isEnabled.value)
+                if (boundary == "close") assertEquals(1, changes().size)
+                if (boundary != "complete") {
+                  assertFalse(
+                    completions().any {
+                      it["params"]
+                        ?.jsonObject
+                        ?.get("outcome")
+                        ?.jsonPrimitive
+                        ?.content == "ready"
+                    },
+                  )
+                }
+                if (boundary == "create" && outcome != "gateway") {
+                  awaitState {
+                    requests.any {
+                      it["method"]?.jsonPrimitive?.content == "talk.session.close" && it["params"]
+                        ?.jsonObject
+                        ?.get("sessionId")
+                        ?.jsonPrimitive
+                        ?.content == "replacement-relay"
+                    }
+                  }
+                }
+              }
+            } finally {
+              proof.manager.stopAllCapture()
+              frames.offer(byteArrayOf())
+              capture?.join(5_000)
+              assertFalse("Voice change capture worker must terminate", capture?.isAlive == true)
+              proof.drainCancelledCapture()
+            }
+          }
+        } finally {
+          org.robolectric.shadows.ShadowAudioRecord
+            .clearSource()
+        }
+      }
+    }
+
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
@@ -2617,7 +2904,7 @@ class TalkModeManagerTest {
                 val id = request.getValue("id").jsonPrimitive.content
                 val payload =
                   responseForRequest(request, webSocket) ?: when (request.getValue("method").jsonPrimitive.content) {
-                    "connect" -> """{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                    "connect" -> """{"features":{"methods":["talk.voice.get","talk.voice.set","talk.voice.complete"]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
                     "talk.config" -> """{"config":{}}"""
                     "talk.session.create" -> """{"relaySessionId":"playback-relay"}"""
                     else -> "{}"

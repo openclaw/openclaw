@@ -1,4 +1,3 @@
-// Doctor-only repair for agent model refs whose provider is no longer available.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,6 +11,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
@@ -68,10 +68,10 @@ function collectPluginProviderIds(
         env: options.env ?? process.env,
         allowWorkspaceScopedCurrent: true,
       });
-    if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+    if (hasIncompletePluginDiscovery(snapshot.diagnostics)) {
       return {
         warnings: [
-          "Skipped stale agent model reference repair because plugin discovery reported errors.",
+          "Skipped stale agent model reference repair because plugin discovery is incomplete; uninspected configuration is preserved.",
         ],
       };
     }

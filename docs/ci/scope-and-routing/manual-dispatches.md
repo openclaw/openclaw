@@ -15,6 +15,13 @@ Ordinary manual CI dispatches run the same job graph as normal CI but force ever
 
 PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
+Canonical manual CI also retains QA Smoke's full profile and Control UI performance
+without owner-path filtering. It selects `published-upgrade-survivor` when the
+target declares `docker-seed-e2e-contract-v1`, preserving the exact
+`legacy-operator-state` plus `auto-auth` proof used by affected PR/main runs.
+Full Release Validation reaches these lanes through its normal CI child without
+setting `release_gate`; frozen targets retain their existing capability checks.
+
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
 gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
@@ -52,3 +59,68 @@ skipping proof. Selecting `windows-2025` does not establish native qualification
 the unchanged lifecycle assertions and cleanup must pass on the actual runner.
 Cleanup and diagnostic upload still run after failure, and retained evidence is
 removed only after cleanup and upload succeed.
+
+#### Installed Gateway startup measurements
+
+The same workflow can measure one immutable npm package on the selected Windows
+runner. Set `target_ref` to the full tooling commit, `run_windows_ci=false`,
+`keepalive_minutes=0`, and `startup_node_version` to an exact Node version
+(default `26.8.2`). Leave WSL and Defender inputs at their defaults. The optional
+`installed_startup_package` input is a JSON object with `runId`, `runAttempt`,
+`workflowSha`, `artifactId`, `artifactDigest`, `packageSha256`, and `sourceSha`.
+Use the immutable `package-under-test-<runId>-<runAttempt>` artifact from a
+successful Package Acceptance run. The workflow verifies its producer and
+artifact metadata, resolves it through the package-candidate owner, and installs
+and rebuilds with normal npm lifecycle scripts.
+
+After the benchmark's lifecycle fixtures pass on Windows, the installed
+`openclaw.mjs` runs once with new synthetic state, then eight more times with that
+same state. Each sample records HTTP readiness, first status and health RPC
+responses, and acknowledged graceful shutdown. An outer managed Windows Job
+contains the controller and all descendants; final success requires both clean
+Gateway shutdown and observed descendant settlement before forced Job cleanup.
+No synchronous process sampler or startup profiler runs during measurement.
+
+The `windows-installed-startup-<runId>-<runAttempt>` artifact retains all nine
+sample slots, errors, package/runtime/helper hashes, source and tooling commits,
+runner hardware, the raw installed npm lockfile, and cleanup evidence. A streamed
+`cohort.log` retains the active PID, phase, child output, and completed probe/RPC
+observations even if cancellation prevents the final sample checkpoint. Synthetic databases and compile caches
+stay in the runner's temporary directory. A failed or interrupted cohort has no
+established summary. “Fresh” means new state, not a cold filesystem; dedicated
+runner results establish a new baseline and do not establish a speedup relative
+to a different desktop. Health RPC success is separate from recorded plugin
+availability and degraded diagnostics.
+
+For a matched comparison, pass `installed_startup_package` as
+`{"baseline": <package-binding>, "candidate": <package-binding>}`. Both bindings
+use the same fields above. The workflow resolves and normally installs both
+packages on one runner before measurement. Their complete npm lock records must
+match, except the independently verified OpenClaw tarball references and integrity.
+Any dependency drift stops the comparison before a Gateway starts; both raw locks
+remain evidence. The packages must have the same version and dependency graph.
+
+Each package has its own immutable install and synthetic state/cache directory.
+The cohort plans 18 slots: fresh baseline then fresh candidate, followed by eight
+restart pairs alternating baseline/candidate and candidate/baseline order. Both
+arms retain their own state across restarts. There are no discarded warmups or
+replacement samples. A failure stops the cohort, retains the remaining unrun
+slots, and invalidates the comparison summary. The per-sample deadlines stay the
+same; the outer lifecycle budget scales from 30 to 60 minutes for two arms.
+
+After all samples and descendants settle, the comparison reports each arm's
+established readiness and absolute first status/health completion, plus paired
+candidate-minus-baseline differences. Negative differences favor the candidate.
+Fresh samples remain separate. Alternating order reduces time-order bias; it
+does not make the filesystem cold or establish performance on other machines.
+
+For CPU attribution, set `installed_startup_cpu_diagnostic=true` with one package
+binding. This separate mode runs one unprofiled fresh prime, then one native CPU
+profile of an established launch using the same synthetic state. Both launches
+still require readiness, first status/health requests, acknowledged shutdown,
+and descendant settlement. It produces no timing summary or paired comparison.
+The artifact retains raw `.cpuprofile` files, the main process/thread identity
+and clock calibration, startup trace metrics, config hashes, and backup-existence
+facts. Profiling and trace observation add overhead; main-isolate samples do not
+account for unprofiled child or Worker CPU. Ordinary timing cohorts remain
+uninstrumented.

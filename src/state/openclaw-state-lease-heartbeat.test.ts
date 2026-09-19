@@ -167,7 +167,9 @@ describe("maintenance lease heartbeat", () => {
           exclusion.release();
         }
         await expect
-          .poll(() => Number(readLease(state.env)?.heartbeat_at))
+          .poll(() => Number(readLease(state.env)?.heartbeat_at), {
+            timeout: Math.max(1, Number(before?.expires_at) - Date.now()),
+          })
           .toBeGreaterThan(Number(before?.heartbeat_at));
         lease.assertOwned();
       });

@@ -31,6 +31,7 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
+import { registerToolChannelProgressTests } from "./embedded-agent-subscribe.handlers.tools.progress.test-support.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -43,7 +44,6 @@ import {
 } from "./tools/ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
-import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 type ToolExecutionStartEvent = Omit<Extract<AgentEvent, { type: "tool_execution_start" }>, "type">;
 type ToolExecutionEndEvent = Omit<Extract<AgentEvent, { type: "tool_execution_end" }>, "type">;
@@ -1088,9 +1088,8 @@ describe("handleToolExecutionStart read path checks", () => {
     await pending;
 
     expect(ctx.state.toolMetaById.has("tool-await-flush")).toBe(true);
-    expect(ctx.state.itemStartedCount).toBe(2);
-    expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
-    expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
+    expect(ctx.state.itemStartedCount).toBe(1);
+    expect([...ctx.state.itemActiveIds]).toEqual(["tool:tool-await-flush"]);
   });
 
   it("keeps processing tool start when progress callbacks throw", async () => {
@@ -1111,7 +1110,7 @@ describe("handleToolExecutionStart read path checks", () => {
     await startTool(ctx, evt);
 
     expect(ctx.state.toolMetaById.has("tool-callback-throws")).toBe(true);
-    expect(ctx.state.itemStartedCount).toBe(2);
+    expect(ctx.state.itemStartedCount).toBe(1);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("tool execution phase callback failed"),
     );
@@ -1470,46 +1469,7 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
   });
 });
 
-describe("sessions_yield channel progress privacy", () => {
-  it.each(["off", "on", "full"] as const)(
-    "keeps continuation context out of %s verbosity output",
-    async (verboseLevel) => {
-      const { ctx } = createTestContext();
-      const onYield = vi.fn();
-      const args = {
-        message: "SYNTHETIC_PRIVATE_CONTINUATION_MARKER",
-        acknowledgment: "Research started; results will follow.",
-      };
-      ctx.params.onToolResult = vi.fn();
-      ctx.shouldEmitToolResult = () => verboseLevel !== "off";
-      ctx.shouldEmitToolOutput = () => verboseLevel === "full";
-      const tool = createSessionsYieldTool({
-        sessionId: ctx.params.sessionId,
-        claimYield: () => true,
-        onYield,
-      });
-      const toolCallId = "yield-private-context";
-
-      await startTool(ctx, { toolName: tool.name, toolCallId, args });
-      const result = await tool.execute(toolCallId, args);
-      await endTool(ctx, { toolName: tool.name, toolCallId, result, isError: false });
-
-      expect(onYield).toHaveBeenCalledWith(args.message, args.acknowledgment);
-      expect(ctx.emitToolSummary).toHaveBeenCalledTimes(verboseLevel === "off" ? 0 : 1);
-      expect(ctx.emitToolOutput).toHaveBeenCalledTimes(verboseLevel === "full" ? 1 : 0);
-      expect(JSON.stringify(vi.mocked(ctx.emitToolSummary).mock.calls)).not.toContain(args.message);
-      expect(JSON.stringify(vi.mocked(ctx.emitToolOutput).mock.calls)).not.toContain(args.message);
-      if (verboseLevel === "full") {
-        expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-          tool.name,
-          undefined,
-          expect.stringContaining(args.acknowledgment),
-          result,
-        );
-      }
-    },
-  );
-});
+registerToolChannelProgressTests({ createTestContext, startTool, updateTool, endTool });
 
 describe("handleToolExecutionEnd private result observer", () => {
   it("reports the sanitized original tool result", async () => {
@@ -2574,6 +2534,34 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     ]);
   });
 
+  it.each([
+    { status: "deferred", itemStatus: "completed" },
+    { status: "error", itemStatus: "failed" },
+  ] as const)(
+    "reports a sessions_yield $status result as a $itemStatus progress item",
+    async ({ status, itemStatus }) => {
+      const { ctx, onAgentEvent } = createTestContext();
+      await executeTool(ctx, {
+        toolName: "sessions_yield",
+        toolCallId: "tool-yield",
+        args: {},
+        isError: false,
+        result: { content: [{ type: "text", text: status }], details: { status } },
+      });
+
+      expect(onAgentEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stream: "item",
+          data: expect.objectContaining({
+            itemId: "tool:tool-yield",
+            phase: "end",
+            status: itemStatus,
+          }),
+        }),
+      );
+    },
+  );
+
   async function executeProcessResult(
     ctx: ToolHandlerContext,
     params: {
@@ -2675,8 +2663,11 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       const { ctx } = createTestContext();
       await executeProcessResult(ctx, { details });
 
-      expect(ctx.state.lastToolError?.terminalDiagnostic).toMatchObject({ reason });
-      expect(ctx.state.lastToolError?.terminalDiagnostic?.reason).not.toHaveProperty("exitCode");
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toEqual({
+        kind: "process",
+        sessionId: "wild-lagoon",
+        reason,
+      });
     },
   );
 
@@ -3288,14 +3279,14 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
           };
           return (
             candidate.stream === "item" &&
-            candidate.data?.itemId === "command:tool-exec-approval-events" &&
+            candidate.data?.itemId === "tool:tool-exec-approval-events" &&
             candidate.data?.status === "blocked"
           );
         }),
       "blocked item event",
     );
     expectRecordFields(itemEvent.data, "blocked item event data", {
-      itemId: "command:tool-exec-approval-events",
+      itemId: "tool:tool-exec-approval-events",
       phase: "end",
       status: "blocked",
       summary: "Awaiting approval before command can run.",
@@ -3325,7 +3316,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         events
           .filter((event) => event.stream === "item" && event.data?.phase === "end")
           .map((event) => event.data?.status),
-      ).toEqual([expectedStatus, expectedStatus]);
+      ).toEqual([expectedStatus]);
       const commandOutput = requireEvent(
         events,
         (event) => event.stream === "command_output",
@@ -3540,12 +3531,7 @@ describe("handleToolExecutionEnd derived tool events", () => {
     const itemUpdates = events.filter(
       (evt) => evt.stream === "item" && evt.data?.phase === "update",
     );
-    expect(itemUpdates.map((evt) => evt.data?.kind)).toEqual([
-      "tool",
-      "command",
-      "tool",
-      "command",
-    ]);
+    expect(itemUpdates.map((evt) => evt.data?.kind)).toEqual(["tool", "tool"]);
     const partialResult = updateEvents[0]?.data?.partialResult as
       | { details?: { aggregated?: string } }
       | undefined;
@@ -3569,10 +3555,9 @@ describe("handleToolExecutionEnd derived tool events", () => {
       onAgentEvent.mock.calls
         .map((call) => call[0])
         .filter((event) => event.stream === "item" && event.data.phase === "update"),
-    ).toHaveLength(8);
-    expect(events.slice(-4).map((event) => [event.stream, event.data?.phase])).toEqual([
+    ).toHaveLength(4);
+    expect(events.slice(-3).map((event) => [event.stream, event.data?.phase])).toEqual([
       ["tool", "result"],
-      ["item", "end"],
       ["item", "end"],
       ["command_output", "end"],
     ]);

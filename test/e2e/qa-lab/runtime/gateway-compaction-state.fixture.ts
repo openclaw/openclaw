@@ -32,6 +32,10 @@ type StateRuntime = {
   loadSessionEntry: typeof import("../../../../src/config/sessions/session-accessor.js").loadSessionEntry;
   resolveSessionTranscriptDatabasePath: typeof import("../../../../src/config/sessions/session-accessor.js").resolveSessionTranscriptDatabasePath;
 };
+type HeartbeatRuntime = Pick<
+  typeof import("openclaw/plugin-sdk/string-coerce-runtime"),
+  "isRecord"
+>;
 type GatewayState = Pick<QaGatewayChild, "cfg" | "runtimeEnv" | "workspaceDir" | "tempRoot">;
 type CompactionProofMessage = AgentMessage & { timestamp: number };
 
@@ -107,6 +111,66 @@ export async function waitForCompactionRunSettlement(
       return entry;
     }
     assert.ok(Date.now() < deadline, "Original run's terminal lifecycle did not persist");
+    await pollDelay(50);
+  }
+}
+
+export async function waitForHeartbeatTerminal(
+  runtime: HeartbeatRuntime,
+  gateway: QaGatewayChild,
+  monitorId: string,
+  runId: string,
+  timeoutMs = CHECKPOINT_TIMEOUT_MS,
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const history = await gateway.call("cron.runs", { id: monitorId, runId, limit: 1 });
+    assert.ok(
+      runtime.isRecord(history) && Array.isArray(history.entries),
+      "cron.runs omitted entries",
+    );
+    const entry = history.entries.find(
+      (candidate) => runtime.isRecord(candidate) && candidate.runId === runId,
+    );
+    if (
+      runtime.isRecord(entry) &&
+      (entry.status === "ok" || entry.status === "error" || entry.status === "skipped")
+    ) {
+      return entry;
+    }
+    assert.ok(Date.now() < deadline, "forced heartbeat did not reach terminal history");
+    await pollDelay(50);
+  }
+}
+
+export async function waitForInterruptedHeartbeatRecovery(
+  runtime: HeartbeatRuntime,
+  gateway: QaGatewayChild,
+  monitorId: string,
+  runningAtMs: number,
+) {
+  const deadline = Date.now() + CHECKPOINT_TIMEOUT_MS;
+  for (;;) {
+    const job = await gateway.call("cron.get", { id: monitorId });
+    assert.ok(
+      runtime.isRecord(job) && runtime.isRecord(job.state),
+      "cron.get omitted heartbeat recovery state",
+    );
+    assert.equal(job.id, monitorId, "Restart recovery changed the heartbeat monitor");
+    if (job.state.runningAtMs === undefined && job.state.lastRunAtMs === runningAtMs) {
+      assert.equal(job.state.lastRunStatus, "error", "Interrupted heartbeat was not settled");
+      assert.equal(
+        job.state.lastError,
+        "cron: job interrupted by gateway restart",
+        "Heartbeat settled for an unexpected reason",
+      );
+      return job.state;
+    }
+    assert.ok(
+      job.state.runningAtMs === undefined || job.state.runningAtMs === runningAtMs,
+      "Another heartbeat started before the interrupted occurrence was recovered",
+    );
+    assert.ok(Date.now() < deadline, "Interrupted heartbeat did not reach recovered idle state");
     await pollDelay(50);
   }
 }

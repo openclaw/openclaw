@@ -5,10 +5,13 @@ import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts"
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { partitionTasks } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderTaskRow } from "./chat-background-task-row.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+
+registerBackgroundTasksEnglish();
 
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,

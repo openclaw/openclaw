@@ -18,7 +18,11 @@ describe("persistPendingFinalDeliveryMarker", () => {
 
   it("owns a multi-payload command delivery as one durable batch", async () => {
     const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-    const payloads = [{ text: "first" }, { text: "second" }];
+    const payloads = [
+      { text: "first" },
+      { text: "internal reasoning", isReasoning: true },
+      { text: "second" },
+    ];
 
     const result = await persistPendingFinalDeliveryMarker({
       deliver: true,
@@ -33,6 +37,10 @@ describe("persistPendingFinalDeliveryMarker", () => {
       runOwnedSessionId: "session-1",
     });
 
+    expect(result.sessionEntry?.pendingFinalDelivery).toMatchObject({
+      kind: "replayable",
+      text: "first\n\nsecond",
+    });
     expect(result.sessionEntry?.pendingFinalDelivery?.deliveries).toEqual([
       { id: expect.any(String), state: "prepared" },
     ]);
@@ -41,6 +49,6 @@ describe("persistPendingFinalDeliveryMarker", () => {
       payloads.map(
         (payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion?.deliveryId,
       ),
-    ).toEqual([deliveryId, deliveryId]);
+    ).toEqual([deliveryId, undefined, deliveryId]);
   });
 });

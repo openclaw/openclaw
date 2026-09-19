@@ -135,6 +135,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let preview: OpenClawChatCanvasPreview?
 
     // Tool-call fields (when `type == "toolCall"` or similar)
+    public let runId: String?
     public let id: String?
     public let name: String?
     public let arguments: AnyCodable?
@@ -198,8 +199,10 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         name: String? = nil,
         arguments: AnyCodable? = nil,
         details: AnyCodable? = nil,
-        isError: Bool? = nil)
+        isError: Bool? = nil,
+        runId: String? = nil)
     {
+        self.runId = runId
         self.type = type
         self.text = text
         self.textSignature = textSignature
@@ -248,6 +251,11 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case id
         case name
         case arguments
+        case runId
+        case toolUseId
+        case tool_use_id
+        case toolCallId
+        case tool_call_id
         case details
         case isError
         case is_error
@@ -277,7 +285,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
             ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
         self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
-        self.id = try container.decodeIfPresent(String.self, forKey: .id)
+        self.runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        self.id = try [CodingKeys.id, .tool_call_id, .toolCallId, .tool_use_id, .toolUseId]
+            .compactMap { key in
+                try container.decodeIfPresent(String.self, forKey: key)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .first { !$0.isEmpty }
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
         self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
@@ -317,6 +331,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.id, forKey: .id)
         try container.encodeIfPresent(self.name, forKey: .name)
         try container.encodeIfPresent(self.arguments, forKey: .arguments)
+        try container.encodeIfPresent(self.runId, forKey: .runId)
         try container.encodeIfPresent(self.details, forKey: .details)
         try container.encodeIfPresent(self.isError, forKey: .isError)
     }
@@ -448,6 +463,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
     public var id: UUID = .init()
     public var transcriptMessageID: String?
+    public var activity: [OpenClawAgentActivityItem]?
     public let transcriptRunID: String?
     public var isTruncated = false
     public let role: String
@@ -520,7 +536,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         phase: String? = nil,
         turnBoundary: Bool? = nil,
         steerTargetRunID: String? = nil,
-        streamFallback: OpenClawChatStreamFallback? = nil)
+        streamFallback: OpenClawChatStreamFallback? = nil,
+        activity: [OpenClawAgentActivityItem]? = nil)
     {
         self.id = id
         self.transcriptMessageID = transcriptMessageID
@@ -531,6 +548,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.turnBoundary = turnBoundary
         self.steerTargetRunID = steerTargetRunID
         self.streamFallback = streamFallback
+        self.activity = activity
         self.content = content
         self.timestamp = timestamp
         self.idempotencyKey = idempotencyKey
@@ -744,6 +762,27 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
     }
 }
 
+public struct OpenClawAgentActivityItem: Codable, Hashable, Sendable {
+    public let itemId: String
+    public let toolCallId: String?
+    public let kind: String
+    public let phase: String
+    public let title: String
+    public let name: String?
+    public let status: String?
+    public let hideFromChannelProgress: Bool?
+    public let suppressChannelProgress: Bool?
+
+    var isVisible: Bool {
+        self.hideFromChannelProgress != true && self.suppressChannelProgress != true
+    }
+}
+
+public struct OpenClawChatHistoryActivity: Codable, Sendable {
+    public let messageId: String
+    public let items: [OpenClawAgentActivityItem]
+}
+
 public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public struct InputConsumption: Codable, Sendable {
         public let runId: String
@@ -757,6 +796,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let sessionInfo: OpenClawChatSessionInfo?
     public let inFlightRun: OpenClawChatInFlightRun?
     public let inputConsumptions: [InputConsumption]?
+    public let activity: [OpenClawChatHistoryActivity]?
 
     public init(
         sessionKey: String,
@@ -765,7 +805,8 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         thinkingLevel: String?,
         sessionInfo: OpenClawChatSessionInfo? = nil,
         inFlightRun: OpenClawChatInFlightRun? = nil,
-        inputConsumptions: [InputConsumption]? = nil)
+        inputConsumptions: [InputConsumption]? = nil,
+        activity: [OpenClawChatHistoryActivity]? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -774,6 +815,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.sessionInfo = sessionInfo
         self.inFlightRun = inFlightRun
         self.inputConsumptions = inputConsumptions
+        self.activity = activity
     }
 }
 
@@ -991,6 +1033,8 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     public let startedAt: Double?
     public let isError: Bool?
     let diffStat: ChatToolDiffStat?
+    var activity: OpenClawAgentActivityItem?
+    var isComplete: Bool = false
 }
 
 public struct OpenClawGatewayHealthOK: Codable, Sendable {

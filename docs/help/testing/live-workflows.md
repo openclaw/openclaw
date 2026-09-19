@@ -16,9 +16,19 @@ When debugging real providers/models (requires real creds):
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_SUBAGENT_STRESS=1 pnpm test:live -- src/agents/subagents/announce/subagent-yield-resume.live.test.ts`
   - Requires `OPENAI_API_KEY` and defaults to `openai/gpt-5.6-luna`; select another
     OpenAI model with `OPENCLAW_LIVE_SUBAGENT_E2E_MODEL`.
-  - Uses isolated Gateway state and synthetic files to verify concurrent child
-    completion, one final reply per parent, and operator resume with preserved
-    task identity, parent completion, and idempotent replay.
+  - Pins the OpenClaw agent harness and uses isolated Gateway state, synthetic
+    files, and externally held HTTP responses. It checks concurrent hidden-result
+    fanout, status-only interrogation of a waiting child tree, operator resume
+    with preserved task identity and idempotent replay, child timeout, a live HTTP
+    503 retrieval failure, and cancellation racing an in-flight result after its
+    owner claims the run. Parent reports are checked against held requests,
+    child execution, task delivery state, and hidden results. The 503 case checks
+    that a completed agent turn does not imply a successful retrieval.
+  - Each case incrementally preserves bounded runtime facts, plus final assistant replies, in
+    `.artifacts/qa-e2e/subagent-challenges-*/evidence.json`, including failed runs.
+    Set `OPENCLAW_LIVE_SUBAGENT_EVIDENCE_DIR` to change the output directory.
+    This live lane does not simulate cold process loss; restart and lost-acceptance
+    ownership are covered by `subagent-orphan-recovery.restart-integration.test.ts`.
   - Defaults to two batches of three children. Set
     `OPENCLAW_LIVE_SUBAGENT_STRESS_BATCHES` (1–5) and
     `OPENCLAW_LIVE_SUBAGENT_STRESS_CHILDREN` (1–6) to change the bounded workload.

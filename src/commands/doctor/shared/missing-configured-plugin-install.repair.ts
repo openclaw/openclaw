@@ -179,6 +179,7 @@ async function repairMissingPluginInstallsWithLease(
     configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
+    operatorManagedPluginIds,
     stalePathInstallPluginIds,
     records,
     persistedRecords,
@@ -244,7 +245,11 @@ async function repairMissingPluginInstallsWithLease(
 
   for (const [pluginId, record] of Object.entries(records)) {
     const bundled = bundledPluginsById.get(pluginId);
-    if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
+    if (
+      operatorManagedPluginIds.has(pluginId) ||
+      !bundled ||
+      !recordMatchesBundledPackage(record, bundled)
+    ) {
       continue;
     }
     if (bundled.preserveExternalInstallRecord) {
@@ -281,6 +286,9 @@ async function repairMissingPluginInstallsWithLease(
       blockedPluginIds: params.blockedPluginIds,
     });
     for (const pluginId of updateDeferredPluginIds) {
+      if (operatorManagedPluginIds.has(pluginId)) {
+        continue;
+      }
       deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
       if (!record || !isPayloadMissing(env, record.installPath)) {
@@ -294,6 +302,7 @@ async function repairMissingPluginInstallsWithLease(
 
   const missingRecordedPlugins = Object.entries(records).filter(
     ([pluginId]) =>
+      !operatorManagedPluginIds.has(pluginId) &&
       !deferredPluginIds.has(pluginId) &&
       !officialReplacementPluginIds.has(pluginId) &&
       Object.hasOwn(nextRecords, pluginId) &&
@@ -379,7 +388,7 @@ async function repairMissingPluginInstallsWithLease(
 
   const missingPluginIds = new Set(
     [...params.pluginIds].filter((pluginId) => {
-      if (deferredPluginIds.has(pluginId)) {
+      if (operatorManagedPluginIds.has(pluginId) || deferredPluginIds.has(pluginId)) {
         return false;
       }
       const hasRecord = Object.hasOwn(nextRecords, pluginId);
@@ -399,10 +408,11 @@ async function repairMissingPluginInstallsWithLease(
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
     configuredChannelOwnerPluginIds,
-    blockedPluginIds:
-      deferredPluginIds.size > 0
-        ? new Set([...(params.blockedPluginIds ?? []), ...deferredPluginIds])
-        : params.blockedPluginIds,
+    blockedPluginIds: new Set([
+      ...(params.blockedPluginIds ?? []),
+      ...deferredPluginIds,
+      ...operatorManagedPluginIds,
+    ]),
   })) {
     const repair = resolveConfiguredPluginCandidateRepair({
       candidate,

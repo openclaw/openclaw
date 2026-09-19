@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -184,6 +185,16 @@ function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
     return payload.some((value) => hasExplicitDeliveryFailure(value, depth + 1));
   }
   const record = payload as Record<string, unknown>;
+  const status = normalizeOptionalLowercaseString(record.status);
+  const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
+  if (
+    record.sentBeforeError === true ||
+    record.visibleReplySent === true ||
+    status === "partial_failed" ||
+    deliveryStatus === "partial_failed"
+  ) {
+    return true;
+  }
   if (record.ok === false || record.delivered === false || record.dryRun === true) {
     return true;
   }
@@ -191,7 +202,6 @@ function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
   if (messageId === "skipped" || messageId === "suppressed") {
     return true;
   }
-  const status = normalizeOptionalLowercaseString(record.status);
   if (
     status === "failed" ||
     status === "error" ||
@@ -201,7 +211,6 @@ function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
   ) {
     return true;
   }
-  const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
   if (
     deliveryStatus === "failed" ||
     deliveryStatus === "error" ||
@@ -291,7 +300,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
   if (!params.receipt) {
     return "not-applicable";
   }
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  if (
+    hasExplicitDeliveryFailure(params.deliveredPayload) &&
+    projectPluginMessageDeliveryFact(params.deliveredPayload)?.partialDelivery !== true
+  ) {
     if (params.preservePendingOnExplicitFailure) {
       return "pending";
     }
@@ -420,34 +432,57 @@ function isExactCurrentSourceConversation(
   return threadPlacement === "match" && isCurrentSourceConversation(params);
 }
 
+type SourceReplyMatch = boolean | (() => Promise<boolean>);
+
 function resolveOwnerCurrentConversationMatch(
   params: SourceReplyTranscriptMirrorParams,
-): boolean | undefined {
+  allowAsync: boolean,
+): SourceReplyMatch | undefined {
   const toolContext = params.toolContext;
   if (!toolContext) {
     return undefined;
   }
   // SAFETY: message actions reach this boundary only after channel resolution.
-  const registration = resolveChannelPluginRegistration(params.channel as ChannelId);
+  const channel = params.channel as ChannelId;
+  const registration = resolveChannelPluginRegistration(channel);
   if (registration?.origin !== "bundled") {
     return undefined;
   }
-  const matcher =
+  const aliasSpec =
     registration.plugin.actions?.messageActionTargetAliases?.[
       // SAFETY: action alias lookup accepts the normalized runtime action name.
       params.action as ChannelMessageActionName
-    ]?.matchesCurrentConversation;
-  if (!matcher) {
+    ];
+  if (!aliasSpec) {
     return undefined;
   }
-  return matcher({
+  const matchParams = {
     args: params.actionParams,
     accountId: normalizeAccountId(params.accountId ?? params.currentAccountId),
     toolContext,
-  });
+  };
+  const matchAsync = aliasSpec.matchesCurrentConversationAsync;
+  if (allowAsync && matchAsync) {
+    const authority = registration.captureReadAuthority?.();
+    const isRegistrationCurrent = () => {
+      const current =
+        registration.captureReadAuthority && !authority?.()
+          ? undefined
+          : resolveChannelPluginRegistration(channel, { loadedOnly: true });
+      return current?.plugin === registration.plugin && current.origin === "bundled";
+    };
+    if (!isRegistrationCurrent()) {
+      return false;
+    }
+    return async () => (await matchAsync(matchParams)) && isRegistrationCurrent();
+  }
+  return aliasSpec.matchesCurrentConversation?.(matchParams) === true;
 }
 
-function isDeliveredThreadPlacementSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
+function resolveDeliveredThreadPlacementSourceReply(
+  params: SourceReplyTranscriptMirrorParams,
+  allowAsync: boolean,
+): SourceReplyMatch {
   if (!hasCurrentSourceContext(params)) {
     return false;
   }
@@ -459,25 +494,43 @@ function isDeliveredThreadPlacementSourceReply(params: SourceReplyTranscriptMirr
     );
     return threadPlacement === "match" && matchesCurrentSourceTarget(params, threadPlacement);
   }
-  return resolveOwnerCurrentConversationMatch(params) ?? false;
+  return resolveOwnerCurrentConversationMatch(params, allowAsync) ?? false;
 }
 
-/** Confirms that a successful message action reached the exact trusted source conversation. */
-export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+function resolveDeliveredCurrentSourceReply(
+  params: SourceReplyTranscriptMirrorParams,
+  allowAsync: boolean,
+): SourceReplyMatch {
+  if (
+    hasExplicitDeliveryFailure(params.deliveredPayload) &&
+    projectPluginMessageDeliveryFact(params.deliveredPayload)?.partialDelivery !== true
+  ) {
     return false;
   }
   switch (params.action.trim().toLowerCase()) {
     case "reply":
       return isDeliveredCurrentSourceReplyAction(params);
     case "thread-reply":
-      return isDeliveredThreadPlacementSourceReply(params);
+      return resolveDeliveredThreadPlacementSourceReply(params, allowAsync);
     default:
       return (
         (params.action === "send" || params.action === "poll") &&
         isExactCurrentSourceConversation(params)
       );
   }
+}
+
+/** Synchronous classification for send-only consumers and legacy owner callbacks. */
+export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
+  return resolveDeliveredCurrentSourceReply(params, false) === true;
+}
+
+/** Confirms delivered source replies, awaiting bundled thread-alias proof when needed. */
+export async function isDeliveredCurrentSourceReplyAsync(
+  params: SourceReplyTranscriptMirrorParams,
+): Promise<boolean> {
+  const match = resolveDeliveredCurrentSourceReply(params, true);
+  return typeof match === "function" ? await match() : match;
 }
 
 function normalizeMessageIdValue(value: unknown): string | undefined {

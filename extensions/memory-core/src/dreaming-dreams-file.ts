@@ -27,8 +27,7 @@ async function resolveDreamsPath(workspaceDir: string): Promise<string> {
   return path.join(workspaceDir, DREAMS_FILENAMES[0]);
 }
 
-function isEmptyDreamsReadError(err: unknown): boolean {
-  const code = extractErrorCode(err);
+function isEmptyDreamsReadError(err: unknown, code: string | undefined): boolean {
   if (
     code === "ENOENT" ||
     code === "ENOTDIR" ||
@@ -47,7 +46,7 @@ export async function readDreamsFile(dreamsPath: string): Promise<string> {
   try {
     return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
   } catch (err) {
-    if (isEmptyDreamsReadError(err)) {
+    if (isEmptyDreamsReadError(err, extractErrorCode(err))) {
       return "";
     }
     throw err;
@@ -216,20 +215,8 @@ function normalizeDiaryBlockBody(block: string): string {
 
 function isOptionalDiaryContextReadError(err: unknown): boolean {
   const code = extractErrorCode(err);
-  if (
-    code === "EACCES" ||
-    code === "EPERM" ||
-    code === "ENOENT" ||
-    code === "ENOTDIR" ||
-    code === "not-found" ||
-    code === "not-file" ||
-    code === "path-alias" ||
-    code === "path-mismatch" ||
-    code === "symlink"
-  ) {
-    return true;
-  }
-  return err instanceof Error && err.message === "path must be a regular file";
+  // Optional prompt context may omit unreadable diaries; updates must preserve the failure.
+  return code === "EACCES" || code === "EPERM" || isEmptyDreamsReadError(err, code);
 }
 
 function getDiaryContextEntries(existing: string): string[] {

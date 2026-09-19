@@ -229,7 +229,7 @@ async function promptCodexMigrationSelection(
     selectableValues: items.map((item) => item.id),
     cursorAt: MIGRATION_SELECTION_ACCEPT,
   });
-  if (isCancel(selected)) {
+  if (typeof selected === "symbol") {
     cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
     runtime.log("Migration cancelled.");
     return null;

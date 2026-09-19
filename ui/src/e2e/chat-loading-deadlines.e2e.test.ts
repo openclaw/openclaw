@@ -140,7 +140,6 @@ suite.define(() => {
           ],
         });
         await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await gateway.waitForRequest("sessions.list", { match: { includeGlobal: true } });
         const startup = await gateway.waitForRequest("chat.startup");
         expect(startup.params).toMatchObject({ sessionKey });
         const composer = currentPage.locator(".agent-chat__input textarea");

@@ -10,8 +10,12 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { activeSessions, startTranscripts } from "./capture.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { startTranscripts } from "./capture.js";
+import { clearTranscriptCapturesForTest } from "./capture.test-support.js";
 import * as providerRegistry from "./provider-registry.js";
 import type { TranscriptSourceProvider } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
@@ -30,12 +34,13 @@ export function useTranscriptStatusFixture() {
   beforeEach(() => {
     previousRegistry = captureActivePluginRegistrySnapshot();
   });
-  afterEach(() => {
-    activeSessions.clear();
+  afterEach(async () => {
+    await clearTranscriptCapturesForTest();
     resetConfigRuntimeState();
+    vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     restoreActivePluginRegistrySnapshot(previousRegistry);
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 

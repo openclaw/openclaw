@@ -714,3 +714,111 @@ describe("Bedrock token usage", () => {
     });
   });
 });
+
+describe("Bedrock tool-result images", () => {
+  it.each(["openai.gpt-5.6-sol", "us.openai.gpt-5.6-sol"])(
+    "lifts tool images into user content for %s while preserving result associations",
+    async (id) => {
+      const png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      const image = { type: "image", mimeType: "image/png", data: png };
+      const context = {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_first",
+            toolName: "inspect",
+            content: [{ type: "text", text: "first result" }, image, image],
+            isError: false,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_second",
+            toolName: "inspect",
+            content: [image],
+            isError: true,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_text",
+            toolName: "read",
+            content: [{ type: "text", text: "plain result" }],
+            isError: false,
+          },
+        ],
+      };
+      const before = structuredClone(context);
+      const input = await capturePayload(
+        bedrockModel({ id, input: ["text", "image"] }),
+        context as never,
+      );
+      const expectedImage = {
+        image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
+      };
+      const placeholder = (toolCallId: string) => ({
+        text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
+      });
+      expect(input.messages).toEqual([
+        {
+          role: ConversationRole.USER,
+          content: [
+            {
+              toolResult: {
+                toolUseId: "call_first",
+                status: "success",
+                content: [{ text: "first result" }, placeholder("call_first")],
+              },
+            },
+            {
+              toolResult: {
+                toolUseId: "call_second",
+                status: "error",
+                content: [placeholder("call_second")],
+              },
+            },
+            {
+              toolResult: {
+                toolUseId: "call_text",
+                status: "success",
+                content: [{ text: "plain result" }],
+              },
+            },
+            { text: "Images from tool result call_first:" },
+            expectedImage,
+            expectedImage,
+            { text: "Images from tool result call_second:" },
+            expectedImage,
+          ],
+        },
+      ]);
+      expect(context).toEqual(before);
+
+      const unaffected = await capturePayload(
+        bedrockModel({ input: ["text", "image"] }),
+        context as never,
+      );
+      expect(unaffected.messages).toEqual([
+        {
+          role: ConversationRole.USER,
+          content: [
+            {
+              toolResult: {
+                toolUseId: "call_first",
+                status: "success",
+                content: [{ text: "first result" }, expectedImage, expectedImage],
+              },
+            },
+            { toolResult: { toolUseId: "call_second", status: "error", content: [expectedImage] } },
+            {
+              toolResult: {
+                toolUseId: "call_text",
+                status: "success",
+                content: [{ text: "plain result" }],
+              },
+            },
+          ],
+        },
+      ]);
+    },
+  );
+});

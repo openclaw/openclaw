@@ -524,12 +524,20 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       silent: false,
     },
     {
-      name: "silence disabled",
+      name: "optional authored silence with empty replies disabled",
       text: SILENT_REPLY_TOKEN,
       optional: true,
       allowed: false,
       failedTool: false,
-      silent: false,
+      silent: true,
+    },
+    {
+      name: "optional authored silence with empty-reply policy unspecified",
+      text: SILENT_REPLY_TOKEN,
+      optional: true,
+      allowed: undefined,
+      failedTool: false,
+      silent: true,
     },
     {
       name: "blank output",

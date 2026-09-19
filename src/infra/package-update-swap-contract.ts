@@ -1,7 +1,8 @@
 // Public contracts shared by package activation and its existing callers.
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
-import type { NpmGlobalPrefixLayout, ResolvedGlobalInstallTarget } from "./update-global.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
+import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
@@ -41,6 +42,7 @@ export type StagedPackageSwapParams = {
   packageName: string;
   postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
   beforeActivate?: () => Promise<void>;
+  assertCurrent?: () => void;
   onLiveMutation?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   timeoutMs?: number;

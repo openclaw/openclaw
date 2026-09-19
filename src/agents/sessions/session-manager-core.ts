@@ -9,7 +9,10 @@ import {
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
-import { SessionEntryNavigation } from "../../config/sessions/session-entry-navigation.js";
+import {
+  resolveOpaqueSessionFirstKeptEntryId,
+  SessionEntryNavigation,
+} from "../../config/sessions/session-entry-navigation.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   isIndexedSessionEntry,
@@ -369,61 +372,19 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       !this.byId.has(normalized.firstKeptEntryId) &&
       this.opaqueParentsById.has(normalized.firstKeptEntryId)
     ) {
-      const resolvedFirstKeptParent = this.resolveCanonicalParentId(normalized.firstKeptEntryId);
-      const firstKeptEntryId =
-        resolvedFirstKeptParent ??
-        this.findFirstCanonicalDescendantOnBranch(
-          normalized.firstKeptEntryId,
-          normalized.parentId,
-        ) ??
-        this.findFirstCanonicalDescendant(normalized.firstKeptEntryId) ??
-        this.resolveEntryParentId(entry);
+      const firstKeptEntryId = resolveOpaqueSessionFirstKeptEntryId({
+        firstKeptEntryId: normalized.firstKeptEntryId,
+        parentId: normalized.parentId,
+        fallbackParentId: this.resolveEntryParentId(entry),
+        byId: this.byId,
+        opaqueParentsById: this.opaqueParentsById,
+        entries: () => this.fileEntries.filter(isIndexedSessionEntry),
+      });
       if (firstKeptEntryId && firstKeptEntryId !== normalized.firstKeptEntryId) {
         normalized = { ...normalized, firstKeptEntryId };
       }
     }
     return normalized;
-  }
-
-  private findFirstCanonicalDescendantOnBranch(
-    opaqueId: string,
-    leafId: string | null,
-  ): string | undefined {
-    const seen = new Set<string>();
-    let currentId = leafId;
-    let firstCanonicalDescendant: string | undefined;
-    while (currentId && !seen.has(currentId)) {
-      if (currentId === opaqueId) {
-        return firstCanonicalDescendant;
-      }
-      seen.add(currentId);
-      const entry = this.byId.get(currentId);
-      if (entry) {
-        firstCanonicalDescendant = entry.id;
-        currentId = entry.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    return undefined;
-  }
-
-  private findFirstCanonicalDescendant(opaqueId: string): string | undefined {
-    for (const entry of this.fileEntries) {
-      if (!isIndexedSessionEntry(entry)) {
-        continue;
-      }
-      const seen = new Set<string>();
-      let parentId = entry.parentId;
-      while (parentId && this.opaqueParentsById.has(parentId) && !seen.has(parentId)) {
-        if (parentId === opaqueId) {
-          return entry.id;
-        }
-        seen.add(parentId);
-        parentId = this.opaqueParentsById.get(parentId) ?? null;
-      }
-    }
-    return undefined;
   }
 
   protected resolveBranchTargetId(branchFromId: string): string | null | undefined {

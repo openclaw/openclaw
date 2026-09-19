@@ -639,7 +639,7 @@ const MessageToolConfigSchema = z
       .object({
         /** Allow sends to other channels within the same provider (default: true). */
         allowWithinProvider: z.boolean().optional(),
-        /** Allow sends across different providers (default: false). */
+        /** Allow sends across different providers (default: true). */
         allowAcrossProviders: z.boolean().optional(),
         /** Cross-context marker configuration. */
         marker: z

@@ -148,7 +148,7 @@ summary: "Page"
       `${opening}\n# Hidden example\n${invalidClosing}\n## Still hidden\n${closing}\n# Visible after close\n`,
     );
 
-    const output = runDocsList(tempRepoRoot, ["--headings"]);
+    const output = renderDocsHeadingMap(path.join(tempRepoRoot, "docs"));
 
     expect(output).not.toContain("H1: Hidden example");
     expect(output).not.toContain("H2: Still hidden");
@@ -167,7 +167,7 @@ summary: "Page"
       `${opening}\n# Hidden example\n${closing}\n# Visible after close\n`,
     );
 
-    const output = runDocsList(tempRepoRoot, ["--headings"]);
+    const output = renderDocsHeadingMap(path.join(tempRepoRoot, "docs"));
 
     expect(output).not.toContain("H1: Hidden example");
     expect(output).toContain("H1: Visible after close");

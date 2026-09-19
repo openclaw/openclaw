@@ -325,27 +325,16 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
     const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
-    if (nextMode === undefined) {
-      if (resetsToDefault) {
-        if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-          delete targetSessionEntry.fastMode;
-          if (
-            !(await persistCommandSession({
-              ...params,
-              sessionEntry: targetSessionEntry,
-              touchedFields: ["fastMode"],
-            }))
-          ) {
-            return sessionEntryPersistenceConflictReply();
-          }
-        }
-        return sessionCommandReply("⚙️ Fast mode reset to default.");
-      }
+    if (nextMode === undefined && !resetsToDefault) {
       return sessionCommandReply("⚙️ Usage: /fast status|auto|on|off|default");
     }
 
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-      targetSessionEntry.fastMode = nextMode;
+      if (resetsToDefault) {
+        delete targetSessionEntry.fastMode;
+      } else {
+        targetSessionEntry.fastMode = nextMode;
+      }
       if (
         !(await persistCommandSession({
           ...params,
@@ -358,9 +347,11 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     return sessionCommandReply(
-      nextMode === "auto"
-        ? "⚙️ Fast mode set to auto."
-        : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+      resetsToDefault
+        ? "⚙️ Fast mode reset to default."
+        : nextMode === "auto"
+          ? "⚙️ Fast mode set to auto."
+          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
     );
   },
 );

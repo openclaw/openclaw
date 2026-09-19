@@ -579,7 +579,7 @@ export async function recoverPendingWorkspaceResults(
           assertPreservedEnvironment();
           placements.acceptWorkspaceResult(turnClaim);
           const recordedStagedResultRef = placements
-            .listPendingWorkspaceResults()
+            .listPendingWorkspaceResults(turnClaim.sessionId)
             .find(
               (result) =>
                 result.sessionId === turnClaim.sessionId &&
@@ -647,7 +647,7 @@ export async function recoverPendingWorkspaceResults(
       try {
         const current = placements.get(pending.sessionId);
         const currentPending = placements
-          .listPendingWorkspaceResults()
+          .listPendingWorkspaceResults(pending.sessionId)
           .find(
             (candidate) =>
               candidate.sessionId === pending.sessionId &&

@@ -205,20 +205,20 @@ export async function applyMessageSendingHook(params: {
       return {
         cancelled: false,
         contentRewritten: true,
-        payload: {
+        payload: copyReplyPayloadMetadata(params.payload, {
           ...params.payload,
           spokenText,
-        },
+        }),
         payloadSummary: {
           ...params.payloadSummary,
           hookContent: spokenText,
         },
       };
     }
-    const payload = {
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       text: sendingResult.content,
-    };
+    });
     return {
       cancelled: false,
       contentRewritten: true,
@@ -239,10 +239,13 @@ export async function applyMessageSendingHook(params: {
   }
 }
 
-export async function applyReplyPayloadSendingHook(params: {
-  hook: QueuedReplyPayloadSendingHook | undefined;
-  payload: ReplyPayload;
-}): Promise<{
+export async function applyReplyPayloadSendingHook(
+  params: {
+    hook: QueuedReplyPayloadSendingHook | undefined;
+    payload: ReplyPayload;
+  },
+  hookRunner = getGlobalHookRunner(),
+): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
   changed: boolean;
@@ -250,14 +253,17 @@ export async function applyReplyPayloadSendingHook(params: {
   if (!params.hook) {
     return { cancelled: false, payload: params.payload, changed: false };
   }
-  const nextPayload = await runReplyPayloadSendingHook({
-    payload: params.payload,
-    kind: params.hook.kind,
-    ...(params.hook.channel ? { channel: params.hook.channel } : {}),
-    ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
-    ...(params.hook.runId ? { runId: params.hook.runId } : {}),
-    context: params.hook.context,
-  });
+  const nextPayload = await runReplyPayloadSendingHook(
+    {
+      payload: params.payload,
+      kind: params.hook.kind,
+      ...(params.hook.channel ? { channel: params.hook.channel } : {}),
+      ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
+      ...(params.hook.runId ? { runId: params.hook.runId } : {}),
+      context: params.hook.context,
+    },
+    hookRunner,
+  );
   if (!nextPayload) {
     return { cancelled: true, payload: params.payload, changed: false };
   }

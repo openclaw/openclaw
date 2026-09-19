@@ -372,16 +372,21 @@ suite.define(() => {
       const where = page.locator("wa-popover.new-session-page__where-popover");
       const cloud = where.getByRole("button", { name: "aws", exact: true });
       await cloud.waitFor();
-      expect(await cloud.isDisabled()).toBe(true);
-      await cloud.focus();
-      await page.keyboard.press("Enter");
-      expect(
-        await page.locator("#new-session-where-trigger").getAttribute("data-cloud-profile"),
-      ).toBeNull();
-      await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
+      expect(await cloud.isEnabled()).toBe(true);
+      await cloud.click();
+      await expect
+        .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-cloud-profile"))
+        .toBe("aws");
       await page.keyboard.press("Escape");
-
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
       await page.locator(".new-session-page__message").fill("clone and inspect this project");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
+        .toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.locator("#new-session-where-trigger").click();
+      await where.locator('[data-value="gateway"]').click();
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -391,6 +396,7 @@ suite.define(() => {
       });
       expect(create.params).not.toHaveProperty("worktree");
       expect(create.params).not.toHaveProperty("worktreeBaseRef");
+      expect(create.params).not.toHaveProperty("worktreeSource");
     } finally {
       await context.close();
     }

@@ -1303,6 +1303,59 @@ syncBuiltinESMExports();
     });
   });
 
+  it.each([
+    ["missing declaration and package", {}, undefined, "is missing declared dependency"],
+    [
+      "missing package",
+      { "@openclaw/ai": "2026.7.33" },
+      undefined,
+      "is missing declared dependency",
+    ],
+    ["missing declaration", {}, { version: "2026.7.33" }, "is missing declared dependency"],
+    [
+      "different declaration",
+      { "@openclaw/ai": "2026.7.1-2" },
+      { version: "2026.7.33" },
+      "dependency spec mismatch",
+    ],
+    ["workspace link", { "@openclaw/ai": "2026.7.33" }, { link: true }, "invalid runtime package"],
+    [
+      "dev-only package",
+      { "@openclaw/ai": "2026.7.33" },
+      { version: "2026.7.33", dev: true },
+      "invalid runtime package",
+    ],
+    ["complete runtime", { "@openclaw/ai": "2026.7.33" }, { version: "2026.7.33" }, null],
+  ] as const)(
+    "validates legacy shrinkwrap runtime coverage: %s",
+    (_name, dependencies, ai, error) => {
+      const version = "2026.7.33";
+      checkTarball({
+        files: {
+          "dist/index.js": "export {};\n",
+          "npm-shrinkwrap.json": JSON.stringify({
+            name: "openclaw",
+            version,
+            lockfileVersion: 3,
+            packages: {
+              "": { name: "openclaw", version, dependencies },
+              ...(ai ? { "node_modules/@openclaw/ai": ai } : {}),
+            },
+          }),
+        },
+        version,
+        options: {
+          packageJson: {
+            files: ["dist", "npm-shrinkwrap.json"],
+            dependencies: { "@openclaw/ai": version },
+          },
+        },
+        status: error ? "nonzero" : 0,
+        ...(error ? { stderr: [`npm-shrinkwrap.json ${error} @openclaw/ai`] } : {}),
+      });
+    },
+  );
+
   const bundledRuntimeCases: NamedTarballCheck[] = [
     {
       name: "accepts npm-selected bundled and hoisted transitive dependency paths",

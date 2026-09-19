@@ -3,18 +3,20 @@ import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
 import * as pluginConfigState from "../plugins/config-state.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
 import { resolveLocalProviderAuthEvidence } from "./provider-auth-evidence.js";
 import {
-  getProviderEnvVars,
-  listKnownProviderAuthEnvVarNames,
+  getProviderEnvVarsCore,
+  listKnownProviderAuthEnvVarNamesCore,
   listKnownSecretEnvVarNames,
-  resolveProviderAuthEnvVarCandidates,
+  resolveProviderAuthEnvVarCandidatesCore,
   resolveProviderAuthLookupMaps,
 } from "./provider-env-vars.js";
 
 type MockManifestPlugin = {
   id: string;
-  origin: string;
+  origin: PluginManifestRecord["origin"];
   enabled?: boolean;
   enabledByDefault?: boolean;
   kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
@@ -78,7 +80,7 @@ function manifestRegistry(...plugins: MockManifestPlugin[]): MockManifestRegistr
 
 function setupPlugin(
   id: string,
-  origin: string,
+  origin: PluginManifestRecord["origin"],
   provider: MockSetupProvider,
   extra: Omit<MockManifestPlugin, "id" | "origin" | "setup"> = {},
 ): MockManifestPlugin {
@@ -86,7 +88,19 @@ function setupPlugin(
 }
 
 function metadataSnapshot(...plugins: MockManifestPlugin[]) {
+  const records: PluginManifestRecord[] = plugins.map((plugin) => ({
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    rootDir: `/plugins/${plugin.id}`,
+    source: `/plugins/${plugin.id}/index.js`,
+    manifestPath: `/plugins/${plugin.id}/openclaw.plugin.json`,
+    ...plugin,
+  }));
   return {
+    owners: buildPluginMetadataProviderFacts(records),
     index: {
       plugins: plugins.map((plugin) => ({
         pluginId: plugin.id,
@@ -112,7 +126,7 @@ function useInstalledPlugins(...plugins: MockManifestPlugin[]): void {
 
 function useInstalledSetupPlugin(
   id: string,
-  origin: string,
+  origin: PluginManifestRecord["origin"],
   provider: MockSetupProvider,
   extra?: Omit<MockManifestPlugin, "id" | "origin" | "setup">,
 ): void {
@@ -125,7 +139,11 @@ function useRegistryPlugins(...plugins: MockManifestPlugin[]): void {
   );
 }
 
-function useRegistrySetupPlugin(id: string, origin: string, provider: MockSetupProvider): void {
+function useRegistrySetupPlugin(
+  id: string,
+  origin: PluginManifestRecord["origin"],
+  provider: MockSetupProvider,
+): void {
   useRegistryPlugins(setupPlugin(id, origin, provider));
 }
 
@@ -168,9 +186,11 @@ describe("provider env vars dynamic manifest metadata", () => {
       { providerAuthAliases: { "fireworks-plan": "fireworks" } },
     );
 
-    expect(getProviderEnvVars("fireworks", { config: {} })).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(getProviderEnvVars("fireworks-plan", { config: {} })).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+    expect(getProviderEnvVarsCore("fireworks", { config: {} })).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(getProviderEnvVarsCore("fireworks-plan", { config: {} })).toEqual([
+      "FIREWORKS_ALT_API_KEY",
+    ]);
+    expect(listKnownProviderAuthEnvVarNamesCore()).toContain("FIREWORKS_ALT_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
@@ -184,10 +204,10 @@ describe("provider env vars dynamic manifest metadata", () => {
       },
     });
 
-    expect(listKnownProviderAuthEnvVarNames()).toContain("PROVIDER_BILLING_CREDENTIAL");
+    expect(listKnownProviderAuthEnvVarNamesCore()).toContain("PROVIDER_BILLING_CREDENTIAL");
     expect(listKnownSecretEnvVarNames()).toContain("PROVIDER_BILLING_CREDENTIAL");
-    expect(resolveProviderAuthEnvVarCandidates()["provider-billing"]).toBeUndefined();
-    expect(getProviderEnvVars("provider-billing")).toStrictEqual([]);
+    expect(resolveProviderAuthEnvVarCandidatesCore()["provider-billing"]).toBeUndefined();
+    expect(getProviderEnvVarsCore("provider-billing")).toStrictEqual([]);
     expect(
       sanitizeEnvVars({ PROVIDER_BILLING_CREDENTIAL: "billing-secret", SAFE_VALUE: "ok" }),
     ).toMatchObject({
@@ -199,6 +219,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   it("scrubs usage credentials using host metadata rather than the candidate sandbox env", () => {
     const configuredSnapshot = {
       workspaceDir: "/workspace",
+      owners: buildPluginMetadataProviderFacts([]),
       index: {
         plugins: [
           {
@@ -251,7 +272,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("lets openai bootstrap from Codex app-server API-key env", () => {
-    expect(resolveProviderAuthEnvVarCandidates()["openai"]).toEqual([
+    expect(resolveProviderAuthEnvVarCandidatesCore()["openai"]).toEqual([
       "CODEX_API_KEY",
       "OPENAI_API_KEY",
     ]);
@@ -263,8 +284,10 @@ describe("provider env vars dynamic manifest metadata", () => {
       envVars: ["MODEL_STUDIO_API_KEY", "MODEL_STUDIO_API_KEY"],
     });
 
-    expect(getProviderEnvVars("model-studio", { config: {} })).toEqual(["MODEL_STUDIO_API_KEY"]);
-    expect(listKnownProviderAuthEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
+    expect(getProviderEnvVarsCore("model-studio", { config: {} })).toEqual([
+      "MODEL_STUDIO_API_KEY",
+    ]);
+    expect(listKnownProviderAuthEnvVarNamesCore()).toContain("MODEL_STUDIO_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
   });
 
@@ -516,7 +539,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     );
 
     expect(
-      resolveProviderAuthEnvVarCandidates({ config: {} })["load-path-provider"],
+      resolveProviderAuthEnvVarCandidatesCore({ config: {} })["load-path-provider"],
     ).toBeUndefined();
     expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
       env: process.env,
@@ -578,7 +601,7 @@ describe("provider env vars dynamic manifest metadata", () => {
       envVars: ["FIREWORKS_API_KEY", "FIREWORKS_SETUP_KEY", "FIREWORKS_API_KEY"],
     });
 
-    expect(getProviderEnvVars("fireworks", { config: {} })).toEqual([
+    expect(getProviderEnvVarsCore("fireworks", { config: {} })).toEqual([
       "FIREWORKS_API_KEY",
       "FIREWORKS_SETUP_KEY",
     ]);
@@ -594,11 +617,11 @@ describe("provider env vars dynamic manifest metadata", () => {
     const mod = await import("./provider-env-vars.js");
 
     expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-    expect(mod.getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(mod.getProviderEnvVarsCore("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     const initialLoads =
       pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mock.calls.length;
     expect(initialLoads).toBeGreaterThan(0);
-    expect(mod.getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(mod.getProviderEnvVarsCore("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(
       initialLoads,
     );
@@ -613,8 +636,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     vi.resetModules();
     const mod = await import("./provider-env-vars.js");
 
-    expect(mod.getProviderEnvVars("whisperx")).toEqual(["WHISPERX_API_KEY"]);
-    expect(mod.listKnownProviderAuthEnvVarNames()).toContain("WHISPERX_API_KEY");
+    expect(mod.getProviderEnvVarsCore("whisperx")).toEqual(["WHISPERX_API_KEY"]);
+    expect(mod.listKnownProviderAuthEnvVarNamesCore()).toContain("WHISPERX_API_KEY");
   });
 
   it("excludes untrusted workspace plugin env vars when requested", async () => {
@@ -638,25 +661,25 @@ describe("provider env vars dynamic manifest metadata", () => {
     const mod = await import("./provider-env-vars.js");
 
     expect(
-      mod.getProviderEnvVars("whisperx", {
+      mod.getProviderEnvVarsCore("whisperx", {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toStrictEqual([]);
     expect(
-      mod.getProviderEnvVars("workspace-setup", {
+      mod.getProviderEnvVarsCore("workspace-setup", {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toStrictEqual([]);
     expect(
-      mod.listKnownProviderAuthEnvVarNames({
+      mod.listKnownProviderAuthEnvVarNamesCore({
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
     ).not.toContain("AWS_SECRET_ACCESS_KEY");
     expect(
-      mod.listKnownProviderAuthEnvVarNames({
+      mod.listKnownProviderAuthEnvVarNamesCore({
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
@@ -672,7 +695,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     const mod = await import("./provider-env-vars.js");
 
     expect(
-      mod.getProviderEnvVars("whisperx", {
+      mod.getProviderEnvVarsCore("whisperx", {
         config: {
           plugins: {
             allow: ["workspace-audio"],
@@ -692,7 +715,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     const mod = await import("./provider-env-vars.js");
 
     expect(
-      mod.getProviderEnvVars("whisperx", {
+      mod.getProviderEnvVarsCore("whisperx", {
         config: {
           plugins: {
             slots: {
@@ -716,7 +739,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     const mod = await import("./provider-env-vars.js");
 
     expect(
-      mod.getProviderEnvVars("whisperx", {
+      mod.getProviderEnvVarsCore("whisperx", {
         config: {
           plugins: {
             slots: {
@@ -732,13 +755,13 @@ describe("provider env vars dynamic manifest metadata", () => {
   it.each([
     {
       name: "auth candidates",
-      resolve: () => resolveProviderAuthEnvVarCandidates({ config: {} }).fireworks,
+      resolve: () => resolveProviderAuthEnvVarCandidatesCore({ config: {} }).fireworks,
       metadataLoads: 1,
     },
     {
       name: "auth scrub keys",
       resolve: () =>
-        listKnownProviderAuthEnvVarNames({ config: {} }).filter((key) =>
+        listKnownProviderAuthEnvVarNamesCore({ config: {} }).filter((key) =>
           key.startsWith("FIREWORKS_"),
         ),
       metadataLoads: 2,
@@ -918,7 +941,7 @@ describe("provider env vars dynamic manifest metadata", () => {
       },
     );
 
-    expect(resolveProviderAuthEnvVarCandidates()["load-path-provider"]).toBeUndefined();
+    expect(resolveProviderAuthEnvVarCandidatesCore()["load-path-provider"]).toBeUndefined();
     expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
       env: process.env,
       allowWorkspaceScopedSnapshot: true,

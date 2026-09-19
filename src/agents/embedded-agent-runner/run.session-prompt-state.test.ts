@@ -86,12 +86,13 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
     sessionAgentId: "main",
     resolvedSessionKey: BASE_RUN_PARAMS.sessionKey,
     lifecycleGeneration: "test-generation",
+    onInterrupt: () => {},
   });
 }
 
 describe("embedded run session prompt state", () => {
-  it("owns compaction continuation as an internal persisted prompt", () => {
-    const state = createState();
+  it("owns compaction continuation as an internal persisted prompt", async () => {
+    await using state = await createState();
 
     state.activateCompactionContinuation("continue after compaction");
 
@@ -103,8 +104,8 @@ describe("embedded run session prompt state", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("preserves exact internal prompt bytes when composing compaction continuation", () => {
-    const state = createState();
+  it("preserves exact internal prompt bytes when composing compaction continuation", async () => {
+    await using state = await createState();
 
     state.activateInternalPrompt("  finish the reasoning exactly  ");
     state.activateCompactionContinuation("continue after compaction");
@@ -118,7 +119,7 @@ describe("embedded run session prompt state", () => {
   });
 
   it("keeps a compound internal prompt across a missing-assistant retry", async () => {
-    const state = createState();
+    await using state = await createState();
     state.activateInternalPrompt("finish the reasoning");
     state.activateCompactionContinuation("continue after compaction");
     const activePrompt = { ...state.activePrompt };
@@ -148,7 +149,7 @@ describe("embedded run session prompt state", () => {
   });
 
   it("retains compaction continuation across reasoning and empty retries", async () => {
-    const state = createState();
+    await using state = await createState();
     const retryState = createEmbeddedRunTerminalRetryState();
     const compactionAssistant = buildEmbeddedRunnerAssistant({
       stopReason: "length",
@@ -242,7 +243,7 @@ describe("embedded run session prompt state", () => {
   });
 
   it("releases compaction continuation before a visible draft revision", async () => {
-    const state = createState();
+    await using state = await createState();
     state.activateCompactionContinuation("continue after compaction");
     const assistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "Visible draft." }],
@@ -274,8 +275,8 @@ describe("embedded run session prompt state", () => {
     expect(state.activePrompt.override).not.toContain("continue after compaction");
   });
 
-  it("adds failed-tool guidance to current-transcript continuation", () => {
-    const state = createState();
+  it("adds failed-tool guidance to current-transcript continuation", async () => {
+    await using state = await createState();
 
     state.continueFromCurrentTranscript({ includeToolFailureInstruction: true });
 
@@ -291,7 +292,7 @@ describe("embedded run session prompt state", () => {
     const waitForProjection = vi
       .spyOn(reconcile, "waitForSessionTranscriptProjection")
       .mockResolvedValue();
-    const state = createState();
+    await using state = await createState();
     const abortSignal = new AbortController().signal;
 
     try {
@@ -320,7 +321,7 @@ describe("embedded run session prompt state", () => {
     }));
     const recorder = createRecorder({ persistApproved });
     const onUserMessagePersisted = vi.fn();
-    const state = createState({
+    await using state = await createState({
       userTurnTranscriptRecorder: recorder,
       onUserMessagePersisted,
     });
@@ -343,7 +344,7 @@ describe("embedded run session prompt state", () => {
       persistApproved,
     });
     const onUserMessagePersisted = vi.fn();
-    const state = createState({
+    await using state = await createState({
       userTurnTranscriptRecorder: recorder,
       onUserMessagePersisted,
     });
@@ -381,7 +382,7 @@ describe("embedded run session prompt state", () => {
     }));
     const recorder = createRecorder({ persistApproved, persistBlocked });
     const onUserMessagePersisted = vi.fn();
-    const state = createState({
+    await using state = await createState({
       userTurnTranscriptRecorder: recorder,
       onUserMessagePersisted,
     });
@@ -402,7 +403,7 @@ describe("embedded run session prompt state", () => {
     const persistApproved = vi.fn(async () => undefined);
     const recorder = createRecorder({ persistApproved });
     const onUserMessagePersisted = vi.fn();
-    const state = createState({
+    await using state = await createState({
       userTurnTranscriptRecorder: recorder,
       onUserMessagePersisted,
     });
@@ -432,7 +433,7 @@ describe("embedded run session prompt state", () => {
       const persistApproved = vi.fn(() => persistence.promise);
       const recorder = createRecorder({ persistApproved });
       const onUserMessagePersisted = vi.fn();
-      const state = createState({
+      await using state = await createState({
         userTurnTranscriptRecorder: recorder,
         onUserMessagePersisted,
       });
@@ -473,7 +474,7 @@ describe("embedded run session prompt state", () => {
   );
 
   it("does not suppress an original prompt that precheck compaction never persisted", async () => {
-    const state = createState();
+    await using state = await createState();
 
     await state.prepareCompactedTranscriptRetry(assertActive);
 
@@ -484,7 +485,7 @@ describe("embedded run session prompt state", () => {
   it("keeps an internal reasoning continuation hidden across precheck compaction", async () => {
     const reasoningContinuation =
       "The previous assistant turn recorded reasoning; continue to the visible answer.";
-    const state = createState();
+    await using state = await createState();
     state.activateInternalPrompt(reasoningContinuation);
 
     await state.prepareCompactedTranscriptRetry(assertActive);

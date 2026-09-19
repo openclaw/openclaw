@@ -5,7 +5,7 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { ImageContent } from "openclaw/plugin-sdk/llm";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
@@ -15,10 +15,12 @@ import {
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import {
+  CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
   CodexContextAttachmentError,
   isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
+  type CodexProjectedImageGroup,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -37,7 +39,10 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
-import { buildCodexParentLocalInstructions } from "./turn-params.js";
+import {
+  buildCodexHistoryProvenancePrefix,
+  buildCodexParentLocalInstructions,
+} from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -81,16 +86,41 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
-  let contextImages: ImageContent[] = [];
-  // A refreshed native thread receives the original admitted user as historical context.
-  const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
-    ? undefined
-    : params.userTurnTranscriptRecorder?.message?.idempotencyKey;
+  const nativeHistoryProvenancePrefix =
+    params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined;
+  const forkedSession =
+    !mutable.startupBinding?.threadId && params.sessionTarget
+      ? getSessionEntry({
+          ...params.sessionTarget,
+          sessionKey: contextSessionKey,
+          hydrateSkillPromptRefs: false,
+          readConsistency: "latest",
+        })
+      : undefined;
+  // A copied spawn transcript promises completed tool evidence to this child.
+  const preserveForkedToolResults = Boolean(
+    forkedSession?.sessionId === params.sessionId &&
+    forkedSession.createdVia === "spawn" &&
+    forkedSession.parentSessionKey &&
+    forkedSession.parentSessionKey !== contextSessionKey &&
+    forkedSession.forkSource?.sessionKey === forkedSession.parentSessionKey &&
+    forkedSession.forkSource.sessionId !== params.sessionId,
+  );
+  let contextImageGroups: CodexProjectedImageGroup[] = [];
+  let turnContextImageGroups: CodexProjectedImageGroup[] = [];
   const assertProjectionCurrent = () => {
     params.hostCapabilities.assertActive();
     connection.assertCurrent();
     connection.runAbortController.signal.throwIfAborted();
   };
+  const admittedMessage =
+    params.userTurnTranscriptRecorder?.message ??
+    (await params.userTurnTranscriptRecorder?.resolveMessage());
+  assertProjectionCurrent();
+  // A refreshed native thread receives the original admitted user as historical context.
+  const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
+    ? undefined
+    : admittedMessage?.idempotencyKey;
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
@@ -128,12 +158,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
-      toolPayloadMode: params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
+      toolPayloadMode:
+        params.pluginRuntimeRefreshMessages || preserveForkedToolResults ? "preserve" : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
     });
     assertProjectionCurrent();
-    contextImages = projection.images ?? [];
+    contextImageGroups = projection.imageGroups ?? [];
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
     promptState.prePromptMessageCount = projection.prePromptMessageCount;
@@ -193,12 +224,14 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       systemPromptAddition: assembled.systemPromptAddition,
       maxRenderedContextChars: codexContextProjectionMaxChars,
       toolPayloadMode:
-        contextEngineProjection || params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
+        contextEngineProjection || params.pluginRuntimeRefreshMessages || preserveForkedToolResults
+          ? "preserve"
+          : "elide",
       ...(projectionDecision.project ? { prepareFileContext } : {}),
       currentUserTurnIdempotencyKey,
     });
     assertProjectionCurrent();
-    contextImages = projectionDecision.project ? (projection.images ?? []) : [];
+    contextImageGroups = projectionDecision.project ? (projection.imageGroups ?? []) : [];
     const decisionBinding = decisionStartupBinding;
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
       sessionId: params.sessionId,
@@ -248,8 +281,21 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
   }
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
+  // Refresh changes the transport prompt, but retains the admitted request's recorder.
+  const admittedContent = admittedMessage?.content;
+  const currentUserMessage = admittedMessage
+    ? typeof admittedContent === "string"
+      ? admittedContent
+      : (admittedContent ?? [])
+          .flatMap((part) => (part.type === "text" ? [part.text] : []))
+          .join("\n")
+    : params.pluginRuntimeRefreshMessages
+      ? ""
+      : params.prompt;
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
+      currentUserMessage,
+      currentUserMessageId: admittedMessage?.idempotencyKey,
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: {
         build: ({ toolsAllow }) => {
@@ -367,12 +413,28 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         promptInputRange: promptBuildResult.promptInputRange,
         decoratedPrompt: turnPromptText,
       });
-    return fitCodexProjectedContextForTurnStart({
+    const imageOffset =
+      projectedRanges && promptState.promptContextRange
+        ? projectedRanges.contextRange.start - promptState.promptContextRange.start
+        : undefined;
+    const fitted = fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
+      maxChars:
+        CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0),
       contextRange: projectedRanges?.contextRange,
       requestRange: projectedRanges?.requestRange,
       preservedRange,
+      imageGroups:
+        imageOffset === undefined
+          ? []
+          : contextImageGroups.map((group) => ({
+              images: group.images,
+              start: group.start + imageOffset,
+              end: group.end + imageOffset,
+            })),
     });
+    turnContextImageGroups = fitted.imageGroups ?? [];
+    return fitted.promptText;
   };
   const firstPromptBuild = await buildPromptFromCurrentInputs();
   const turnState = {
@@ -512,9 +574,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       binding,
       bindingStore,
       identity: bindingIdentity,
-      sessionFile: params.sessionFile,
       agentDir,
-      codexHome: appServer.start.env?.CODEX_HOME,
+      codexHome: appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
       expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
@@ -577,10 +638,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   let workspaceReferencesIncluded = true;
   return {
     context,
-    get contextImages() {
-      return contextImages;
+    get contextImageGroups() {
+      return turnContextImageGroups;
     },
     codexModelInputHistoryMessages,
+    nativeHistoryProvenancePrefix,
     turnState,
     refreshWorkspaceReferences: (include: boolean) => {
       turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild, include);

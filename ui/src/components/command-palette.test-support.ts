@@ -1,12 +1,14 @@
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import {
@@ -25,7 +27,18 @@ export function createGateway(
   connected: boolean,
   options: { methods?: string[]; request?: GatewayRequestHandler } = {},
 ): GatewayHarness {
-  const client = createTestGatewayClient(options.request ?? (() => ({ models: [] })));
+  const request =
+    options.request ??
+    ((method: string) =>
+      method === "sessions.search" ? { results: [], sessions: [] } : { models: [] });
+  const client = createTestGatewayClient((...args) => {
+    // Creation targeting has its own catalog. Search fixtures provide an empty
+    // valid destination response without consuming their scripted search replies.
+    if (args[0] === "environments.list") {
+      return { environments: [], profiles: [] };
+    }
+    return request(...args);
+  });
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "reconnecting",
@@ -86,24 +99,40 @@ export function createGateway(
   };
 }
 
+const disposeContexts = new Set<() => void>();
+
+afterEach(() => {
+  for (const dispose of disposeContexts) {
+    dispose();
+  }
+  disposeContexts.clear();
+});
+
 export function createContext(
   gateway: ApplicationGateway,
-  list: ApplicationContext<RouteId>["sessions"]["list"],
-): ApplicationContext<RouteId> {
+  list: ApplicationContext["sessions"]["list"],
+): ApplicationContext {
+  const agents = createAgentCapability(gateway);
+  // Search scenarios control catalog acquisition independently of creation.
+  // Keep the canonical empty roster and subscription lifecycle, not a fabricated agent.
+  agents.ensureList = async () => null;
+  const agentSelection = createAgentSelectionCapability(gateway, agents);
+  disposeContexts.add(() => {
+    agentSelection.dispose();
+    agents.dispose();
+  });
   return {
     gateway,
-    agentSelection: createAgentSelectionCapability(gateway, {
-      state: { agentsList: null },
-      subscribe: () => () => undefined,
-    }),
-    agents: {
-      ensureList: async () => null,
-    },
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
+    agentSelection,
+    agents,
+    agentIdentity: createAgentIdentityCapability(gateway),
     sessions: {
       list,
       state: { result: null },
+      subscribe: () => () => undefined,
     },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 export function createSessionResult(key: string, displayName: string): SessionsListResult {
@@ -116,7 +145,7 @@ export function createSessionResult(key: string, displayName: string): SessionsL
   } as SessionsListResult;
 }
 
-export async function mountPalette(context: ApplicationContext<RouteId>) {
+export async function mountPalette(context: ApplicationContext) {
   const provider = createApplicationContextProvider(context);
   const palette = document.createElement("openclaw-command-palette") as CommandPalette;
   palette.onNavigate = vi.fn();
@@ -130,7 +159,7 @@ export async function mountPalette(context: ApplicationContext<RouteId>) {
 export async function enterQuery(palette: CommandPalette, query: string) {
   palette.openPalette();
   await palette.updateComplete;
-  const input = palette.querySelector<HTMLInputElement>(".cmd-palette__input");
+  const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input");
   if (!input) {
     throw new Error("Expected command palette input");
   }

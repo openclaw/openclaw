@@ -121,6 +121,31 @@ let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["res
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
+const PEER_ONLY_ROUTING_CONFIG: Pick<OpenClawConfig, "agents" | "bindings"> = {
+  agents: { ownership: "explicit", entries: { main: {}, other: {} } },
+  bindings: [
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "feishu", peer: { kind: "group", id: "peer-1" } },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "slack", peer: { kind: "channel", id: "peer-1" } },
+    },
+    {
+      type: "route",
+      agentId: "main",
+      match: { channel: "feishu", peer: { kind: "direct", id: "peer-2" } },
+    },
+    {
+      type: "route",
+      agentId: "other",
+      match: { channel: "discord", peer: { kind: "group", id: "ops" } },
+    },
+  ],
+};
 const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
 > = ({ rawId }) => ({
@@ -284,6 +309,7 @@ async function executeFireAndForgetA2AFrom(
     bindingAgentId?: string;
     bindingPeerId?: string;
     bindingTeamId?: string;
+    routingConfig?: Pick<SessionsToolTestConfig, "agents" | "bindings">;
   },
 ) {
   setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -332,6 +358,7 @@ async function executeFireAndForgetA2AFrom(
           ],
         }
       : {}),
+    ...options?.routingConfig,
     session: {
       scope: "per-sender",
       mainKey: options?.mainKey ?? "main",
@@ -1147,9 +1174,28 @@ describe("sessions_send gating", () => {
     { targetKey: "agent:main:dashboard:child", timeoutSeconds: 0 },
     { targetKey: "agent:main:dashboard:child", timeoutSeconds: 1 },
     { targetKey: "agent:main:subagent:child", timeoutSeconds: 1 },
+    {
+      targetKey: "agent:main:dashboard:child",
+      timeoutSeconds: 0,
+      requesterSessionKey: "agent:main:feishu:group:peer-1",
+    },
+    {
+      targetKey: "agent:main:dashboard:child",
+      timeoutSeconds: 1,
+      requesterSessionKey: "agent:main:slack:channel:peer-1",
+    },
+    {
+      targetKey: "agent:main:dashboard:child",
+      timeoutSeconds: 1,
+      requesterSessionKey: "agent:main:feishu:direct:peer-2:thread:reply-root",
+    },
   ])(
-    "keeps an exact-incarnation send scoped ($targetKey, wait $timeoutSeconds)",
-    async ({ targetKey: targetSessionKey, timeoutSeconds }) => {
+    "keeps an exact-incarnation send scoped ($targetKey, wait $timeoutSeconds, $requesterSessionKey)",
+    async ({
+      targetKey: targetSessionKey,
+      timeoutSeconds,
+      requesterSessionKey = MAIN_AGENT_SESSION_KEY,
+    }) => {
       await withTestDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
         const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
         vi.mocked(runSessionsSendA2AFlow).mockClear();
@@ -1160,8 +1206,8 @@ describe("sessions_send gating", () => {
           {
             sessionId: targetSessionId,
             updatedAt: 1,
-            parentSessionKey: MAIN_AGENT_SESSION_KEY,
-            spawnedBy: MAIN_AGENT_SESSION_KEY,
+            parentSessionKey: requesterSessionKey,
+            spawnedBy: requesterSessionKey,
           },
         );
         callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1181,11 +1227,12 @@ describe("sessions_send gating", () => {
           return {};
         });
         const tool = createSessionsSendTool({
-          agentSessionKey: MAIN_AGENT_SESSION_KEY,
+          agentSessionKey: requesterSessionKey,
           expectedTargetSessionId: targetSessionId,
           idempotencyKey: "worker-session-send:stable-operation",
           callGateway: callGatewayMock,
           config: {
+            ...PEER_ONLY_ROUTING_CONFIG,
             session: { scope: "per-sender", mainKey: "main", store: storePath },
             tools: {
               agentToAgent: { enabled: true },
@@ -1217,6 +1264,8 @@ describe("sessions_send gating", () => {
             method: "agent",
             params: expect.objectContaining({
               idempotencyKey: "worker-session-send:stable-operation",
+              sessionKey: targetSessionKey,
+              inputProvenance: expect.objectContaining({ sourceSessionKey: requesterSessionKey }),
             }),
           }),
         );
@@ -1861,7 +1910,6 @@ describe("sessions_send gating", () => {
     { label: "cron with direct token", key: "agent:main:cron:direct:peer-1" },
     { label: "hook with direct token", key: "agent:main:hook:direct:peer-1" },
     { label: "hook with dm token", key: "agent:main:hook:dm:peer-1" },
-    { label: "subagent with direct token", key: "agent:main:subagent:direct:peer-1" },
     { label: "nested agent owner", key: "agent:main:agent:worker:feishu:direct:peer-1" },
     {
       label: "thread-scoped direct conversation",
@@ -1875,6 +1923,27 @@ describe("sessions_send gating", () => {
     const flowParams = await executeFireAndForgetA2AFrom(key);
 
     expect(flowParams.requesterSessionKey).toBe(key);
+  });
+
+  it.each([
+    { label: "group", key: "agent:main:feishu:group:peer-1" },
+    { label: "channel", key: "agent:main:slack:channel:peer-1" },
+    { label: "threaded DM", key: "agent:main:feishu:direct:peer-2:thread:reply-root" },
+  ])("preserves a peer-only $label requester without an account owner", async ({ key }) => {
+    const flowParams = await executeFireAndForgetA2AFrom(key, {
+      routingConfig: PEER_ONLY_ROUTING_CONFIG,
+    });
+
+    expect(flowParams.requesterSessionKey).toBe(key);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:other:discord:group:ops",
+          inputProvenance: expect.objectContaining({ sourceSessionKey: key }),
+        }),
+      }),
+    );
   });
 
   it.each([

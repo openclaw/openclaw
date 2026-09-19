@@ -52,7 +52,7 @@ function parseBackupManifestSourcePath(value: unknown, label: string): string {
   if (typeof value !== "string" || value.includes("\0")) {
     throw new Error(`Backup manifest ${label} has an invalid sourcePath.`);
   }
-  const windowsPath = /^[A-Za-z]:[\\/]/u.test(value);
+  const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\(?![?.]\\))/u.test(value);
   const normalized = windowsPath ? path.win32.normalize(value) : path.posix.normalize(value);
   if ((!windowsPath && !value.startsWith("/")) || normalized !== value) {
     throw new Error(`Backup manifest ${label} sourcePath must be absolute and normalized.`);
@@ -87,7 +87,7 @@ function parseBackupManifestAgentRoots(
       throw new Error("Backup manifest agent root has an invalid or noncanonical agentId.");
     }
     const normalizedSourcePath = parseBackupManifestSourcePath(sourcePath, "agent root");
-    const windowsPath = /^[A-Za-z]:[\\/]/u.test(normalizedSourcePath);
+    const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\(?![?.]\\))/u.test(normalizedSourcePath);
     const sourcePathKey = windowsPath
       ? normalizeWindowsPathForComparison(normalizedSourcePath)
       : normalizedSourcePath;
@@ -197,9 +197,8 @@ export function verifyBackupManifestEntries(manifest: BackupManifest, entries: S
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
-  const normalizedEntrySet = new Set(normalizedEntries);
 
-  if (!normalizedEntrySet.has(manifestEntryPath)) {
+  if (!entries.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
 
@@ -215,11 +214,10 @@ export function verifyBackupManifestEntries(manifest: BackupManifest, entries: S
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
-    const exact = normalizedEntrySet.has(assetArchivePath);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
-    );
-    if (!exact && !nested) {
+    if (
+      !entries.has(assetArchivePath) &&
+      !normalizedEntries.some((entry) => isArchivePathWithin(entry, assetArchivePath))
+    ) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }

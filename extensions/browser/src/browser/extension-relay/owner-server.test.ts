@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
 import { relayOwnerReply, relayOwnerRetired } from "./owner-protocol.js";
 import { attachRelayOwner } from "./owner-server.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";

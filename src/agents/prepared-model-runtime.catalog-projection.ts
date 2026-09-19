@@ -1,7 +1,7 @@
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
@@ -69,19 +69,14 @@ export function createPreparedModelCatalogProjection(params: {
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
     );
+    const keyOf = createModelCatalogIdentityKeyResolver();
     projected.entries = dedupeByKey(
       [...projected.entries.filter(includesEntry), ...current.entries],
-      resolveModelCatalogIdentityKey,
+      keyOf,
     );
     projected.routeVariants = dedupeByKey(
       [...projected.routeVariants.filter(includesEntry), ...current.routeVariants],
-      (entry) =>
-        JSON.stringify([
-          resolveModelCatalogIdentityKey(entry),
-          entry.api,
-          entry.baseUrl,
-          entry.nativeRuntime,
-        ]),
+      (entry) => JSON.stringify([keyOf(entry), entry.api, entry.baseUrl, entry.nativeRuntime]),
     );
     prepareModelCatalogThinkingPolicies({
       catalog: projected,

@@ -28,6 +28,76 @@ export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void 
   }
 }
 
+export function dropLegacyRuntimeJournalSchemas(db: DatabaseSync): void {
+  const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
+  if (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) {
+    // The reverted f91de52 journal keyed events only by run_id. It is derived runtime
+    // state, so discard that incompatible shape and let the canonical schema recreate it.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_agent_acp_parent_stream_events_created;
+      DROP TABLE acp_parent_stream_events;
+    `);
+  }
+
+  const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
+  if (trajectoryColumns?.has("event_id")) {
+    // The reverted f91de52 journal used event_id instead of the canonical session/seq key.
+    // Trajectory runtime events are derived, so rebuild rather than preserving stale rows.
+    db.exec(`
+      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_session;
+      DROP INDEX IF EXISTS idx_agent_trajectory_runtime_events_run;
+      DROP TABLE trajectory_runtime_events;
+    `);
+  }
+}
+
+/** Backfill one generation token without copying or rewriting transcript rows. */
+export function migrateSessionTranscriptGenerations(
+  db: DatabaseSync,
+  previousVersion: number,
+): void {
+  // Remove after 2026-10-01: drop the generation backfill once the minimum supported agent schema is 13.
+  if (previousVersion >= 13) {
+    return;
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
+     SELECT session_id, lower(hex(randomblob(16))), ?
+     FROM transcript_events
+     GROUP BY session_id`,
+  ).run(Date.now());
+}
+
+export function migrateSessionTranscriptActiveProjection(
+  db: DatabaseSync,
+  previousVersion: number,
+): void {
+  if (previousVersion >= 10) {
+    return;
+  }
+  const columns = readSqliteTableColumns(db, "session_transcript_index_state");
+  if (columns && !columns.has("active_event_count")) {
+    db.exec(
+      "ALTER TABLE session_transcript_index_state ADD COLUMN active_event_count INTEGER NOT NULL DEFAULT 0;",
+    );
+  }
+  if (columns && !columns.has("active_message_count")) {
+    db.exec(
+      "ALTER TABLE session_transcript_index_state ADD COLUMN active_message_count INTEGER NOT NULL DEFAULT 0;",
+    );
+  }
+  // This table is derived state. Gateway startup rebuilds it after all legacy
+  // imports finish, keeping schema-open work cheap and history reads bounded.
+  db.exec(`
+    DELETE FROM session_transcript_active_events;
+    UPDATE session_transcript_index_state
+    SET needs_rebuild = 1,
+        active_event_count = 0,
+        active_message_count = 0,
+        updated_at = ${Date.now()};
+  `);
+}
+
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
   return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
 }

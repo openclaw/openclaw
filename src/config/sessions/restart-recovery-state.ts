@@ -7,6 +7,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import type {
+  HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "./restart-recovery-types.js";
@@ -69,6 +70,45 @@ function normalizePresentStringArray(value: unknown): string[] | undefined {
     return undefined;
   }
   return normalizeStringArray(value) ?? [];
+}
+
+function normalizeHarnessCompletionRecovery(value: unknown): HarnessCompletionRecovery | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const taskId = normalizeRunId(value.taskId);
+  const taskStatus =
+    value.taskStatus === "succeeded" || value.taskStatus === "failed"
+      ? value.taskStatus
+      : undefined;
+  const taskRunId = normalizeRunId(value.taskRunId);
+  const sourceRunId = normalizeRunId(value.sourceRunId);
+  const requesterSessionKey = normalizeRunId(value.requesterSessionKey);
+  const requesterAgentId = normalizeRunId(value.requesterAgentId);
+  const sessionId = normalizeRunId(value.sessionId);
+  const lifecycleRevision = normalizeRunId(value.lifecycleRevision);
+  if (
+    !taskId ||
+    !taskStatus ||
+    !taskRunId ||
+    !sourceRunId ||
+    !requesterSessionKey ||
+    !requesterAgentId ||
+    !sessionId ||
+    (value.lifecycleRevision !== undefined && !lifecycleRevision)
+  ) {
+    return undefined;
+  }
+  return {
+    taskId,
+    taskStatus,
+    taskRunId,
+    sourceRunId,
+    requesterSessionKey,
+    requesterAgentId,
+    sessionId,
+    ...(lifecycleRevision ? { lifecycleRevision } : {}),
+  };
 }
 
 function normalizeTerminalDeliveryEvidenceResult(
@@ -150,6 +190,11 @@ function normalizeTerminalDeliveryEvidenceResult(
   const deliveryStatus: RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"] = status
     ? {
         status,
+        ...(typeof rawStatus?.resultCount === "number" &&
+        Number.isSafeInteger(rawStatus.resultCount) &&
+        rawStatus.resultCount >= 0
+          ? { resultCount: rawStatus.resultCount }
+          : {}),
         ...(errorMessage ? { errorMessage } : {}),
         ...(payloadOutcomes?.length ? { payloadOutcomes } : {}),
       }
@@ -183,6 +228,9 @@ function normalizeTerminalDeliveryEvidenceResult(
               ...(target.threadSuppressed === true ? { threadSuppressed: true as const } : {}),
               ...(mediaUrls ? { mediaUrls } : {}),
               ...(visible !== undefined ? { visible } : {}),
+              ...(typeof target.sourceReplyFinal === "boolean"
+                ? { sourceReplyFinal: target.sourceReplyFinal }
+                : {}),
             },
           ];
         })
@@ -243,7 +291,32 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       evidence.splice(previousIndex, 1);
     }
     const transcriptRunId = normalizeRunId(item.transcriptRunId);
-    evidence.push({ runId, ...result, ...(transcriptRunId ? { transcriptRunId } : {}) });
+    const harnessCompletion = normalizeHarnessCompletionRecovery(item.harnessCompletion);
+    const rawContext = isRecord(item.deliveryContext) ? item.deliveryContext : undefined;
+    const deliveryContext = normalizeDeliveryContext({
+      channel: normalizeRunId(rawContext?.channel),
+      to: normalizeRunId(rawContext?.to),
+      accountId: normalizeRunId(rawContext?.accountId),
+      threadId:
+        typeof rawContext?.threadId === "number"
+          ? rawContext.threadId
+          : normalizeRunId(rawContext?.threadId),
+    });
+    const rawFinalReceipt = isRecord(item.durableFinalReceipt)
+      ? item.durableFinalReceipt
+      : undefined;
+    const intentId = normalizeRunId(rawFinalReceipt?.intentId);
+    const deliveryId = normalizeRunId(rawFinalReceipt?.deliveryId);
+    const platformMessageId = normalizeRunId(rawFinalReceipt?.platformMessageId);
+    evidence.push({
+      runId,
+      ...result,
+      ...(transcriptRunId ? { transcriptRunId } : {}),
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
+      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+        ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
+        : {}),
+    });
   }
   const bounded = evidence.slice(-MAX_TERMINAL_RUN_IDS);
   return bounded.length > 0 ? bounded : undefined;
@@ -280,6 +353,7 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryDeliveryRequestFingerprint"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryHarnessCompletion"
   | "restartRecoveryRequesterAccountId"
   | "restartRecoveryRequesterSenderId"
   | "restartRecoverySameChannelThreadRequired"
@@ -308,6 +382,15 @@ export function normalizeRestartRecoveryEntryFields(
     value: SessionEntry[K] | undefined,
   ) => void,
 ): void {
+  const harnessCompletion = normalizeHarnessCompletionRecovery(
+    entry.restartRecoveryHarnessCompletion,
+  );
+  assign(
+    "restartRecoveryHarnessCompletion",
+    isDeepStrictEqual(harnessCompletion, entry.restartRecoveryHarnessCompletion)
+      ? entry.restartRecoveryHarnessCompletion
+      : harnessCompletion,
+  );
   const deliveryMediaUrls = normalizePresentStringArray(entry.restartRecoveryDeliveryMediaUrls);
   assign(
     "restartRecoveryDeliveryMediaUrls",
@@ -401,7 +484,7 @@ export function normalizeRestartRecoveryEntryFields(
   );
 }
 
-function mergeRestartRecoveryTerminalDeliveryEvidence(
+export function mergeRestartRecoveryTerminalDeliveryEvidence(
   current: unknown,
   appended: unknown,
 ): RestartRecoveryTerminalDeliveryEvidence[] | undefined {
@@ -490,6 +573,12 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
             {
               runId: sourceRunId,
               ...params.terminalDeliveryEvidence,
+              ...(params.entry.restartRecoveryHarnessCompletion?.sourceRunId === sourceRunId
+                ? {
+                    harnessCompletion: params.entry.restartRecoveryHarnessCompletion,
+                    deliveryContext: params.entry.restartRecoveryDeliveryContext,
+                  }
+                : {}),
               transcriptRunId:
                 normalizeRunId(params.terminalRunId) ??
                 normalizeRunId(params.entry.restartRecoveryDeliveryRunId),
@@ -508,6 +597,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,

@@ -7,8 +7,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
 import type {
+  ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
@@ -85,15 +85,9 @@ type ActionTargetAliasSpec = {
   aliases: string[];
 };
 
-export type ActionDeliveryTargetAliasSpec = ActionTargetAliasSpec & {
-  deliveryTargetAliases?: string[];
-  resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
-  matchesCurrentConversation?: (params: {
-    args: Record<string, unknown>;
-    accountId: string;
-    toolContext: ChannelThreadingToolContext;
-  }) => boolean;
-};
+export type ActionDeliveryTargetAliasSpec = NonNullable<
+  NonNullable<ChannelMessageActionAdapter["messageActionTargetAliases"]>[ChannelMessageActionName]
+>;
 
 type ActionTargetAliasOptions = {
   channel?: string;

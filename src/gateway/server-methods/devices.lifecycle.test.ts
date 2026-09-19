@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  type DiagnosticSecurityEvent,
+} from "../../infra/diagnostic-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
@@ -25,6 +29,110 @@ const { deviceHandlers } = await import("./devices.js");
 
 describe("device lifecycle", () => {
   beforeEach(resetDeviceHandlerTestState);
+
+  it.each(
+    ["rotate", "revoke"].flatMap((operation) =>
+      ["ownership", "role", "service"].map((denial) => ({ operation, denial })),
+    ),
+  )("preserves $operation $denial denial ordering and privacy", async ({ operation, denial }) => {
+    const method = `device.token.${operation}`;
+    const deviceId = denial === "ownership" ? " device-2 " : " device-1 ";
+    const role = denial === "service" ? " operator " : " node ";
+    const reason =
+      denial === "ownership"
+        ? "device-ownership-mismatch"
+        : denial === "role"
+          ? "role-management-requires-admin"
+          : "caller-missing-scope";
+    const wording = operation === "rotate" ? "rotation" : "revocation";
+    const order: string[] = [];
+    const events: DiagnosticSecurityEvent[] = [];
+    const trusted: boolean[] = [];
+    const mutation = operation === "rotate" ? rotateDeviceTokenMock : revokeDeviceTokenMock;
+    if (denial === "service") {
+      mutation.mockImplementationOnce(async () => {
+        order.push("service");
+        return { ok: false, reason: "caller-missing-scope", scope: "operator.admin" };
+      });
+    }
+    const opts = createOptions(
+      method,
+      { deviceId, role },
+      {
+        client: createClient(["operator.pairing"], " device-1 ", { isDeviceTokenAuth: true }),
+      },
+    );
+    const updateSurface = vi.spyOn(opts.context.nodeRegistry, "updateSurface");
+    vi.mocked(opts.context.logGateway.warn).mockImplementation(() => {
+      order.push("warn");
+    });
+    vi.mocked(opts.respond).mockImplementation(() => {
+      order.push("respond");
+    });
+    const stop = onInternalDiagnosticEvent((event, metadata) => {
+      if (event.type === "security.event") {
+        order.push("event");
+        events.push(event);
+        trusted.push(metadata.trusted);
+      }
+    });
+    try {
+      await expectDefined(deviceHandlers[method], method)(opts);
+    } finally {
+      stop();
+    }
+    expect(order).toEqual([
+      ...(denial === "service" ? ["service"] : []),
+      "warn",
+      "event",
+      "respond",
+    ]);
+    if (denial === "service") {
+      expect(mutation).toHaveBeenCalledExactlyOnceWith({
+        deviceId,
+        role,
+        callerScopes: ["operator.pairing"],
+        ...(operation === "rotate" ? { scopes: undefined } : {}),
+      });
+    } else {
+      expect(mutation).not.toHaveBeenCalled();
+    }
+    expect(opts.context.logGateway.warn).toHaveBeenCalledExactlyOnceWith(
+      `device token ${wording} denied device=${deviceId} role=${role} reason=${reason}${denial === "service" ? " scope=operator.admin" : ""}`,
+    );
+    expect(opts.respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: `device token ${wording} denied`,
+    });
+    expect(trusted).toEqual([true]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "security.event",
+      category: "auth",
+      action: `device.token.${wording}_denied`,
+      outcome: "denied",
+      severity: "medium",
+      reason,
+      actor: {
+        kind: "operator",
+        role: "operator",
+        deviceIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u),
+      },
+      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+      policy: { id: "gateway.device-token", decision: "deny", reason },
+      control: { id: method, family: "auth" },
+      attributes: { role: role.trim() },
+    });
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("device-1");
+    expect(serialized).not.toContain("device-2");
+    expect(serialized).not.toContain("operator.admin");
+    expect(opts.context.logGateway.info).not.toHaveBeenCalled();
+    expect(opts.context.broadcast).not.toHaveBeenCalled();
+    expect(opts.context.invalidateClientsForDevice).not.toHaveBeenCalled();
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expect(updateSurface).not.toHaveBeenCalled();
+  });
 
   it("clears and invalidates node runtime state after removing a full device pairing", async () => {
     const nodeId = "disconnected-node-device";

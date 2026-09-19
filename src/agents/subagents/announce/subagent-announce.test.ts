@@ -104,7 +104,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     targetRequesterSessionKey: string;
     triggerMessage: string;
     requesterIsSubagent?: boolean;
-    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
     completionDirectOrigin?: {
       channel?: string;
       to?: string;
@@ -147,8 +146,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       return { delivered: true, path: "steered" };
     }
 
-    const effectiveOrigin =
-      params.completionDirectOrigin ?? params.requesterOrigin ?? params.directOrigin;
+    const effectiveOrigin = params.completionDirectOrigin ?? params.directOrigin;
 
     const response = (await callGatewayMock({
       method: "agent",
@@ -345,7 +343,7 @@ describe("subagent announce seam flow", () => {
   });
 
   it.each([false, true])(
-    "does not substitute private grandchild findings for its parent's authored result: private=%s",
+    "keeps the parent's authored result for public and private grandchildren: private=%s",
     async (privateChild) => {
       const parentKey = "agent:main:subagent:parent";
       subagentRegistryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
@@ -381,12 +379,8 @@ describe("subagent announce seam flow", () => {
         }),
       ).toBe("delivered");
       const message = String(requireAgentCall().params?.message);
-      if (privateChild) {
-        expect(message).toContain("parent reviewed and approved");
-        expect(message).not.toContain("raw grandchild marker");
-      } else {
-        expect(message).toContain("raw grandchild marker");
-      }
+      expect(message).toContain("parent reviewed and approved");
+      expect(message).not.toContain("raw grandchild marker");
     },
   );
 

@@ -10,6 +10,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
+import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
@@ -129,10 +130,12 @@ export async function installManagedPlugin(
   const env = params.env ?? process.env;
   return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const performInstall = async () => {
-      const officialCatalog =
-        params.request.source === "official" || params.request.source === "clawhub"
-          ? await loadOfficialCatalog()
-          : { entries: [] };
+      const configuredClawHubUrl = env.OPENCLAW_CLAWHUB_URL ?? env.CLAWHUB_URL;
+      const useHostedCatalog =
+        params.request.source === "official" ||
+        (params.request.source === "clawhub" &&
+          (!configuredClawHubUrl || isDefaultClawHubBaseUrl(configuredClawHubUrl)));
+      const officialCatalog = useHostedCatalog ? await loadOfficialCatalog() : { entries: [] };
       const warnings: string[] = [];
       const request = resolveManagedPluginInstallRequest(params.request, officialCatalog.entries);
       const planned = resolvePluginInstallRequestContext({

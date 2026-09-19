@@ -293,16 +293,20 @@ function renderToolWorkspaceFilePath(
 /** Neutral end-state line every expanded tool surface closes with. */
 export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
   const label =
-    outcome === "failed"
-      ? exitCode === undefined
-        ? t("chat.toolCards.failed")
-        : t("chat.toolCards.exitCode", { code: String(exitCode) })
-      : outcome === "running"
-        ? t("chat.toolCards.running")
-        : outcome === "succeeded"
-          ? t("chat.toolCards.completed")
-          : null;
-  return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
+    outcome === "skipped"
+      ? t("chat.toolCards.skipped")
+      : outcome === "failed"
+        ? exitCode === undefined
+          ? t("chat.toolCards.failed")
+          : t("chat.toolCards.exitCode", { code: String(exitCode) })
+        : outcome === "running"
+          ? t("chat.toolCards.running")
+          : outcome === "succeeded"
+            ? t("chat.toolCards.completed")
+            : outcome === "blocked"
+              ? t("chat.toolCards.blocked")
+              : t("chat.toolCards.outcomeUnknown");
+  return html`<div class="chat-tool-card__outcome">${label}</div>`;
 }
 
 function renderTerminalBlock(command: string, output: string | undefined) {
@@ -332,7 +336,7 @@ function renderToolCardModes(
   // Call IDs repeat across messages; scope DOM identity without copying source cards.
   // Web Awesome links ARIA references in later observer callbacks; initial render needs them too.
   const id = `${messageKey}:${card.id}`;
-  const active = isError ? "raw" : "diff";
+  const active = isError || outcome === "skipped" ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
   return html`
     <wa-tab-group

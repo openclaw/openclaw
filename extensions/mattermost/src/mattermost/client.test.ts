@@ -1,6 +1,6 @@
-// Mattermost tests cover client plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -44,16 +44,6 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
   });
 
   return { mockFetch: mockFetch as typeof fetch, calls };
-}
-
-function requestUrl(url: string | URL | Request): string {
-  if (typeof url === "string") {
-    return url;
-  }
-  if (url instanceof URL) {
-    return url.toString();
-  }
-  return url.url;
 }
 
 function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
@@ -490,6 +480,84 @@ describe("createMattermostClient", () => {
     });
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
+  });
+
+  it("treats an accepted reaction add as success when its body read fails", async () => {
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error("accepted response body lost");
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(
+      client.request("/reactions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+      }),
+    ).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an accepted reaction add as success when its body is undecodable", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response('{"partial":', {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(
+      client.request("/reactions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+      }),
+    ).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a rejecting body cancellation on an accepted reaction add", async () => {
+    const release = vi.fn(async () => {});
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        return Promise.reject(new Error("release failed"));
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+    const client = createMattermostClient({
+      baseUrl: "https://chat.example.com",
+      botToken: "test-token",
+    });
+
+    await expect(
+      client.request("/reactions", {
+        method: "POST",
+        body: JSON.stringify({ user_id: "u1", post_id: "p1", emoji_name: "+1" }),
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

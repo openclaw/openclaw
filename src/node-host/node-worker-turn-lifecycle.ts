@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { withTimeout } from "../infra/fs-safe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -12,10 +13,26 @@ import { createNodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-contract.js";
 import {
   createNodeWorkerActiveTurn,
+  type NodeWorkerObservedTerminal,
   type NodeWorkerRunningChild,
   type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+
+export async function cancelNodeWorkerTurn(
+  active: NodeWorkerRunningChild,
+  turn: NonNullable<NodeWorkerRunningChild["turn"]>,
+  timeoutMs: number,
+): Promise<void> {
+  // A worker that stopped reading can block the write as well as the reply.
+  await withTimeout(
+    sendNodeWorkerInput(active.adapter, { type: "cancel", turnId: turn.claim.launchId }).then(
+      () => turn.done,
+    ),
+    timeoutMs,
+    { message: "node worker turn cancellation did not settle" },
+  );
+}
 
 /** Shutdown must be able to abort admission before it stops the retiring physical owner. */
 export async function waitForNodeWorkerRetirement(
@@ -76,6 +93,29 @@ export function settleNodeWorkerTurn(
   active.turn = undefined;
   active.retiring = !frame.retainWorker;
   turn.settle();
+}
+
+/** Preserve accepted cancellation when a worker exits without a turn result frame. */
+export function reconcileNodeWorkerTurnCancellation(
+  active: NodeWorkerObservedTerminal,
+  store: NodeWorkerTurnStore,
+): void {
+  if (!active.cancelledTurn) {
+    return;
+  }
+  // Gateway authority may close before worker finishing. The physical failure
+  // remains separate, and neither journal can settle before process cleanup.
+  const turn = store.finish({
+    expected: active.cancelledTurn,
+    ownerLaunchId: active.launchId,
+    supervisor: active.supervisor,
+    worker: active.worker,
+    state: "cancelled",
+    errorText: active.outcome.errorText ?? "node worker turn cancelled",
+  });
+  if (!turn || turn.state === "pending" || turn.state === "running") {
+    throw new Error("node worker cancellation lost its physical owner");
+  }
 }
 
 export async function startNodeWorkerTurn({

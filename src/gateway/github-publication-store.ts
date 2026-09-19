@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -14,11 +17,19 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
+import {
+  readSharedGitHubPublicationWorkspace,
+  type SharedGitHubPublicationSession,
+  type SharedGitHubPublicationSelector,
+} from "./github-publication-shared-read.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-store.js";
 
 type GitHubPublicationDatabase = Pick<
   StateDatabase,
-  "github_publication_requests" | "worker_session_placements"
+  | "github_publication_requests"
+  | "github_publication_session_lifecycles"
+  | "worker_session_placements"
 >;
 export type GitHubPublicationRow = StateDatabase["github_publication_requests"];
 export type GitHubPublicationExecutionRow = Omit<
@@ -71,6 +82,156 @@ export function readGitHubPublicationRequest(
   );
 }
 
+/** Shared observation never initializes schema, prepares identity, or resumes publication. */
+export function readSharedGitHubPublicationRequest(
+  session: SharedGitHubPublicationSession,
+  selector: SharedGitHubPublicationSelector,
+  entry: SessionEntry,
+): GitHubPublicationRow | undefined {
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) =>
+    runSqliteDeferredTransactionSync(db, () => {
+      if (!tableExists(db, "github_publication_requests")) {
+        return undefined;
+      }
+      let selection = githubPublicationDatabase(db)
+        .selectFrom("github_publication_requests")
+        .selectAll("github_publication_requests")
+        .where("session_key", "=", session.sessionKey)
+        .where("agent_id", "=", session.agentId);
+      if ("requestId" in selector) {
+        selection = selection.where(
+          "github_publication_requests.request_id",
+          "=",
+          selector.requestId,
+        );
+        const row = executeSqliteQueryTakeFirstSync(db, selection);
+        if (!row) {
+          return undefined;
+        }
+        checkSharedWorktreeReceipt(row);
+        // An explicitly selected terminal receipt is history, not discovery of the current workspace.
+        if (row.status === "published" || row.status === "failed") {
+          return row;
+        }
+      } else if (selector.idempotencyKey !== undefined) {
+        selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
+      }
+      const hasLifecycle = tableExists(db, "github_publication_session_lifecycles");
+      const ordered = selection
+        .leftJoin("github_publication_session_lifecycles as lifecycle", (join) =>
+          join
+            .onRef("lifecycle.request_id", "=", "github_publication_requests.request_id")
+            .on("lifecycle.publication_kind", "=", "shared"),
+        )
+        .where((eb) =>
+          eb.or([
+            eb("lifecycle.request_id", "is not", null),
+            eb("github_publication_requests.status", "not in", ["published", "failed"]),
+          ]),
+        )
+        .select(["lifecycle.request_id as lifecycle_request_id", "lifecycle.lifecycle_revision"])
+        .orderBy("created_at_ms", "desc")
+        .orderBy("github_publication_requests.request_id", "desc")
+        .limit(64);
+      // Completed receipts can predate lifecycle bindings. They are unqualified history,
+      // not current workspace evidence; pending receipts still fail closed when unbound.
+      const candidate = hasLifecycle
+        ? executeSqliteQueryTakeFirstSync(db, ordered.limit(1))
+        : undefined;
+      const existing = hasLifecycle
+        ? candidate
+        : executeSqliteQueryTakeFirstSync(
+            db,
+            selection.where("status", "not in", ["published", "failed"]).limit(1),
+          );
+      if (!existing) {
+        return undefined;
+      }
+      const workspace = readSharedGitHubPublicationWorkspace(db, session, entry);
+      if (workspace?.kind !== "worktree") {
+        return undefined;
+      }
+      if (!candidate) {
+        throw new Error("GitHub publication session binding is unavailable.");
+      }
+      const revision = entry.lifecycleRevision ?? null;
+      const matchesWorkspace = (row: typeof candidate) =>
+        row.session_id === session.sessionId &&
+        row.lifecycle_revision === revision &&
+        row.worktree_id === workspace.worktreeId &&
+        row.repository_fingerprint === workspace.repositoryFingerprint &&
+        row.branch === workspace.branch;
+      if (candidate.lifecycle_request_id !== null && matchesWorkspace(candidate)) {
+        checkSharedWorktreeReceipt(candidate);
+        return candidate;
+      }
+      let cursor: GitHubPublicationRow | undefined;
+      for (;;) {
+        const after = cursor;
+        const page = after
+          ? ordered.where((eb) =>
+              eb.or([
+                eb("created_at_ms", "<", after.created_at_ms),
+                eb.and([
+                  eb("created_at_ms", "=", after.created_at_ms),
+                  eb("github_publication_requests.request_id", "<", after.request_id),
+                ]),
+              ]),
+            )
+          : ordered;
+        const rows = executeSqliteQuerySync(db, page).rows;
+        for (const row of rows) {
+          checkSharedWorktreeReceipt(row);
+          if (row.lifecycle_request_id === null) {
+            throw new Error("GitHub publication session binding is unavailable.");
+          }
+          if (matchesWorkspace(row)) {
+            return row;
+          }
+        }
+        if (rows.length < 64) {
+          return undefined;
+        }
+        cursor = rows[rows.length - 1]!;
+      }
+    }),
+  );
+}
+
+function checkSharedWorktreeReceipt(row: GitHubPublicationRow): void {
+  assertReadableSharedGitHubPublication(row);
+  if (
+    row.request_digest !==
+    digestGitHubPublicationRequest({
+      sessionId: row.session_id,
+      idempotencyKey: row.idempotency_key,
+      title: row.title ?? undefined,
+      body: row.body ?? undefined,
+    })
+  ) {
+    throw new Error("GitHub publication receipt is corrupt.");
+  }
+}
+
+/** A malformed terminal row must not project as a new, pending publication. */
+export function assertReadableSharedGitHubPublication(
+  row: Parameters<typeof projectGitHubPublicationResult>[0],
+): void {
+  if (
+    !["agent-override", "system-configured", "system-detected"].includes(row.identity_source) ||
+    !Number.isSafeInteger(row.identity_account_id) ||
+    row.identity_account_id <= 0 ||
+    !row.identity_login ||
+    !["requested", "publishing", "published", "failed"].includes(row.status) ||
+    (row.status === "published" &&
+      (!row.pull_request_url || !row.repository || !row.branch || !row.head_commit)) ||
+    (row.status === "failed" &&
+      (!row.error_code || !PUBLICATION_FAILURE_CODES.has(row.error_code) || !row.next_action))
+  ) {
+    throw new Error("Shared GitHub publication receipt is corrupt.");
+  }
+}
+
 export function listGitHubPublicationsForClaim(
   claim: WorkerSessionTurnClaim,
   options: { pendingOnly?: boolean } = {},
@@ -119,6 +280,7 @@ export function claimGitHubPublicationExecution(
       if (!claimed) {
         throw new Error("GitHub publication execution ownership changed.");
       }
+      deferSharedGitHubPublicationChanged(db, claimed);
       return claimed;
     },
     undefined,
@@ -232,6 +394,9 @@ export function insertGitHubPublicationRequest(
   ) {
     throw new Error("GitHub publication idempotency key was reused.");
   }
+  if (inserted.numAffectedRows === 1n) {
+    deferSharedGitHubPublicationChanged(db, stored);
+  }
   return stored;
 }
 
@@ -268,6 +433,7 @@ export function createGitHubPublicationExecutionStore(instanceId: string) {
         if (!updated) {
           throw new Error(errors[transition]);
         }
+        deferSharedGitHubPublicationChanged(db, updated);
         return updated;
       },
       undefined,
@@ -349,7 +515,7 @@ export function deferGitHubPublicationRequests(requestIds: string[]): void {
       const query = githubPublicationDatabase(db);
       const updatedAtMs = Date.now();
       for (const requestId of requestIds) {
-        executeSqliteQuerySync(
+        const changed = executeSqliteQuerySync(
           db,
           query
             .updateTable("github_publication_requests")
@@ -364,8 +530,12 @@ export function deferGitHubPublicationRequests(requestIds: string[]): void {
               updated_at_ms: updatedAtMs,
             })
             .where("request_id", "=", requestId)
-            .where("status", "in", ["requested", "publishing"]),
-        );
+            .where("status", "in", ["requested", "publishing"])
+            .returning(["session_key", "agent_id", "identity_source"]),
+        ).rows;
+        for (const row of changed) {
+          deferSharedGitHubPublicationChanged(db, row);
+        }
       }
     },
     undefined,

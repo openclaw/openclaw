@@ -20,7 +20,13 @@ import {
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
+  isCodexAppServerOverloadError,
+  type CodexAppServerClient,
+} from "./app-server/client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
@@ -34,6 +40,7 @@ import type {
   JsonValue,
 } from "./app-server/protocol.js";
 import { isJsonObject } from "./app-server/protocol.js";
+import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
 import {
   requestCodexAppServerJson,
   withCodexAppServerJsonClient,
@@ -41,6 +48,7 @@ import {
 } from "./app-server/request.js";
 import { createCodexSessionGenerationSupersededError } from "./app-server/session-binding.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -60,11 +68,16 @@ export type CodexControlRequestOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   assertCurrent?: () => void;
+  catalogPreview?: true;
+  catalogPreviewCache?: CodexCatalogPreviewCache;
+  catalogRows?: number;
+  controlObservation?: CodexControlRequestObservation;
   beforeRequest?: (
     request: CodexAppServerScopedRequest,
     client: CodexAppServerClient,
     scope: { assertCurrent: () => void },
   ) => Promise<void>;
+  /** Settles ownership while leased, including final authority checks before committing. */
   onResponse?: (
     response: unknown,
     client: CodexAppServerClient,
@@ -222,17 +235,29 @@ export async function codexControlRequest(
   requestParams?: unknown,
   options: CodexControlRequestOptions = {},
 ): Promise<unknown> {
+  try {
+    options.controlObservation?.phase("prepare");
+  } catch {
+    // Diagnostic callbacks cannot change control-request behavior.
+  }
   // Explicit control options own the connection; harness defaults would reject user-home Unix.
   const runtime = options.startOptions
     ? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig })
     : resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const startOptions = options.startOptions ?? runtime.start;
-  const auth = options.onResponse
-    ? await prepareCodexControlSessionAuth(options, startOptions)
-    : {
-        authProfileId: options.authProfileId ?? undefined,
-        clientOptions: { authProfileId: options.authProfileId },
-      };
+  // Native-auth forks also settle detached subscriptions on their selected
+  // local or remote connection without acquiring an OpenClaw session login.
+  const nativeAuthFork =
+    method === "thread/fork" &&
+    options.startOptions !== undefined &&
+    options.authProfileId === null;
+  const auth =
+    options.onResponse && !nativeAuthFork
+      ? await prepareCodexControlSessionAuth(options, startOptions)
+      : {
+          authProfileId: options.authProfileId ?? undefined,
+          clientOptions: { authProfileId: options.authProfileId },
+        };
   const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
     assertCurrent: options.assertCurrent,
@@ -242,6 +267,14 @@ export async function codexControlRequest(
     sessionId: options.sessionId,
     agentDir: options.agentDir,
     isolated: options.isolated,
+    ...(options.catalogPreview
+      ? {
+          catalogPreview: true as const,
+          catalogPreviewCache: options.catalogPreviewCache,
+          catalogRows: options.catalogRows,
+        }
+      : {}),
+    ...(options.controlObservation ? { controlObservation: options.controlObservation } : {}),
     ...auth.clientOptions,
   };
   if (options.onResponse || options.beforeRequest) {
@@ -262,15 +295,31 @@ export async function codexControlRequest(
             abandonClient: () => closeCodexStartupClientBestEffort(client),
           });
         } else {
-          response = await request({ method, requestParams });
+          try {
+            response = await request({ method, requestParams });
+          } catch (error) {
+            if (
+              nativeAuthFork &&
+              (isCodexAppServerIndeterminateRequestCancellationError(error) ||
+                isCodexAppServerIndeterminateTransportError(error) ||
+                (error instanceof CodexAppServerRpcError && !isCodexAppServerOverloadError(error)))
+            ) {
+              // Codex can subscribe before response assembly fails. Without the
+              // new thread id, only the exact client can settle that subscription.
+              await closeCodexStartupClientBestEffort(client);
+            }
+            throw error;
+          }
         }
-        // Subscription-producing control requests must publish their exact
-        // physical-client ownership before this shared lease can be released.
-        await options.onResponse?.(response, client, {
-          authProfileId: auth.authProfileId,
-          assertCurrent: scope.assertCurrent,
-        });
-        scope.assertCurrent();
+        if (options.onResponse) {
+          // Settlement fences its commit; a later guard cannot turn that committed result into failure.
+          await options.onResponse(response, client, {
+            authProfileId: auth.authProfileId,
+            assertCurrent: scope.assertCurrent,
+          });
+        } else {
+          scope.assertCurrent();
+        }
         return response;
       },
     );

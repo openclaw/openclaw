@@ -3,6 +3,10 @@ import type { SQLOutputValue } from "node:sqlite";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { normalizeSqliteNumber } from "./sqlite-number.js";
+import {
+  readActiveSqliteReadersForPath,
+  type SqliteReaderDiagnostic,
+} from "./sqlite-reader-lifecycle.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 
@@ -23,6 +27,7 @@ export type SqliteWalHealth = {
   consecutiveBlocked: number;
   warning: boolean;
   error?: string;
+  activeReaders?: SqliteReaderDiagnostic[];
 };
 
 function sqliteFileBytes(pathname: string): number {
@@ -34,6 +39,16 @@ function sqliteFileBytes(pathname: string): number {
     }
     throw error;
   }
+}
+
+function readCheckpointResult(row: Record<string, SQLOutputValue> | undefined) {
+  const [busy, logFrames, checkpointedFrames] = Object.values(row ?? {}).map((value) =>
+    normalizeSqliteNumber(typeof value === "number" || typeof value === "bigint" ? value : null),
+  );
+  if (busy === undefined || logFrames === undefined || checkpointedFrames === undefined) {
+    throw new Error("SQLite returned an invalid WAL checkpoint result");
+  }
+  return { busy, logFrames, checkpointedFrames };
 }
 
 /** The maintenance lifecycle owns this checkpoint result and its last observation. */
@@ -75,14 +90,7 @@ export function createSqliteWalCheckpoint(
     let busy: boolean;
     let sizeError: unknown;
     try {
-      const [busyResult, logFrames, checkpointedFrames] = Object.values(row ?? {}).map((value) =>
-        normalizeSqliteNumber(
-          typeof value === "number" || typeof value === "bigint" ? value : null,
-        ),
-      );
-      if (busyResult === undefined || logFrames === undefined || checkpointedFrames === undefined) {
-        throw new Error("SQLite returned an invalid WAL checkpoint result");
-      }
+      const { busy: busyResult, logFrames, checkpointedFrames } = readCheckpointResult(row);
       busy = busyResult !== 0;
       observation.logFrames = logFrames;
       observation.checkpointedFrames = checkpointedFrames;
@@ -110,6 +118,14 @@ export function createSqliteWalCheckpoint(
           (observation.walBytes !== null &&
             observation.databaseBytes !== null &&
             observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
+      if (observation.state === "blocked") {
+        const readers = options.databasePath
+          ? readActiveSqliteReadersForPath(options.databasePath)
+          : [];
+        if (readers.length) {
+          observation.activeReaders = readers;
+        }
+      }
       health = observation;
     } catch (error) {
       recordCheckpointError(error, observation);
@@ -132,8 +148,23 @@ export function createSqliteWalCheckpoint(
   return {
     record: recordCheckpoint,
     recordError: recordCheckpointError,
+    inspectIdle(row: Record<string, SQLOutputValue> | undefined): boolean {
+      const { busy, logFrames, checkpointedFrames } = readCheckpointResult(row);
+      // An incomplete PASSIVE checkpoint can belong to another connection's reader.
+      // A local native reader instead refuses the checkpoint; non-WAL results are negative.
+      return (
+        busy === 0 && logFrames >= 0 && checkpointedFrames >= 0 && checkpointedFrames <= logFrames
+      );
+    },
     get health() {
-      return health ? { ...health } : undefined;
+      return health
+        ? {
+            ...health,
+            ...(health.activeReaders
+              ? { activeReaders: health.activeReaders.map((reader) => Object.assign({}, reader)) }
+              : {}),
+          }
+        : undefined;
     },
   };
 }

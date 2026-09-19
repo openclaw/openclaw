@@ -23,8 +23,8 @@ import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-
 const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
 
-beforeEach(() => {
-  resetSlackTestState();
+beforeEach(async () => {
+  await resetSlackTestState();
 });
 
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -118,7 +118,7 @@ describe("slack startup user allowlist resolution", () => {
     const initial: OpenClawConfig = {
       channels: { slack: { enabled: true, dmPolicy: "allowlist", allowFrom: ["UOLD"] } },
     };
-    resetSlackTestState(initial);
+    await resetSlackTestState(initial);
     setRuntimeConfigSnapshot(initial, initial);
     slackTestState.replyMock.mockResolvedValue({ text: "ok" });
     const monitor = startSlackMonitor(monitorSlackProvider);
@@ -163,7 +163,7 @@ describe("slack startup user allowlist resolution", () => {
         },
       },
     };
-    resetSlackTestState(initial);
+    await resetSlackTestState(initial);
     setRuntimeConfigSnapshot(initial, initial);
     slackTestState.replyMock.mockResolvedValue({ text: "ok" });
     const lookup = createDeferred<Array<{ input: string; resolved: boolean }>>();
@@ -206,7 +206,7 @@ describe("slack startup user allowlist resolution", () => {
   });
 
   it("registers one native approval client per Enterprise Grid team", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: {
           enabled: true,
@@ -258,7 +258,7 @@ describe("slack startup user allowlist resolution", () => {
   });
 
   it("registers the native approval runtime for plugin-only Slack approvals", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: {
           enabled: true,
@@ -303,7 +303,7 @@ describe("slack startup user allowlist resolution", () => {
   });
 
   it("skips user entry resolution when name matching is not enabled", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       messages: {
         responsePrefix: "PFX",
       },
@@ -362,7 +362,7 @@ describe("slack startup user allowlist resolution", () => {
   });
 
   it("resolves user entries when name matching is enabled", async () => {
-    resetSlackTestState({
+    await resetSlackTestState({
       channels: {
         slack: {
           enabled: true,

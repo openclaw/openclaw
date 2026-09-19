@@ -4,14 +4,17 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
+  finishUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import * as childCommands from "../../process/exec.js";
@@ -28,10 +31,12 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createUpdateProgress } from "./progress.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import {
   continueMigratedUpdateInFreshProcess,
   inspectActivatedUpdateState,
 } from "./update-command-migrated.js";
+import { taskRecovery } from "./update-command-post-update.test-support.js";
 import { createUpdateRunProgress } from "./update-command-run.js";
 
 // Model the already-running updater's older schema contract. The candidate
@@ -132,6 +137,135 @@ it.each([
         env,
       }),
     ).resolves.toBe(blocked);
+  },
+);
+
+it.each([
+  { pending: true, status: "skipped" },
+  { pending: false, status: "error" },
+  { pending: true, status: "error" },
+] as const)(
+  "retains the backup across migrated finalization (readiness pending=$pending, status=$status)",
+  async ({ pending, status }) => {
+    const exitCode = status === "skipped" ? 0 : 1;
+    const reason = status === "skipped" ? "gateway-readiness-unverified" : "doctor-failed";
+    const base = dirs.make("migrated-readiness-pending-");
+    const { transaction, packageRoot } = await createRetainedPackageSwap(base);
+    const env = { OPENCLAW_STATE_DIR: path.join(base, "state") };
+    const run = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+      activationTimeoutMs: 90_000,
+    };
+    const configSnapshot = await createConfigIO({ env, observe: false }).readConfigFileSnapshot();
+    const windowsRecovery = taskRecovery();
+    const complete = vi.spyOn(transaction, "complete");
+    const rollback = vi.spyOn(transaction, "rollback");
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    // Keep the real parent and package owner; model only the completed candidate's JSON reply.
+    vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
+      async (_argv, options) => {
+        if (typeof options === "number" || typeof options.input !== "string") {
+          throw new Error("Expected serialized finalization input");
+        }
+        const input: MigratedUpdateFinalizationInput = JSON.parse(options.input);
+        const result = {
+          ...input.params.result,
+          status,
+          reason,
+          runId: run.runId,
+          steps: pending
+            ? [
+                {
+                  name: "gateway verification",
+                  command: "gateway verification",
+                  cwd: packageRoot,
+                  durationMs: 90_000,
+                  exitCode: 0,
+                  termination: "timeout",
+                  advisory: {
+                    kind: "recoverable-maintenance",
+                    message:
+                      "Gateway is still starting after 90000ms; left running with readiness unverified.",
+                  },
+                },
+              ]
+            : [],
+        };
+        finishUpdateRun(
+          run.runId,
+          { status: status === "skipped" ? "skipped" : "failed", reason },
+          { env },
+        );
+        await fs.writeFile(
+          input.resultPath,
+          JSON.stringify({ result, exitCode, terminalRunId: run.runId }),
+        );
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          cleanup: "normal",
+        };
+      },
+    );
+
+    const outcome = await continueMigratedUpdateInFreshProcess(
+      {
+        mutationStarted: true,
+        result: { status: "ok", mode: "npm", root: packageRoot, steps: [], durationMs: 1 },
+        root: packageRoot,
+        installKindChanged: false,
+        configSnapshot,
+        requestedChannel: null,
+        storedChannel: "stable",
+        channel: "stable",
+        downgradeRisk: false,
+        shouldRestart: true,
+        opts: { json: true, run },
+        preManagedServiceStop: {
+          stopped: true,
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          serviceEnv: env,
+          windowsTaskAutoStartRecovery: windowsRecovery,
+        },
+        packageTransaction: transaction,
+        controlPlaneUpdateSentinelMeta: null,
+        preUpdatePluginInstallRecords: {},
+        startedAt: Date.now(),
+        packageUpdateNodeRunner: process.execPath,
+        updateStepTimeoutMs: 90_000,
+      },
+      [],
+    );
+
+    expect(outcome).toMatchObject({
+      exitCode,
+      result: { status },
+    });
+    expect(outcome.result.reason).toBe(reason);
+    if (pending) {
+      expect(complete).not.toHaveBeenCalled();
+    } else {
+      expect(complete).toHaveBeenCalledExactlyOnceWith(
+        { activationVerified: false },
+        expect.any(Function),
+      );
+    }
+    expect(rollback).not.toHaveBeenCalled();
+    expect(windowsRecovery.complete).toHaveBeenCalledWith(pending);
+    expect(windowsRecovery.complete).not.toHaveBeenCalledWith(!pending);
+    await expect(
+      fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
+    ).resolves.toContain('"version":"1.0.0"');
+    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+      '"version":"2.0.0"',
+    );
   },
 );
 

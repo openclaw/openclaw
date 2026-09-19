@@ -3,6 +3,7 @@
  */
 
 import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
+import { MODEL_CATALOG_THINKING_LEVELS } from "@openclaw/model-catalog-core/model-catalog-types";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import type { Model } from "../../llm/types.js";
@@ -11,10 +12,8 @@ import type { ThinkingLevel } from "../runtime/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
 
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
 function isValidThinkingLevel(level: string): level is ThinkingLevel {
-  return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
+  return MODEL_CATALOG_THINKING_LEVELS.some((candidate) => candidate === level);
 }
 
 function splitModelPatternSuffix(pattern: string): [string, string] | undefined {

@@ -27,7 +27,8 @@ openclaw-custodian-page {
 
 .custodian-surface {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  /* Notices share one row so their presence cannot displace the flexible transcript. */
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -85,7 +86,7 @@ openclaw-custodian-page {
 }
 
 .custodian-surface--empty-error {
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto auto auto;
   align-content: start;
 }
 
@@ -583,4 +584,12 @@ openclaw-custodian-page {
   .custodian__thinking > span:not(.sr-only) {
     animation: none;
   }
+}
+
+.custodian__plugin-reference {
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
 }

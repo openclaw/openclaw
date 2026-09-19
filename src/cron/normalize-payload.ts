@@ -104,7 +104,7 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       }
     }
   }
-  if ("timeoutSeconds" in next) {
+  if ("timeoutSeconds" in next && next.timeoutSeconds !== null) {
     const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
     if (timeoutSeconds !== undefined) {
       next.timeoutSeconds = timeoutSeconds;

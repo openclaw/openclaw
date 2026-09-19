@@ -142,20 +142,20 @@ cleanup_dmg() {
 trap cleanup_dmg EXIT
 
 detach_dmg() {
-  local attempt
-  for attempt in {1..15}; do
+  local delay
+  # Mount writers have exited and the shell never enters MOUNT_POINT.
+  # Flush writes, then give Finder/Spotlight up to 54s to release the volume.
+  sync
+  for delay in 2 3 4 5 6 7 8 9 10; do
+    sleep "$delay"
     if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
       MOUNTED=0
       return
     fi
-    if (( attempt >= 3 )) && hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
-      MOUNTED=0
-      return
-    fi
-    # Finder can retain the just-closed volume briefly on macOS runners.
-    sleep 2
   done
-  return 1
+  echo "WARN: DMG mount still busy; forcing detach: $MOUNT_POINT" >&2
+  hdiutil detach "$MOUNT_POINT" -force || return 1
+  MOUNTED=0
 }
 
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"

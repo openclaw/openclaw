@@ -1,8 +1,9 @@
 // File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
+import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
-import { root } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError, root } from "openclaw/plugin-sdk/security-runtime";
 import {
   fileIdentity,
   matchesFileIdentity,
@@ -22,6 +23,8 @@ const TEXT_SNIFF_MAX_BYTES = 8192;
 
 type FileFetchParams = {
   path?: unknown;
+  /** Optional canonical root: follow parent aliases within it, never the final file. */
+  rootPath?: unknown;
   maxBytes?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
@@ -68,6 +71,9 @@ function clampMaxBytes(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): FileFetchErrCode {
+  if (err instanceof FsSafeError && err.code === "too-large") {
+    return "FILE_TOO_LARGE";
+  }
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
     return safeCode;
@@ -131,9 +137,15 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
+  const requestedRoot =
+    params.rootPath === undefined ? undefined : readAbsolutePath(params.rootPath);
+  if (requestedRoot !== undefined && typeof requestedRoot !== "string") {
+    return requestedRoot;
+  }
+
   const canonical = await resolveCanonicalReadPath({
-    requestedPath,
-    followSymlinks,
+    requestedPath: requestedRoot ?? requestedPath,
+    followSymlinks: requestedRoot === undefined && followSymlinks,
     classifyError: classifyFsError,
     notFoundMessage: "file not found",
   });
@@ -143,8 +155,15 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
 
   let opened: Awaited<ReturnType<Awaited<ReturnType<typeof root>>["open"]>>;
   try {
-    const parentRoot = await root(path.dirname(canonical));
-    opened = await parentRoot.open(path.basename(canonical));
+    if (requestedRoot !== undefined) {
+      const readRoot = await root(canonical);
+      opened = await readRoot.open(path.relative(canonical, requestedPath), {
+        symlinks: followSymlinks ? "follow-parents-within-root" : "reject",
+      });
+    } else {
+      const parentRoot = await root(path.dirname(canonical));
+      opened = await parentRoot.open(path.basename(canonical));
+    }
   } catch (err) {
     const code = classifyFsError(err);
     return {
@@ -200,15 +219,7 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
       };
     }
 
-    const buffer = await opened.handle.readFile();
-    if (buffer.byteLength > maxBytes) {
-      return {
-        ok: false,
-        code: "FILE_TOO_LARGE",
-        message: `read ${buffer.byteLength} bytes exceeds limit ${maxBytes}`,
-        canonicalPath: opened.realPath,
-      };
-    }
+    const buffer = await readFileHandleBounded(opened.handle, maxBytes);
 
     const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
     const base64 = buffer.toString("base64");

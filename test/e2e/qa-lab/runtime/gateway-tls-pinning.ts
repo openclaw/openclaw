@@ -10,7 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { normalizeTlsFingerprint } from "../../../../packages/gateway-client/src/client-address-utils.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { createConfiguredGatewayLocalProbe } from "../../../../src/gateway/local-http-probe.js";

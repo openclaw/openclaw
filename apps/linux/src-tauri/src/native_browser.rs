@@ -486,7 +486,10 @@ impl NativeBrowserState {
             let failure_owner = self.clone();
             let failure_app = app.clone();
             let failure_label = view.label().to_string();
-            if let Err(error) = platform::observe_navigation_failure(&view, move || {
+            if let Err(error) = platform::observe_navigation_events(&view, move |navigation| {
+                if navigation != platform::NavigationEvent::Failed {
+                    return;
+                }
                 let event = navigation_epoch.load(Ordering::SeqCst);
                 failed_epoch.store(event, Ordering::SeqCst);
                 let clock = navigation_epoch.clone();

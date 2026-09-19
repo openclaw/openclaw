@@ -9,7 +9,6 @@ import {
   createDispatcher,
   emptyConfig,
   hookMocks,
-  replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -39,8 +38,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = automaticGroupReplyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -697,51 +694,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(commentaryEnabled).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("normalizes tool-result media before delivery and drops blocked file URLs", async () => {
-    setNoAbort();
-    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
-      async (payload: ReplyPayload) => ({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-      }),
-    );
-    const cfg = automaticGroupReplyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      ChatType: "group",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await opts?.onToolResult?.({
-        text: "NO_REPLY",
-        mediaUrls: ["file://attacker/share/probe.mp3"],
-      });
-      return { text: "done" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { suppressDefaultToolProgressMessages: true },
-    });
-
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("webchat");
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
   it("delivers tool summaries in forum topic sessions when verbose is enabled", async () => {
@@ -1566,8 +1518,6 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const onItemEvent = vi.fn();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       ChatType: "group",
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",

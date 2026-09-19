@@ -273,7 +273,7 @@ async function createFixture() {
       return withPluginRuntimeRegistryScope(registry, async () => {
         const delivered: ReplyPayload[] = [];
         const accounting = await accountQueued(context.execution);
-        const decision = resolveFollowupDeliveryDecision({
+        const decision = await resolveFollowupDeliveryDecision({
           turn,
           execution: { runId: context.runId, outcome: context.execution },
           accounting,

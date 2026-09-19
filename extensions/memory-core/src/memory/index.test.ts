@@ -70,23 +70,35 @@ describe("memory index", () => {
     ).run(model, providerKey, providerFixture.identityAlias.provider);
   }
 
-  it("does not prepare vector deletes after in-place reset drops a missing vector table", async () => {
+  it("rebuilds a missing vector table through forced sync with cached readiness", async () => {
     const cfg = createCfg({
       vectorEnabled: true,
     });
     const manager = await getFreshManager(cfg);
     trackManager(manager);
-    type VectorState = { available: boolean | null; dims?: number };
-    const vector = Reflect.get(manager, "vector") as VectorState;
-    vector.available = true;
-    vector.dims = 4;
-    Reflect.set(Reflect.get(manager, "database"), "vectorReady", Promise.resolve(true));
+    await manager.sync({ reason: "test", force: true });
+    const db = Reflect.get(manager, "db") as DatabaseSync;
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 1,
+    });
+    await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+    expect(manager.status().vector).toMatchObject({ storeAvailable: true, dims: 4 });
+    db.exec("DROP TABLE memory_index_chunks_vec");
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'memory_index_chunks_vec'").get(),
+    ).toBeUndefined();
 
-    await expect(
-      Reflect.apply(Reflect.get(manager, "runInPlaceReindex"), manager, [
-        { reason: "test", force: true },
-      ]),
-    ).resolves.toBeUndefined();
+    await manager.sync({ reason: "test", force: true });
+    const chunks = db.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all();
+    expect(chunks).toEqual([
+      { id: expect.any(String), text: expect.stringContaining("Alpha memory line.") },
+    ]);
+    expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual(
+      chunks.map(({ id }) => ({ id })),
+    );
+    expect(await manager.search("alpha")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
   });
 
   it("indexes memory files and searches", async () => {
@@ -247,7 +259,7 @@ describe("memory index", () => {
   });
 
   it.each(["none", "openai"])(
-    "indexes incomplete and mixed annotations promptly with provider %s",
+    "preserves incomplete and mixed annotations when indexing with provider %s",
     async (provider) => {
       await fs.writeFile(
         path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -260,9 +272,8 @@ describe("memory index", () => {
       );
       const manager = await getFreshManager(createCfg({ provider }));
       try {
-        const started = performance.now();
+        // curated-annotations.test.ts in memory-host-sdk guards parser backtracking.
         await manager.sync({ reason: "test", force: true });
-        expect(performance.now() - started).toBeLessThan(3_000);
         const db = Reflect.get(manager, "db") as DatabaseSync;
         expect(
           db
@@ -1551,7 +1562,7 @@ describe("memory index", () => {
 
   it("drains retained queued targets through the next idle sync call", async () => {
     const markers = {
-      blocker: "BLOCKER LOCKED SYNC 729",
+      blocker: "BLOCKER FAILED SYNC 729",
       retained: "RETAINED RETRY TARGET 729",
       trigger: "IDLE TRIGGER TARGET 729",
     };
@@ -1562,8 +1573,10 @@ describe("memory index", () => {
         sources: ["sessions"],
         sessionMemory: true,
       }),
+      "cli",
     );
-    let lock: DatabaseSync | null = null;
+    const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const db = new DatabaseSync(dbPath);
     try {
       await manager.sync({ reason: "test-baseline", force: true });
       for (const [sessionId, marker] of Object.entries(markers)) {
@@ -1580,13 +1593,16 @@ describe("memory index", () => {
         });
       }
 
-      const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-      lock = new DatabaseSync(dbPath);
-      lock.exec("PRAGMA busy_timeout = 0");
-      lock.exec("BEGIN EXCLUSIVE");
+      db.exec(`
+        CREATE TRIGGER fail_queued_session_publication
+        AFTER INSERT ON memory_index_chunks
+        BEGIN
+          SELECT RAISE(FAIL, 'forced queued session publication failure');
+        END;
+      `);
 
       const active = manager.sync({
-        reason: "test-locked-owner",
+        reason: "test-failed-owner",
         sessions: [
           {
             agentId: "main",
@@ -1606,38 +1622,16 @@ describe("memory index", () => {
         ],
       });
       const failures = await Promise.allSettled([active, failedQueued]);
-      lock.exec("ROLLBACK");
-      lock.close();
-      lock = null;
-      const describeSqliteFailure = (failure: unknown): string => {
-        const details = [String(failure)];
-        if (failure && typeof failure === "object") {
-          const record = failure as Record<string, unknown>;
-          for (const key of ["message", "code"] as const) {
-            if (typeof record[key] === "string") {
-              details.push(record[key]);
-            }
-          }
-          if (record.cause && typeof record.cause === "object") {
-            const cause = record.cause as Record<string, unknown>;
-            for (const key of ["message", "code"] as const) {
-              if (typeof cause[key] === "string") {
-                details.push(cause[key]);
-              }
-            }
-          }
-        }
-        return details.join(" ");
-      };
       for (const result of failures) {
         expect(result.status).toBe("rejected");
         if (result.status !== "rejected") {
-          throw new Error("expected SQLite-locked sync to reject");
+          throw new Error("expected failed SQLite publication to reject");
         }
-        expect(describeSqliteFailure(result.reason)).toMatch(
-          /SQLITE_(?:BUSY|LOCKED)|database is (?:busy|locked)/i,
-        );
+        expect(result.reason).toMatchObject({
+          message: "forced queued session publication failure",
+        });
       }
+      db.exec("DROP TRIGGER fail_queued_session_publication");
 
       const ftsMatchCount = (marker: string): number => {
         const observer = new DatabaseSync(dbPath, { readOnly: true });
@@ -1656,6 +1650,8 @@ describe("memory index", () => {
 
       expect(ftsMatchCount(markers.retained)).toBe(0);
       expect(ftsMatchCount(markers.trigger)).toBe(0);
+      // Hand ordinary dirty state to maintenance so recovery must use the retained queue.
+      manager.takeReindexRetryStateForMaintenance();
       const recoveryState = manager as unknown as {
         syncing: Promise<void> | null;
         queuedSessions: Map<string, unknown>;
@@ -1690,13 +1686,7 @@ describe("memory index", () => {
       expect(recoveryState.queuedSessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
-      if (lock) {
-        try {
-          lock.exec("ROLLBACK");
-        } finally {
-          lock.close();
-        }
-      }
+      db.close();
       await manager.close?.();
     }
   });
@@ -1708,12 +1698,14 @@ describe("memory index", () => {
       trigger: "LIVE REJECTION RECOVERY TARGET 729",
     };
     const sessionKey = (sessionId: string) => `agent:main:live-rejection:${sessionId}`;
+    // Startup catchup must not consume the controlled sync mocks.
     const manager = await getFreshManager(
       createCfg({
         provider: "none",
         sources: ["sessions"],
         sessionMemory: true,
       }),
+      "cli",
     );
     let resolveActiveSync: (() => void) | undefined;
     const activeSyncGate = new Promise<void>((resolve) => {

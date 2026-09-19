@@ -111,6 +111,9 @@ describe("Cloud Workers mutation requests", () => {
           };
         }
         if (method === "environments.list") {
+          if (!isRecord(params) || params.projection !== "profiles") {
+            throw new Error("environment inventory unavailable");
+          }
           return { environments: [], profiles: [{ id: "pending", operatingSystems: systems }] };
         }
         if (method !== "config.patch" || !validateConfigPatchParams(params)) {
@@ -154,6 +157,10 @@ describe("Cloud Workers mutation requests", () => {
           );
           expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
         });
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith("environments.list", { projection: "profiles" }),
+        );
+        expect(page.textContent).not.toContain("environment inventory unavailable");
         const row = expectDefined(
           [...page.querySelectorAll(".settings-row")].find(
             (entry) => entry.querySelector("code")?.textContent === "pending",

@@ -16,6 +16,15 @@ function fail(message = "Unsupported survivor manager request or generated unit 
   throw new Error(message);
 }
 
+function expandSpecifiers(value) {
+  return value.replace(/%%|%h|%/g, (specifier) => {
+    if (specifier === "%") {
+      fail();
+    }
+    return specifier === "%h" ? process.env.HOME : "%";
+  });
+}
+
 // buildSystemdUnit quotes whole words and escapes only quotes/backslashes.
 function words(value) {
   const result = [];
@@ -31,14 +40,7 @@ function words(value) {
     result.push(word.startsWith('"') ? word.slice(1, -1).replace(/\\(["\\])/g, "$1") : word);
     offset = pattern.lastIndex;
   }
-  return result.map((word) =>
-    word.replace(/%%|%h|%/g, (specifier) => {
-      if (specifier === "%") {
-        fail();
-      }
-      return specifier === "%h" ? process.env.HOME : "%";
-    }),
-  );
+  return result.map(expandSpecifiers);
 }
 
 function assignments(values) {
@@ -88,10 +90,12 @@ function parseUnit(content) {
   if (!programArguments.length || !path.isAbsolute(programArguments[0])) {
     fail();
   }
-  const workingDirectories = words(single("WorkingDirectory"));
-  if (workingDirectories.length > 1) {
+  const expanded = expandSpecifiers(single("WorkingDirectory"));
+  if (expanded && !path.isAbsolute(expanded)) {
     fail();
   }
+  // Remove only the renderer's trailing /. shield; normalizing .. would change symlink traversal.
+  const workingDirectory = expanded.endsWith("/.") ? expanded.slice(0, -2) || "/" : expanded;
   const environment = assignments(
     (directives.get("Environment") || []).flatMap((value) => {
       if (!value) {
@@ -102,11 +106,17 @@ function parseUnit(content) {
   );
   const environmentFiles = (directives.get("EnvironmentFile") || []).map((value) => {
     const optional = value.startsWith("-");
-    const filenames = words(optional ? value.slice(1) : value);
-    if (filenames.length !== 1 || !path.isAbsolute(filenames[0])) {
+    const pattern = expandSpecifiers(optional ? value.slice(1) : value);
+    if (!path.isAbsolute(pattern)) {
       fail();
     }
-    return [filenames[0], optional];
+    // This copied, dependency-free shim accepts only the renderer's literal glob escapes.
+    // Keep the expanded pattern for manager properties; reject unsupported wildcards at load.
+    const filename = pattern.replace(
+      /\\([?*()[\]\\])|[?*[\]\\]/g,
+      (_match, literal) => literal ?? fail(),
+    );
+    return { pattern, filename, optional };
   });
   const supported = new Set([
     "ExecStart",
@@ -127,7 +137,7 @@ function parseUnit(content) {
   }
   return {
     programArguments,
-    workingDirectory: workingDirectories[0] || "",
+    workingDirectory,
     environment,
     environmentFiles,
     killMode: single("KillMode") || "control-group",
@@ -375,14 +385,41 @@ function writeCommandProperties(unit, scope) {
           ],
           ["s", unit.workingDirectory],
           ["as", Object.entries(unit.environment).map(([key, value]) => `${key}=${value}`)],
-          ["a(sb)", unit.environmentFiles],
+          ["a(sb)", unit.environmentFiles.map(({ pattern, optional }) => [pattern, optional])],
           ["as", []],
         ],
   );
 }
 
+function recordCaller(file, parentPid, action) {
+  const roles = [];
+  let pid = Number(parentPid);
+  for (let depth = 0; depth < 64 && Number.isSafeInteger(pid) && pid > 1; depth++) {
+    try {
+      // Commander replaces argv[0] with these titles before executing the action.
+      const title = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0];
+      if (title === "openclaw-doctor" || title === "openclaw-update") {
+        roles.push(title.slice("openclaw-".length));
+      }
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      pid = Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]);
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+        throw error;
+      }
+      break;
+    }
+  }
+  // Caller evidence contains roles only; never retain process arguments or environment values.
+  fs.appendFileSync(file, `${JSON.stringify({ action, roles })}\n`);
+}
+
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "record-caller" && args.length === 3) {
+    recordCaller(...args);
+    return;
+  }
   if (
     operation === "busctl" &&
     args.length === 7 &&
@@ -409,7 +446,7 @@ function run() {
       fail("Cannot launch an absent fixture unit.");
     }
     const environment = { ...unit.environment };
-    for (const [filename, optional] of unit.environmentFiles) {
+    for (const { filename, optional } of unit.environmentFiles) {
       let content;
       try {
         content = fs.readFileSync(filename, "utf8");
@@ -442,8 +479,9 @@ function run() {
       ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
       ...unit.programArguments,
     ];
+    // Physical traversal matches chdir: shell-logical .. can select a different directory.
     console.log(
-      `cd ${quote(unit.workingDirectory || process.env.HOME)} && exec ${command.map(quote).join(" ")}`,
+      `cd -P ${quote(unit.workingDirectory || process.env.HOME)} && exec ${command.map(quote).join(" ")}`,
     );
     return;
   }

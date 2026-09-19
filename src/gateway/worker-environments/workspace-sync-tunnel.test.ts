@@ -23,7 +23,7 @@ import {
   workspaceSetup,
 } from "./tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
-import { parseWorkerWorkspaceManifest } from "./workspace-reconcile.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

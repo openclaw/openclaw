@@ -1,5 +1,8 @@
 /** Config IO adapter used by secrets apply/configure flows. */
+import path from "node:path";
 import { createConfigIO } from "../config/config.js";
+import { privateFileStoreSync } from "../infra/private-file-store.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
 
 const silentConfigIoLogger = {
   error: () => {},
@@ -17,4 +20,20 @@ export function createSecretsConfigIO(params: {
     env: params.env,
     logger: silentConfigIoLogger,
   });
+}
+
+/**
+ * Atomically writes secret-adjacent text, using the private store for default 0600 files.
+ */
+export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
+  if (mode !== 0o600) {
+    replaceFileAtomicSync({
+      filePath: pathname,
+      content: value,
+      mode,
+      tempPrefix: ".openclaw-secrets",
+    });
+    return;
+  }
+  privateFileStoreSync(path.dirname(pathname)).writeText(path.basename(pathname), value);
 }

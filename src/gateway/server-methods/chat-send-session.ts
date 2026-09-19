@@ -139,6 +139,7 @@ function loadChatSendSessionContext(params: {
       sessionLoadMs,
       cfg,
       storePath,
+      ...(sessionLoadResult.readSource ? { readSource: sessionLoadResult.readSource } : {}),
       entry,
       sessionKey,
       legacyKey,

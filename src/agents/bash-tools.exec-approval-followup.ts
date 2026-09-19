@@ -48,11 +48,9 @@ const DIRECT_FOLLOWUP_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const;
-const AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS = 5 * 60;
 const AGENT_FOLLOWUP_WAIT_TIMEOUT_MS = 60_000;
 const AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS = 1_000;
-const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS =
-  AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS * 1_000 + AGENT_FOLLOWUP_WAIT_TIMEOUT_MS;
+const AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS = 6 * 60_000;
 
 async function callExecApprovalFollowupGateway(
   method: "agent" | "agent.wait",
@@ -387,7 +385,6 @@ function buildAgentFollowupArgs(params: {
     ...(params.internalRuntimeHandoffId
       ? { internalRuntimeHandoffId: params.internalRuntimeHandoffId }
       : {}),
-    timeout: AGENT_FOLLOWUP_RUN_TIMEOUT_SECONDS,
   };
 }
 

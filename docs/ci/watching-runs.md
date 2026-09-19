@@ -72,6 +72,12 @@ still waits for the attached CI run to succeed. Terminal `GREEN` exits 0,
 aggregate and pending count; `ci-run` timeouts identify that completion mode
 because it does not inspect the rollup.
 
+An HTTP 407 proxy-authentication refusal exits immediately with
+`PROXY-AUTH-FAILED` and exit code 2. Retrying the same command cannot renew its
+proxy access. Start a new watcher from an active authenticated run, or repair the
+configured proxy authentication before retrying. Other transient transport failures
+retain the bounded retry behavior.
+
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after
 verifying the successful exact-head attempt, its complete same-name job group,

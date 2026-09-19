@@ -49,6 +49,19 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it("uses preserved format diagnostics without exposing raw details", () => {
+    const message = "safe summary";
+    const error = new FailoverError(message, {
+      reason: "format",
+      rawError: "Invalid session transcript entry: message PRIVATE_CANARY",
+    });
+
+    expect(buildExternalRunFailureReply({ message, error })).toEqual({
+      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      isGenericRunnerFailure: false,
+    });
+  });
+
   it("includes heartbeat preflight reasons without verbose opt-in", () => {
     const message =
       "Codex session became active in another runner; wait for it to finish before continuing";

@@ -124,8 +124,9 @@ config-the-default error).
   reasoning-effort startup override. An explicit value takes precedence over
   a reasoning suffix in `model`, including `off`. When omitted, ACP spawns use existing
   subagent thinking defaults, the configured target agent's `thinkingDefault`, and per-model
-  `agents.defaults.models["provider/model"].params.thinking` for the selected
-  model.
+  `params.thinking` for the selected model. The target agent's
+  `agents.entries.<agent>.models["provider/model"]` setting overrides the shared
+  `agents.defaults.models["provider/model"]` setting.
 </ParamField>
 
 ## Spawn bind and thread modes

@@ -1,22 +1,295 @@
+import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import {
+  hasAuthoritativeTaskBackingFromRecords,
+  selectCurrentCanonicalTaskBacking,
+} from "../tasks/task-backing-records.js";
+import { restoreTaskExecutionSnapshot } from "../tasks/task-execution-owner.js";
 import {
   applyFlowPatch,
+  isTaskMirroredFlowSyncUnchanged,
   normalizeRestoredFlowRecord,
+  prepareTaskMirroredFlowSyncFromCurrent,
 } from "../tasks/task-flow-registry.records.js";
 import type { getTaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
 import type {
+  TaskFlowRegistryMirroredSync,
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
+import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
+import { selectExistingTaskForCreate } from "../tasks/task-registry-create-rules.js";
+import { runTaskCreateOperation } from "../tasks/task-registry-create.operation.js";
+import { assertParentFlowRecordLinkAllowed } from "../tasks/task-registry-parent-flow-rules.js";
+import { findLatestTaskForFlowInSnapshot } from "../tasks/task-registry-records.js";
+import type {
+  TaskMirroredFlowSyncOutcome,
+  TaskRegistryRestoreResult,
+} from "../tasks/task-registry-restore.worker.js";
+import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
+import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
 
+function syncRestoredTaskFlow(
+  taskStore: TaskRegistryStore,
+  flowStore: TaskFlowRegistryStore,
+  params: { taskId: string; expectedParentFlowId?: string },
+): TaskMirroredFlowSyncOutcome {
+  const { taskId } = params;
+  let flowId = params.expectedParentFlowId?.trim();
+  try {
+    const snapshot = taskStore.loadSnapshot();
+    const task = snapshot.tasks.get(taskId);
+    const currentParentFlowId = task?.parentFlowId?.trim();
+    if (
+      !task ||
+      !currentParentFlowId ||
+      (params.expectedParentFlowId !== undefined && currentParentFlowId !== flowId)
+    ) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: null } };
+    }
+    flowId = currentParentFlowId;
+    if (findLatestTaskForFlowInSnapshot(snapshot.tasks, flowId)?.taskId !== taskId) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: null } };
+    }
+    const stored = flowStore.loadSnapshot().flows.get(flowId);
+    if (!stored) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: null } };
+    }
+    const current = normalizeRestoredFlowRecord(stored);
+    if (current.syncMode !== "task_mirrored") {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: current } };
+    }
+    const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, current);
+    if (isTaskMirroredFlowSyncUnchanged(prepared)) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: current } };
+    }
+    try {
+      flowStore.upsertFlow(prepared.next);
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: prepared.next } };
+    } catch {
+      return {
+        taskId,
+        flowId,
+        kind: "result",
+        result: { ok: false, reason: "persist_failed", current },
+      };
+    }
+  } catch (error) {
+    return {
+      taskId,
+      flowId,
+      kind: "error",
+      error: serializeAgentSchemaInspectionError(error),
+    };
+  }
+}
+
 export function createInMemoryTaskRegistryStore(
   snapshot: TaskRegistryStoreSnapshot = { tasks: new Map(), deliveryStates: new Map() },
+  flowStore?: TaskFlowRegistryStore,
 ): TaskRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    async runInitialMutationAsync(context, command, assertCurrent) {
+      const unsupported = (): never => {
+        throw new Error("Initial flow mutations require the isolated worker fixture.");
+      };
+      const operations: {
+        [Key in keyof TaskInitialWorkerOperations]: (
+          input: TaskInitialWorkerOperations[Key]["input"],
+        ) => TaskInitialWorkerOperations[Key]["output"];
+      } = {
+        "tasks.createRecord": (input) =>
+          runTaskCreateOperation(input, {
+            readSelection: (identity) => {
+              const flows = flowStore?.loadSnapshot().flows;
+              const parentFlowId = input.params.parentFlowId?.trim();
+              assertParentFlowRecordLinkAllowed(
+                { ...identity, parentFlowId },
+                parentFlowId ? flows?.get(parentFlowId) : undefined,
+              );
+              const current = this.loadSnapshot();
+              const existing = selectExistingTaskForCreate({
+                ...input.params,
+                ...identity,
+                candidates: [...current.tasks.values()].toSorted(
+                  (left, right) =>
+                    left.createdAt - right.createdAt ||
+                    (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0),
+                ),
+                isTaskMirroredFlow: (flowId) => flows?.get(flowId)?.syncMode === "task_mirrored",
+              });
+              return {
+                existing,
+                deliveryState: existing ? current.deliveryStates.get(existing.taskId) : undefined,
+              };
+            },
+            write: (operation) => operation(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+          }),
+        "flows.createForTask": unsupported,
+        "tasks.settleUnstarted": (input) => {
+          const current = this.loadSnapshot().tasks.get(input.taskId);
+          if (
+            !current ||
+            (current.status !== "queued" && current.status !== "running") ||
+            current.endedAt !== undefined
+          ) {
+            return null;
+          }
+          const params = {
+            ...input.terminal,
+            runId: input.expectedTask.runId,
+            runtime: input.expectedTask.runtime,
+            sessionKey: input.expectedTask.childSessionKey ?? input.expectedTask.ownerKey,
+          };
+          return runTaskRecordTransitionOperation(
+            {
+              kind: "state",
+              taskId: input.taskId,
+              now: input.now,
+              expectedTask: input.expectedTask,
+              params,
+            },
+            {
+              readCurrent: () => this.loadSnapshot().tasks.get(input.taskId),
+              hasAuthoritativeBacking: (task) =>
+                hasAuthoritativeTaskBackingFromRecords(task, {
+                  isManagedFlow: (flowId) =>
+                    flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "managed",
+                  resolveCurrentCanonicalBacking: (scope) =>
+                    selectCurrentCanonicalTaskBacking({
+                      ...scope,
+                      candidates: [...this.loadSnapshot().tasks.values()],
+                      isTaskMirroredFlow: (flowId) =>
+                        flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "task_mirrored",
+                    }),
+                }),
+              write: (operation) => operation(),
+              upsertTask: (task) => {
+                this.upsertTaskWithDeliveryState({
+                  task,
+                  deliveryState: this.loadSnapshot().deliveryStates.get(task.taskId),
+                });
+                return true;
+              },
+              assertCurrent,
+              deferCommit: (publish) => publish(),
+              onCommitted() {},
+            },
+          );
+        },
+        "tasks.linkInitialFlow": unsupported,
+        "flows.deleteUnlinkedForTask": unsupported,
+        "flows.finalizeTaskCancellation": unsupported,
+      };
+      context.admission.assertCurrent();
+      assertCurrent();
+      return operations[command.type](command.input);
+    },
+    async syncLiveTaskFlowAsync(_context, params, authority) {
+      if (!flowStore) {
+        throw new Error(
+          "In-memory live task-flow synchronization requires an explicit flow store.",
+        );
+      }
+      authority.assertCurrent();
+      const task = structuredClone(state.tasks.get(params.taskId));
+      if (
+        !task ||
+        task.parentFlowId?.trim() !== params.flowId ||
+        !authority.isSelected({ ...params, createdAt: task.createdAt })
+      ) {
+        return { kind: "not-selected" };
+      }
+      authority.assertCurrent();
+      const current = flowStore.loadSnapshot().flows.get(params.flowId);
+      try {
+        const result = flowStore.syncMirroredTask(task, () => ({
+          stage() {},
+          rollback() {},
+          commit() {},
+          publish() {},
+        }));
+        return { kind: "result", result: { ok: true, flow: result.flow } };
+      } catch (error) {
+        if (!current) {
+          throw error;
+        }
+        return { kind: "result", result: { ok: false, reason: "persist_failed", current } };
+      }
+    },
+    async withSnapshotAsync<T>(
+      this: TaskRegistryStore,
+      _context: OpenClawStateWorkerContext,
+      consume: (result: TaskRegistryRestoreResult) => T,
+    ): Promise<T> {
+      const restored = restoreTaskExecutionSnapshot(this);
+      const flowSyncs = restored.settledTasks.flatMap((task) => {
+        const flowId = task.parentFlowId?.trim();
+        if (!flowId) {
+          return [];
+        }
+        if (!flowStore) {
+          throw new Error(
+            "In-memory task restoration with linked settlements requires an explicit flow store.",
+          );
+        }
+        return [
+          syncRestoredTaskFlow(this, flowStore, {
+            taskId: task.taskId,
+            expectedParentFlowId: flowId,
+          }),
+        ];
+      });
+      return consume({ ...restored, flowSyncs });
+    },
+    async syncTaskFlowAsync(
+      this: TaskRegistryStore,
+      _context: OpenClawStateWorkerContext,
+      params: { taskId: string; expectedParentFlowId?: string },
+    ): Promise<TaskMirroredFlowSyncOutcome> {
+      if (!flowStore) {
+        throw new Error("In-memory task flow synchronization requires an explicit flow store.");
+      }
+      return syncRestoredTaskFlow(this, flowStore, params);
+    },
     loadSnapshot: () => structuredClone(state),
+    async loadMutationSnapshotAsync(
+      this: TaskRegistryStore,
+      _context: OpenClawStateWorkerContext,
+      scope?: TaskRegistryMutationScope,
+    ): Promise<TaskRegistryStoreSnapshot> {
+      const projectionSnapshot = structuredClone(this.loadSnapshot());
+      if (!scope) {
+        return projectionSnapshot;
+      }
+      const tasks = new Map(
+        [...projectionSnapshot.tasks].filter(
+          ([taskId, task]) =>
+            taskId === scope.taskId ||
+            Boolean(scope.runId?.trim() && task.runId?.trim() === scope.runId.trim()) ||
+            Boolean(
+              scope.childSessionKey?.trim() &&
+              task.childSessionKey?.trim() === scope.childSessionKey.trim(),
+            ),
+        ),
+      );
+      return {
+        tasks,
+        deliveryStates: new Map(
+          [...projectionSnapshot.deliveryStates].filter(([taskId]) => tasks.has(taskId)),
+        ),
+      };
+    },
     upsertTaskWithDeliveryState: ({ task, deliveryState }) => {
       const nextTask = structuredClone(task);
       const nextDeliveryState = deliveryState ? structuredClone(deliveryState) : undefined;
@@ -42,9 +315,31 @@ export function createInMemoryTaskFlowRegistryStore(
 ): TaskFlowRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    withSnapshotAsync: async (_context, consume) => consume(structuredClone(state)),
+    readFlowAsync: async (_context, flowId) => structuredClone(state.flows.get(flowId)),
     loadSnapshot: () => structuredClone(state),
     upsertFlow: (flow) => {
       state.flows.set(flow.flowId, structuredClone(flow));
+    },
+    syncMirroredTask(task, preparePublication) {
+      const stored = state.flows.get(task.parentFlowId?.trim() ?? "");
+      let result: TaskFlowRegistryMirroredSync = { changed: false, flow: null };
+      if (stored) {
+        const current = normalizeRestoredFlowRecord(stored);
+        result = { changed: false, flow: current };
+        if (current.syncMode === "task_mirrored") {
+          const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, current);
+          if (!isTaskMirroredFlowSyncUnchanged(prepared)) {
+            this.upsertFlow(prepared.next);
+            result = { changed: true, flow: prepared.next, previous: current };
+          }
+        }
+      }
+      const publication = preparePublication(result);
+      publication.stage();
+      publication.commit();
+      publication.publish();
+      return result;
     },
     updateFlow: (params, preparePublication) => {
       const publish = (result: TaskFlowRegistryObservedUpdate) => {

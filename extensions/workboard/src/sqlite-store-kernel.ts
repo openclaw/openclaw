@@ -11,7 +11,7 @@ import {
   iterateSqliteQuerySync,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
@@ -22,6 +22,7 @@ import type {
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
+  WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
   asBlobContent,
@@ -48,7 +49,7 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   cards: SyncStore<WorkboardCardStore>;
   boards: SyncStore<WorkboardKeyedStore<PersistedWorkboardBoard>>;
-  subscriptions: SyncStore<WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>>;
+  subscriptions: SyncStore<WorkboardSubscriptionStore>;
   attachments: SyncStore<WorkboardKeyedStore<PersistedWorkboardAttachment>>;
   dataVersion(this: void): number;
   close(this: void): void;
@@ -467,9 +468,7 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
   };
 }
 
-class WorkboardSqliteSubscriptionStore implements SyncStore<
-  WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>
-> {
+class WorkboardSqliteSubscriptionStore implements SyncStore<WorkboardSubscriptionStore> {
   private readonly rowsQuery;
 
   constructor(private readonly db: DatabaseSync) {
@@ -534,12 +533,18 @@ class WorkboardSqliteSubscriptionStore implements SyncStore<
     return result.changes > 0;
   }
 
-  entries(): Array<{ key: string; value: PersistedWorkboardNotificationSubscription }> {
+  entries(
+    options: Parameters<WorkboardSubscriptionStore["entries"]>[0] = {},
+  ): Array<{ key: string; value: PersistedWorkboardNotificationSubscription }> {
+    let query = this.rowsQuery;
+    if (options.boardId) {
+      query = query.where("board_id", "=", options.boardId);
+    }
+    if (options.cardId) {
+      query = query.where("card_id", "=", options.cardId);
+    }
     return Array.from(
-      iterateSqliteQuerySync(
-        this.db,
-        this.rowsQuery.orderBy("created_at", "asc").orderBy("id", "asc"),
-      ),
+      iterateSqliteQuerySync(this.db, query.orderBy("created_at", "asc").orderBy("id", "asc")),
       (row) => ({
         key: requiredString(row, "id"),
         value: readSubscription(row),

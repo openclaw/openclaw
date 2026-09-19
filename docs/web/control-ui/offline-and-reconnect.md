@@ -57,7 +57,22 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
+Queued messages follow the order shown in the queue, including moves made while
+attachment bytes are loading after reconnect. A message already being sent keeps its place.
+If another pane is editing a message, finish or cancel that edit before moving
+messages across it. A successful retry clears that edit-conflict notice.
+Opening a queued-message editor after the other pane releases its edit clears the earlier
+edit-conflict notice.
+
 Editing an unsent queued message remains safe if the connection drops mid-edit.
+Open queued-message edits stay available when you switch conversations, even after
+visiting enough chats to replace older cached views. Finish or cancel the edit to
+release that retained conversation.
+An open queued-message edit also blocks automatic UI reloads after a Gateway update.
+Use **Review edit** in the reload notice to return to its conversation and split,
+even after switching to another page.
+Save or cancel the edit, then use **Refresh for full capabilities** to continue.
+Explicit browser reloads do not preserve an unsaved queued-message correction.
 If another pane changes or removes that message, the edit stays open: copy your
 correction, cancel the edit, and review the queue before trying again. A full queue
 asks you to wait or remove a message. If browser storage prevents saving an edit,
@@ -66,9 +81,35 @@ save clears the previous error.
 
 Page and sidebar refreshes that fail because the Gateway is suspending, restarting, starting,
 or unreachable show no inline error: the footer connection indicator owns that state. Each panel
-keeps its last data and refreshes automatically once the Gateway accepts work again. Other refresh
+keeps its last data and refreshes automatically once the Gateway accepts work again.
+Established conversation names remain visible in the browser tab and chat headings,
+including split views, while reconnecting to the same Gateway and account. Other refresh
 failures remain visible inline with their message and are retried automatically when the Gateway
 becomes available again. These refresh callouts have no manual **Retry** button.
+
+When an Agent identity save is interrupted, its editor leaves the saving state on
+reconnect. If the same agent remains selected, the draft stays available to review
+and save again; a late result from the interrupted request cannot clear a newer edit.
+
+After reconnect, an open conversation link is checked against the Gateway. If the
+Gateway confirms that the conversation no longer exists, such as an incognito
+conversation after a Gateway restart, the page shows **Session not found** with
+actions to open Main or browse sessions. A connection failure or a conversation
+missing from the current sidebar page does not count as deletion.
+
+Opening a view for the first time can fail if its interface files cannot be downloaded.
+Check the connection, then use **Reload**. The same error can occur after an update;
+it does not by itself mean a new version was installed. If unsaved work blocks the
+reload, follow the displayed save or cancel guidance, then try again.
+
+If chat history times out, its **Retry** action reloads the saved conversation and restores
+its live session subscription, including approval updates.
+
+Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+
+Retiring a delivered attachment does not discard the run's completion. If the browser misses
+that completion, a queue recovery read that confirms the same session and run have finished
+clears the stale running indicator and resumes queued input.
 
 Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
 metadata and payload references in session storage. Attachment bytes stay with the queued input;
@@ -116,9 +157,15 @@ commands keep their retry/discard queue controls.
 If the Gateway reports that a `/steer` or `/redirect` message failed to start, the Control UI
 restores the submitted draft when the composer is still empty. It preserves newer text and
 attachments. If you switched conversations, recovery stays with the original conversation.
+If you moved Home between the page and its dock while the command was pending, recovery
+follows the current Home composer and preserves any newer draft entered there.
 
 Queued messages and drafts keep the conversation and agent selected when they were created.
 Switching agents, opening a split pane, or reloading does not move them to another destination.
+When split panes show the same conversation, returning to an older pane after visiting other
+conversations does not replace a newer saved draft. Text, selected recipients, Goal mode,
+and attachments follow the same draft revision. Switching quickly between split panes keeps
+the last selected conversation active, including when narrowing the window.
 A literal `global` conversation keeps its captured agent; an agent's main conversation stays
 separate unless the Gateway is configured with global session scope.
 

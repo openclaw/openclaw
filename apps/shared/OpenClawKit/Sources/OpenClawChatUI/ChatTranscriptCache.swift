@@ -5,48 +5,6 @@ import OSLog
 
 private let cacheLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatTranscriptCache")
 
-final class OutboxChangeHub: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuations: [UUID: AsyncStream<OpenClawChatOutboxChange>.Continuation] = [:]
-
-    func stream() -> AsyncStream<OpenClawChatOutboxChange> {
-        let id = UUID()
-        let pair = AsyncStream<OpenClawChatOutboxChange>.makeStream()
-        self.lock.lock()
-        self.continuations[id] = pair.continuation
-        self.lock.unlock()
-        pair.continuation.onTermination = { [weak self] _ in
-            self?.remove(id)
-        }
-        return pair.stream
-    }
-
-    func yield(_ change: OpenClawChatOutboxChange) {
-        self.lock.lock()
-        let continuations = Array(self.continuations.values)
-        self.lock.unlock()
-        for continuation in continuations {
-            continuation.yield(change)
-        }
-    }
-
-    func finish() {
-        self.lock.lock()
-        let continuations = Array(self.continuations.values)
-        self.continuations.removeAll()
-        self.lock.unlock()
-        for continuation in continuations {
-            continuation.finish()
-        }
-    }
-
-    private func remove(_ id: UUID) {
-        self.lock.lock()
-        self.continuations.removeValue(forKey: id)
-        self.lock.unlock()
-    }
-}
-
 /// Canonical gateway evidence must beat a user cancellation synchronously;
 /// actor hops would leave a window where an already-delivered row is hidden.
 private final class CanonicalMessageProofHub: @unchecked Sendable {
@@ -1256,7 +1214,9 @@ extension OpenClawChatSQLiteTranscriptCache {
         let rows = try Row.fetchAll(
             db,
             sql: """
-            SELECT c.*, s.branch_epoch AS scope_branch_epoch
+            SELECT c.*, s.branch_epoch AS scope_branch_epoch,
+              (SELECT COUNT(*) FROM outbox_attachments a
+               WHERE a.gateway_id = c.gateway_id AND a.command_id = c.client_uuid) AS attachment_count
             FROM outbox_commands c
             LEFT JOIN outbox_branch_scopes s
               ON s.gateway_id = c.gateway_id AND s.session_key = c.session_key
@@ -1265,7 +1225,32 @@ extension OpenClawChatSQLiteTranscriptCache {
             ORDER BY c.created_at, c.enqueue_sequence
             """,
             arguments: [gatewayID])
-        return try rows.map { try self.command(from: $0, in: db, gatewayID: gatewayID) }
+        guard !rows.isEmpty else { return [] }
+        // CROSS JOIN streams attachments in command order without sorting payloads.
+        let attachmentCursor = try Row.fetchCursor(
+            db,
+            sql: """
+            SELECT a.type, a.mime_type, a.file_name, a.payload, a.duration_seconds
+            FROM outbox_commands c
+            CROSS JOIN outbox_attachments a
+              ON a.gateway_id = c.gateway_id AND a.command_id = c.client_uuid
+            WHERE c.gateway_id = ?
+            ORDER BY c.created_at, c.enqueue_sequence, a.position
+            """,
+            arguments: [gatewayID])
+        return try rows.map { row in
+            let id: String = row["client_uuid"]
+            let attachmentCount: Int = row["attachment_count"]
+            var attachmentRows: [Row] = []
+            // Counts avoid reading the next command before this command's decoding can fail.
+            for _ in 0..<attachmentCount {
+                guard let attachmentRow = try attachmentCursor.next() else {
+                    throw DatabaseError(message: "outbox attachment group is incomplete")
+                }
+                attachmentRows.append(attachmentRow.copy())
+            }
+            return try self.command(from: row, id: id, attachmentRows: attachmentRows)
+        }
     }
 
     private nonisolated static func command(
@@ -1282,6 +1267,14 @@ extension OpenClawChatSQLiteTranscriptCache {
             WHERE gateway_id = ? AND command_id = ? ORDER BY position
             """,
             arguments: [gatewayID, id])
+        return try self.command(from: row, id: id, attachmentRows: attachmentRows)
+    }
+
+    private nonisolated static func command(
+        from row: Row,
+        id: String,
+        attachmentRows: [Row]) throws -> OpenClawChatOutboxCommand
+    {
         let attachments = attachmentRows.map { attachmentRow in
             OpenClawChatOutboxAttachment(
                 type: attachmentRow["type"],

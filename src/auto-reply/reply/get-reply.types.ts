@@ -4,6 +4,7 @@ import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/tr
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -33,20 +34,27 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  extractedFileImages?: import("../../media-understanding/extracted-file-images.js").ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
   getProviderLoginConfig?: () => OpenClawConfig;
   /** Invocation-owned conversation facts; never execution or sender authority. */
   replyConversation?: PreparedReplyConversation;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+  /** Internal delivery owner that stages reply media using current Gateway session policy. */
+  mediaNormalizationOwner?: "gateway";
   /** Exact authority-bearing settings captured by Gateway chat admission. */
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
+  /** Current external dashboard turn only; never persisted or inherited by another run. */
+  dashboardReadAdmission?: DashboardMessageReadAdmission;
   expectedExistingSessionId?: string;
   /** First dispatch only: admission created this exact pinned session before reply initialization. */
   newlyCreatedSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
+  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
+  cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;

@@ -10,11 +10,13 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
-Use **Search settings** to find pages and configuration fields. Add `tag:storage`, for example, to filter configuration fields by tag. Tags can appear before, within, or after a text phrase: `Log File tag:storage` and `Log tag:storage File` both find **Log File Path**. Multiple tags require a field to match every tag.
+Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
-In **Models**, **Connect** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. **Model setup** opens the separate [setup and activation flow](/start/onboarding). If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+Global model defaults apply to every agent. Switching the Settings agent while saving does not change the save target. If a save fails, **Retry** resubmits that change; after recovery, the controls follow the saved configuration, including later updates from another client.
+
+In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
 
 Model pickers show the authentication methods available to the selected agent. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
@@ -66,6 +68,8 @@ Credentials reserved for Control UI link previews are excluded from both agent a
 
 Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients. Where the transcript shows avatars, saved and streaming assistant replies use the configured agent image or text avatar. Agents without a configured avatar omit the repeated fallback icon.
 
+In **Agent settings → Files**, unsaved edits stay with their agent when you switch file tabs or select another agent and return. Returning reads the current file from disk while preserving your edits; if the file changed elsewhere, saving keeps the existing conflict recovery choices. These drafts live only in the open Agents settings page: save before leaving the page, reloading the browser, or changing Gateway connections. An ordinary reconnect preserves them.
+
 Elsewhere, agents without a custom image or emoji use a generated face that fills the circular avatar. Its color, eyes, mouth, and solid or pastel background come from the agent ID, so the same agent keeps the same face across reloads and clients. Renaming the agent's display name does not change its face. Generated faces are decorative and do not indicate activity or model choice.
 
 ## Gateway host status
@@ -91,7 +95,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a five-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery reuses its ten-second snapshot. CPU count and model share a two-second snapshot; process counters and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every five seconds while the page is visible
@@ -125,9 +129,13 @@ Docs translations are generated for the same non-English locale set, but the doc
 
 ## Appearance themes
 
-The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon, Phosphor, CRT, Manuscript, Rosé, and Miami themes (Claw is default), plus one browser-local tweakcn import slot. Each theme ships its own self-hosted typeface, loaded only when selected or previewed: Claw uses Instrument Sans, Knot uses Geist, Dash pairs DM Sans with Fraunces for chat prose, Absolutely pairs Space Grotesk with Lora for chat prose, Tide uses IBM Plex Sans, Rosé uses DM Sans, and Miami uses Space Grotesk. Beacon targets WCAG AAA (7:1) contrast with the Atkinson Hyperlegible Next typeface for low vision, bright sunlight, projectors, and low-quality panels. Phosphor and CRT set the entire surface, chat prose included, in JetBrains Mono — Phosphor as green-on-glass, CRT as a white-on-black console with squared corners. Manuscript is the one light-first theme: parchment and iron-gall ink with a lapis accent, set entirely in the Lora serif, with a candlelit dark mode. To import a theme, open the [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
+Ask the agent to list themes, choose one by name or description, or design and apply a new theme. The `theme` tool uses the same catalog and profile selection as Appearance. Plugin themes and agent-created personal themes appear alongside built-ins with their names and descriptions. Profile theme changes reach connected browsers live; plugin theme additions, updates, and removals take effect after plugin hot reload without restarting the Gateway or reloading the browser. If a selected plugin theme becomes unavailable, Claw renders temporarily and the selection returns when the theme is available again. A loading error in Appearance offers **Retry** to refresh the catalog and palette.
 
-Imported themes are stored only in the current browser profile; they are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches back to Claw if the imported theme was active.
+Personal theme definitions are saved to your authenticated Gateway profile. Existing browser-local tweakcn imports remain local and are never uploaded automatically. The agent reports a selection as saved; a browser that is offline applies it when it next connects. A theme that supplies only one color mode uses that mode even when the preference is System. Explicit accent and font overrides continue to take precedence over the theme.
+
+The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon, Phosphor, CRT, Manuscript, Rosé, and Miami themes (Claw is default), plus themes contributed by enabled plugins, personal themes saved through the agent, and one browser-local tweakcn import slot. Each theme ships its own self-hosted typeface, loaded only when selected or previewed: Claw uses Instrument Sans, Knot uses Geist, Dash pairs DM Sans with Fraunces for chat prose, Absolutely pairs Space Grotesk with Lora for chat prose, Tide uses IBM Plex Sans, Rosé uses DM Sans, and Miami uses Space Grotesk. Beacon targets WCAG AAA (7:1) contrast with the Atkinson Hyperlegible Next typeface for low vision, bright sunlight, projectors, and low-quality panels. Phosphor and CRT set the entire surface, chat prose included, in JetBrains Mono — Phosphor as green-on-glass, CRT as a white-on-black console with squared corners. Manuscript is the one light-first theme: parchment and iron-gall ink with a lapis accent, set entirely in the Lora serif, with a candlelit dark mode. To import a theme, open the [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
+
+Themes imported from tweakcn are stored only in the current browser profile; they are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches back to Claw if the imported theme was active.
 
 The mounted UI keeps a live display-preference snapshot for its connected Gateway. Local changes and same-Gateway browser-tab edits update open composers without a reload. Selecting a different Gateway in another tab does not retarget the current tab. Credentials remain owned by the connection, separate from this display snapshot.
 
@@ -173,24 +181,35 @@ the Control UI. For example, a base path of `/openclaw` uses
 `/openclaw/settings/plugins`. The page is always available, even when every
 optional plugin is disabled.
 
-Plugins is a hub with four tabs: **Installed** and **Discover** manage plugin
-code at `/settings/plugins`, **Skills** hosts the per-agent skill manager at
-`/skills`, and **Workshop** hosts Skill Workshop proposal review at
-`/skills/workshop`. Each tab keeps its own URL, and the sidebar shows the
-single Plugins entry for all of them.
+The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
+**Workshop** tabs open the per-agent skill manager at `/skills` and Skill
+Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
+shows the local inventory, with search and installed/enabled filters. Select a
+plugin to open its overview.
 
-The **Installed** tab shows the full local inventory grouped by category, with
-overview counts. Each row opens a detail view; its overflow (`…`) menu enables
-or disables the plugin and offers **Remove** for externally installed plugins.
-It also lists configured [MCP servers](/cli/mcp) and supports adding, disabling,
-and removing them inline. The same server controls live on **Settings → MCP**.
-Your selected detail tab stays open as additional plugin information loads.
-The **Discover** tab is the store: featured plugins included with OpenClaw,
-official external plugins, and one-click MCP connectors for popular services.
-Typing in the search box queries
-[ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
-section with download counts and source-verification badges. Deep links can
-target the store directly with `/settings/plugins/discover`.
+Opening a plugin shows its description, publisher, supported capabilities, and
+full README on one overview. Select a tool to read its full description. The
+metadata rail shows available release details, categories, repository, and
+documentation. Security audits link to ClawHub.
+
+Installed plugins offer **Reload plugin**, **Enable** or **Disable**, **Uninstall**
+when removable, and **Settings**. Installing from a catalog overview keeps the
+same URL and changes those actions in place. **Settings** opens an addressable
+editor with plugin configuration and permissions; Back returns to the overview.
+Existing `#configuration` links still open the editor. Local controls and the
+installed README remain available when optional ClawHub metadata cannot load.
+The catalog shows featured plugins and category shelves. Search queries
+[ClawHub](https://clawhub.ai/plugins) without leaving the page. Catalog detail
+links use `/plugins/<catalog-id>`; installed-only links use
+`/settings/plugins/<plugin-id>`. Both show the same overview and actions.
+
+Open a skill on a plugin detail page to browse its complete declared folder. The
+viewer starts with `SKILL.md`, includes unlinked files and nested folders, and
+renders full Markdown documents. Files that cannot render, exceed the read
+limits, or are unavailable remain visible with an explanation. Installed and
+catalog plugins use the same viewer; catalog reads stay pinned to the selected
+release and do not install or execute the plugin. This viewer has no search or
+Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
@@ -208,6 +227,26 @@ cannot be removed, only disabled.
 Reading the catalog and searching ClawHub require `operator.read`. Installing,
 enabling, disabling, or removing a plugin and changing MCP servers require
 `operator.admin`; those actions stay disabled for read-only operators.
+
+Plugin-declared credential fields support masked key entry and an inline key-signup
+link. The eye reveals only the key you are entering; it never retrieves the stored
+secret. Leaving an empty input unchanged preserves its existing credential.
+
+Administrators can inspect and edit a declared credential's secret reference: its
+source (`env`, `file`, `exec`, or `store`), provider alias, and identifier. The
+Gateway returns that metadata only for the selected field and current config
+revision, without resolving the secret. **Cancel** removes this field's unsaved
+reference change, including after a rejected save, while preserving other edits.
+If Cancel cannot reload the saved configuration, the dialog keeps the draft and
+shows that read's error; background refreshes cannot replace the pending Cancel read.
+**Save** waits for the existing Settings write to be acknowledged; the dialog
+cannot be dismissed while that write is pending. If the saved value cannot be
+confirmed, the dialog keeps the draft and displays the recovery error. Failed
+writes retain the draft, and stale revisions require a fresh read. Read-only config
+permits inspection but disables changes. Environment fallback is inspect-only:
+change the variable at its source. Saving a reference does not rotate a secret or
+verify a provider connection. Fields without declared credential metadata retain
+the ordinary schema editor.
 
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Install,
@@ -267,6 +306,8 @@ Form edits save automatically. If the connection changes while edits are pending
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
 discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
+Devices node-binding controls also pause while configuration reloads, so a pending
+read cannot overwrite a new selection.
 
 **Native embed mode.** Native hosts can inject `window.__OPENCLAW_NATIVE_EMBED__ = { platform: "ios", formFactor: "phone" }` at document start to show settings without Dashboard navigation chrome. Supported platforms are `ios`, `macos`, and `android`; form factors are `phone`, `pad`, and `desktop`. In this mode, `/settings` lists the same visible groups and destinations as the settings sidebar. Every embedded route outside the settings root provides a Back button and title, including pages reached through links or tabs such as Memory import, Plugins, and Skill Workshop. Back follows app navigation history; direct links fall back to the nearest settings parent (Memory for Memory import) or `/settings`. Layouts respect device safe areas and use touch controls at phone widths. The flag changes presentation only: Gateway scopes and the existing native device-settings capability still determine which settings are available. Ordinary browser loads keep their existing navigation.
 
@@ -426,17 +467,18 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 
 Open **Activity** from the sidebar's page picker, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
-- **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
-- Each session can show a rolling recap of work performed, observed outcomes, and unresolved work. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. The last recap stays visible while an update is pending or unavailable; **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
+- **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Pins do not affect this order. Each row shows the human attribution and configured agent avatar/name. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
+- Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
+- Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Search older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.
 - **Live activity** shows running and queued sessions above the ephemeral browser-local tool stream. The session snapshot comes from the Gateway; the tool stream uses the same `session.tool` and tool events that power Chat tool cards.
 - **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
 
 The Sessions view owns its query independently of the sidebar. Its people filter uses the Gateway's full visible-session associations before pagination, not the four-avatar participant preview. `sessions.list` accepts `involvingProfileId` and `includePeople`; the response reports the canonical selected profile ID, bounded people counts, and `peopleIncomplete`. Only Gateway profiles appear as people. Remote, agent, and unresolved identities cannot acquire profile names or links through an equal raw ID. Counts and dates describe associated sessions, not a person's last input; recorded participation, verified creation, and assigned responsibility remain distinct from permission to see a session. Old profile links follow profile merges. A limit notice identifies incomplete participant history or truncated results.
 
-The Sessions view batches bursts of session-change events into a refresh. Event-driven refreshes pause while the browser tab is hidden and catch up once when you return. Changing filters or retrying a failed request still loads immediately.
+The Sessions view batches bursts of session-change events into a refresh, with at least one second between automatic refresh attempts during continuous activity. Event-driven refreshes pause while the browser tab is hidden and catch up once when you return. Changing filters or retrying a failed request still loads immediately. The sidebar's session capability also [reuses row snapshots and paces list reads](/web/control-ui/sessions-and-sidebar#sidebar-navigation). Activity links retain their search and people filters during initial loading and navigation.
 
-The Gateway updates recaps when new work happens, throttling ongoing updates and catching up after a run ends. Idle sessions make no repeated model calls. Archiving retains the recap and requests catch-up; an agent still running in an archived session can update it when work finishes. Reopening or new work resumes freshness checks. Older sessions backfill in bounded chronological chunks when requested from Activity. Incognito sessions and subagent sessions do not generate recaps. Recaps are generated text and do not determine whether a task is complete or grant access to a session.
+The Gateway updates recaps when new work happens, throttling ongoing updates and catching up after a run ends. A shared queue runs at most two recap calls at once and retries temporary overload or rate-limit failures up to three times with increasing delays, honoring provider retry timing. Authentication, configuration, and exhausted subscription failures require correction before retrying. Idle sessions make no repeated model calls. Archiving retains the recap and requests catch-up; an agent still running in an archived session can update it when work finishes. Reopening or new work resumes freshness checks. Older sessions backfill in bounded chronological chunks when requested from Activity. Recaps read user and assistant conversation text, preferring final answers and skipping tool calls/results. Existing cached recaps gradually adopt the shorter format through the same queue while retaining their previous coverage. Incognito sessions and subagent sessions do not generate recaps. Recaps are generated text and do not determine whether a task is complete or grant access to a session.
 
 To find an older archived conversation, choose **Sessions**, **All time**, and **Everyone** in the people filter, then enter its name or label in **Search session titles…**. This metadata search includes archived sessions and applies across the complete caller-visible store before the 100-result window. Narrow the query if results are truncated. Open an archived match to read its retained history, then select **Unarchive** to continue the same conversation.
 
@@ -468,23 +510,43 @@ Meeting transcripts are separate from agent chat-history search in **Sessions**.
 Each page contains up to 50 meetings, grouped by local day with newest first.
 Rows show participant previews, duration, an overview when available, and distinct
 **In progress** and **No speech captured** states. Search by title or session/source ID, then
-select a meeting. Existing `/meetings?selector=...` links open its saved summary. Meeting URLs are
-not searched. Open **Filters** for
+select a meeting. Existing `/meetings?selector=...` links open **Summary** by default,
+including while capture is active. Meeting URLs are not searched. Open **Filters** for
 provider, account, agent, and date controls; the disclosure opens automatically
 when those filters are active. Provider, account, and agent IDs match
 exactly. Date filters use UTC session start times, with an inclusive lower bound
 and exclusive upper bound. **Next page** continues the ordered results;
 **First page**, a filter change, or **Refresh** starts a new pagination pass.
-The reader opens **Summary** first. Select **Transcript** for timestamped speaker
-text alongside the list on desktop or in a single column on mobile. Its URL
-preserves the selected meeting and tab.
+The reader opens **Summary** for both active and completed meetings. Select
+**Transcript** to read timestamped speech. An explicitly selected tab stays selected,
+including when capture ends. A URL with a transcript search and no explicit tab
+opens **Transcript**. Timestamped speaker text appears alongside the list on desktop
+or in a single column on mobile. Its URL preserves the selected meeting and tab.
+
+While the page is visible and connected, the library and active meeting refresh
+automatically every three seconds. **Live capture** shows elapsed time; an empty
+active transcript says **Waiting for speech**. Updates show saved speech, so
+provider capture and transcription can add latency. Background reads preserve
+filter drafts, the current transcript page, and loaded history without a loading
+flash. The reader automatically loads every page and retains earlier text. Hidden tabs pause
+automatic reads and catch up when visible again. Completed meetings refresh less
+frequently once notes are available; a meeting without notes keeps checking for
+the stored summary after capture stops.
+
+Active captures generate a summary about every five minutes when new speech has
+been saved, using the owning agent's utility model. Summary jobs do not overlap;
+quiet periods keep the existing notes. The configured primary model and then
+text heuristics provide fallback notes when needed. **Summary so far** marks
+interim notes and shows when they were generated. Capture continues during
+summary generation, and stopping the meeting saves a fresh final summary.
 
 **Search within this transcript** searches the full stored transcript in bounded
-server pages. **Load more** continues through utterances or matches; only the
-latest five loaded pages stay in the browser's reading window. **Read from
-beginning** returns to the first page. **Summary** renders the stored Markdown
-notes, including their speaker-labeled transcript, and labels model-generated or
-heuristic provenance when available. Opening this tab does not run a summary job.
+server pages that load automatically until the complete transcript or all matches
+are visible. **Summary** renders the stored Markdown
+notes with the transcript section kept in the separate **Transcript** tab, and labels model-generated or
+heuristic provenance when available. Opening a meeting with speech but no saved
+summary automatically requests generation for operators with write access. A
+generating state remains visible until notes arrive; failures offer a retry.
 Missing summaries and empty transcripts have distinct empty states.
 Saved summaries load independently of speech pages. If a transcript page exceeds
 its transfer limit, you can still read the saved notes and download an export

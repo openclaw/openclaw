@@ -11,6 +11,7 @@ import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-recor
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   pluginCacheExistsSync,
+  pluginCacheRealpathSync,
   readPluginCacheFile,
   readPluginCacheJsonFile,
 } from "./plugin-cache-files.js";
@@ -35,6 +36,111 @@ afterEach(() => {
 });
 
 describe("plugin package facts", () => {
+  it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
+    const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
+    const packageDir = path.join(root, "package");
+    const nestedDir = path.join(packageDir, "nested");
+    const alias = path.join(root, "alias");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(path.join(root, "catalog.json"), "root");
+    fs.writeFileSync(path.join(packageDir, "catalog.json"), "package");
+    fs.symlinkSync(nestedDir, alias, process.platform === "win32" ? "junction" : "dir");
+
+    const paths = [
+      packageDir,
+      alias,
+      `${alias}${path.sep}..${path.sep}catalog.json`,
+      path.relative(process.cwd(), packageDir),
+      ...(process.platform === "win32" ? [packageDir.toUpperCase()] : []),
+    ];
+    const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+    for (const targetPath of paths) {
+      const expected = fs.realpathSync(targetPath);
+      const nativeExpected = fs.realpathSync.native(targetPath);
+      for (const nativeFirst of [false, true]) {
+        nativeRealpath.mockClear();
+        const cache = createPluginCache();
+        withPluginCache(cache, () => {
+          if (nativeFirst) {
+            expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          }
+          expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+          expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          expect(nativeRealpath).toHaveBeenCalledTimes(1);
+          invalidatePluginCacheMetadata(cache);
+          expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+          expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          expect(nativeRealpath).toHaveBeenCalledTimes(2);
+        });
+      }
+    }
+  });
+
+  it("retains JavaScript resolution when native resolution fails without merging cache policies", () => {
+    const root = tempDirs.make("plugin-realpath-fallback-");
+    const expected = fs.realpathSync(root);
+    vi.spyOn(fs.realpathSync, "native").mockImplementation(() => {
+      throw Object.assign(new Error("native resolution unavailable"), { code: "ELOOP" });
+    });
+    withPluginCache(createPluginCache(), () => {
+      expect(pluginCacheRealpathSync(root, true)).toBeNull();
+      expect(pluginCacheRealpathSync(root)).toBe(expected);
+      expect(pluginCacheRealpathSync(root, true)).toBeNull();
+    });
+  });
+
+  it.each(["native", "javascript"] as const)(
+    "reuses the provider catalog source resolved by the %s filesystem path",
+    (resolver) => {
+      const dir = fs.realpathSync(tempDirs.make("plugin-provider-source-"));
+      const providerDiscoverySource = path.join(dir, "provider-discovery.js");
+      fs.writeFileSync(
+        path.join(dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "cached-provider",
+          providers: ["cached-provider"],
+          providerCatalogEntry: "./provider-discovery.js",
+          configSchema: { type: "object" },
+        }),
+      );
+      fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
+      const nativeRealpath = fs.realpathSync.native;
+      const nativeRealpathSpy = vi.spyOn(fs.realpathSync, "native");
+      if (resolver === "javascript") {
+        nativeRealpathSpy.mockImplementation((filePath, options) => {
+          // Exercise metadata fallback without disabling fs-safe's native
+          // canonicalization when it admits the manifest descriptor.
+          if (filePath === providerDiscoverySource) {
+            throw new Error("native realpath unavailable");
+          }
+          return nativeRealpath(filePath, options);
+        });
+      }
+      const realpathSpy = vi.spyOn(fs, "realpathSync");
+      const resolverSpy = resolver === "native" ? nativeRealpathSpy : realpathSpy;
+
+      withPluginCache(createPluginCache(), () => {
+        for (let build = 0; build < 2; build += 1) {
+          const registry = loadPluginManifestRegistryCore({
+            installRecords: {},
+            candidates: [
+              {
+                idHint: "cached-provider",
+                rootDir: dir,
+                source: path.join(dir, "index.js"),
+                origin: "bundled",
+              },
+            ],
+          });
+          expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
+          expect(
+            resolverSpy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource),
+          ).toHaveLength(1);
+        }
+      });
+    },
+  );
+
   it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
     const root = tempDirs.make("plugin-lease-parent-");
     const filePath = path.join(root, "catalog.json");

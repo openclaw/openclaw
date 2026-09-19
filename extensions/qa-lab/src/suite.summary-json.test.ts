@@ -21,6 +21,16 @@ describe("buildQaSuiteSummaryJson", () => {
     concurrency: 2,
   };
 
+  it("rejects the removed channel-driver selection input", () => {
+    expect(() =>
+      buildQaSuiteSummaryJson(
+        Object.assign({}, baseParams, {
+          channelDriverSelection: { channel: "discord", driver: "crabline" },
+        }),
+      ),
+    ).toThrow("channelDriverSelection was removed");
+  });
+
   it("records provider/model/mode so parity gates can verify labels", () => {
     const json = buildQaSuiteSummaryJson(baseParams);
     expect(json.run.status).toBe("completed");
@@ -52,12 +62,9 @@ describe("buildQaSuiteSummaryJson", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
       channelDriver: "crabline",
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
+      channel: "telegram",
+      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channelDriverSmokePath: "crabline-provider-readiness.json",
     });
 
     expect(json.run.channelDriver).toBe("crabline");

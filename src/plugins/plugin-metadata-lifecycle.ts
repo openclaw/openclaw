@@ -20,13 +20,17 @@ import {
   type PluginCache,
 } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import {
+  retainPluginSourceCaptureInstance,
+  sweepPluginSourceCaptureDirectories,
+} from "./plugin-source-capture-directory.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
 const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
 type GatewayMetadataOwner = {
   cache?: PluginCache;
   phase: "booting" | "active" | "closing";
-  closing?: Promise<void>;
+  closing?: Promise<PluginHostCleanupResult>;
   retirements: Set<{
     cache: PluginCache;
     beforeRetire?: PluginHostRegistryRetirement;
@@ -51,6 +55,8 @@ export function retainGatewayPluginMetadata() {
       "Gateway plugin metadata is shutting down; finish cleanup before starting another Gateway. If cleanup failed, resolve the failure and restart.",
     );
   }
+  const sourceCaptures = retainPluginSourceCaptureInstance();
+  void sweepPluginSourceCaptureDirectories();
   const owner: GatewayMetadataOwner = {
     cache: bootstrapCache,
     phase: "booting",
@@ -173,15 +179,15 @@ export function retainGatewayPluginMetadata() {
     },
     waitForRetirement,
     close(
-      onFinal?: (retire: () => Promise<void>) => void | Promise<void>,
+      onFinal?: (retire: () => Promise<PluginHostCleanupResult>) => void | Promise<void>,
       retireRegistry?: () => Promise<void | PluginHostCleanupResult>,
-    ): Promise<void> {
+    ): Promise<PluginHostCleanupResult> {
       beginClose();
       if (owner.closing) {
         return owner.closing;
       }
       if (!gatewayMetadataOwners.has(owner)) {
-        return Promise.resolve();
+        return Promise.resolve({ cleanupCount: 0, failures: [] });
       }
       const otherOwners = [...gatewayMetadataOwners].filter((other) => other !== owner);
       const precedingCloses = otherOwners.flatMap((other) =>
@@ -189,7 +195,7 @@ export function retainGatewayPluginMetadata() {
       );
       // The last entrant owns shared close, including when prior retirements are still pending.
       const final = precedingCloses.length === otherOwners.length;
-      let retirement: Promise<void> | undefined;
+      let retirement: Promise<PluginHostCleanupResult> | undefined;
       const retire = () =>
         (retirement ??= Promise.resolve().then(async () => {
           const previous = owner.cache;
@@ -205,7 +211,7 @@ export function retainGatewayPluginMetadata() {
               selectCurrentPluginMetadataCache(survivor.cache);
             }
           }
-          await waitForRetirement([
+          return await waitForRetirement([
             ...(retireRegistry ? [Promise.resolve().then(retireRegistry)] : []),
             ...(final ? precedingCloses : []),
           ]);
@@ -216,14 +222,16 @@ export function retainGatewayPluginMetadata() {
           if (final) {
             await onFinal?.(retire);
           }
-          await retire();
+          const cleanup = await retire();
           if (final) {
             clearPluginMetadataCaches();
           }
+          await sourceCaptures.releaseAsync();
+          gatewayMetadataOwners.delete(owner);
+          return cleanup;
         } catch (error) {
           throw new PluginRuntimeCloseRetainedError(error);
         }
-        gatewayMetadataOwners.delete(owner);
       });
       return owner.closing;
     },

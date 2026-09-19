@@ -10,9 +10,11 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as configRuntime from "./src/config.js";
+import { teamReportsSqliteBackendEntrypoint } from "./src/sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./src/store.js";
 
 vi.mock("./src/store.js", () => ({
@@ -118,7 +120,7 @@ describe("Team Reports registration", () => {
       await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
     const store = await openStore({
       stateDir: directory,
-      workerModuleUrl: new URL("./src/store.worker.ts", import.meta.url),
+      workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
     });
     const opened = createDeferred<void>();
     const releaseOpen = createDeferred<void>();
@@ -219,7 +221,7 @@ describe("Team Reports registration", () => {
     const actual = await vi.importActual<typeof import("./src/store.js")>("./src/store.js");
     const store = await actual.createTeamReportsStore({
       stateDir: directory,
-      workerModuleUrl: new URL("./src/store.worker.ts", import.meta.url),
+      workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
     });
     vi.mocked(createTeamReportsStore).mockResolvedValueOnce(store);
     const { services } = captureReports();

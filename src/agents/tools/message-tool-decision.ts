@@ -1,8 +1,21 @@
 /** Exact-run decision receipts for message-tool boundaries without a durable owner. */
 import { recordMessageActionDecision } from "../../audit/message-action-decision.js";
+import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+
+export function resolveTrustedDecisionChannel(
+  raw: string | null | undefined,
+  catalog: PreparedMessageToolCatalog | undefined,
+): string | undefined {
+  const channel = normalizeMessageChannel(raw);
+  if (!channel) {
+    return undefined;
+  }
+  return channel === INTERNAL_MESSAGE_CHANNEL || catalog?.getChannel(channel) ? channel : undefined;
+}
 
 type Decision = Omit<
   Parameters<typeof recordMessageActionDecision>[0],

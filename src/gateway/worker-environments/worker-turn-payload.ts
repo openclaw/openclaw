@@ -67,6 +67,7 @@ function buildWorkerAgentRuntimeIdentity(params: {
     | "currentChannelId"
     | "currentMessagingTarget"
     | "currentThreadTs"
+    | "gatewayUiCommandTarget"
     | "messageChannel"
     | "messageProvider"
   >;
@@ -84,6 +85,7 @@ function buildWorkerAgentRuntimeIdentity(params: {
     turnSourceTo: turn.currentMessagingTarget ?? turn.currentChannelId,
     turnSourceAccountId: turn.agentAccountId,
     turnSourceThreadId: turn.currentThreadTs,
+    gatewayUiCommandTarget: turn.gatewayUiCommandTarget,
     workerTurnClaim: params.turnClaim,
   };
 }
@@ -118,7 +120,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
   const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
-  bindWorkerTurnOwner(
+  const takeFinishingOutcome = bindWorkerTurnOwner(
     params.placements,
     params.turnClaim,
     runtimeIdentity.executionIdentityToken,
@@ -131,6 +133,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
     assertActive,
+    takeFinishingOutcome,
   };
 }
 

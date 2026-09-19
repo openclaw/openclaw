@@ -1243,6 +1243,7 @@ describe("installPluginFromClawHub", () => {
         sha256: DEMO_CLAWPACK_SHA256,
         npmIntegrity: "sha512-clawpack",
         npmShasum: "1".repeat(40),
+        size: 4096,
       } as unknown as ClawHubResolvedArtifact,
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
@@ -1267,6 +1268,7 @@ describe("installPluginFromClawHub", () => {
     expect(success.clawhub?.npmIntegrity).toBe("sha512-clawpack");
     expect(success.clawhub?.npmShasum).toBe("1".repeat(40));
     expect(success.clawhub?.clawpackSha256).toBe(DEMO_CLAWPACK_SHA256);
+    expect(success.clawhub?.clawpackSize).toBe(4096);
     expect(fetchClawHubPackageVersionMock).not.toHaveBeenCalled();
     expect(archiveDownloadCall().artifact).toBe("clawpack");
     expect(archiveDownloadCall().name).toBe("demo");

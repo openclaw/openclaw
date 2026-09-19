@@ -91,6 +91,7 @@ export function resolveAssistantMediaPolicy(params: {
   const remote = Boolean(entry?.execNode || entry?.repositoryWorkspaceId);
   let session: AssistantMediaSession | undefined;
   let sessionRoot: string | undefined;
+  let executionCwd: string | undefined;
   if (loaded && entry && agentId) {
     if (!auth.operatorScopes.includes("operator.admin")) {
       const profileId = auth.authenticatedUserProfile?.profileId;
@@ -115,7 +116,9 @@ export function resolveAssistantMediaPolicy(params: {
     }
     session = { sessionKey: loaded.canonicalKey, agentId, sessionId: entry.sessionId };
     if (!remote) {
-      sessionRoot = entry.sessionRoot ?? resolveSessionWorkspaceRoots(config, agentId, entry).root;
+      const workspace = resolveSessionWorkspaceRoots(config, agentId, entry);
+      sessionRoot = entry.sessionRoot ?? workspace.root;
+      executionCwd = workspace.diffCwd;
     }
   }
   const workspaceOnly =
@@ -140,6 +143,7 @@ export function resolveAssistantMediaPolicy(params: {
     : undefined;
   return {
     session,
+    executionCwd,
     remote: remote || isCloudWorkerPlacementState(placement?.state),
     localRoots,
     workspaceOnly,

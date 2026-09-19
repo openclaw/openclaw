@@ -55,7 +55,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    return "lit-runtime";
+    // The cache directive belongs to the deferred text-attachment renderer, not
+    // the shared startup vendor chunk. Let its consumer determine when it loads.
+    return normalized.endsWith("/directives/cache.js") ? undefined : "lit-runtime";
   }
 
   if (

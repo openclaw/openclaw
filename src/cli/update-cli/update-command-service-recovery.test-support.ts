@@ -7,10 +7,13 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { captureEnv } from "../../test-utils/env.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -118,8 +121,8 @@ export function registerRecoveryTests(params: {
 }): void {
   it.each([
     { startup: "fast", readyAfterMs: 0, needsRecovery: false },
-    { startup: "slow", readyAfterMs: 20_000, needsRecovery: true },
-    { startup: "unready", readyAfterMs: Infinity, needsRecovery: true },
+    { startup: "slow", readyAfterMs: 20_000, needsRecovery: false },
+    { startup: "unready", readyAfterMs: Infinity, needsRecovery: false },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
   ])(
     "verifies the $startup refresh before deciding on recovery",
@@ -189,17 +192,18 @@ export function registerRecoveryTests(params: {
         return health;
       });
 
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "npm",
+        root,
+        steps: [],
+        durationMs: 0,
+        before: { version: "2026.1.1" },
+        after: { version: VERSION },
+      };
       const activated = await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "npm",
-          root,
-          steps: [],
-          durationMs: 0,
-          before: { version: "2026.1.1" },
-          after: { version: VERSION },
-        },
+        result,
         opts: { json: true, run: params.run() },
         refreshServiceEnv: true,
         serviceInstallEnv: process.env,
@@ -211,7 +215,28 @@ export function registerRecoveryTests(params: {
         timeoutMs: 1_000,
       });
 
-      expect(activated).toBe("ok");
+      const pending = startup === "slow" || startup === "unready";
+      expect(activated).toBe(pending ? "readiness-pending" : "ok");
+      if (pending) {
+        const run = params.run();
+        expect(completeUpdateCommandRun(result, run)).toMatchObject({
+          status: "skipped",
+          reason: "gateway-readiness-unverified",
+        });
+        expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
+          status: "skipped",
+          reason: "gateway-readiness-unverified",
+          confirmedAtMs: null,
+          verification: { serviceRunning: true, pid: 4242, readyz: false },
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "warning:gateway verification",
+              detail: expect.stringContaining("Keep recovery backups"),
+            }),
+          ]),
+        });
+        expect(mocks.running).toBe(true);
+      }
       expect(mocks.events).toEqual([
         "native stop",
         "refresh activation",
@@ -221,7 +246,7 @@ export function registerRecoveryTests(params: {
               "recovery restart",
             ]
           : []),
-        "health: healthy",
+        pending ? "health: timeout" : "health: healthy",
       ]);
       expect(mocks.script).not.toHaveBeenCalled();
       expect(mocks.restart).not.toHaveBeenCalled();

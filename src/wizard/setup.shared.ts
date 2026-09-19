@@ -6,8 +6,16 @@ import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owne
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { transformConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
+import {
+  transformConfigWithPendingPluginInstalls,
+  stripPendingPluginInstallRecords,
+} from "../plugins/install-record-commit.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import {
+  captureSetupInferenceFileUndo,
+  type SetupInferenceConfigTarget,
+  type SetupInferenceConfigWriteOptions,
+} from "../system-agent/setup-inference-transition.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import {
@@ -77,24 +85,27 @@ export function formatQuickstartGatewaySummary(
   ].join("\n");
 }
 
+export type WizardConfigWriteOptions = {
+  allowConfigSizeDrop?: boolean;
+  /** Reject the write if config changed after the caller's verified snapshot. */
+  baseHash?: string;
+  /** Preserve an absent-file precondition that cannot be represented by baseHash. */
+  baseSnapshot?: ConfigFileSnapshot;
+  /** Apply only the wizard's delta to the latest authored config. */
+  mergeBase?: OpenClawConfig;
+  writeOptions?: ConfigWriteOptions;
+  /** Runtime follow-up intent for the Gateway config watcher. */
+  afterWrite?: ConfigWriteAfterWrite;
+  onPreparedCommit?: (snapshot: ConfigFileSnapshot, config: OpenClawConfig) => void;
+};
+
 /**
  * Config writes go through the pending-plugin-install commit helper so wizard
  * flows never drop install records that a concurrent migration already staged.
  */
 export async function writeWizardConfigFile(
   config: OpenClawConfig,
-  opts: {
-    allowConfigSizeDrop?: boolean;
-    /** Reject the write if config changed after the caller's verified snapshot. */
-    baseHash?: string;
-    /** Preserve an absent-file precondition that cannot be represented by baseHash. */
-    baseSnapshot?: ConfigFileSnapshot;
-    /** Apply only the wizard's delta to the latest authored config. */
-    mergeBase?: OpenClawConfig;
-    writeOptions?: ConfigWriteOptions;
-    /** Runtime follow-up intent for the Gateway config watcher. */
-    afterWrite?: ConfigWriteAfterWrite;
-  } = {},
+  opts: WizardConfigWriteOptions = {},
 ) {
   return await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
@@ -108,12 +119,48 @@ export async function writeWizardConfigFile(
         : {}),
       ...(opts.baseSnapshot ? { baseSnapshot: opts.baseSnapshot } : {}),
     },
-    transform: (current) => ({
-      nextConfig: opts.mergeBase
+    transform: (current, context) => {
+      // SAFETY: Both sides of the wizard delta are typed configs.
+      const nextConfig = opts.mergeBase
         ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
-        : config,
-    }),
+        : config;
+      opts.onPreparedCommit?.(context.snapshot, nextConfig);
+      return { nextConfig };
+    },
   });
+}
+
+export function createWizardInferenceConfigTarget(
+  commit: typeof writeWizardConfigFile,
+): SetupInferenceConfigTarget {
+  const write = async (
+    config: OpenClawConfig,
+    options: SetupInferenceConfigWriteOptions,
+    baseSnapshot?: ConfigFileSnapshot,
+  ) => {
+    const result = await commit(config, {
+      baseSnapshot,
+      writeOptions: options.writeOptions,
+      onPreparedCommit: (snapshot, next) =>
+        options.captureUndo(
+          captureSetupInferenceFileUndo(
+            { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
+            stripPendingPluginInstallRecords(next),
+          ),
+        ),
+    });
+    return result.nextConfig;
+  };
+  return {
+    write,
+    read: async () => {
+      const snapshot = await readSetupConfigFileSnapshot();
+      return {
+        config: snapshot.sourceConfig,
+        write: (config, options) => write(config, options, snapshot),
+      };
+    },
+  };
 }
 
 export async function readSetupConfigFileSnapshot() {
@@ -123,7 +170,9 @@ export async function readSetupConfigFileSnapshot() {
 export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.valid) {
-    throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+    throw new Error(
+      "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+    );
   }
   return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
 }

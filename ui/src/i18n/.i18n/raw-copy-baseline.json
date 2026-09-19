@@ -180,13 +180,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/command-palette.ts",
-      "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
       "text": "esc"
     },
@@ -273,6 +266,20 @@
       "name": "text",
       "path": "ui/src/pages/about/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
+      "text": "Offline person"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
+      "text": "Online person"
     },
     {
       "count": 1,

@@ -9,10 +9,8 @@ import {
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import {
-  resolveNpmGlobalPrefixLayoutFromPrefix,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 
 type PackageUpdateStepResult = Awaited<
   ReturnType<typeof runGlobalPackageUpdateSteps>

@@ -108,11 +108,11 @@ function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObjec
   return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
 }
 
-function normalizeNetworkProxyPermissionMap<TPermission extends string>(
-  value: Record<string, TPermission> | undefined,
-): Record<string, TPermission> | undefined {
+function normalizeNetworkProxyPermissionMap(
+  value: Record<string, "allow" | "deny" | "none"> | undefined,
+): Record<string, "allow" | "deny"> | undefined {
   const entries = Object.entries(value ?? {})
-    .map(([key, permission]) => [key.trim(), permission] as const)
+    .map(([key, permission]) => [key.trim(), permission === "none" ? "deny" : permission] as const)
     .filter(([key]) => key.length > 0);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }

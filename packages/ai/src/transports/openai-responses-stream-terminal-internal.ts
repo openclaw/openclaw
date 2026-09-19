@@ -351,11 +351,23 @@ export function createResponsesTerminalController(params: {
     if (terminalEventType === "response.completed" && typeof response.end_turn === "boolean") {
       output.endTurn = response.end_turn;
     }
+    const incompleteReason = response.incomplete_details?.reason;
     appendAssistantMessageDiagnostic(output, {
       type: "openai_responses_terminal",
       timestamp: Date.now(),
       details: {
         eventType: terminalEventType,
+        ...(terminalEventType === "response.incomplete"
+          ? {
+              incompleteReason:
+                incompleteReason === "max_output_tokens" ||
+                incompleteReason === "max_messages" ||
+                incompleteReason === "content_filter" ||
+                incompleteReason === "steered"
+                  ? incompleteReason
+                  : "unknown",
+            }
+          : {}),
         endTurn:
           typeof response.end_turn === "boolean"
             ? response.end_turn

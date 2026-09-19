@@ -439,6 +439,7 @@ export async function runToolProgressMentionSafetyScenario(context: MatrixQaScen
     expectedPreviewKind: "message",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE"),
     label: "tool progress mention safety",
+    allowGenericProgressLine: true,
     allowFinalBeforeProgress: true,
     mentionSafety: true,
     progressPattern: /@room|@alice:matrix-qa\.test|!room:matrix-qa\.test/i,

@@ -11,13 +11,17 @@ const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds
 const loadBundledChannelDoctorContractApi = vi.hoisted(() => vi.fn());
 const getBootstrapChannelPlugin = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../plugins/doctor-contract-registry.js", () => ({
-  collectDoctorConfigRepairPluginIds: (...args: unknown[]) =>
-    collectRelevantDoctorPluginIds(...args),
-  applyPluginDoctorCompatibilityMigrations: (...args: unknown[]) =>
-    applyPluginDoctorCompatibilityMigrations(...args),
-  collectRelevantDoctorPluginIds: (...args: unknown[]) => collectRelevantDoctorPluginIds(...args),
-}));
+vi.mock(import("../../../plugins/doctor-contract-registry.js"), async (importOriginal) => {
+  const { isPluginDoctorMigrationDeferred } = await importOriginal();
+  return {
+    isPluginDoctorMigrationDeferred,
+    collectDoctorConfigRepairPluginIds: (...args: unknown[]) =>
+      collectRelevantDoctorPluginIds(...args),
+    applyPluginDoctorCompatibilityMigrations: (...args: unknown[]) =>
+      applyPluginDoctorCompatibilityMigrations(...args),
+    collectRelevantDoctorPluginIds: (...args: unknown[]) => collectRelevantDoctorPluginIds(...args),
+  };
+});
 
 vi.mock("../../../channels/plugins/doctor-contract-api.js", () => ({
   loadBundledChannelDoctorContractApi: (...args: unknown[]) =>

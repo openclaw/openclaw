@@ -3,8 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <title>Quick Chat</title>
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="quickchat.css" />
   </head>
   <body>
@@ -19,7 +20,9 @@
           aria-expanded="false"
         >
           <span id="agent-avatar" class="agent-avatar" aria-hidden="true">A</span>
-          <span class="agent-chevron" aria-hidden="true">⌄</span>
+          <svg class="agent-chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m5 6.5 3 3 3-3" />
+          </svg>
         </button>
         <input
           id="message"
@@ -36,7 +39,12 @@
           aria-expanded="false"
           hidden
         >
-          <span aria-hidden="true">⚙</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="m9 3-.6 2.5-1.7 1L4.2 6.2 2.7 8.8l1.8 1.8v2.8l-1.8 1.8 1.5 2.6 2.5-.3 1.7 1L9 21h6l.6-2.5 1.7-1 2.5.3 1.5-2.6-1.8-1.8v-2.8l1.8-1.8-1.5-2.6-2.5.3-1.7-1L15 3Z"
+            />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
         </button>
         <button id="send" class="send" type="button" aria-label="Send message" disabled>
           <span id="send-icon" class="send-icon" aria-hidden="true">↑</span>

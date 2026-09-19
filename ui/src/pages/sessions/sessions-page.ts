@@ -17,17 +17,20 @@ import { renderAgentScopeControl } from "../../components/agent-scope-control.ts
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
+import {
+  formatBatchSessionRemovalError,
+  withSessionWorkspaceRecovery,
+} from "../../components/session-workspace-recovery.runtime.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -45,6 +48,7 @@ import {
   type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
+import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
   resolveSessionNavigationAgentId,
@@ -53,32 +57,25 @@ import {
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
-  canArchiveSessionRow,
-  canDeleteSessionRows,
-  isPinnableUiSessionRow,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
-import {
-  canCopySessionMarkdown,
-  runSessionNavigationAction,
-} from "../../lib/sessions/session-menu-navigation.ts";
+import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
+import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
-import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import {
-  pluginSessionMenuActions,
-  runControlUiPluginAction,
-} from "../../plugins/control-ui-actions.ts";
+import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
+import { prepareArchiveOutcome } from "./archive-outcome.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsRouteData } from "./route.ts";
+import { renderSessionManagementMenu } from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
@@ -97,7 +94,10 @@ type SessionsPageMutationResult = "completed" | "failed" | "stale";
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
-type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived" | "sessionId">;
+type SessionDeleteRow = Pick<
+  GatewaySessionRow,
+  "key" | "archived" | "sessionId" | "label" | "displayName"
+>;
 
 type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
@@ -208,14 +208,14 @@ class SessionsPage extends OpenClawLightDomElement {
         this.submittedTranscriptSearchQuery,
         context ?? null,
         context?.agentSelection.state.scopeId ?? null,
-        snapshot ? isGatewayMethodAdvertised(snapshot, "sessions.search") === true : false,
       ] as const;
     },
-    task: async ([client, query, context, _agentScope, advertised], { signal }) => {
-      if (!client || !query || !context || !advertised) {
+    task: async ([client, query, context, _agentScope], { signal }) => {
+      if (!client || !query || !context) {
         return initialState;
       }
       const {
+        sessions,
         results,
         indexing = false,
         truncated = false,
@@ -223,14 +223,11 @@ class SessionsPage extends OpenClawLightDomElement {
       } = await searchVisibleSessionTranscripts({
         client,
         query,
-        listSessions: context.sessions.list,
         listOptions: this.sessionListOptions(context, ""),
         // Task retirement must stop later RPCs, not only hide their eventual results.
         isCurrent: () => !signal.aborted,
-        resolveAgentId: (sessionKey) =>
-          parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
       });
-      return { results, indexing, truncated, archivedTranscriptsExcluded };
+      return { sessions, results, indexing, truncated, archivedTranscriptsExcluded };
     },
   });
 
@@ -621,7 +618,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const scope = this.captureRequestScope();
-    if (!scope || isGatewayMethodAdvertised(scope.gateway.snapshot, "sessions.search") !== true) {
+    if (!scope) {
       return;
     }
     this.transcriptSearchQuery = query;
@@ -769,8 +766,32 @@ class SessionsPage extends OpenClawLightDomElement {
     this.sessionMutationPending = true;
     let mutationError: string | null = null;
     try {
-      const result = await scope.sessions.deleteMany(requests);
+      const request = async () => {
+        const result = await scope.sessions.deleteMany(requests);
+        if (rows.length === 1 && result.errors.length > 0) {
+          throw result.errors[0]!.error;
+        }
+        return result;
+      };
+      const row = rows[0]!;
+      const result =
+        rows.length === 1
+          ? await withSessionWorkspaceRecovery({
+              action: "delete",
+              session: {
+                ...row,
+                label: row.label || row.displayName || row.key,
+                agentId: requests[0]!.agentId,
+              },
+              scope: { ...scope, signal: this.pluginActionLifetime.signal },
+              isCurrent: () => this.isRequestScopeCurrent(scope),
+              request,
+            })
+          : await request();
       if (!this.isRequestScopeCurrent(scope)) {
+        return;
+      }
+      if (!result) {
         return;
       }
       if (result.preservedWorktrees.length > 0) {
@@ -813,7 +834,9 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       await this.refreshSessionList(scope);
       if (result.errors.length > 0) {
-        mutationError = formatUiExternalText(result.errors.join("; "));
+        mutationError = result.errors
+          .map(({ error }) => formatBatchSessionRemovalError(error))
+          .join("; ");
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1132,6 +1155,7 @@ class SessionsPage extends OpenClawLightDomElement {
     patch: Parameters<SessionsProps["onPatch"]>[1],
     scope: SessionsPageRequestScope | null = this.captureRequestScope(),
     expectedSessionId?: string,
+    onConfirmed?: (result: SessionPatchResult) => void,
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
       // Nothing was attempted (e.g. rename dialog submitted after the gateway
@@ -1157,10 +1181,30 @@ class SessionsPage extends OpenClawLightDomElement {
       return "failed";
     }
     try {
-      const patched = await scope.sessions.patch(key, patch, {
-        agentId,
-        ...(expectedSessionId ? { expectedSessionId } : {}),
-      });
+      const request = () =>
+        scope.sessions.patch(key, patch, {
+          agentId,
+          ...(expectedSessionId ? { expectedSessionId } : {}),
+        });
+      const row = this.result?.sessions.find((entry) => entry.key === key);
+      const patched =
+        patch.archived === true
+          ? await withSessionWorkspaceRecovery({
+              action: "archive",
+              session: {
+                key,
+                sessionId: expectedSessionId,
+                label: row?.label || row?.displayName || key,
+                agentId,
+              },
+              scope: { ...scope, signal: this.pluginActionLifetime.signal },
+              isCurrent: () => this.isRequestScopeCurrent(scope),
+              request,
+            })
+          : await request();
+      if (patched) {
+        onConfirmed?.(patched);
+      }
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
       }
@@ -1190,35 +1234,23 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
+    const onConfirmed = prepareArchiveOutcome(
+      scope.sessions,
+      row,
+      this.sessionAgentId(row.key, scope.context),
+    );
+    if (!onConfirmed) {
+      return;
+    }
     const finishArchive = scope.sessions.beginArchive(row.key, row.sessionId);
     if (!finishArchive) {
       return;
     }
-    let result: SessionsPageMutationResult;
     try {
-      result = await this.patchSession(row.key, { archived: true }, scope, row.sessionId);
+      await this.patchSession(row.key, { archived: true }, scope, row.sessionId, onConfirmed);
     } finally {
       finishArchive();
     }
-    if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
-      return;
-    }
-    // Undo is captured before showing the toast: the toast host outlives this
-    // page, so the action must run against the shared mutations store (which
-    // fails closed on connection replacement) rather than page scope — a
-    // page-scope check would silently no-op after navigating away.
-    const agentId = this.sessionAgentId(row.key, scope.context);
-    showToast({
-      message: t("sessionsView.sessionArchived"),
-      actionLabel: t("common.undo"),
-      onAction: () => {
-        void scope.sessions.patch(
-          row.key,
-          { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
-          { agentId, expectedSessionId: row.sessionId },
-        );
-      },
-    });
   }
 
   private async forkSession(key: string, fromLastCompleted = false) {
@@ -1477,128 +1509,111 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!menu || !context || !row) {
       return nothing;
     }
-    const gateway = context.gateway.snapshot;
-    const configuredMainKey = resolveUiConfiguredMainKey({
-      agentsList: context.agents.state.agentsList,
-      hello: gateway.hello,
-    });
-    const archiveAllowed = canArchiveSessionRow(row, configuredMainKey);
-    const deleteAllowed = canDeleteSessionRows([row], configuredMainKey);
-    const cloudWorkerStopAction = resolveCloudWorkerStopAction(row.placement);
-    const cloudWorkerStopAllowed = Boolean(
-      cloudWorkerStopAction &&
-      (!cloudWorkerStopAction.blocksActiveRun || row.hasActiveRun !== true) &&
-      isGatewayMethodAdvertised(gateway, cloudWorkerStopAction.method) === true,
-    );
-    const pinnable = isPinnableUiSessionRow(row);
-    return html`
-      <openclaw-session-menu
-        .session=${{
-          label: normalizeOptionalString(row.label) ?? row.key,
-          sessionId: normalizeOptionalString(row.sessionId) ?? null,
-          pinned: row.pinned === true,
-          pinnable,
-          unread: row.unread === true,
-          archived: row.archived === true,
-          archiving: context.sessions.archiveVisibility(row.key) === "pending",
-          category: normalizeOptionalString(row.category) ?? null,
-          icon: normalizeOptionalString(row.icon) ?? null,
-          color: normalizeOptionalString(row.color) ?? null,
-          categoryClearReturnsToGroups: false,
-        }}
-        .anchor=${menu}
-        .trigger=${this.sessionMenuTrigger}
-        .disabled=${this.loading}
-        .navigationAllowed=${true}
-        .copyMarkdownAllowed=${canCopySessionMarkdown(gateway)}
-        .splitAllowed=${false}
-        .actionDisabledReasons=${sessionMenuReasons({
-          snapshot: gateway,
-          session: { ...row, pinnable },
-          cloudWorkerStopAction,
-        })}
-        .forkDisabled=${row.modelSelectionLocked === true}
-        .forkFromLastCompleted=${row.hasActiveRun === true}
-        .archiveAllowed=${archiveAllowed}
-        .deleteAllowed=${deleteAllowed}
-        .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
-        .groups=${this.knownCategories()}
-        .work=${this.sessionMenuWork}
-        .pluginActions=${pluginSessionMenuActions(context.plugins, row)}
-        .onClose=${() => this.closeSessionMenu()}
-        .onAction=${(action: SessionMenuAction) => {
-          switch (action.kind) {
-            case "open-pr":
-              openExternalUrlSafe(action.url);
+    return renderSessionManagementMenu({
+      context,
+      row,
+      menu,
+      trigger: this.sessionMenuTrigger,
+      disabled: this.loading,
+      groups: this.knownCategories(),
+      work: this.sessionMenuWork,
+      onClose: () => this.closeSessionMenu(),
+      onAction: (action: SessionMenuAction) => {
+        switch (action.kind) {
+          case "open-pr":
+            openExternalUrlSafe(action.url);
+            break;
+          case "open-in":
+            openEditor(action.editor, action.path);
+            break;
+          case "copy-session-id":
+          case "copy-session-link":
+          case "copy-session-preview-link":
+          case "copy-markdown":
+          case "open-new-tab":
+          case "open-new-window":
+          case "split-right":
+          case "split-below":
+            void runSessionNavigationAction(action.kind, {
+              context,
+              session: row,
+              agentId: row.agentId,
+              isCurrent: () => this.isConnected && this.context === context,
+            });
+            break;
+          case "toggle-pin":
+            void this.patchSession(row.key, { pinned: row.pinned !== true });
+            break;
+          case "toggle-involving-me": {
+            const scope = this.captureRequestScope();
+            if (!scope || !row.sessionId) {
+              this.error = t("sessionsView.actionRequiresConnection");
               break;
-            case "open-in":
-              openEditor(action.editor, action.path);
-              break;
-            case "copy-session-id":
-            case "copy-session-link":
-            case "copy-session-preview-link":
-            case "copy-markdown":
-            case "open-new-tab":
-            case "open-new-window":
-            case "split-right":
-            case "split-below":
-              void runSessionNavigationAction(action.kind, {
-                context,
-                session: row,
-                agentId: row.agentId,
-                isCurrent: () => this.isConnected && this.context === context,
+            }
+            void requestSessionInvolvement(scope.client, {
+              key: row.key,
+              expectedSessionId: row.sessionId,
+              agentId: row.agentId ?? this.sessionAgentId(row.key, scope.context),
+              hidden: !row.hiddenFromInvolvingMe,
+            })
+              .then(async () => {
+                if (this.isRequestScopeCurrent(scope)) {
+                  await this.refreshSessionList(scope);
+                }
+              })
+              .catch((error: unknown) => {
+                if (this.isRequestScopeCurrent(scope)) {
+                  this.error = formatUiError(error);
+                }
               });
-              break;
-            case "toggle-pin":
-              void this.patchSession(row.key, { pinned: row.pinned !== true });
-              break;
-            case "toggle-unread":
-              void this.patchSession(row.key, { unread: row.unread !== true });
-              break;
-            case "rename":
-              void this.renameSession(row);
-              break;
-            case "set-color":
-              void this.patchSession(row.key, { color: action.color });
-              break;
-            case "set-icon":
-              void this.patchSession(row.key, { icon: action.icon });
-              break;
-            case "reset-appearance":
-              void this.patchSession(row.key, { icon: null, color: null });
-              break;
-            case "fork":
-              void this.forkSession(row.key, row.hasActiveRun === true);
-              break;
-            case "plugin":
-              void this.runPluginAction(action.id, menu);
-              break;
-            case "move-to-group":
-              this.assignCategory(row.key, action.category);
-              break;
-            case "new-group":
-              void this.requestNewCategory(row.key);
-              break;
-            case "toggle-archived":
-              if (row.archived === true) {
-                void this.patchSession(row.key, { archived: false }, undefined, row.sessionId);
-              } else {
-                void this.archiveSessionWithUndo(row);
-              }
-              break;
-            case "assign-owner":
-              void this.context?.sessions.assignOwner(row.key, action.owner);
-              break;
-            case "stop-cloud-worker":
-              void this.stopCloudWorker(row);
-              break;
-            case "delete":
-              void this.deleteSessionFromMenu(row);
-              break;
+            break;
           }
-        }}
-      ></openclaw-session-menu>
-    `;
+          case "toggle-unread":
+            void this.patchSession(row.key, { unread: row.unread !== true });
+            break;
+          case "rename":
+            void this.renameSession(row);
+            break;
+          case "set-color":
+            void this.patchSession(row.key, { color: action.color });
+            break;
+          case "set-icon":
+            void this.patchSession(row.key, { icon: action.icon });
+            break;
+          case "reset-appearance":
+            void this.patchSession(row.key, { icon: null, color: null });
+            break;
+          case "fork":
+            void this.forkSession(row.key, row.hasActiveRun === true);
+            break;
+          case "plugin":
+            void this.runPluginAction(action.id, menu);
+            break;
+          case "move-to-group":
+            this.assignCategory(row.key, action.category);
+            break;
+          case "new-group":
+            void this.requestNewCategory(row.key);
+            break;
+          case "toggle-archived":
+            if (row.archived === true) {
+              void this.patchSession(row.key, { archived: false }, undefined, row.sessionId);
+            } else {
+              void this.archiveSessionWithUndo(row);
+            }
+            break;
+          case "assign-owner":
+            void this.context?.sessions.assignOwner(row.key, action.owner);
+            break;
+          case "stop-cloud-worker":
+            void this.stopCloudWorker(row);
+            break;
+          case "delete":
+            void this.deleteSessionFromMenu(row);
+            break;
+        }
+      },
+    });
   }
 
   override render() {
@@ -1640,8 +1655,7 @@ class SessionsPage extends OpenClawLightDomElement {
             hello: context.gateway.snapshot.hello,
           }),
           searchQuery: this.searchQuery,
-          transcriptSearchAvailable:
-            isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.search") === true,
+          transcriptSearchAvailable: context.gateway.snapshot.phase === "connected",
           transcriptSearchQuery: this.transcriptSearchQuery,
           transcriptSearch: this.transcriptSearchTask.render({
             initial: () => ({ status: "idle" }) as const,
@@ -1775,16 +1789,14 @@ class SessionsPage extends OpenClawLightDomElement {
           onDeleteSelected: () => void this.deleteSelected(),
           onNavigateToChat: (sessionKey) => {
             const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-            context.navigate(face, {
-              ...sessionNavigationTarget({
-                context,
-                face,
-                sessionKey,
-                agentId: this.sessionPathAgentId(sessionKey, context),
-                preferenceDerivedFace: true,
-              }).options,
-              hash: "",
+            const target = sessionNavigationTarget({
+              context,
+              face,
+              sessionKey,
+              agentId: this.sessionPathAgentId(sessionKey, context),
+              preferenceDerivedFace: true,
             });
+            context.navigate(face, target.options);
           },
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),

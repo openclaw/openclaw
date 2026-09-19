@@ -143,18 +143,23 @@ async function handleSessionGoalMutation(
       assertCurrent,
     });
     if (!committed.replayed && committed.sessionEntry) {
-      recordSessionGoalChanged({
+      const goalChanged = recordSessionGoalChanged({
         sessionKey: target.canonicalKey,
         agentId: target.agentId,
         entry: committed.sessionEntry,
         actor: gatewayClientSessionCreator(client),
         summary: `goal ${request.action}`,
       });
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        agentId: target.agentId,
-        reason: "goal",
-      });
+      try {
+        // Fence the committed projection before yielding to best-effort shared-state signaling.
+        emitSessionsChanged(context, {
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          reason: "goal",
+        });
+      } finally {
+        await goalChanged;
+      }
     }
     respond(
       true,

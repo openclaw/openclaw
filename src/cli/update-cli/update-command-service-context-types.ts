@@ -1,6 +1,26 @@
+import type { ServiceInspectionReason } from "../../daemon/service-inspection-error.js";
+import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import type { ManagedGatewayUpdateVerdict } from "./update-command-service-plan.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
+
+/** One native rewrite per finalization; subsequent activation preserves its publication. */
+export type UpdateServiceDefinitionRecovery = {
+  backup?: GatewayServiceDefinitionBackupReceipt;
+  preserved?: boolean;
+  unverified?: boolean;
+};
+
+export type ManagedGatewayUpdateVerdict =
+  | { kind: "absent" | "foreign" }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
+  | { kind: "unresolved"; root: string; fingerprint: string }
+  | { kind: "unavailable"; message: string; inspectionReason?: ServiceInspectionReason };
 
 export type PreManagedServiceStop = {
   stoppedAtMs?: number;
@@ -8,6 +28,8 @@ export type PreManagedServiceStop = {
   inspected: boolean;
   runtimeInspected: boolean;
   running: boolean;
+  /** Verified native service process, used only to correlate legacy Gateway locks. */
+  servicePid?: number;
   offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;

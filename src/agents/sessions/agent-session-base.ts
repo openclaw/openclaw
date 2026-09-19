@@ -457,24 +457,24 @@ export abstract class AgentSessionBase {
       // Track assistant message for auto-compaction (checked on agent_end)
       if (event.message.role === "assistant") {
         this.lastAssistantMessage = event.message;
-
-        const assistantMsg = event.message;
-        // A length response may still need overflow recovery in checkCompaction();
-        // retryCount is independent and resets for every non-error response below.
-        if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
-          this.overflowRecoveryAttempts = 0;
-        }
-
-        // Reset retry counter immediately on successful assistant response
-        // This prevents accumulation across multiple LLM calls within a turn
-        if (assistantMsg.stopReason !== "error" && this.retryCount > 0) {
-          this.emit({
-            type: "auto_retry_end",
-            success: true,
-            attempt: this.retryCount,
-          });
-          this.retryCount = 0;
-        }
+      }
+    }
+    // Async message fragments do not establish a successful provider response.
+    if (event.type === "turn_end" && event.message.role === "assistant") {
+      const assistantMsg = event.message;
+      if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
+        this.overflowRecoveryAttempts = 0;
+      }
+      if (assistantMsg.stopReason !== "error" && this.retryCount > 0) {
+        this.emit({
+          type: "auto_retry_end",
+          success: assistantMsg.stopReason !== "aborted",
+          attempt: this.retryCount,
+          ...(assistantMsg.stopReason === "aborted"
+            ? { finalError: assistantMsg.errorMessage }
+            : {}),
+        });
+        this.retryCount = 0;
       }
     }
   }

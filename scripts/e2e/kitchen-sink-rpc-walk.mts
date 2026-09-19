@@ -12,8 +12,9 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+// The target cwd may be outside this checkout, without our tsconfig aliases.
+import { asRecord, isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { hasNonEmptyString } from "../../packages/normalization-core/src/string-coerce.ts";
 import { appendBoundedTail } from "../lib/bounded-output-tail.mjs";
 import {
   createBoundedResponseTooLargeError,
@@ -385,7 +386,7 @@ export async function resolveKitchenSinkRpcPort(
 function resolveOpenClawRunner(): OpenClawRunner {
   if (process.env.OPENCLAW_ENTRY) {
     return {
-      command: "node",
+      command: process.execPath,
       baseArgs: [process.env.OPENCLAW_ENTRY],
       label: process.env.OPENCLAW_ENTRY,
     };
@@ -393,7 +394,7 @@ function resolveOpenClawRunner(): OpenClawRunner {
   for (const candidate of ["dist/index.mjs", "dist/index.js"]) {
     const resolved = path.join(process.cwd(), candidate);
     if (fs.existsSync(resolved)) {
-      return { command: "node", baseArgs: [resolved], label: resolved };
+      return { command: process.execPath, baseArgs: [resolved], label: resolved };
     }
   }
   return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };

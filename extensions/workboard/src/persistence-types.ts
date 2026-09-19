@@ -34,6 +34,16 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   entries(): Promise<Array<{ key: string; value: T }>>;
 };
 
+export type WorkboardSubscriptionStore = Omit<
+  WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
+  "entries"
+> & {
+  entries(options?: {
+    boardId?: string;
+    cardId?: string;
+  }): Promise<Array<{ key: string; value: PersistedWorkboardNotificationSubscription }>>;
+};
+
 type WorkboardBoardCardAggregate = {
   boardId: string;
   status: WorkboardCard["status"];

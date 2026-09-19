@@ -1,3 +1,4 @@
+import { withoutCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 
 const HISTORICAL_AGENT_LEASE_SCHEMA = `CREATE TABLE IF NOT EXISTS state_leases (
@@ -41,10 +42,18 @@ function removeSchemaRange(sql: string, startMarker: string, endMarker?: string)
 /** Exact schema bytes from 509a5f0373764, derived from current SQL with later additions removed. */
 export function historicalV15AgentSchemaSql(): string {
   const withoutPendingInputs = removeSchemaRange(
-    OPENCLAW_AGENT_SCHEMA_SQL,
+    withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL).replace(
+      "-- No foreign key: node triggers settle key renames and deletion even while a\n-- maintenance owner has disabled foreign-key enforcement.\n",
+      "",
+    ),
     "\n-- Accepted input stays outside the active transcript until its exact turn owns execution.",
   );
   let sql = restoreHistoricalAgentLeaseSchema(withoutPendingInputs)
+    .replace(
+      "-- Legacy ACP provenance is private import evidence carried with its logical session.\n",
+      "",
+    )
+    .replace("  legacy_acp_migration_json TEXT,\n", "")
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
     .replace("  project_id TEXT,\n", "")
     .replace("  route_context_json TEXT,\n", "")
@@ -57,6 +66,11 @@ export function historicalV15AgentSchemaSql(): string {
       "  owner_actor_type TEXT,\n  owner_actor_id TEXT,\n  owner_assigned_by_type TEXT,\n  owner_assigned_by_id TEXT,\n  owner_assigned_at INTEGER,\n",
       "",
     );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_label",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_parent_session_key",
+  );
   sql = removeSchemaRange(
     sql,
     "CREATE TABLE IF NOT EXISTS session_progress_cards (",

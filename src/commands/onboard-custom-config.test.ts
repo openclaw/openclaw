@@ -437,9 +437,16 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.headers).toEqual({ "api-key": "abcd1234" });
 
     const model = provider?.models?.find((m) => m.id === "o4-mini");
-    expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.reasoning).toBe(true);
-    expect(model?.compat).toEqual({ supportsStore: false });
+    expect(Object.entries(model ?? {})).toEqual([
+      ["id", "o4-mini"],
+      ["name", "o4-mini (Custom Provider)"],
+      ["contextWindow", 400_000],
+      ["maxTokens", 16_384],
+      ["input", ["text", "image"]],
+      ["cost", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["reasoning", true],
+      ["compat", { supportsStore: false }],
+    ]);
 
     const modelRef = `${providerId}/${result.modelId}`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBe("medium");
@@ -476,9 +483,16 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.headers).toEqual({ "api-key": "key123" });
 
     const model = provider?.models?.find((m) => m.id === "gpt-4.1");
-    expect(model?.reasoning).toBe(false);
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.compat).toEqual({ supportsStore: false });
+    expect(Object.entries(model ?? {})).toEqual([
+      ["id", "gpt-4.1"],
+      ["name", "gpt-4.1 (Custom Provider)"],
+      ["contextWindow", 400_000],
+      ["maxTokens", 16_384],
+      ["input", ["text"]],
+      ["cost", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["reasoning", false],
+      ["compat", { supportsStore: false }],
+    ]);
 
     const modelRef = `${providerId}/gpt-4.1`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBeUndefined();
@@ -590,9 +604,15 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.authHeader).toBeUndefined();
     expect(provider?.headers).toBeUndefined();
-    expect(provider?.models?.[0]?.reasoning).toBe(false);
-    expect(provider?.models?.[0]?.input).toEqual(["text"]);
-    expect(provider?.models?.[0]?.compat).toBeUndefined();
+    expect(Object.entries(provider?.models?.[0] ?? {})).toEqual([
+      ["id", "foo-large"],
+      ["name", "foo-large (Custom Provider)"],
+      ["contextWindow", 128_000],
+      ["maxTokens", 4096],
+      ["input", ["text"]],
+      ["cost", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["reasoning", false],
+    ]);
     expect(
       result.config.agents?.defaults?.models?.["custom/foo-large"]?.params?.thinking,
     ).toBeUndefined();

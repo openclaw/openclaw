@@ -219,7 +219,7 @@ if (gitArgs[0] === "remote" && gitArgs[1] === "get-url") {
 if (gitArgs[0] === "fetch" && !${JSON.stringify(realFetch)}) {
   process.exit(0);
 }
-if (gitArgs[0] === "archive" && process.env.GIT_ARCHIVE_MODE) {
+if (gitArgs.includes("archive") && process.env.GIT_ARCHIVE_MODE) {
   const outputArgument = gitArgs.find((value) => value.startsWith("--output="));
   if (!outputArgument) {
     console.error("archive test mode requires disk-backed output");
@@ -240,6 +240,10 @@ if (gitArgs[0] === "archive" && process.env.GIT_ARCHIVE_MODE) {
   process.exit(76);
 }
 const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
+if (result.status === 0 && gitArgs.includes("archive") && process.env.GIT_ARCHIVE_CAPTURE) {
+  const outputArgument = gitArgs.find((value) => value.startsWith("--output="));
+  fs.copyFileSync(outputArgument.slice("--output=".length), process.env.GIT_ARCHIVE_CAPTURE);
+}
 process.exit(result.status ?? 1);
 `,
     { mode: 0o755 },
@@ -649,6 +653,12 @@ function advanceObservedMain(fixture: Fixture, fromSha: string, branch: string):
 
 function runAuthority(fixture: Fixture, phase: string, overrides: NodeJS.ProcessEnv = {}) {
   fs.writeFileSync(fixture.outputPath, "");
+  if (overrides.MOBILE_OPERATION === "inspect" && phase === "inspect") {
+    const candidatePath = path.join(fixture.trusted, ".ios-inspection-candidate");
+    if (!fs.existsSync(candidatePath)) {
+      fs.cpSync(fixture.workspace, candidatePath, { recursive: true });
+    }
+  }
   return spawnSync(process.execPath, ["--experimental-strip-types", fixture.scriptPath, phase], {
     encoding: "utf8",
     env: { ...fixture.env, ...overrides },
@@ -694,6 +704,94 @@ function archiveSpoolPath(fixture: Fixture): string {
     throw new Error("git archive did not use disk-backed output");
   }
   return output.slice("--output=".length);
+}
+
+function writeArchiveFixture(repository: string): void {
+  writeFile(repository, "unneeded/promised.txt", "unrelated promised blob\n");
+  for (const [file, prefix, pattern] of [
+    [".gitattributes", "root", "scripts/fixtures"],
+    ["scripts/.gitattributes", "nested", "fixtures"],
+  ] as const) {
+    writeFile(
+      repository,
+      file,
+      `${pattern}/${prefix}-ignored.txt export-ignore\n` +
+        `${pattern}/${prefix}-subst.txt export-subst\n` +
+        `${pattern}/${prefix}-crlf.txt text eol=crlf\n`,
+    );
+    writeFile(repository, `scripts/fixtures/${prefix}-ignored.txt`, `${prefix} ignored\n`);
+    writeFile(repository, `scripts/fixtures/${prefix}-subst.txt`, "$Format:%H %ct$\n");
+    writeFile(repository, `scripts/fixtures/${prefix}-crlf.txt`, "first\nsecond\n");
+  }
+  writeFile(repository, "scripts/fixtures/keep.txt", "required archive resource\n");
+  writeFile(repository, "scripts/fixtures/executable.sh", "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(path.join(repository, "scripts/fixtures/executable.sh"), 0o755);
+  fs.symlinkSync("keep.txt", path.join(repository, "scripts/fixtures/keep-link"));
+}
+
+function useColdPartialClone(fixture: Fixture, missingPath?: string): void {
+  const previousTrusted = fixture.trusted;
+  const workflowSha = git(previousTrusted, "rev-parse", "HEAD");
+  const trusted = path.join(path.dirname(previousTrusted), "trusted-partial");
+  git(fixture.source, "config", "uploadpack.allowFilter", "true");
+  git(
+    path.dirname(trusted),
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    pathToFileURL(fixture.source).href,
+    trusted,
+  );
+  git(trusted, "update-ref", "--no-deref", "HEAD", workflowSha);
+  git(trusted, "update-ref", "refs/remotes/origin/mobile-authority-target", fixture.targetSha);
+
+  // Populate only the authority inputs, never warming the unrelated promised blob
+  // through a full checkout or a preceding archive in this clone.
+  const blobs = new Set<string>();
+  for (const ref of new Set([fixture.baseSha, fixture.targetSha, workflowSha])) {
+    for (const entry of git(trusted, "ls-tree", "-r", ref).split("\n")) {
+      const [metadata, file] = entry.split("\t");
+      const blob = metadata?.split(" ")[2];
+      if (!blob || !file) {
+        throw new Error(`Malformed fixture tree entry: ${entry}`);
+      }
+      if (file !== "unneeded/promised.txt" && file !== missingPath) {
+        blobs.add(blob);
+      }
+    }
+  }
+  for (const blob of blobs) {
+    git(trusted, "cat-file", "blob", blob);
+  }
+  // The CLI needs these checked-out modules; archive contents still come only
+  // from Git objects. Keep HEAD independent of the receipt's Tooling SHA.
+  for (const file of [
+    ".github/actions/mobile-release-authority/authority.mjs",
+    "scripts/mobile-release-intent.mjs",
+  ]) {
+    writeFile(trusted, file, fs.readFileSync(path.join(previousTrusted, file), "utf8"));
+  }
+  fixture.trusted = trusted;
+  fixture.actionPath = path.join(trusted, ".github/actions/mobile-release-authority");
+  fixture.scriptPath = path.join(fixture.actionPath, "authority.mjs");
+  fixture.env.MOBILE_ACTION_PATH = fixture.actionPath;
+  fs.writeFileSync(fixture.gitLog, "");
+  expect(git(trusted, "config", "--get", "remote.origin.promisor")).toBe("true");
+  expect(git(trusted, "config", "--get", "remote.origin.partialclonefilter")).toBe("blob:none");
+}
+
+function hasLocalBlob(fixture: Fixture, file: string): boolean {
+  const oid = git(fixture.source, "rev-parse", `${fixture.baseSha}:${file}`);
+  const result = spawnSync(
+    "/usr/bin/git",
+    ["-C", fixture.trusted, "--no-lazy-fetch", "cat-file", "-e", oid],
+    {
+      encoding: "utf8",
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    },
+  );
+  expect([0, 1], result.stderr).toContain(result.status);
+  return result.status === 0;
 }
 
 function resetState(fixture: Fixture): void {
@@ -770,8 +868,11 @@ function recordOverrides(fixture: Fixture, outputs: Record<string, string>): Nod
 function prepareRecoveryOverrides(
   fixture: Fixture,
   outputs: Record<string, string>,
+  mutate?: (repository: string) => void,
 ): NodeJS.ProcessEnv {
   git(fixture.source, "checkout", "-b", "trusted-main-after-upload", fixture.baseSha);
+  mutate?.(fixture.source);
+  git(fixture.source, "add", "-A");
   git(fixture.source, "commit", "--allow-empty", "-m", "advance trusted main after upload");
   const recoveryWorkflowSha = git(fixture.source, "rev-parse", "HEAD");
   git(fixture.trusted, "fetch", "origin", recoveryWorkflowSha);
@@ -798,6 +899,78 @@ function expectOnlyAttemptOneLifecycleReads(
 }
 
 describe("mobile release authority", () => {
+  it("validates inspection without publication receipts, intents, attestations, or ref writes", () => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutputs(fixture.outputPath)).toEqual({
+      inspection_validated: "true",
+      ios_app_store_version: "2026.9.20",
+    });
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-intent-ios"))).toBe(false);
+    expect(
+      readGhTrace(fixture.ghLog).every(
+        ({ args }) =>
+          args[0] === "api" && !args.includes("POST") && !args[1]?.includes("/artifacts"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "cancelled",
+      { GH_CURRENT_STATUSES: "in_progress,completed", GH_CURRENT_CONCLUSIONS: 'null,"cancelled"' },
+    ],
+    ["rerun", { GH_CURRENT_ATTEMPTS: "1,2" }],
+    ["revoked actor", { GH_PERMISSIONS: "write,read" }],
+    ["moved candidate", { GH_TARGET_REFS: OTHER_SHA }],
+    ["wrong tooling", { MOBILE_WORKFLOW_SHA: OTHER_SHA }],
+    ["recovery", { MOBILE_RECOVERY: "true" }],
+    ["foreign run", { MOBILE_AUTHORITY_RUN_ID: "999" }],
+  ])("rejects inspection with %s before returning credential admission", (_label, overrides) => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect", ...overrides });
+    expect(result.status).toBe(1);
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(readGhTrace(fixture.ghLog).some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects dirty trusted tooling during inspection before admission", () => {
+    const fixture = createFixture();
+    fs.appendFileSync(
+      path.join(fixture.trusted, "scripts/lib/ios-release-plan.ts"),
+      "\n// unexpected tooling mutation\n",
+    );
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Trusted inspection tooling has tracked changes");
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(readGhTrace(fixture.ghLog)).toEqual([]);
+  });
+
+  it("rejects dirty candidate data during inspection", () => {
+    const fixture = createFixture();
+    const candidatePath = path.join(fixture.trusted, ".ios-inspection-candidate");
+    fs.cpSync(fixture.workspace, candidatePath, { recursive: true });
+    fs.writeFileSync(path.join(candidatePath, "apps/ios/CHANGELOG.md"), "dirty\n");
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tracked changes");
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+  });
+
+  it.each(["authorize", "revalidate", "validate-record", "record"])(
+    "inspection cannot enter %s",
+    (phase) => {
+      const fixture = createFixture();
+      const result = runAuthority(fixture, phase, { MOBILE_OPERATION: "inspect" });
+      expect(result.status).toBe(1);
+      expect(readOutputs(fixture.outputPath)).toEqual({});
+      expect(readGhTrace(fixture.ghLog)).toEqual([]);
+    },
+  );
+
   it("authorizes an exact five-file release candidate and emits an attested v2 receipt", () => {
     const fixture = createFixture();
     const outputs = authorize(fixture);
@@ -1037,6 +1210,142 @@ describe("mobile release authority", () => {
     expect(fs.existsSync(path.dirname(spool))).toBe(true);
     expect(fs.existsSync(spool)).toBe(false);
   });
+
+  it.each([
+    ["authorization", false, undefined],
+    ["recovery with different HEAD attributes", true, undefined],
+    ["authorization with a lazy required resource", false, "scripts/fixtures/keep.txt"],
+  ] as const)(
+    "preserves the complete cold partial-clone archive during %s without unrelated fetches",
+    (_label, recovery, missingPath) => {
+      const fixture = createFixture({ mutateBase: writeArchiveFixture });
+      let overrides: NodeJS.ProcessEnv = {};
+      if (recovery) {
+        const outputs = authorize(fixture);
+        signIntentFile(fixture, outputs);
+        overrides = prepareRecoveryOverrides(fixture, outputs, (repository) => {
+          writeFile(
+            repository,
+            ".gitattributes",
+            "scripts/fixtures/root-subst.txt export-ignore\n",
+          );
+          writeFile(
+            repository,
+            "scripts/.gitattributes",
+            "fixtures/nested-subst.txt export-ignore\n",
+          );
+        });
+        resetState(fixture);
+      }
+      const expected = path.join(fixture.runnerTemp, "expected.tar");
+      git(
+        fixture.source,
+        "archive",
+        "--format=tar",
+        `--output=${expected}`,
+        fixture.baseSha,
+        "--",
+        "scripts",
+      );
+      useColdPartialClone(fixture, missingPath);
+      // Neither unstaged attributes nor an inherited attribute source may replace
+      // the selected immutable Tooling SHA, including record-only recovery.
+      writeFile(fixture.trusted, ".gitattributes", "scripts export-ignore\n");
+      writeFile(fixture.trusted, "scripts/.gitattributes", "* export-ignore\n");
+      const head = git(fixture.trusted, "rev-parse", "HEAD");
+      expect(head === fixture.baseSha).toBe(!recovery);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+      if (missingPath) {
+        expect(hasLocalBlob(fixture, missingPath)).toBe(false);
+      }
+      const captured = path.join(fixture.runnerTemp, "actual.tar");
+      const trace = path.join(fixture.runnerTemp, "archive-events.jsonl");
+      const result = runAuthority(fixture, recovery ? "validate-record" : "authorize", {
+        ...overrides,
+        GIT_ARCHIVE_CAPTURE: captured,
+        GIT_ATTR_SOURCE: head,
+        GIT_NO_LAZY_FETCH: undefined,
+        GIT_TRACE2_EVENT: trace,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(fs.readFileSync(captured).equals(fs.readFileSync(expected))).toBe(true);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+      const fetches = fs
+        .readFileSync(trace, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; argv?: string[] })
+        .filter((event) => event.event === "child_start" && event.argv?.includes("fetch"));
+      expect(fetches).toHaveLength(missingPath ? 1 : 0);
+      if (missingPath) {
+        expect(hasLocalBlob(fixture, missingPath)).toBe(true);
+      }
+      const spool = archiveSpoolPath(fixture);
+      expect(fs.existsSync(spool)).toBe(false);
+      const extracted = path.dirname(spool);
+      for (const prefix of ["root", "nested"]) {
+        expect(fs.existsSync(path.join(extracted, `scripts/fixtures/${prefix}-ignored.txt`))).toBe(
+          false,
+        );
+        expect(
+          fs.readFileSync(path.join(extracted, `scripts/fixtures/${prefix}-subst.txt`), "utf8"),
+        ).toBe(
+          `${fixture.baseSha} ${git(fixture.source, "show", "-s", "--format=%ct", fixture.baseSha)}\n`,
+        );
+        expect(
+          fs.readFileSync(path.join(extracted, `scripts/fixtures/${prefix}-crlf.txt`), "utf8"),
+        ).toBe("first\r\nsecond\r\n");
+      }
+      expect(fs.readFileSync(path.join(extracted, "scripts/fixtures/keep.txt"), "utf8")).toBe(
+        "required archive resource\n",
+      );
+      expect(fs.statSync(path.join(extracted, "scripts/fixtures/executable.sh")).mode & 0o111).toBe(
+        0o111,
+      );
+      expect(fs.readlinkSync(path.join(extracted, "scripts/fixtures/keep-link"))).toBe("keep.txt");
+      const commitId = spawnSync("/usr/bin/git", ["get-tar-commit-id"], {
+        encoding: "utf8",
+        input: fs.readFileSync(captured),
+      });
+      expect(commitId.status, commitId.stderr).toBe(0);
+      expect(commitId.stdout.trim()).toBe(fixture.baseSha);
+    },
+  );
+
+  it.each([".gitattributes", "scripts/.gitattributes", "scripts/fixtures/keep.txt"])(
+    "refuses an incomplete scripts export when promised %s is unavailable",
+    (missingPath) => {
+      const fixture = createFixture({ mutateBase: writeArchiveFixture });
+      useColdPartialClone(fixture, missingPath);
+      expect(hasLocalBlob(fixture, missingPath)).toBe(false);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+      git(
+        fixture.trusted,
+        "remote",
+        "set-url",
+        "origin",
+        path.join(fixture.runnerTemp, "absent-origin"),
+      );
+      const captured = path.join(fixture.runnerTemp, "incomplete.tar");
+
+      const result = runAuthority(fixture, "authorize", {
+        GIT_ARCHIVE_CAPTURE: captured,
+        GIT_NO_LAZY_FETCH: undefined,
+      });
+
+      expect(result.status).toBe(1);
+      const oid = git(fixture.source, "rev-parse", `${fixture.baseSha}:${missingPath}`);
+      expect(result.stderr).toContain(`could not fetch ${oid} from promisor remote`);
+      expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+      expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
+      expect(fs.existsSync(captured)).toBe(false);
+      const spool = archiveSpoolPath(fixture);
+      expect(fs.existsSync(spool)).toBe(false);
+      expect(fs.existsSync(path.join(path.dirname(spool), "scripts"))).toBe(false);
+      expect(hasLocalBlob(fixture, "unneeded/promised.txt")).toBe(false);
+    },
+  );
 
   it.each([
     ["partial Git archive", "partial-failure"],
@@ -1605,6 +1914,26 @@ describe("mobile release authority", () => {
     expect(trace.at(-1)?.args[1]).toContain("/collaborators/");
     expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
     expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
+  });
+
+  it("record-only rejects a missing original intent before token or ref writing", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "resolve-artifacts", {
+      ...recovery,
+      MOBILE_INTENT_ARTIFACT_DIGEST: "",
+      MOBILE_INTENT_ARTIFACT_ID: "",
+      MOBILE_INTENT_ARTIFACT_NAME: "",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Expected exactly one unexpired mobile-release-intent-ios-123-1 artifact",
+    );
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-intent-ios"))).toBe(false);
+    expect(readGhTrace(fixture.ghLog).some(({ args }) => args.includes("POST"))).toBe(false);
   });
 
   it("records exact iOS and Android intents and handles an identical create race idempotently", () => {
@@ -3002,7 +3331,11 @@ fi
       };
       expect(workflow.name).toBe(name);
       expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
-      expect(Object.keys(workflow.jobs)).toEqual(["authorize", "release", "recover-record"]);
+      expect(Object.keys(workflow.jobs)).toEqual(
+        platform === "ios"
+          ? ["authorize", "release", "recover-record", "inspect"]
+          : ["authorize", "release", "recover-record"],
+      );
       expect(workflow.jobs.authorize?.environment).toBeUndefined();
       expect(workflow.jobs.release?.environment).toBe(environment);
       expect(workflow.jobs["recover-record"]?.environment).toBe(environment);
@@ -3402,7 +3735,7 @@ fi
     }
   });
 
-  it("passes protected iOS release inputs only to the iOS upload step", () => {
+  it("passes protected iOS group policy only to upload and inspection, and screenshot inputs only to upload", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
     const project = parse(fs.readFileSync("apps/ios/project.yml", "utf8")) as {
       name?: string;
@@ -3435,13 +3768,19 @@ fi
     );
 
     expect(source).not.toContain("secrets.TESTFLIGHT_INTERNAL_GROUP");
-    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(1);
+    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(2);
     expect(workflow.jobs.release?.environment).toBe("ios-beta-release");
     expect(placements).toEqual([
       {
         envName: "TESTFLIGHT_INTERNAL_GROUP",
         jobName: "release",
         runsUpload: true,
+        value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
+      },
+      {
+        envName: "TESTFLIGHT_INTERNAL_GROUP",
+        jobName: "inspect",
+        runsUpload: false,
         value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
       },
     ]);

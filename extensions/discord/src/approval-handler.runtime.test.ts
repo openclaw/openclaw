@@ -271,7 +271,7 @@ describe("discordApprovalNativeRuntime", () => {
       decision: "deny",
       applicationStatus: "not-applied",
       terminalStatus: undefined,
-      label: "Not applied",
+      label: "Denied",
       accentColor: 0xed4245,
     },
     {

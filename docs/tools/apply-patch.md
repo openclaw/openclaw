@@ -46,6 +46,12 @@ runs to the end of the file.
 
 - Patch paths support relative paths (from the workspace directory) and absolute paths.
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- This setting is independent of `tools.exec.mode`. Setting `tools.exec.mode: "full"` does not lift the `apply_patch` workspace boundary.
+- `tools.fs.workspaceOnly` contains `apply_patch` independently, so clearing one setting can leave the other in force.
+- An explicit session permission mode overrides both configuration settings: `full` removes their containment, `guarded` and `workspace` contain `apply_patch`, and `read-only` omits the tool.
+- Required workspace roots and sandbox restrictions still apply in `full` mode. Keep patch paths inside a required root; changing either configuration setting or the session mode cannot lift it.
+- Memory-flush runs expose only `read` and append-only `write`, so `apply_patch` is unavailable even in `full` mode.
+- Runs whose entire agent executes on a worker (`worker-turn`) ignore both configuration settings. With no permission mode, they contain `apply_patch` whenever it is available; an explicit `full` mode disables that tool containment. Workers used only for remote commands (`remote-exec`) follow the locally running agent's file-tool policy.
 - `*** Add File:` and a non-self `*** Move to:` require the destination path to be absent. To intentionally replace a path, delete it earlier in the same patch before adding or moving the replacement.
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
@@ -53,7 +59,7 @@ runs to the end of the file.
   to disable it, or restrict it to specific models with
   `tools.exec.applyPatch.allowModels` (accepts raw ids like `gpt-5.4` or full
   ids like `openai/gpt-5.4`).
-- Config lives under `tools.exec.applyPatch.*`.
+- The tool's enablement and model settings live under `tools.exec.applyPatch.*`.
 
 ## Example
 

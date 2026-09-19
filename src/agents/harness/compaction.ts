@@ -179,7 +179,6 @@ async function resolveHarnessCompactApiKey(params: {
       authProfileMode,
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogTransport: true,
       workspaceDir,
     });
   let model = callerRuntimeModel;

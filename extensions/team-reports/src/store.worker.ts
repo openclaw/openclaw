@@ -13,7 +13,7 @@ import {
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerCommand,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { DAY_MS } from "./periods.js";
 import type {
@@ -236,14 +236,15 @@ class TeamReportsDatabase {
     );
   }
 
+  private latestDay() {
+    return this.selectPeriods()
+      .select(["data_json", "summary_json"])
+      .where("period", "=", "day")
+      .limit(1);
+  }
+
   latestSourceWarnings(): string[] {
-    const row = executeSqliteQueryTakeFirstSync(
-      this.db,
-      this.selectPeriods()
-        .select(["data_json", "summary_json"])
-        .where("period", "=", "day")
-        .limit(1),
-    );
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.latestDay());
     if (!row) {
       return [];
     }
@@ -252,6 +253,30 @@ class TeamReportsDatabase {
       report.sources.discord?.warnings ?? [],
       summary?.warnings ?? [],
     );
+  }
+
+  latestPeople(): TeamReportsOperations["latestPeople"]["output"] {
+    const row = executeSqliteQueryTakeFirstSync(this.db, this.latestDay());
+    if (!row) {
+      return undefined;
+    }
+    // Validate the complete stored documents before omitting activity and summary payloads.
+    const { report } = readPeriod(row);
+    return {
+      key: row.key,
+      members: report.members.map(
+        ({ login, aliases, display, affiliation, roleGroup, roleLabel, access, areas }) => ({
+          login,
+          aliases,
+          display,
+          affiliation,
+          roleGroup,
+          roleLabel,
+          access,
+          areas,
+        }),
+      ),
+    };
   }
 
   getDayReports(sinceMs: number, untilMs: number): ReportDocument[] {
@@ -496,6 +521,8 @@ export function createSqliteWorkerBackend(_input: undefined, context: { database
           return database.listPeriods(command.input);
         case "latestSourceWarnings":
           return database.latestSourceWarnings();
+        case "latestPeople":
+          return database.latestPeople();
         case "getDayReports":
           return database.getDayReports(command.input.sinceMs, command.input.untilMs);
         case "listPersonDays":

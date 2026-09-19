@@ -8,7 +8,7 @@ import {
 } from "@slack/web-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
-import type { SlackIngressTurnLifecycle } from "./ingress.js";
+import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import {
   createSlackThreadTsResolver,
   isTransientSlackThreadLookupError,

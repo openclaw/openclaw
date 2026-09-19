@@ -62,7 +62,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   lines.push(`Default model: ${defaultModel}${defaultCtx}`);
 
   const sessionCount = summary.sessions?.count ?? 0;
-  lines.push(`Active sessions: ${sessionCount}`);
+  lines.push(`Stored sessions: ${sessionCount}`);
 
   const recent = Array.isArray(summary.sessions?.recent) ? summary.sessions?.recent : [];
   if (recent.length > 0) {

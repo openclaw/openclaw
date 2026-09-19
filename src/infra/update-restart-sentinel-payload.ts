@@ -1,5 +1,6 @@
 // Builds restart sentinel payloads for update handoff reporting.
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
+import { isUpdateGatewayReadinessPending } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
 // Update restart sentinel payloads carry update result details across a process
@@ -24,6 +25,18 @@ export type UpdateRestartSentinelMeta = {
 };
 
 export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): UpdateRunResult {
+  if (
+    (result.status === "ok" ||
+      (result.status === "skipped" && result.reason === "already-current")) &&
+    isUpdateGatewayReadinessPending(result)
+  ) {
+    return {
+      ...result,
+      status: "skipped",
+      reason:
+        result.reason === "still-starting" ? "still-starting" : "gateway-readiness-unverified",
+    };
+  }
   const beforeSha = result.before?.sha?.trim();
   const afterSha = result.after?.sha?.trim();
   return result.status === "ok" &&
@@ -37,13 +50,19 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
-  if (!result.recovery) {
+  const recovery = result.recovery;
+  if (!recovery) {
     return undefined;
   }
-  const recovery = { ...result.recovery };
-  // Restored runtimes parse this object strictly, so persist only the pre-update shape.
-  delete recovery.packageRollbackVerified;
-  return recovery;
+  // Restored runtimes parse this strictly; keep new diagnostics in the update result.
+  return recovery.serviceRestartSafe
+    ? {
+        serviceRestartSafe: true,
+        version: recovery.version,
+        buildId: recovery.buildId,
+        service: recovery.service,
+      }
+    : { serviceRestartSafe: false, reason: recovery.reason };
 }
 
 /** Build the restart sentinel payload written after update runs. */

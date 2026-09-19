@@ -16,6 +16,7 @@ describe("update failure triage diagnostics", () => {
       const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
       const secret = "sk-test-update-triage-secret-1234567890";
       const result: UpdateRunResult = {
+        runId: "10000000-0000-4000-8000-000000000001",
         status: "error",
         mode: "npm",
         root: path.join(home, "npm", "openclaw"),
@@ -63,6 +64,7 @@ describe("update failure triage diagnostics", () => {
       expect(raw).not.toContain("\uFFFD");
       expect(failure).toMatchObject({
         result: {
+          runId: result.runId,
           reason: "Package install failed",
           before: { version: "2026.8.1" },
           recovery: result.recovery,

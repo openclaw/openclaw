@@ -165,6 +165,9 @@ return sanitized task summaries, not raw runtime state.
     use their recorded terminal activity time, then creation time, as the
     canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
+  - Failed session-metadata reads return `UNAVAILABLE` with the recorded cause
+    instead of an empty or partial page. Genuinely empty authorized results
+    remain successful empty pages.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.
   - Result: `{ "task": TaskSummary }`.

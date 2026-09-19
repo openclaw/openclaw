@@ -417,6 +417,44 @@ run_update_smoke() {
 }
 
 
+# Published 9.4 continues in its old process after a successful package swap.
+# Accept only the observed 9.4 -> 9.5 warning, after JSON and fresh CLI checks;
+# another executable on PATH or a fresh process warning is still real skew.
+verify_historical_self_update_warning() {
+  local stderr="$1" outcome="$2" updater_status="$3"
+  [[ "$PACKAGE_NAME" == "openclaw" && "$UPDATE_BASELINE_VERSION" == "2026.9.4" &&
+     "$UPDATE_EXPECT_VERSION" == "2026.9.5" &&
+     "$outcome" == "applied" && "$updater_status" == "0" ]] || return 1
+  local line warning_count=0
+  while IFS= read -r line; do
+    [[ "$line" == *"config was written by version"* ]] || continue
+    [[ "$line" == "Your OpenClaw config was written by version 2026.9.5, but this command is running 2026.9.4." ]] || return 1
+    warning_count=$((warning_count + 1))
+  done <<<"$stderr"
+  [[ "$warning_count" == "1" ]] || return 1
+
+  local cmd_path npm_root fresh_output fresh_version
+  cmd_path="$(bash --noprofile --norc -c 'hash -r; command -v "$1"' _ "$PACKAGE_NAME")" || return 1
+  npm_root="$(quiet_npm root -g)" || return 1
+  # Bind the fresh PATH entry to the global package actually updated, not a
+  # different installation that happens to print the expected version.
+  node - "$cmd_path" "$npm_root/$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION" <<'NODE' || return 1
+const fs = require("node:fs");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const [command, root, expected] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const bin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.[manifest.name];
+assert.equal(manifest.version, expected);
+assert.equal(typeof bin, "string");
+assert.equal(fs.realpathSync(command), fs.realpathSync(path.join(root, bin)));
+NODE
+  fresh_output="$("$cmd_path" --version 2>&1)" || return 1
+  [[ "$fresh_output" != *"config was written by version"* ]] || return 1
+  fresh_version="$(extract_openclaw_semver "$fresh_output")" || return 1
+  [[ "$fresh_version" == "$UPDATE_EXPECT_VERSION" ]]
+}
+
 run_update_candidate() {
   local UPDATE_BASELINE_VERSION="$1"
   local expected_outcome="$2"
@@ -448,12 +486,6 @@ run_update_candidate() {
   printf "%s\n" "$UPDATE_JSON"
   if [[ -n "$update_stderr" ]]; then
     printf "%s\n" "$update_stderr" >&2
-  fi
-  if [[ "$update_stderr" == *"config was written by version"* ]] && allow_legacy_update_warning; then
-    echo "WARN: legacy baseline emitted a self-update version-skew warning; fixed baselines must not" >&2
-  elif [[ "$update_stderr" == *"config was written by version"* ]]; then
-    echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
-    return 1
   fi
   if [[ "$update_status" -ne 0 ]]; then
     if is_self_swapped_package_process_exit "$update_stderr"; then
@@ -577,6 +609,17 @@ NODE
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+
+  if [[ "$update_stderr" == *"config was written by version"* ]] && allow_legacy_update_warning; then
+    echo "WARN: legacy baseline emitted a self-update version-skew warning; fixed baselines must not" >&2
+  elif [[ "$update_stderr" == *"config was written by version"* ]]; then
+    if verify_historical_self_update_warning "$update_stderr" "$expected_outcome" "$update_status"; then
+      echo "WARN: published 2026.9.4 updater emitted its old-process warning; fresh PATH and global install verified as 2026.9.5" >&2
+    else
+      echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
+      return 1
+    fi
+  fi
 }
 
 run_npm_global_smoke() {

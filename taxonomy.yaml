@@ -625,14 +625,40 @@ surfaces:
           - name: Event scoping
             coverageIds: [gateway.event-scoping]
             description: Broadcast event scoping, including fail-closed behavior for unknown event families.
+          - name: People and session attribution
+            coverageIds: [gateway.people-and-session-attribution]
+            description: Durable profiles plus distinct creator, owner, and participant history for collaborative sessions.
+          - name: Session sharing and identity-scoped state
+            coverageIds: [gateway.session-sharing-and-identity-scoped-state]
+            description: Explicit membership, public links, mentions, and private drafts without treating visibility as authorization.
+          - name: Personal model accounts
+            coverageIds: [gateway.personal-model-accounts]
+            description: Profile-owned provider credentials and session-sticky account selection on shared infrastructure.
+          - name: Agent bindings and ownership
+            coverageIds: [gateway.agent-bindings-and-ownership]
+            description: Deterministic account and conversation routing plus assignable human or agent session ownership.
+          - name: Shared and tenant trust boundaries
+            coverageIds: [gateway.shared-and-tenant-trust-boundaries]
+            description: One explicit trust domain for shared collaboration and separate Gateway cells for tenant isolation.
+          - name: Identity and decision receipts
+            coverageIds: [gateway.identity-and-decision-receipts]
+            description: Opt-in metadata-only inspection that distinguishes attribution, enforcement, unknown evidence, and delivery outcomes.
         docs:
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
+          - docs/concepts/multi-user.md
+          - docs/concepts/agent-bindings.md
+          - docs/gateway/multi-tenant-hosting.md
+          - docs/gateway/audit.md
         search_anchors:
           - "gateway runtime and websocket protocol gateway runtime websocket feature matrix: roles, scopes, and operator policy"
           - "gateway runtime websocket feature matrix: roles, scopes, and operator policy"
+          - shared gateway people ownership and attribution
+          - shared session visibility and personal model accounts
+          - agent bindings and ownership
+          - tenant trust boundaries and decision receipts
         category_note: roles-scopes-and-operator-policy.md
-        human_lts_override: true
+        human_lts_override: false
       - name: Gateway Lifecycle
         id: gateway-lifecycle
         features:
@@ -1941,11 +1967,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: session-memory
-    name: Session, memory, and context engine
+    name: Session, memory, and state lifecycle
     family: core
     level: beta
     level_code: M3
-    rationale: Strong docs and active implementation. Maturity depends on transcript durability, compaction quality, and cross-client parity.
+    rationale: OpenClaw has durable sessions, memory, backup and restore, state migrations, and cross-client attachment. Maturity still depends on portability guarantees, recovery discipline, transcript durability, compaction quality, and cross-client parity.
     completeness_instructions: references/completeness/session-memory-and-context-engine.md
     categories:
       - name: CLI Session and Transcript Management
@@ -1957,6 +1983,9 @@ surfaces:
           - name: Transcript Management
             coverageIds: [session-memory.transcript-management]
             description: Covers Transcript Management across `openclaw sessions`, `openclaw transcripts`, cleanup, show/list/path behavior, TUI session history actions, and Gateway-backed session management commands.
+          - name: Session trajectory export and inspection
+            coverageIds: [session-memory.session-trajectory-export-and-inspection]
+            description: Operator export of bounded session trajectory bundles for inspection, diagnostics, and support handoff.
         docs:
           - docs/concepts/session.md
           - docs/reference/session-management-compaction.md
@@ -1966,8 +1995,9 @@ surfaces:
           - Transcript Management
           - session, memory, and context engine cli session and transcript management
           - cli session and transcript management
+          - session trajectory export and inspection
         category_note: cli-session-and-transcript-management.md
-        human_lts_override: true
+        human_lts_override: false
       - name: Token Management
         id: token-management
         features:
@@ -2072,15 +2102,21 @@ surfaces:
           - name: "Session Parity — Session continuity"
             coverageIds: [session-memory.session-parity-session-continuity]
             description: "Exact coverage for session continuity within Session Parity."
+          - name: Gateway-owned session attachment and catalogs
+            coverageIds: [session-memory.gateway-owned-session-attachment-and-catalogs]
+            description: Discovery and attachment to the same Gateway-owned session from Control UI, terminal, mobile, CLI, and coding harness clients.
         docs:
           - docs/web/webchat.md
           - docs/platforms/android.md
           - docs/channels/channel-routing.md
+          - docs/concepts/session-attachment.md
+          - docs/nodes/session-catalogs.md
         search_anchors:
           - Cross-client History
           - Session Parity
           - session, memory, and context engine cross-client history and session parity
           - cross-client history and session parity
+          - Gateway-owned session attachment and catalogs
         category_note: cross-client-history-and-session-parity.md
         human_lts_override: false
       - name: Diagnostics, Maintenance, and Recovery
@@ -2116,10 +2152,23 @@ surfaces:
           - name: "Session and transcript recovery — Update run"
             coverageIds: [session-memory.recovery-update-run]
             description: "Exact coverage for update run within Session and transcript recovery."
+          - name: Full-state archive backup and verification
+            coverageIds: [session-memory.full-state-archive-backup-and-verification]
+            description: Archive planning, safe capture, manifest and database verification, sensitive-state handling, and recorded backup freshness.
+          - name: Portable SQLite and Git state restore
+            coverageIds: [session-memory.portable-sqlite-and-git-state-restore]
+            description: Verified, sanitized, portable database snapshots and deterministic Git-backed state with fresh-target restore workflows.
+          - name: Versioned state migrations and rollback guards
+            coverageIds: [session-memory.versioned-state-migrations-and-rollback-guards]
+            description: Explicit schema history, pre-upgrade state protection, migration diagnostics, and guarded recovery across version changes.
         docs:
           - docs/gateway/diagnostics.md
           - docs/reference/session-management-compaction.md
           - docs/diagnostics/flags.md
+          - docs/cli/backup.md
+          - docs/install/backups.md
+          - docs/start/why-openclaw/versioned-state-guarded-upgrades.md
+          - docs/reference/database-schemas/state-schema-history.md
         search_anchors:
           - stuck-session diagnostics
           - restart recovery
@@ -2127,6 +2176,9 @@ surfaces:
           - diagnostic bundles
           - transcript repair
           - session maintenance warnings
+          - full-state archive backup and verification
+          - portable SQLite and Git state restore
+          - versioned state migrations and rollback guards
         category_note: diagnostics-maintenance-and-recovery.md
         human_lts_override: false
       - name: Core Prompts and Context
@@ -2236,10 +2288,14 @@ surfaces:
           - name: "Active Memory — Memory recall"
             coverageIds: [session-memory.active-memory-memory-recall]
             description: "Exact coverage for memory recall within Active Memory."
+          - name: Memory provenance, promotion, and forgetting
+            coverageIds: [session-memory.memory-provenance-promotion-and-forgetting]
+            description: Source lineage, admission, review, durable promotion, exclusion, and end-to-end forgetting for retained memory.
         docs:
           - docs/reference/memory-config.md
           - docs/concepts/memory.md
           - docs/channels/discord.md
+          - docs/concepts/memory-provenance.md
         search_anchors:
           - Memory Backend Storage
           - Embedding Search
@@ -2251,6 +2307,7 @@ surfaces:
           - root memory files
           - active memory
           - memory backend storage and embedding search
+          - memory provenance promotion and forgetting
         category_note: memory-files-tools-and-active-memory.md
         human_lts_override: false
       - name: Session Routing
@@ -4971,11 +5028,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: app-sdk
-    name: OpenClaw App SDK
+    name: External apps and interoperability
     family: core
     level: alpha
     level_code: M2
-    rationale: OpenClaw App SDK is a distinct external app contract separate from Gateway runtime and Plugin SDK. Current scoring shows a real `@openclaw/sdk` path with gaps around public packaging, auto-discovery, approvals, helpers, and compatibility.
+    rationale: External apps can use the public SDK, attach to sessions, or interoperate through ACP/ACPX, MCP, and A2A. These paths are real but still have uneven packaging, discovery, transport, approval, and compatibility guarantees.
     completeness_instructions: references/completeness/openclaw-app-sdk.md
     categories:
       - name: Client API
@@ -5021,10 +5078,17 @@ surfaces:
           - name: Scopes and redaction
             coverageIds: [app-sdk.scopes-and-redaction]
             description: Token scopes, secret-forwarding defaults, and redaction boundaries.
+          - name: External app grants and session attachment
+            coverageIds: [app-sdk.external-app-grants-and-session-attachment]
+            description: Explicit external-app access grants and attachment to existing Gateway sessions without private runtime coupling.
+          - name: Session URLs and cross-client continuity
+            coverageIds: [app-sdk.session-urls-and-cross-client-continuity]
+            description: Stable session references that preserve focus and continuity across CLI, browser, IDE, and external clients.
         docs:
           - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
+          - docs/cli/attach.md
         search_anchors:
           - Connect to a Gateway
           - explicit URL/token handling
@@ -5032,6 +5096,8 @@ surfaces:
           - gateway auto
           - Security model
           - token scopes
+          - external app grants and session attachment
+          - session URLs and cross-client continuity
         category_note: gateway-access.md
         human_lts_override: false
       - name: Agent Conversations
@@ -5147,10 +5213,26 @@ surfaces:
           - name: Public package contract
             coverageIds: [app-sdk.public-package-contract]
             description: Package publication and reusable-client expectations tracked explicitly.
+          - name: ACP and ACPX harness sessions
+            coverageIds: [app-sdk.acp-acpx-harness-sessions]
+            description: Persistent and one-shot harness sessions across the ACP bridge, ACPX clients, IDEs, and configured coding agents.
+          - name: MCP server exposure
+            coverageIds: [app-sdk.mcp-server-exposure]
+            description: Deliberate exposure of OpenClaw tools and resources through supported MCP server transports.
+          - name: MCP client registry, transport, OAuth, and apps
+            coverageIds: [app-sdk.mcp-client-registry-transport-oauth-apps]
+            description: Registered MCP clients with bounded transports, authentication, app surfaces, and operator diagnostics.
+          - name: A2A discovery, tasks, and peers
+            coverageIds: [app-sdk.a2a-discovery-tasks-and-peers]
+            description: A2A 1.0 Agent Card discovery, inbound and outbound task lifecycle, polling, peer configuration, and session isolation.
         docs:
           - docs/gateway/external-apps.md
           - docs/concepts/typebox.md
           - docs/gateway/protocol.md
+          - docs/cli/acp.md
+          - docs/cli/mcp.md
+          - docs/tools/mcp.md
+          - docs/channels/a2a.md
         search_anchors:
           - Generated client strategy
           - Gateway schemas
@@ -5158,6 +5240,9 @@ surfaces:
           - Explicitly unsupported today
           - unsupported environment mutations
           - future per-run overrides
+          - ACP ACPX harness sessions
+          - MCP server client registry transport OAuth apps
+          - A2A discovery tasks outbound peers
         category_note: compatibility.md
         human_lts_override: false
     last_score_run:
@@ -7217,11 +7302,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: containers
-    name: Docker and Podman hosting
+    name: Fleet, containers, and cloud execution
     family: platform-app
     level: beta
     level_code: M3
-    rationale: Install docs exist and are common deployment paths. Promote after recurring release smoke captures upgrade and volume behavior.
+    rationale: OpenClaw supports local container hosting, isolated fleet cells, and cloud-worker execution. The main workflows exist, but fleet and cloud lifecycle, recovery, placement, and image guarantees remain less mature than the local Docker and Podman path.
     completeness_instructions: references/completeness/docker-podman-hosting.md
     categories:
       - name: Container Setup
@@ -7245,14 +7330,25 @@ surfaces:
           - name: Rootless Podman image setup
             coverageIds: [containers.rootless-podman-image-setup]
             description: Rootless Podman image setup, launch, setup/onboarding, host CLI routing, Quadlet autostart, and owner/permission checks
+          - name: Isolated fleet cell setup
+            coverageIds: [containers.isolated-fleet-cell-setup]
+            description: Creation of tenant-scoped fleet cells with their own Gateway, state, credentials, channel accounts, container, and loopback host port.
+          - name: Cloud worker profiles and runtime bootstrap
+            coverageIds: [containers.cloud-worker-profiles-and-runtime-bootstrap]
+            description: Cloud worker profile configuration, machine prerequisites, verified runtime and worker bundle installation, and fail-closed enrollment.
         docs:
           - docs/install/docker.md
           - docs/install/podman.md
+          - docs/cli/fleet.md
+          - docs/gateway/cloud-workers.md
+          - docs/gateway/cloud-workers/setup-and-bundle-installation.md
         search_anchors:
           - docker / podman hosting docker install, compose, and first-run setup
           - docker install, compose, and first-run setup
           - docker / podman hosting podman rootless, quadlet, and host cli
           - podman rootless, quadlet, and host cli
+          - isolated fleet cell setup
+          - cloud worker profiles and runtime bootstrap
         category_note: docker-install-compose-and-first-run-setup.md
         human_lts_override: false
       - name: Container Operations
@@ -7291,12 +7387,22 @@ surfaces:
           - name: Operator-facing update
             coverageIds: [containers.operator-facing-update]
             description: Operator-facing update, backup, persistence, low-memory, and troubleshooting guidance
+          - name: Fleet cell lifecycle and diagnostics
+            coverageIds: [containers.fleet-cell-lifecycle-and-diagnostics]
+            description: List, status, logs, start, stop, restart, upgrade, doctor, backup, restore, and removal workflows for isolated cells.
+          - name: Cloud session lifecycle and recovery
+            coverageIds: [containers.cloud-session-lifecycle-and-recovery]
+            description: Dispatch, status, sleep, wake, teardown, replay, recovery, and replacement behavior for cloud-backed sessions.
         docs:
           - docs/install/podman.md
           - docs/install/docker-vm-runtime.md
           - docs/install/docker.md
           - docs/install/hetzner.md
           - docs/install/hostinger.md
+          - docs/cli/fleet.md
+          - docs/cli/worker.md
+          - docs/gateway/cloud-sessions.md
+          - docs/gateway/cloud-workers/session-lifecycle.md
         search_anchors:
           - docker / podman hosting host cli container targeting and update lifecycle
           - host cli container targeting and update lifecycle
@@ -7306,6 +7412,8 @@ surfaces:
           - networking, control ui, health, and observability
           - docker / podman hosting provider-hosted vps and operator runbooks
           - provider-hosted vps and operator runbooks
+          - fleet cell lifecycle and diagnostics
+          - cloud session lifecycle and recovery
         category_note: runtime-configuration-state-volumes-and-secrets.md
         human_lts_override: false
       - name: Image Release and Validation
@@ -7332,15 +7440,24 @@ surfaces:
           - name: Release-path install
             coverageIds: [containers.release-path-install]
             description: Release-path install, update, upgrade survivor, live-provider, plugin, Open WebUI, and cleanup scenario planning
+          - name: Worker image preparation and retention
+            coverageIds: [containers.worker-image-preparation-and-retention]
+            description: Prepared worker images, runtime identity, bounded retention, replacement, deletion obligations, and operator recovery.
+          - name: Warm image reuse and refresh
+            coverageIds: [containers.warm-image-reuse-and-refresh]
+            description: Deterministic cold-versus-warm allocation, checkpoint reuse, refresh boundaries, and safe cleanup across supported providers.
         docs:
           - docs/install/docker.md
           - docs/install/docker-vm-runtime.md
           - docs/reference/full-release-validation.md
+          - docs/gateway/cloud-workers/warm-images.md
         search_anchors:
           - docker / podman hosting image build, release packaging, and attestations
           - image build, release packaging, and attestations
           - docker / podman hosting docker e2e release smoke and scheduler
           - docker e2e release smoke and scheduler
+          - worker image preparation and retention
+          - warm image reuse and refresh
         category_note: image-build-release-packaging-and-attestations.md
         human_lts_override: false
       - name: Agent Sandbox and Tooling
@@ -7355,12 +7472,23 @@ surfaces:
           - name: Container image dependency baking
             coverageIds: [containers.container-image-dependency-baking]
             description: Container image dependency baking for skills/plugins/tools
+          - name: Cloud placement and machine admission
+            coverageIds: [containers.cloud-placement-and-machine-admission]
+            description: Session placement, provider admission, machine-class selection, capacity, and project-default routing for remote workers.
+          - name: Cloud desktop and computer control
+            coverageIds: [containers.cloud-desktop-and-computer-control]
+            description: Authenticated observation and control of desktop-capable cloud workers without public desktop ingress.
         docs:
           - docs/install/docker.md
           - docs/install/docker-vm-runtime.md
+          - docs/gateway/cloud-workers/placement-and-machine-selection.md
+          - docs/gateway/cloud-workers/per-project-default-profiles.md
+          - docs/gateway/cloud-workers/desktop.md
         search_anchors:
           - docker / podman hosting containerized agents, sandbox, and tooling support
           - containerized agents, sandbox, and tooling support
+          - cloud placement and machine admission
+          - cloud desktop and computer control
         category_note: containerized-agents-sandbox-and-tooling-support.md
         human_lts_override: false
     last_score_run:
@@ -9436,7 +9564,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: community-channels
-    name: Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat
+    name: Community channel cohort
     family: channel
     level: alpha
     level_code: M2
@@ -9498,7 +9626,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: regional-channels
-    name: Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels
+    name: Regional channel cohort
     family: channel
     level: alpha
     level_code: M2

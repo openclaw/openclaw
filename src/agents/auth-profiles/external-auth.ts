@@ -97,6 +97,7 @@ function resolveAllowedExternalCliAuthProfiles(params: {
   const cliProfiles =
     externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
       allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
+      ...(params.env ? { env: params.env } : {}),
       providerIds: params.externalCli?.externalCliProviderIds,
       profileIds: explicitProfileIds,
     }) ?? [];

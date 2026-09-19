@@ -2,6 +2,7 @@ import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import "../components/app-topbar.ts";
+import "../components/assistant-panel.ts";
 import "../components/modal-dialog.ts";
 import {
   formatDocumentTitle,
@@ -38,7 +39,11 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatPage } from "../pages/chat/chat-page.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
+import {
+  equalShellRouteState,
+  selectShellRouteState,
+  type ShellRouteState,
+} from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import {
@@ -56,10 +61,10 @@ import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload
 import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
-  ASSISTANT_PANEL_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   LazyCustomElementRequestController,
+  LINK_READER_PANEL_ELEMENT,
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
@@ -95,21 +100,6 @@ i18n.setLocaleLoadRecovery({
   },
 });
 
-function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
-  return (
-    previous.routeId === next.routeId &&
-    previous.routeFailed === next.routeFailed &&
-    previous.location?.pathname === next.location?.pathname &&
-    previous.location?.search === next.location?.search &&
-    previous.location?.hash === next.location?.hash &&
-    previous.committedRouteId === next.committedRouteId &&
-    previous.committedLocation?.pathname === next.committedLocation?.pathname &&
-    previous.committedLocation?.search === next.committedLocation?.search &&
-    previous.committedLocation?.hash === next.committedLocation?.hash &&
-    previous.committedSessionKey === next.committedSessionKey
-  );
-}
-
 class OpenClawShell
   extends OpenClawLightDomElement
   implements ShellChromeHost, ShellGatewayHost, ShellNavigationHost, ShellViewHost
@@ -126,8 +116,8 @@ class OpenClawShell
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  readonly linkReaderPanelElement = LINK_READER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
-  readonly assistantPanelElement = ASSISTANT_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   readonly onboardingMemoryImportElement = {
     tagName: "openclaw-onboarding-memory-import",
@@ -213,12 +203,7 @@ class OpenClawShell
       }
     });
   }
-  // Lazy: the critical-notice module stays out of the startup chunk (perf
-  // budget); loaded on the first session.observer digest after boot.
-  criticalNoticeRuntime: Promise<
-    typeof import("../pages/chat/critical-observer-notice.runtime.ts")
-  > | null = null;
-  // Lazy for the same reason: the pairing modal is opened from Settings, not at
+  // Lazy: the pairing modal is opened from Settings, not at
   // boot, so its template, icons, and strings stay off the startup chunk.
   @state() devicePairSetupRenderer:
     | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
@@ -250,7 +235,7 @@ class OpenClawShell
   private readonly shellChrome = new ShellChromeOwner(this);
   private readonly shellGateway = new ShellGatewayOwner(this);
 
-  get context(): ApplicationContext<RouteId> | undefined {
+  get context(): ApplicationContext | undefined {
     return this.runtime?.context;
   }
 
@@ -265,7 +250,7 @@ class OpenClawShell
     return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
   }
 
-  storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
+  storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
     const gatewaySnapshot = context.gateway.snapshot;
     return {
       settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
@@ -276,7 +261,7 @@ class OpenClawShell
   }
 
   private chatTitleContext(
-    context: ApplicationContext<RouteId>,
+    context: ApplicationContext,
     outboxScopeHost: StoredOutboxScopeHost,
   ): string {
     const sessionKey = this.activeSessionKey;
@@ -296,7 +281,9 @@ class OpenClawShell
       ? normalizeAgentLabel(agent)
       : resolveSessionDisplayName(
           sessionKey,
-          context.sessions.state.result?.sessions.find((session) => session.key === sessionKey),
+          context.sessions.presentation.result?.sessions.find(
+            (session) => session.key === sessionKey,
+          ),
         );
   }
 
@@ -317,6 +304,28 @@ class OpenClawShell
           };
         },
       )
+      .effect(
+        () => this.context,
+        (context) => {
+          const startedAt = Date.now();
+          let active = true;
+          let disconnect: (() => void) | undefined;
+          const runtime = createIdleImport(
+            () => import("./control-ui-favicon-status.runtime.ts"),
+            ({ connectControlUiFavicon }) => {
+              if (active) {
+                disconnect = connectControlUiFavicon(this, context, startedAt);
+              }
+            },
+          );
+          runtime.schedule();
+          return () => {
+            active = false;
+            runtime.dispose();
+            disconnect?.();
+          };
+        },
+      )
       .watch(
         () => this.context?.nativeDeviceSettings,
         (settings, notify) => settings.subscribe(notify),
@@ -334,9 +343,20 @@ class OpenClawShell
         (selection, notify) => selection.subscribe(notify),
       )
       .watch(
+        () => this.context?.settingsAgentSelection,
+        (selection, notify) => selection.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentIdentity,
+        (identity, notify) => identity.subscribe(notify),
+      )
+      .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
-        (gateway) => this.shellGateway.synchronizeGateway(gateway.snapshot),
+        (gateway) => {
+          this.shellChrome.synchronizeCommandPaletteScope();
+          this.shellGateway.synchronizeGateway(gateway.snapshot);
+        },
       )
       .effect(
         () => this.context?.gateway,
@@ -381,6 +401,16 @@ class OpenClawShell
         (sessions) => {
           this.observeDeletedSessions(sessions.state);
           this.recoverDeletedActiveSession(sessions.state);
+        },
+        () => this.performUpdate(),
+      )
+      .watch(
+        () => this.context?.placementStartup,
+        (startup, notify) => startup.subscribe(notify),
+        () => {
+          if (this.context) {
+            this.recoverDeletedActiveSession(this.context.sessions.state);
+          }
         },
       )
       .watch(
@@ -546,9 +576,9 @@ class OpenClawShell
     this.shellNavigation.navigate(routeId, options);
   }
 
-  recoverNotFoundRoute() {
+  readonly recoverNotFoundRoute = () => {
     return this.shellNavigation.recoverNotFoundRoute();
-  }
+  };
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
     this.shellNavigation.recoverDeletedActiveSession(sessionState);
@@ -593,7 +623,15 @@ class OpenClawShell
   readonly handleNativeHistoryState = this.shellChrome.handleNativeHistoryState;
   readonly handleWindowResize = this.shellChrome.handleWindowResize;
   readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
+  get pendingDebugOverlayMode() {
+    return this.shellChrome.pendingDebugOverlayMode;
+  }
+  readonly togglePendingDebugOverlayMode = () => this.shellChrome.togglePendingDebugOverlayMode();
   readonly openPalette = this.shellChrome.openPalette;
+  readonly closePendingPalette = this.shellChrome.closePendingPalette;
+  get commandPaletteLoading() {
+    return this.shellChrome.commandPaletteLoading;
+  }
   readonly refreshControlUi = (): Promise<boolean> => {
     const context = this.context;
     if (!context) {
@@ -668,6 +706,9 @@ class OpenClawShell
     if (!context) {
       return;
     }
+    if (this.querySelector(".settings-sidebar__agent")) {
+      void context.agentIdentity.ensure([context.settingsAgentSelection.state.selectedId]);
+    }
     if (this.workspaceChromeVisible) {
       this.shellChrome.panels.restore();
     }
@@ -720,6 +761,7 @@ class OpenClawShell
   override render() {
     if (this.workspaceChromeVisible) {
       this.lazyCustomElements.preload(APP_SIDEBAR_ELEMENT);
+      this.lazyCustomElements.preload(this.commandPaletteElement);
     }
     return renderApplicationShell(this);
   }

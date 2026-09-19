@@ -4,6 +4,7 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
@@ -17,6 +18,7 @@ import {
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import type { ModelRef } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   resolveProviderIdForAuth,
@@ -24,6 +26,23 @@ import {
 } from "./provider-auth-aliases.js";
 
 const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
+
+/** Canonicalize a bound CLI provider without renaming an already selected model. */
+export function resolveCliBoundModelRef(
+  ref: ModelRef,
+  cfg?: OpenClawConfig,
+  sessionEntry?: SessionEntry,
+): ModelRef {
+  const canonicalProvider =
+    cfg && sessionEntry?.cliSessionBindings?.[ref.provider] !== undefined
+      ? resolveCliRuntimeCanonicalProvider({
+          runtime: ref.provider,
+          config: cfg,
+          includeSetupRegistry: true,
+        })
+      : undefined;
+  return { provider: canonicalProvider ?? ref.provider, model: ref.model };
+}
 
 /** True for retired provider ids that should stay out of model selection surfaces. */
 export function isRetiredModelPickerProvider(provider: string): boolean {
@@ -185,6 +204,7 @@ function resolveConfiguredRuntime(params: {
 export type CliRuntimeAuthDirectories = {
   agentDir: string;
   inheritedAuthDir?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type RuntimeAuthAliasParams = {
@@ -239,6 +259,7 @@ function resolveCliRuntimeFromAuthProfile(
   },
 ): string | undefined {
   const configuredProfiles = params.cfg?.auth?.profiles ?? {};
+  const env = params.preparedAuthDirectories?.env ?? process.env;
   // Login and auth-order commands own the credential store, not config metadata.
   // Reuse its published snapshot without reopening SQLite on a request path.
   const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
@@ -246,9 +267,10 @@ function resolveCliRuntimeFromAuthProfile(
       (params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined),
     resolveLegacyInheritedAuthDir(
       params.cfg ?? {},
-      process.env,
-      params.preparedAuthDirectories?.inheritedAuthDir,
+      env,
+      () => params.preparedAuthDirectories?.inheritedAuthDir,
     ),
+    env,
   );
   if (params.authProfileId?.trim()) {
     const profileId = params.authProfileId.trim();

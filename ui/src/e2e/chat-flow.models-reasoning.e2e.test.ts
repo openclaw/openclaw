@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -92,8 +93,8 @@ suite.define(() => {
         key: sessionKey,
         contextWindow: "200k",
       });
-      await gateway.setMethodResponse(
-        "sessions.list",
+      // Patch acknowledgements and history must see the same committed context window.
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
       );
       await gateway.resolveDeferred("sessions.patch");
@@ -169,21 +170,39 @@ suite.define(() => {
       });
       await waitForRequests(gateway, "sessions.list", firstListCount + 1, rosterMatch);
 
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...session,
-        permissionMode: "workspace",
-        reason: "patch",
-        sessionKey: session.key,
-        updatedAt: 3,
-      });
-      await gateway.resolveDeferred(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
+      // Later patch acknowledgements read canonical state, not injected wire snapshots.
+      const workspaceList = chatSessionListResponse([
+        { ...session, permissionMode: "workspace", updatedAt: 3 },
+      ]);
+      await gateway.setSessionsListResponse(workspaceList);
+      // Snapshot and emit in one browser turn so an earlier request cannot satisfy this event.
+      const workspaceEventListCount = await page.evaluate(
+        ({ session: eventSession, match }) => {
+          const mockGateway = (
+            window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+          ).openclawControlUiE2eGateway;
+          if (!mockGateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          const count = mockGateway.findRequests("sessions.list", match).length;
+          mockGateway.emit("sessions.changed", {
+            ...eventSession,
+            permissionMode: "workspace",
+            reason: "patch",
+            sessionKey: eventSession.key,
+            updatedAt: 3,
+          });
+          return count;
+        },
+        { session, match: rosterMatch },
       );
+      await gateway.resolveDeferred("sessions.list", workspaceList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Workspace");
 
+      // Admit this event's refresh before measuring the next mutation's own roster request.
+      await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
       const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.deferNext("sessions.list", rosterMatch);
       await trigger.click();
@@ -195,6 +214,10 @@ suite.define(() => {
       });
       await waitForRequests(gateway, "sessions.list", secondListCount + 1, rosterMatch);
 
+      const defaultList = chatSessionListResponse([
+        { ...session, permissionMode: undefined, updatedAt: 4 },
+      ]);
+      await gateway.setSessionsListResponse(defaultList);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
         permissionMode: null,
@@ -202,10 +225,7 @@ suite.define(() => {
         sessionKey: session.key,
         updatedAt: 4,
       });
-      await gateway.resolveDeferred(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
-      );
+      await gateway.resolveDeferred("sessions.list", defaultList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       expect(await trigger.textContent()).toContain("Default");
 
@@ -532,11 +552,13 @@ suite.define(() => {
       };
 
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      const defaultOption = activePane.locator('[data-chat-model-default="true"]');
+      await expect.poll(() => defaultOption.getAttribute("aria-selected")).toBe("true");
+      expect(await defaultOption.getAttribute("data-chat-model-option")).toBe("openai/gpt-5.5");
 
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(patchRequest.params)).toMatchObject({
+      expect(requireRecord(patchRequest.params)).toEqual({
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
       });
@@ -556,7 +578,7 @@ suite.define(() => {
         .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
         .toBe("agent:main:session-b");
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      await expect.poll(() => defaultOption.getAttribute("aria-selected")).toBe("true");
 
       await page
         .locator(
@@ -648,12 +670,16 @@ suite.define(() => {
       const modelSelect = main.locator('[data-chat-model-select="true"]').first();
       await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      await expect
+        .poll(() =>
+          main.locator('[data-chat-model-default="true"]').first().getAttribute("aria-selected"),
+        )
+        .toBe("true");
 
       await modelSelect.click();
       await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
       const firstPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(firstPatch.params)).toMatchObject({
+      expect(requireRecord(firstPatch.params)).toEqual({
         key: "agent:ops:session-a",
         model: "openai/gpt-5.5",
       });
@@ -673,9 +699,10 @@ suite.define(() => {
       expect(requireRecord(patches[1]?.params)).toMatchObject({
         key: "agent:ops:session-a",
         model: null,
+        agentRuntime: null,
       });
       expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
-      expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
+      await expect.poll(() => defaultModel.getAttribute("aria-selected")).toBe("true");
     } finally {
       await suite.closeBrowserContext(context);
     }

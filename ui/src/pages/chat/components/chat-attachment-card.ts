@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import {
   renderAttachmentFileIcon,
@@ -8,6 +9,8 @@ import {
   type AttachmentFileVisualMode,
 } from "./chat-attachment-file-icon.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
+
+registerChatMessageMetadataEnglish();
 
 type AttachmentCardKind = Extract<
   AttachmentItem["attachment"]["kind"],

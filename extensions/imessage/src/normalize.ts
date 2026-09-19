@@ -13,6 +13,21 @@ const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
 
+export function normalizeIMessageHandleValue(trimmed: string): string | undefined {
+  if (trimmed.includes("@")) {
+    return normalizeLowercaseStringOrEmpty(trimmed);
+  }
+  const bareChatIdentifier = normalizeBareIMessageChatIdentifier(trimmed);
+  if (bareChatIdentifier) {
+    return `chat_identifier:${bareChatIdentifier}`;
+  }
+  const normalized = isIMessagePhoneLikeHandle(trimmed) ? normalizeE164(trimmed) : "";
+  if (normalized) {
+    return normalized;
+  }
+  return undefined;
+}
+
 function normalizeIMessageHandle(raw: string, allowContactName = false): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -36,18 +51,9 @@ function normalizeIMessageHandle(raw: string, allowContactName = false): string 
     const value = trimmed.slice(prefix.length).trim();
     return `${normalizeLowercaseStringOrEmpty(prefix)}${value}`;
   }
-  if (trimmed.includes("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  const bareChatIdentifier = normalizeBareIMessageChatIdentifier(trimmed);
-  if (bareChatIdentifier) {
-    return `chat_identifier:${bareChatIdentifier}`;
-  }
-  const normalized = isIMessagePhoneLikeHandle(trimmed) ? normalizeE164(trimmed) : "";
-  if (normalized) {
-    return normalized;
-  }
-  return allowContactName ? trimmed.replace(/\s+/g, "") : "";
+  return (
+    normalizeIMessageHandleValue(trimmed) ?? (allowContactName ? trimmed.replace(/\s+/g, "") : "")
+  );
 }
 
 export function normalizeIMessageMessagingTarget(raw: string): string | undefined {

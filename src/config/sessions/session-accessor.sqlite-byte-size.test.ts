@@ -4,7 +4,11 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.j
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { persistSessionTranscriptTurn, readTranscriptStatsSync } from "./session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  readTranscriptStatsSync,
+  replaceTranscriptEvents,
+} from "./session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import {
   readRecentSessionTranscriptMessageEvents,
@@ -21,6 +25,7 @@ import {
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
   SYNC_REBUILD_MAX_BYTES,
+  SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
@@ -179,6 +184,74 @@ it.each(readers)("sizes %s without reading transcript overflow payloads", async 
   });
 });
 
+it.each([
+  { name: "raw", read: readTranscriptRawDelta },
+  { name: "display", read: readTranscriptDisplayDelta },
+])("bounds $name delta sizing before its byte limit and resumes in order", async ({ read }) => {
+  await withOpenClawTestState({ label: "delta-byte-budget" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId: "delta-byte-budget",
+      sessionKey: "agent:main:delta-byte-budget",
+    };
+    const events = Array.from({ length: 512 }, (_, index) => ({
+      type: "message",
+      id: `event-${index}`,
+      parentId: index === 0 ? null : `event-${index - 1}`,
+      message: { role: "user", content: `🦞\0-${index}` },
+    }));
+    await replaceTranscriptEvents(scope, events);
+    const limits = { maxBytes: 1, maxEvents: 1_000 };
+    read(scope, limits);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const counter = trackSqliteStatementExecutions(db, ["metadata"], (query) =>
+      query.includes('from "transcript_events"') && query.includes("serialized_bytes")
+        ? "metadata"
+        : null,
+    );
+    try {
+      const blocked = read(scope, limits);
+      expect(blocked).toMatchObject({
+        kind: "page",
+        events: [],
+        hasMore: true,
+        requiredBytes: Buffer.byteLength(JSON.stringify(events[0])) + 1,
+        serializedBytes: 0,
+      });
+      expect(counter.rowCounts.metadata).toBeLessThanOrEqual(128);
+
+      const expected = events.slice(0, 70);
+      const maxBytes = expected.reduce(
+        (total, event) => total + Buffer.byteLength(JSON.stringify(event)) + 1,
+        0,
+      );
+      const first = read(scope, { ...limits, maxBytes });
+      if (first.kind !== "page") {
+        throw new Error("Expected the first delta page");
+      }
+      expect(first.events.map(({ event }) => event)).toEqual(expected);
+      expect(first).toMatchObject({ hasMore: true, serializedBytes: maxBytes });
+      expect(first).not.toHaveProperty("requiredBytes");
+      expect(counter.rowCounts.metadata).toBeLessThanOrEqual(256);
+
+      const rest = read(scope, { cursor: first.cursor, maxEvents: 1_000, maxBytes: 1_000_000 });
+      if (rest.kind !== "page") {
+        throw new Error("Expected the remaining delta page");
+      }
+      expect(rest.events.map(({ event }) => event)).toEqual(events.slice(expected.length));
+      expect(rest.hasMore).toBe(false);
+      expect(read(scope, { cursor: rest.cursor })).toMatchObject({
+        kind: "page",
+        events: [],
+        hasMore: false,
+      });
+    } finally {
+      counter.restore();
+    }
+  });
+});
+
 it.each(["incoming", "stored"])(
   "defers a rebuild when %s UTF-8 bytes exceed the synchronous budget",
   (source) => {
@@ -202,6 +275,44 @@ it.each(["incoming", "stored"])(
           source === "incoming" ? [event] : [],
         ),
       ).toBe(false);
+    } finally {
+      db.close();
+    }
+  },
+);
+
+it.each([
+  { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS, synchronous: true },
+  { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
+  { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS - 1, synchronous: true },
+  { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
+  { incomingRows: SYNC_REBUILD_MAX_ROWS + 1, storedRows: 1, synchronous: false },
+])(
+  "bounds rebuild preflight with $storedRows stored and $incomingRows incoming rows",
+  ({ incomingRows, storedRows, synchronous }) => {
+    const db = openNodeSqliteDatabase(":memory:");
+    try {
+      db.exec("CREATE TABLE transcript_events (session_id TEXT, event_json TEXT)");
+      const event = { message: { role: "user", content: "small" } };
+      const serialized = JSON.stringify(event);
+      const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?)");
+      for (let index = 0; index < storedRows; index++) {
+        insert.run("budget", serialized);
+      }
+      let sizedRows = 0;
+      db.function("octet_length", (value) => {
+        sizedRows++;
+        return Buffer.byteLength(String(value));
+      });
+      expect(
+        shouldRebuildSessionTranscriptIndexSynchronously(
+          db,
+          "budget",
+          Array.from({ length: incomingRows }, () => event),
+        ),
+      ).toBe(synchronous);
+      const remainingRows = SYNC_REBUILD_MAX_ROWS - incomingRows;
+      expect(sizedRows).toBeLessThanOrEqual(Math.max(0, remainingRows + 1));
     } finally {
       db.close();
     }

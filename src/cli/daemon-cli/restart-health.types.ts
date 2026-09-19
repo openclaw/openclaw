@@ -11,6 +11,8 @@ export const GATEWAY_RESTART_WAIT_OUTCOMES = [
   "stale-pids",
   "stopped-free",
   "timeout",
+  "still-starting",
+  "generation-changed",
 ] as const;
 
 export type GatewayRestartWaitOutcome = (typeof GATEWAY_RESTART_WAIT_OUTCOMES)[number];

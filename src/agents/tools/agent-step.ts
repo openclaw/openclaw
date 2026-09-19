@@ -58,6 +58,7 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  sourceRole?: "subagent";
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
   const promptedAt = Date.now();
@@ -67,6 +68,7 @@ export async function runAgentStep(params: {
     sourceSessionKey: params.sourceSessionKey,
     sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
+    ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
   const message = annotateInterSessionPromptText(params.message, inputProvenance);
@@ -127,6 +129,7 @@ export async function runAgentStep(params: {
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
+    untilTerminal: true,
   });
   if (result.status !== "ok") {
     return undefined;

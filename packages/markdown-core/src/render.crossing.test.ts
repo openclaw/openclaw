@@ -3,6 +3,32 @@ import { markdownToIR } from "./ir.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
 describe("renderMarkdownWithMarkers crossing spans", () => {
+  it("prepares independent link copies before invoking callbacks", () => {
+    const first = { start: 0, end: 3, href: "first" };
+    const second = { start: 4, end: 7, href: "second" };
+    const seen: string[] = [];
+
+    renderMarkdownWithMarkers(
+      { text: "one two", styles: [], links: [first, second] },
+      {
+        styleMarkers: {},
+        escapeText: (text) => text,
+        buildLink: (link) => {
+          seen.push(link.href);
+          if (link.start === 0) {
+            second.href = "changed by earlier callback";
+          }
+          link.href = "changed on callback copy";
+          return null;
+        },
+      },
+    );
+
+    expect(seen).toEqual(["first", "second"]);
+    expect(first.href).toBe("first");
+    expect(second.href).toBe("changed by earlier callback");
+  });
+
   it.each([
     {
       name: "a style ending inside a spoiler",

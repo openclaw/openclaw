@@ -1,8 +1,14 @@
 // Subsystem logger tests cover per-subsystem log routing and filtering.
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -36,6 +42,7 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  resetDiagnosticEventsForTest();
   setVerbose(false);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -47,6 +54,92 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it("omits routine call sites while retaining error and fatal locations", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "trace", consoleLevel: "silent", file });
+    const log = createSubsystemLogger("gateway/stack").child("nested");
+
+    for (const level of ["trace", "debug", "info", "warn", "error", "fatal", "raw"] as const) {
+      log[level](`stack policy ${level}`);
+    }
+    await testApi.flushFileLogQueueForTests();
+
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => record.message)).toEqual(
+      ["trace", "debug", "info", "warn", "error", "fatal", "raw"].map(
+        (level) => `stack policy ${level}`,
+      ),
+    );
+    expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+    ]);
+    for (const record of records) {
+      expect(record._meta).toMatchObject({
+        name: '{"subsystem":"gateway/stack/nested"}',
+        parentNames: ["openclaw"],
+      });
+    }
+  });
+
+  it("tracks diagnostic log interest and enablement for a retained subsystem logger", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    const log = createSubsystemLogger("gateway/stack");
+    const listener = vi.fn();
+
+    log.info("no listener");
+    const unsubscribeUnrelated = onInternalDiagnosticEvent(listener, { exclude: ["log.record"] });
+    log.info("unrelated listener");
+    const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
+    log.info("log listener");
+    await yieldToEventLoop();
+    setDiagnosticsEnabledForProcess(false);
+    log.info("disabled diagnostics");
+    setDiagnosticsEnabledForProcess(true);
+    log.raw("enabled diagnostics");
+    await yieldToEventLoop();
+    unsubscribeLogs();
+    log.info("removed log listener");
+    unsubscribeUnrelated();
+    await testApi.flushFileLogQueueForTests();
+
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+    expect(listener.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({
+        type: "log.record",
+        message: "log listener",
+        code: { line: expect.any(Number), functionName: expect.any(String) },
+      }),
+      expect.objectContaining({
+        type: "log.record",
+        message: "enabled diagnostics",
+        code: { line: expect.any(Number), functionName: expect.any(String) },
+      }),
+    ]);
+  });
+
   it("returns true for any/file when only file logging would emit", () => {
     setLoggerOverride({ level: "debug", consoleLevel: "silent" });
     const log = createSubsystemLogger("agent/embedded");
@@ -100,6 +193,27 @@ describe("createSubsystemLogger().isEnabled", () => {
     const log = createSubsystemLogger("agent/embedded");
 
     expect(log.isEnabled("info", "console")).toBe(false);
+  });
+
+  it("skips metadata reads, serialization, and transport formatting below both sink levels", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "json" });
+    const consoleLog = installConsoleMethodSpy("log");
+    const format = vi.fn(() => "formatted");
+    const write = vi.fn();
+    getLogger().attachTransport({ format, write });
+    const serialize = vi.fn(() => "metadata");
+    const readField = vi.fn(() => ({ toJSON: serialize }));
+    const meta = Object.defineProperty({}, "field", { enumerable: true, get: readField });
+    const log = createSubsystemLogger("gateway");
+
+    log.trace("filtered trace", meta);
+    log.debug("filtered debug", meta);
+
+    expect(readField).not.toHaveBeenCalled();
+    expect(serialize).not.toHaveBeenCalled();
+    expect(format).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(consoleLog).not.toHaveBeenCalled();
   });
 
   it("does not apply console subsystem filters to file target", () => {
@@ -436,6 +550,123 @@ describe("createSubsystemLogger().isEnabled", () => {
       expect(logSpy).toHaveBeenCalledWith("raw diagnostic");
     },
   );
+
+  it("appends warn/error structured fields as compact key=value pairs in plain console styles", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
+    const warn = vi.fn();
+    const error = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error };
+    const log = createSubsystemLogger("session-catalog");
+
+    log.warn("slow Codex catalog list phases", {
+      elapsedMs: 12345,
+      admissionWaitMs: 0,
+      admitted: true,
+      phaseDurationsMs: { open: 3, validation: 8 },
+      note: "two words",
+      skipped: undefined,
+      error: new Error("boom"),
+    });
+    log.error("catalog failed", { reason: "timeout" });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const warnLine = String(mockCall(warn)[0]);
+    expect(warnLine).toContain("slow Codex catalog list phases");
+    expect(warnLine).toContain(
+      'elapsedMs=12345 admissionWaitMs=0 admitted=true phaseDurationsMs={"open":3,"validation":8} note="two words" error=boom',
+    );
+    expect(warnLine).not.toContain("skipped=");
+    expect(String(mockCall(error)[0])).toContain("catalog failed reason=timeout");
+  });
+
+  it("masks key-aware sensitive fields in the console tail", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
+    const warn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+
+    createSubsystemLogger("gateway").warn("provider retry", {
+      apiToken: "opaque-value-no-pattern-match",
+      nested: { password: "hunter2" },
+      elapsedMs: 12,
+    });
+
+    const warnLine = String(mockCall(warn)[0]);
+    expect(warnLine).not.toContain("opaque-value-no-pattern-match");
+    expect(warnLine).not.toContain("hunter2");
+    expect(warnLine).toContain("elapsedMs=12");
+  });
+
+  it("redacts structured fields before the console tail length cap clips them", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
+    const warn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+
+    createSubsystemLogger("gateway").warn("provider retry", {
+      // Sized so an unredacted tail would be cut in the middle of the value below.
+      padding: "x".repeat(2040),
+      apiToken: "opaque-value-no-pattern-match",
+    });
+
+    const warnLine = String(mockCall(warn)[0]);
+    expect(warnLine).not.toContain("opaque-value");
+    expect(warnLine).toContain("...(truncated)");
+  });
+
+  it("leaves json console output untouched and serializes each field once", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+    const warn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    let serializations = 0;
+    const stateful = {
+      toJSON() {
+        serializations += 1;
+        return { calls: serializations };
+      },
+    };
+
+    createSubsystemLogger("gateway").warn("provider retry", { elapsedMs: 12, stateful });
+
+    const parsed = JSON.parse(String(mockCall(warn)[0]));
+    expect(parsed).toMatchObject({ level: "warn", message: "provider retry", elapsedMs: 12 });
+    expect(serializations).toBe(1);
+  });
+
+  it("keeps a circular field readable on one line and omits fields with no JSON form", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
+    const warn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    const circular: Record<string, unknown> = { name: "catalog" };
+    circular.self = circular;
+
+    createSubsystemLogger("session-catalog").warn("slow list", {
+      circular,
+      big: 10n,
+      // Dropped by the shared redactor, matching the file sink and the json style.
+      handler: () => undefined,
+    });
+
+    const warnLine = String(mockCall(warn)[0]);
+    expect(warnLine).toContain('circular={"name":"catalog","self":"[Circular]"}');
+    expect(warnLine).toContain("big=10");
+    expect(warnLine).not.toContain("handler=");
+    expect(warnLine).not.toContain("\n");
+  });
+
+  it("keeps info console lines and explicit consoleMessage overrides free of structured fields", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const logSpy = vi.fn();
+    const warn = vi.fn();
+    loggingState.rawConsole = { log: logSpy, info: vi.fn(), warn, error: vi.fn() };
+    const log = createSubsystemLogger("gateway");
+
+    log.info("listing sessions", { elapsedMs: 5 });
+    log.warn("slow list", { elapsedMs: 5000, consoleMessage: "slow list (see file log)" });
+
+    expect(String(mockCall(logSpy)[0])).not.toContain("elapsedMs=");
+    const warnLine = String(mockCall(warn)[0]);
+    expect(warnLine).toContain("slow list (see file log)");
+    expect(warnLine).not.toContain("elapsedMs=");
+  });
 
   it("preserves structured subsystem fields through the shared JSON formatter", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });

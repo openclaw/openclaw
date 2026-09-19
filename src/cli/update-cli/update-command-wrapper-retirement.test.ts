@@ -1,10 +1,91 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import * as exec from "../../process/exec.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 
 describe("retireStandaloneGitWrapper", () => {
+  it.each(["replacement", "content change", "oversized file", "directory", "revoked finalizer"])(
+    "preserves a wrapper after %s during pkg inspection",
+    async (change) => {
+      await withTestDir({ prefix: "openclaw-wrapper-pkg-race-" }, async (base) => {
+        const root = path.join(base, "old");
+        const wrapper = path.join(base, "openclaw");
+        const original = `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${root}/dist/entry.js "$@"\n`;
+        const replacement = "#!/bin/sh\necho replacement\n";
+        await fs.writeFile(wrapper, original, { mode: 0o755 });
+        let revoked = false;
+        const assertCurrent = vi.fn(() => {
+          if (revoked) {
+            throw new Error("finalizer revoked");
+          }
+        });
+        const query = vi.spyOn(exec, "runCommandBuffered").mockImplementationOnce(async () => {
+          if (change === "replacement") {
+            await fs.rename(wrapper, path.join(base, "saved"));
+            await fs.writeFile(wrapper, original, { mode: 0o755 });
+          } else if (change === "directory") {
+            await fs.rename(wrapper, path.join(base, "saved"));
+            await fs.mkdir(wrapper);
+          } else if (change === "oversized file") {
+            await fs.writeFile(wrapper, "x".repeat(4097));
+          } else if (change === "content change") {
+            await fs.writeFile(wrapper, replacement);
+          } else {
+            revoked = true;
+          }
+          return pkgQueryResult();
+        });
+        try {
+          await withMockedPlatform("freebsd", async () => {
+            await expect(
+              retireStandaloneGitWrapper({ previousRoot: root, searchDirs: [base], assertCurrent }),
+            ).resolves.toMatchObject({ error: expect.stringContaining("Could not retire") });
+          });
+          if (change === "directory") {
+            expect((await fs.lstat(wrapper)).isDirectory()).toBe(true);
+          } else {
+            await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(
+              change === "content change"
+                ? replacement
+                : change === "oversized file"
+                  ? "x".repeat(4097)
+                  : original,
+            );
+          }
+          expect(assertCurrent).toHaveBeenCalledTimes(change === "revoked finalizer" ? 1 : 0);
+        } finally {
+          query.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("preserves a pkg-owned legacy wrapper even when its contents match", async () => {
+    await withTestDir({ prefix: "openclaw-wrapper-pkg-" }, async (base) => {
+      const root = path.join(base, "old");
+      const wrapper = path.join(base, "openclaw");
+      const contents = `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${root}/dist/entry.js "$@"\n`;
+      await fs.writeFile(wrapper, contents, { mode: 0o755 });
+      const query = vi
+        .spyOn(exec, "runCommandBuffered")
+        .mockResolvedValue(pkgQueryResult(`${wrapper}\n`));
+      try {
+        await withMockedPlatform("freebsd", async () => {
+          await expect(
+            retireStandaloneGitWrapper({ previousRoot: root, searchDirs: [base] }),
+          ).resolves.toMatchObject({ error: expect.stringContaining("owned by FreeBSD pkg") });
+        });
+        await expect(fs.readFile(wrapper, "utf8")).resolves.toBe(contents);
+      } finally {
+        query.mockRestore();
+      }
+    });
+  });
   it("removes only the installer wrapper for the previous checkout", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wrapper-retire-"));
     const oldRoot = path.join(home, "old checkout");

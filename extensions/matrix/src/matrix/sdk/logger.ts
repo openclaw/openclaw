@@ -1,4 +1,3 @@
-// Matrix plugin module implements logger behavior.
 import { format } from "node:util";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 // security-runtime exports the same redaction helper without logging-core's

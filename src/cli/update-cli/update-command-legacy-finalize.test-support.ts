@@ -4,8 +4,23 @@ import fs from "node:fs";
 import { registerHooks } from "node:module";
 
 const scratch = process.env.OPENCLAW_STATE_DIR!;
-const source = (relative: string) => new URL(relative, import.meta.url).href;
+const source = (relative: string) =>
+  new URL(
+    import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
+    import.meta.url,
+  ).href;
+// Consume fixture metadata before the real worker interprets its own arguments.
+const runtimeEntry = process.argv.splice(2, 1)[0];
+if (!runtimeEntry) {
+  throw new Error("Legacy finalizer fixture requires its read-only worker declaration.");
+}
+const readOnlyEntrypoint: unknown = JSON.parse(runtimeEntry);
 const overrides = new Map<string, string>([
+  [
+    source("../../infra/runtime-process-entrypoints.ts"),
+    `import {runtimeProcessEntrypoints as actual} from ${JSON.stringify(source("../../infra/runtime-process-entrypoints.ts") + "?fixture-original")};
+    export const runtimeProcessEntrypoints = {...actual, sqliteReadOnly: ${JSON.stringify(readOnlyEntrypoint)}};`,
+  ],
   [
     source("./update-command-service-plan.ts"),
     `

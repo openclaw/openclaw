@@ -89,7 +89,6 @@ it.each([false, true])(
         tag: artifact,
         timeoutMs: 30_000,
         startedAt: params.startedAt,
-        jsonMode: true,
         progress: params.progress,
         nodeRunner: process.execPath,
         managedServiceEnv: run.env,

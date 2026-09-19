@@ -51,16 +51,105 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
     cwd = checkout;
   }
   const output = path.join(root, "snapshot");
-  const capture = () =>
+  const capture = (baseCommit = base) =>
     execFileSync(
       process.execPath,
-      ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cwd, base, output],
+      ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cwd, baseCommit, output],
       { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
     ).trim();
   return { cwd, root, git, base, output, capture, env };
 }
 
 describe("repository publication checkpoint capture", () => {
+  it.each(["full", "split", "linked", "linked-config"] as const)(
+    "preserves committed CRLF bytes when capturing clean and edited workspaces (%s index)",
+    async (format) => {
+      const f = await fixture(format === "linked" || format === "linked-config" ? format : false);
+      const file = "gradlew.bat";
+      const content = Buffer.from("@echo off\r\necho unchanged\r\n");
+      await fs.writeFile(path.join(f.cwd, file), content);
+      await fs.writeFile(path.join(f.cwd, ".gitattributes"), "* text=auto eol=lf\n");
+      f.git("add", ".gitattributes");
+      // Model an existing CRLF blob: ordinary add would normalize a new file first.
+      const blob = execFileSync("git", ["hash-object", "-w", "--no-filters", "--stdin"], {
+        cwd: f.cwd,
+        env: f.env,
+        input: content,
+        encoding: "utf8",
+      }).trim();
+      f.git("update-index", "--add", "--cacheinfo", `100644,${blob},${file}`);
+      f.git("commit", "--quiet", "-m", "existing CRLF blob");
+      const head = f.git("rev-parse", "HEAD");
+      const tree = f.git("rev-parse", "HEAD^{tree}");
+      if (format === "split") {
+        f.git("update-index", "--split-index");
+      }
+      expect(f.git("status", "--porcelain")).toBe("");
+      const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
+      const index = await fs.readFile(indexPath);
+      for (const edited of [false, true]) {
+        if (edited) {
+          await fs.writeFile(path.join(f.cwd, "counter.txt"), "changed\r\n");
+          await fs.rm(f.output, { recursive: true });
+        }
+        const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
+        const digest = f.capture(head);
+        const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+        expect(local.sourceHeadCommit).toBe(head);
+        expect(local.sourceIndexTree).toBe(tree);
+        expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+        expect(f.git("rev-parse", `${local.workspaceTree}:${file}`)).toBe(blob);
+        if (edited) {
+          expect(snapshot.entries).toEqual([
+            { path: "counter.txt", mode: "100644", sha: expect.any(String) },
+          ]);
+          expect(
+            await readGitHubRepositoryPublicationBlob(f.output, snapshot.entries[0]!.sha!),
+          ).toEqual(Buffer.from("changed\n"));
+        } else {
+          expect(local.workspaceTree).toBe(tree);
+          expect(snapshot.entries).toEqual([]);
+        }
+        expect(await fs.readFile(indexPath)).toEqual(index);
+        expect(await fs.readFile(path.join(f.cwd, file))).toEqual(content);
+        expect(f.git("rev-parse", "HEAD")).toBe(head);
+      }
+    },
+  );
+
+  it.each(["full", "split", "linked", "linked-config"] as const)(
+    "captures same-size unstaged edits with matching cached timestamps (%s index)",
+    async (format) => {
+      const f = await fixture(format === "linked" || format === "linked-config" ? format : false);
+      f.git("config", "core.trustctime", "false");
+      f.git("config", "core.checkStat", "minimal");
+      const file = path.join(f.cwd, "counter.txt");
+      const timestamp = Math.floor(Date.now() / 1000) - 60;
+      await fs.writeFile(file, "staged\n");
+      await fs.utimes(file, timestamp, timestamp);
+      f.git("add", "counter.txt");
+      if (format === "split") {
+        f.git("update-index", "--split-index");
+      }
+      const stagedTree = f.git("write-tree");
+      const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
+      // Reproduce a coarse-timestamp filesystem without relying on execution timing.
+      await fs.utimes(indexPath, timestamp, timestamp);
+      await fs.writeFile(file, "latest\n");
+      await fs.utimes(file, timestamp, timestamp);
+      const index = await fs.readFile(indexPath);
+      const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
+      const digest = f.capture();
+      const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+      expect(local.sourceIndexTree).toBe(stagedTree);
+      expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+      expect(f.git("show", `${local.workspaceTree}:counter.txt`)).toBe("latest");
+      expect(await fs.readFile(indexPath)).toEqual(index);
+      expect(await fs.readFile(file, "utf8")).toBe("latest\n");
+      expect(f.git("rev-parse", "HEAD")).toBe(f.base);
+    },
+  );
+
   it("captures a cumulative Git-normalized sparse tree, binary bytes, modes and deletions without changing the worker index", async () => {
     const f = await fixture();
     await fs.writeFile(path.join(f.cwd, "counter.txt"), "first\r\n");
@@ -105,7 +194,7 @@ describe("repository publication checkpoint capture", () => {
   });
 
   it.each(["full", "split", "linked", "linked-config"] as const)(
-    "preserves staged path inventory and index bytes while normalizing the full worktree (%s index)",
+    "preserves staged path inventory and index bytes while staging workspace changes (%s index)",
     async (format) => {
       const f = await fixture(format === "linked" || format === "linked-config" ? format : false);
       await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "staged\r\n");

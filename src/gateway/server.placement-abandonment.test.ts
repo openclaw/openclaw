@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { it, vi } from "vitest";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.js";
 import { getFreePort } from "../../scripts/lib/gateway-bench-probes.js";
+import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -29,6 +32,10 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
+// Never capture a previous case's spy after a test timeout.
+const createTunnel = nodeTunnel.createNodeWorkerTunnelManager;
+let fixtureActive = false;
+
 const cases = [
   {
     name: "moves an offline device with a result already pending",
@@ -47,64 +54,138 @@ const cases = [
   },
 ];
 
-it.each(cases)(
+it.for(cases)(
   "$name, completes a fresh turn, and archives deletion",
   { timeout: 90_000 },
-  async ({ persisted, failed }) => {
-    const state = await createOpenClawTestState({
-      label: "placement-abandonment",
-      env: {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
-        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-      },
-    });
-    const reply = "RECOVERED_SESSION_OK";
-    const requestLog = state.path("provider-requests.jsonl");
-    const mockPort = await getFreePort();
-    const mock = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
-      detached: process.platform !== "win32",
-      env: {
-        PATH: process.env.PATH,
-        MOCK_PORT: String(mockPort),
-        SUCCESS_MARKER: reply,
-        MOCK_REQUEST_LOG: requestLog,
-      },
-    });
-    mock.stdout.resume();
-    mock.stderr.resume();
-    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-    let offlineDeviceSeeded = false;
-    let cleaningUp = false;
-    const cleanupTransport = transport();
-    const cleanupNodes = await cleanupTransport.listCurrentNodes();
-    for (const node of cleanupNodes) {
-      node.nodeId = "offline-device";
+  async ({ persisted, failed }, { expect, onTestFinished, signal }) => {
+    // A hook timeout also leaves its async cleanup running. Do not let the next
+    // case acquire HOME, SQLite, or this module's spy until that owner releases.
+    if (fixtureActive) {
+      throw new Error("Previous placement abandonment fixture has not released its state");
     }
-    cleanupTransport.listCurrentNodes = async () => cleanupNodes;
-    const stopInvoke = vi.spyOn(cleanupTransport, "invoke");
-    const createTunnel = nodeTunnel.createNodeWorkerTunnelManager;
-    const tunnelFixture = vi
-      .spyOn(nodeTunnel, "createNodeWorkerTunnelManager")
-      .mockImplementation((options) =>
-        createTunnel({
-          ...options,
-          getTransport: () => (cleaningUp ? cleanupTransport : options.getTransport()),
-        }),
-      );
+    fixtureActive = true;
+    const bodySettled = createDeferred();
+    const fixture = createFixtureLifetime();
+    const cleanups: Array<() => unknown> = [];
+    let gatewayStopped = true;
+    let childStopped = true;
+    let bodyFailure: { error: unknown } | undefined;
+    // The body owns teardown inside its original 90-second budget. The finish
+    // hook only joins that same lifetime if Vitest times out before it settles.
+    void fixture.track(bodySettled.promise);
+    onTestFinished(async () => {
+      await fixture.cleanup();
+      fixtureActive = false;
+    });
     try {
+      const state = await createOpenClawTestState({
+        label: "placement-abandonment",
+        verifyCleanup: fixture.verifyCleanup,
+        env: {
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          // The configured loopback provider uses the built-in Responses adapter.
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+        },
+      });
+      cleanups.push(async () => {
+        if (!gatewayStopped || !childStopped) {
+          throw new Error("Placement abandonment fixture still owns Gateway or child state");
+        }
+        closeOpenClawStateDatabaseForTest();
+        await state.cleanup();
+      });
+      signal.throwIfAborted();
+      const reply = "RECOVERED_SESSION_OK";
+      const requestLog = state.path("provider-requests.jsonl");
+      const mockPort = await getFreePort();
+      signal.throwIfAborted();
+      const mock = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
+        detached: process.platform !== "win32",
+        env: {
+          PATH: process.env.PATH,
+          MOCK_PORT: String(mockPort),
+          SUCCESS_MARKER: reply,
+          MOCK_REQUEST_LOG: requestLog,
+        },
+      });
+      childStopped = false;
+      cleanups.push(async () => {
+        await stopChild(mock);
+        expect(
+          inspectManagedProcessGroup(mock, {
+            errorPolicy: "indeterminate",
+            inspectLeaderWhenNoGroup: true,
+          }),
+        ).toBe("dead");
+        childStopped = true;
+      });
+      mock.stdout.resume();
+      mock.stderr.resume();
+      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      let offlineDeviceSeeded = false;
+      let cleaningUp = false;
+      const offlineTransport = transport();
+      offlineTransport.hasCurrentRunner = () => false;
+      offlineTransport.listCurrentNodes = async () => [];
+      const offlineNodeLookup = vi.spyOn(offlineTransport, "getCurrentNode");
+      const cleanupTransport = transport();
+      const cleanupNodes = await cleanupTransport.listCurrentNodes();
+      signal.throwIfAborted();
+      for (const node of cleanupNodes) {
+        node.nodeId = "offline-device";
+      }
+      cleanupTransport.listCurrentNodes = async () => cleanupNodes;
+      const stopInvoke = vi.spyOn(cleanupTransport, "invoke");
+      const tunnelFixture = vi
+        .spyOn(nodeTunnel, "createNodeWorkerTunnelManager")
+        .mockImplementation((options) =>
+          createTunnel({
+            ...options,
+            getTransport: () => (cleaningUp ? cleanupTransport : offlineTransport),
+          }),
+        );
+      cleanups.push(() => tunnelFixture.mockRestore());
+      cleanups.push(async () => {
+        if (!gateway) {
+          return;
+        }
+        const { client, server, port } = gateway;
+        await runQaGatewayFixture(
+          () => disconnectGatewayClient(client),
+          async () => {
+            // Only teardown supplies an acknowledgement for this exact synthetic
+            // device. The registered manager still owns draining and shutdown.
+            cleaningUp = true;
+            await server.close({ reason: "placement abandonment test cleanup" });
+            gatewayStopped = true;
+            if (offlineDeviceSeeded) {
+              expect(stopInvoke).toHaveBeenCalledWith(
+                expect.objectContaining({
+                  command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+                  params: expect.objectContaining({
+                    environmentId: "offline-environment",
+                    sessionId: REQUEST.sessionId,
+                    ownerEpoch: 1,
+                  }),
+                }),
+              );
+            }
+            await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
+          },
+        );
+      });
       await expect
-        .poll(async () => (await fetch(`http://127.0.0.1:${mockPort}/health`)).status)
+        .poll(async () => (await fetch(`http://127.0.0.1:${mockPort}/health`, { signal })).status)
         .toBe(200);
+      signal.throwIfAborted();
       const provider = buildMockOpenAiResponsesProvider(
         `http://127.0.0.1:${mockPort}/v1`,
         "placement-test",
@@ -135,12 +216,15 @@ it.each(cases)(
             },
           },
         },
-        plugins: { enabled: true, allow: ["openai"], slots: { memory: "none" } },
+        plugins: { slots: { memory: "none" } },
         tools: { deny: ["*"] },
         gateway: { auth: { mode: "token", token } },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
+      signal.throwIfAborted();
       const start = async () => {
+        signal.throwIfAborted();
+        gatewayStopped = false;
         gateway = await startGatewayWithClient({
           cfg,
           configPath: state.configPath,
@@ -148,6 +232,7 @@ it.each(cases)(
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
         await gateway.server.startupSettled;
+        signal.throwIfAborted();
         return gateway;
       };
       if (!persisted) {
@@ -177,6 +262,7 @@ it.each(cases)(
           worktree: { id: worktreeId, branch: "main", repoRoot: state.workspaceDir },
         },
       );
+      signal.throwIfAborted();
       let database = openOpenClawStateDatabase();
       let placements = createWorkerSessionPlacementStore({ database });
       const environmentId = "offline-environment";
@@ -238,6 +324,7 @@ it.each(cases)(
           }),
         ).resolves.toMatchObject({ ok: true, placement: { state: "local" } });
       }
+      signal.throwIfAborted();
       expect(placements.get(sessionId)).toMatchObject({ state: "local", turnClaim: null });
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
@@ -261,6 +348,7 @@ it.each(cases)(
         deliver: false,
         idempotencyKey: randomUUID(),
       });
+      signal.throwIfAborted();
       expect(accepted.runId).not.toBe(claim.runId);
       await expect(
         client.request(
@@ -269,10 +357,12 @@ it.each(cases)(
           { timeoutMs: 35_000 },
         ),
       ).resolves.toMatchObject({ status: "ok" });
+      signal.throwIfAborted();
       const history = await client.request<{ messages: Array<{ role: string; content: unknown }> }>(
         "chat.history",
         { sessionKey },
       );
+      signal.throwIfAborted();
       expect(history.messages.filter((item) => item.role === "assistant")).toEqual([
         expect.objectContaining({
           content: [expect.objectContaining({ type: "text", text: reply })],
@@ -282,6 +372,7 @@ it.each(cases)(
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
+      signal.throwIfAborted();
       expect(requests).toHaveLength(1);
       expect(requests[0].body).toContain(message);
       expect(requests[0].body).not.toContain(claim.runId);
@@ -291,6 +382,7 @@ it.each(cases)(
         "sessions.delete",
         { key: sessionKey, expectedSessionId: sessionId, deleteTranscript: true },
       );
+      signal.throwIfAborted();
       expect(deleted.deleted).toBe(true);
       expect(deleted.archived).toHaveLength(1);
       expect(readSessionArchiveContentSync(deleted.archived[0]!)).toContain(reply);
@@ -299,34 +391,27 @@ it.each(cases)(
       expect(placements.getPlacementMove(sessionId)).toBeUndefined();
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
+      expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");
       expect(stopInvoke).not.toHaveBeenCalled();
+    } catch (error) {
+      bodyFailure = { error };
     } finally {
       try {
-        if (gateway) {
-          await disconnectGatewayClient(gateway.client);
-          // Only teardown supplies an acknowledgement for this exact synthetic
-          // device. The registered manager still owns draining and shutdown.
-          cleaningUp = true;
-          await gateway.server.close({ reason: "placement abandonment test cleanup" });
-          if (offlineDeviceSeeded) {
-            expect(stopInvoke).toHaveBeenCalledWith(
-              expect.objectContaining({
-                command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-                params: expect.objectContaining({
-                  environmentId: "offline-environment",
-                  sessionId: REQUEST.sessionId,
-                  ownerEpoch: 1,
-                }),
+        await runQaGatewayFixture(
+          async () => {
+            if (bodyFailure) {
+              throw bodyFailure.error;
+            }
+          },
+          ...cleanups.toReversed().map(
+            (cleanup) => () =>
+              fixture.verifyCleanup(async () => {
+                await cleanup();
               }),
-            );
-          }
-          await expect(fetch(`http://127.0.0.1:${gateway.port}/health`)).rejects.toThrow();
-        }
+          ),
+        );
       } finally {
-        tunnelFixture.mockRestore();
-        await stopChild(mock);
-        closeOpenClawStateDatabaseForTest();
-        await state.cleanup();
+        bodySettled.resolve();
       }
     }
   },

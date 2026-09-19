@@ -15,7 +15,10 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
-import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
+import {
+  getSessionMcpRequestSignal,
+  runWithSessionMcpRequestSignal,
+} from "./agent-bundle-mcp-request-context.js";
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type {
   BundleMcpToolRuntime,
@@ -619,8 +622,11 @@ export async function createBundleMcpToolRuntime(params: {
     safeServerNamesByServer?: ReadonlyMap<string, string>;
   }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
+  const signal = getSessionMcpRequestSignal();
+  signal?.throwIfAborted();
   const createRuntime =
     params.createRuntime ?? (await import("./agent-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  signal?.throwIfAborted();
   const runtime = createRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
@@ -631,11 +637,44 @@ export async function createBundleMcpToolRuntime(params: {
       ? { safeServerNamesByServer: params.safeServerNamesByServer }
       : {}),
   });
-  return await materializeBundleMcpToolsForRun({
-    runtime,
-    reservedToolNames: params.reservedToolNames,
-    disposeRuntime: async () => {
+  // Private acquisition owns cancellation until the caller receives its disposal handle.
+  let abortDisposal: Promise<void> | undefined;
+  const onAbort = () => {
+    abortDisposal = (async () => {
       await runtime.dispose();
-    },
-  });
+    })();
+    void abortDisposal.catch(() => recordAgentCleanupFailure());
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) {
+    onAbort();
+  }
+  try {
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime,
+      reservedToolNames: params.reservedToolNames,
+      disposeRuntime: async () => {
+        await runtime.dispose();
+      },
+    }).catch(async (error: unknown) => {
+      if (signal?.aborted) {
+        // Catalog failure keeps its own error; cancellation must first replay physical cleanup failure.
+        try {
+          await abortDisposal;
+        } finally {
+          await runtime.joinCleanup?.();
+        }
+        signal.throwIfAborted();
+      }
+      throw error;
+    });
+    if (signal?.aborted) {
+      await materialized.dispose();
+      signal.throwIfAborted();
+    }
+    return materialized;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    await abortDisposal;
+  }
 }

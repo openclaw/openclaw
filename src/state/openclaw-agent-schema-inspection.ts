@@ -1,12 +1,16 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { readSqliteWriterAppVersion } from "../infra/sqlite-schema-header.js";
+import {
+  readSqliteSchemaHeader,
+  readSqliteWriterAppVersion,
+} from "../infra/sqlite-schema-header.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { isValidAgentId } from "../routing/session-key.js";
@@ -34,6 +38,7 @@ export type AgentSchemaInspection = {
   version: number;
   writerAppVersion?: string;
   reason?: string;
+  failure?: Error;
   agentSchemaMeta?: ExistingAgentSchemaMeta | null;
 };
 
@@ -42,8 +47,20 @@ export function inspectAgentDatabaseSchema(
   database: DatabaseSync,
   input: AgentSchemaInspectionInput,
 ): AgentSchemaInspection {
+  if (!input.verifyCurrentSchemaShape && !input.requireStartupMigrationReadiness) {
+    try {
+      const { userVersion, ...header } = readSqliteSchemaHeader(
+        database,
+        input.inspectOwnership ? input.supportedVersion : undefined,
+      );
+      return { version: userVersion, ...header };
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(database);
+    }
+  }
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
+  let checkingShape = false;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -68,15 +85,17 @@ export function inspectAgentDatabaseSchema(
       agentId != null &&
       (!input.requireStartupMigrationReadiness || version > 0)
     ) {
+      checkingShape = true;
       assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: input.pathname,
+        allowStartupIndexRepair: input.requireStartupMigrationReadiness,
       });
     }
     return inspection;
   } catch (error) {
-    if (input.requireStartupMigrationReadiness) {
-      throw error;
+    if (input.requireStartupMigrationReadiness && !checkingShape) {
+      return { ...inspection, failure: toStringifiedError(error) };
     }
     // Preserve the observed version even when shape validation fails, so Doctor
     // can still report a pending migration alongside the unreadable shape.

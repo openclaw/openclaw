@@ -18,7 +18,7 @@ import {
 import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
-  exerciseToolCardRendering,
+  registerToolCardRenderingTests,
   streamingPrefixFrame,
   toolFrame,
 } from "./tui-pty-rendering-test-support.js";
@@ -757,11 +757,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     TEST_TIMEOUT_MS,
   );
 
-  it(
-    "authenticates running partial and completed tool cards in real terminal frames",
-    async () => await exerciseToolCardRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
-    STARTUP_TEST_TIMEOUT_MS,
-  );
+  registerToolCardRenderingTests(startTuiFixture, STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
 
   it(
     "blocks overlapping normal messages while a run is busy",

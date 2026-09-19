@@ -13,7 +13,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
-import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  unopenedMcpConfig,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -956,7 +959,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const runtimeParams = {
       sessionKey,
       workspaceDir: baseRunParams.workspaceDir,
-      cfg: { mcp: { servers: {} } },
+      cfg: unopenedMcpConfig,
     };
     retireSessionMcpRuntimeForSessionKeyMock.mockImplementation(
       mcpTools.retireSessionMcpRuntimeForSessionKey,
@@ -973,6 +976,7 @@ describe("runCliAgent before_agent_reply seam", () => {
         ...runtimeParams,
         sessionId: successorSessionId,
       });
+      expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
 
       await runCliAgent({
         ...baseRunParams,

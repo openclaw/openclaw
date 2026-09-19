@@ -15,6 +15,7 @@ import {
   archiveMigrationItem,
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
+  resolvePlannedMigrationTargets,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
@@ -39,6 +40,8 @@ import {
 } from "../app-server/config.js";
 import { ensureCodexPluginActivation } from "../app-server/plugin-activation.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
+import { isOpenAiCuratedMarketplace } from "../app-server/plugin-inventory.js";
+import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
@@ -46,7 +49,11 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
-import { applyCodexAuthItems, resolveCodexConfigPatchMode, type CodexAuthSource } from "./auth.js";
+import {
+  createCodexAuthItemApplier,
+  resolveCodexConfigPatchMode,
+  type CodexAuthSource,
+} from "./auth.js";
 import {
   buildCodexMigrationPlan,
   buildCodexPluginsConfigValue,
@@ -56,7 +63,6 @@ import {
   readCodexPluginMigrationConfigEntry,
   type CodexPluginMigrationConfigEntry,
 } from "./plan.js";
-import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
@@ -86,7 +92,7 @@ export function prepareTargetCodexAppServer(
   ctx: MigrationProviderContext,
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
-  const targets = resolveCodexMigrationTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
   const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
@@ -121,7 +127,7 @@ export async function applyCodexMigrationPlan(params: {
   const plan = params.plan ?? (await buildCodexMigrationPlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "codex");
   const items: MigrationItem[] = [];
-  const targets = resolveCodexMigrationTargets(params.ctx);
+  const targets = resolvePlannedMigrationTargets(params.ctx);
   const codexHome =
     typeof plan.metadata?.codexHome === "string" && plan.metadata.codexHome.trim()
       ? plan.metadata.codexHome
@@ -136,6 +142,12 @@ export async function applyCodexMigrationPlan(params: {
     params.ctx.config,
   );
   const applyCtx = { ...params.ctx, runtime };
+  const applyAuthItem = createCodexAuthItemApplier({
+    ctx: applyCtx,
+    source: authSource,
+    targets,
+    items: plan.items,
+  });
   for (const item of plan.items) {
     if (item.status !== "planned") {
       items.push(item);
@@ -144,14 +156,7 @@ export async function applyCodexMigrationPlan(params: {
     if (item.id === CODEX_PLUGIN_CONFIG_ITEM_ID) {
       items.push(await applyCodexPluginConfigItem(applyCtx, item, items));
     } else if (item.kind === "auth") {
-      items.push(
-        ...(await applyCodexAuthItems({
-          ctx: applyCtx,
-          item,
-          source: authSource,
-          targets,
-        })),
-      );
+      items.push(...(await applyAuthItem(item)));
     } else if (item.kind === "plugin" && item.action === "install") {
       items.push(await applyCodexPluginInstallItem(applyCtx, item));
     } else if (item.kind === "manual") {
@@ -207,7 +212,7 @@ async function applyCodexPluginInstallItem(
           requestParams,
           timeoutMs: 60_000,
           startOptions: appServer.start,
-          agentDir: resolveCodexMigrationTargets(ctx).agentDir,
+          agentDir: resolvePlannedMigrationTargets(ctx).agentDir,
           config: ctx.config,
           isolated: false,
         }),
@@ -313,16 +318,14 @@ async function requestTargetCodexAppServerJson(params: {
   const deadline = Date.now() + params.timeoutMs;
   const discoveryTimeoutMs = targetCodexMarketplaceDiscoveryTimeoutMs();
   const discoveryDeadline = Math.min(deadline, Date.now() + discoveryTimeoutMs);
-  let lastResponse: unknown;
-  let attempt = 0;
+  let lastResponse: v2.PluginListResponse;
   do {
-    attempt += 1;
     const remainingMs = Math.max(1, discoveryDeadline - Date.now());
-    lastResponse = await requestCodexAppServerJson({
+    lastResponse = await requestCodexAppServerJson<v2.PluginListResponse>({
       ...params,
       timeoutMs: remainingMs,
     });
-    if (hasOpenAiCuratedMarketplace(lastResponse)) {
+    if (lastResponse.marketplaces.some(isOpenAiCuratedMarketplace)) {
       return lastResponse;
     }
     if (Date.now() >= discoveryDeadline) {
@@ -336,22 +339,6 @@ async function requestTargetCodexAppServerJson(params: {
   } while (Date.now() < discoveryDeadline);
 
   return lastResponse;
-}
-
-function hasOpenAiCuratedMarketplace(response: unknown): boolean {
-  if (!response || typeof response !== "object" || !("marketplaces" in response)) {
-    return false;
-  }
-  const marketplaces = (response as { marketplaces?: unknown }).marketplaces;
-  return (
-    Array.isArray(marketplaces) &&
-    marketplaces.some(
-      (marketplace) =>
-        marketplace &&
-        typeof marketplace === "object" &&
-        (marketplace as { name?: unknown }).name === CODEX_PLUGINS_MARKETPLACE_NAME,
-    )
-  );
 }
 
 function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -374,7 +361,7 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
-  const targets = resolveCodexMigrationTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   const appServer = resolveTargetCodexAppServer(ctx);
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     agentDir: targets.agentDir,

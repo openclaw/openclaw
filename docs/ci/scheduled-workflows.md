@@ -198,6 +198,15 @@ Quality stays separate from security so quality findings can be scheduled, measu
 
 ## Maintenance workflows
 
+### Comment automation
+
+Comment jobs reject known no-ops before acquiring a hosted runner. Maintainer
+Command Reactions skips comments without `/` only when using its default command
+list; any nonempty `MAINTAINER_COMMAND_REACTIONS` override retains the full matcher,
+including commands without slashes. Auto response skips Bot-authored issue
+comments that Barnacle already ignores. Other issue and PR events retain their
+existing admission rules, including meaningful automation-authored updates.
+
 ### Dependency Audit
 
 `Dependency Audit` runs the production lockfile audit daily at 07:23 UTC and on
@@ -212,8 +221,7 @@ npm check covers npm bulk advisories only, not every upstream advisory source.
 The triage owner is **@steipete**, set on 2026-09-03 in
 [#137960](https://github.com/openclaw/openclaw/pull/137960). No `.github/CODEOWNERS`
 rule covers `.github/workflows/dependency-audit.yml`, so this line is the only
-record of that ownership. Review routing for a fix follows the lockfile owner
-`@openclaw/openclaw-secops`, which owns `/pnpm-lock.yaml` and `/package-lock.json`.
+record of that ownership.
 Investigate failed scheduled runs and rerun the strict workflow to confirm
 recovery:
 

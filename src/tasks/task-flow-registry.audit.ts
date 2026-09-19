@@ -1,5 +1,5 @@
 // Produces task-flow registry audit summaries for diagnostics and maintenance.
-import { listTasksForFlowId } from "./runtime-internal.js";
+import { listTaskStatesForFlowIds } from "./runtime-internal.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import type {
   TaskFlowAuditCode,
@@ -10,7 +10,6 @@ import type {
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { summarizeAuditFindings } from "./task-registry.audit.shared.js";
-import type { TaskRecord } from "./task-registry.types.js";
 
 export type {
   TaskFlowAuditFinding,
@@ -66,10 +65,6 @@ function compareFindings(left: TaskFlowAuditFinding, right: TaskFlowAuditFinding
 
 function getReferenceAt(flow: TaskFlowRecord): number {
   return flow.updatedAt ?? flow.createdAt;
-}
-
-function getLinkedTasks(flowId: string): TaskRecord[] {
-  return listTasksForFlowId(flowId);
 }
 
 function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
@@ -146,11 +141,13 @@ export function listTaskFlowAuditFindings(
     );
   }
 
+  const tasksByFlowId =
+    flows.length > 0 ? listTaskStatesForFlowIds(flows.map((flow) => flow.flowId)) : undefined;
   for (const flow of flows) {
     const referenceAt = getReferenceAt(flow);
     const ageMs = Math.max(0, now - referenceAt);
-    const linkedTasks = getLinkedTasks(flow.flowId);
-    const activeTasks = linkedTasks.filter((task) => isTaskFlowCancellationPending(task));
+    const linkedTasks = tasksByFlowId?.get(flow.flowId.trim()) ?? [];
+    const hasActiveTasks = linkedTasks.some(isTaskFlowCancellationPending);
 
     if (flow.status === "running" && ageMs >= staleRunningMs) {
       findings.push(
@@ -194,7 +191,7 @@ export function listTaskFlowAuditFindings(
       flow.status !== "failed" &&
       flow.status !== "succeeded" &&
       flow.status !== "lost" &&
-      activeTasks.length === 0 &&
+      !hasActiveTasks &&
       now - flow.cancelRequestedAt >= cancelStuckMs
     ) {
       findings.push(

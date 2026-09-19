@@ -437,7 +437,7 @@ export async function sendMessageTelegram(
             telegramHasInlineKeyboard: part.hasInlineKeyboard,
           };
           telegramCaptionDeliveryMetadata.add(meta);
-          recordSentMessage(chatId, part.messageId, cfg, {
+          await recordSentMessage(chatId, part.messageId, cfg, {
             accountId: account.accountId,
             agentId: ownerAgentId,
           });

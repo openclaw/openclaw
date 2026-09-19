@@ -8,7 +8,6 @@ import { createSkillsWatcherMock } from "./refresh.watcher.test-support.js";
 
 const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
 let refreshModule: typeof import("./refresh.js");
-let refreshTestSupport: typeof import("./refresh.test-support.js");
 let fixtureRoot: string;
 let fixtureWorkspaceDir: string;
 
@@ -21,7 +20,6 @@ vi.mock("../loading/plugin-skills.js", () => ({
 describe("Windows skills watcher paths", () => {
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
-    refreshTestSupport = await import("./refresh.test-support.js");
   });
   beforeEach(async () => {
     watchMock.mockClear();
@@ -31,7 +29,7 @@ describe("Windows skills watcher paths", () => {
     await fs.mkdir(path.join(fixtureWorkspaceDir, "skills"), { recursive: true });
   });
   afterEach(async () => {
-    await refreshTestSupport.resetSkillsRefreshForTest();
+    await refreshModule.closeSkillsWatchers(true);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -89,7 +87,7 @@ describe("Windows skills watcher paths", () => {
           normalized(scenario === "existing" ? skillsRoot : path.dirname(skillsRoot)),
         );
         expect(skillsWatch.options).toMatchObject({
-          depth: scenario === "existing" ? 6 : 7,
+          depth: scenario === "existing" ? 7 : 0,
           followSymlinks: false,
         });
         const repoSkillsRoot = path.join(longRoot, "repo", "skills");

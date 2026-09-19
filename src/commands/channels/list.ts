@@ -14,7 +14,7 @@ import {
 } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
@@ -271,29 +271,20 @@ export async function channelsListCommand(
     });
   }
 
-  // Catalog entries that are not already represented by a plugin row above can
-  // still be useful in two shapes:
-  //   1. Catalog plugin package is not yet installed on disk — rendered as
-  //      `not installed, not configured, disabled` so the channel still
-  //      appears in the listing as installable.
-  //   2. Catalog plugin package IS installed but the user has no config
-  //      entry for the channel, AND the read-only loader did not surface
-  //      a plugin object for it (because it only activates based on
-  //      configured channels). These would otherwise silently disappear
-  //      from the listing — render them as `installed, not configured,
-  //      disabled` so operators can tell the plugin is ready to configure.
-  // Without --all, keep this limited to configured channels whose official
-  // external plugin owner is missing, otherwise `channels list` can claim
-  // there are no configured channels even though openclaw.json has one.
-  const catalogOnlyLines = catalogEntries
-    .filter((entry) => !renderedChannelIds.has(entry.id))
+  // --all includes installed and installable catalog-only channels; ordinary lists
+  // retain missing configured owners. Evaluate presence once for this inventory.
+  const catalogOnlyEntries = catalogEntries.filter((entry) => !renderedChannelIds.has(entry.id));
+  const repairHintsByChannelId = new Map(
+    resolveMissingOfficialExternalChannelPluginRepairHints({
+      config: cfg,
+      channelIds: catalogOnlyEntries.map((entry) => entry.id),
+      ...(workspaceDir ? { workspaceDir } : {}),
+      manifestRecords: metadataSnapshot.plugins,
+    }).map((hint) => [hint.channelId, hint]),
+  );
+  const catalogOnlyLines = catalogOnlyEntries
     .map((entry) => {
-      const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: cfg,
-        channelId: entry.id,
-        ...(workspaceDir ? { workspaceDir } : {}),
-        manifestRecords: metadataSnapshot.plugins,
-      });
+      const hint = repairHintsByChannelId.get(entry.id);
       return {
         entry,
         installed: isInstalled(entry.id),

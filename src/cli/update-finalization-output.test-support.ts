@@ -9,9 +9,13 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
-await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+await fs.writeFile(
+  path.join(root, "package.json"),
+  JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+);
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
+const repairDeadline = scenario === "repair-deadline";
 const blockedChildSource = `
 const fs = require('node:fs');
 process.title = 'node fixture-private-argument';
@@ -42,6 +46,7 @@ export async function doctorCommand() {
   if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {
     throw new Error('Update Doctor unexpectedly allowed gateway activation');
   }
+  ${repairDeadline ? `if ((await fs.readFile(${JSON.stringify(path.join(process.env.OPENCLAW_STATE_DIR!, "managed-service-state"))}, 'utf8')) !== 'stopped') throw new Error('Doctor ran before the parent parked its service');` : ""}
   intro('OpenClaw doctor');
   note('Doctor panel diagnostic', 'Repair');
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
@@ -61,6 +66,12 @@ export async function doctorCommand() {
   }
   outro('Doctor complete.');
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
+  ${
+    scenario === "doctor-warning"
+      ? `await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,
+        JSON.stringify({status:'ok', warnings:['Optional probe failed; run openclaw doctor after updating.']}));`
+      : ""
+  }
 }
 `;
 const installedEntry = path.join(root, "installed-cli.mjs");
@@ -128,16 +139,18 @@ export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_
   ],
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    scenario === "phase-hang"
-      ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
+    // Replace snapshot creation only; keep real readers available to Doctor imports.
+    `export * from ${JSON.stringify(`${sourceUrl("./update-cli/update-command-config-snapshot.ts")}?fixture-original`)};\n` +
+      (scenario === "phase-hang"
+        ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
 export const createUpdateConfigSnapshot = async () => {
   const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
   console.error('fixture configSnapshot entered');
   await child;
 };`
-      : scenario === "borrowed-phase"
-        ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
-        : "export const createUpdateConfigSnapshot = async () => {};",
+        : scenario === "borrowed-phase"
+          ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+          : "export const createUpdateConfigSnapshot = async () => {};"),
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
@@ -166,8 +179,9 @@ export const preparePostCorePluginConfig = async () => ({
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
-const blockedPhase =
-  scenario === "doctor-hang" || scenario === "doctor-progress"
+const blockedPhase = repairDeadline
+  ? "plugins"
+  : scenario === "doctor-hang" || scenario === "doctor-progress"
     ? "doctor"
     : scenario === "phase-hang"
       ? "configSnapshot"
@@ -196,6 +210,11 @@ export async function runInteractiveUpdateFailureAction({ runtime }) {
 }`,
   );
 }
+if (repairDeadline) {
+  const { prepareRepairDeadlineFixture } =
+    await import("./update-finalization-repair.test-support.js");
+  await prepareRepairDeadlineFixture(stubs, sourceUrl, root, installedEntry);
+}
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
@@ -208,6 +227,11 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
+
+if (repairDeadline) {
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  await withPluginLifecycleLease({}, async () => {});
+}
 
 const { Command } = await import("commander");
 const { registerUpdateCli } = await import("./update-cli.js");

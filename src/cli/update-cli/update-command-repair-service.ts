@@ -100,7 +100,7 @@ export async function repairUpdateService(params: {
       // service owner gets one restart; the independent oracle decides success.
       if (turnPendingValidation) {
         turnPendingValidation = false;
-        if (!validation.ok) {
+        if (!validation.ok && !validation.stopReason) {
           const state = await inspectOwner(signal);
           assertCurrent();
           await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
@@ -128,7 +128,6 @@ export async function repairUpdateService(params: {
                 assertCurrent,
               },
               "restart",
-              true,
             );
           } catch (error) {
             // A stale restart error is not permission to append diagnostics or
@@ -156,10 +155,46 @@ export async function repairUpdateService(params: {
       if (validation.ok && validation.pluginWarnings?.length) {
         result = appendPluginUpdateWarnings(result, validation.pluginWarnings);
       }
+      if (result.recovery?.serviceRestartSafe && result.recovery.packageRollbackVerified) {
+        result = {
+          ...result,
+          recovery: {
+            ...result.recovery,
+            service: validation.ok
+              ? "healthy"
+              : validation.stopReason || validation.summary === "timeout"
+                ? undefined
+                : "failed",
+            reason: validation.ok ? undefined : (validation.stopReason ?? validation.summary),
+          },
+        };
+      }
       return validation;
     },
   });
-  return repair.status === "repaired"
-    ? { ...result, status: "ok", reason: undefined, recovery: undefined }
+  return repair.status === "repaired" ||
+    (repair.status === "unrepaired" &&
+      (repair.reason === "gateway-readiness-pending" || repair.reason === "still-starting") &&
+      repair.finalValidation.stopReason === repair.reason)
+    ? {
+        ...result,
+        status: "ok",
+        reason:
+          repair.finalValidation.stopReason === "still-starting" ? "still-starting" : undefined,
+        recovery:
+          repair.status === "repaired" &&
+          result.recovery?.packageRollbackVerified &&
+          result.after?.version
+            ? {
+                serviceRestartSafe: true,
+                packageRollbackVerified: true,
+                version: result.after.version,
+                ...(result.after.buildId ? { buildId: result.after.buildId } : {}),
+                service: "healthy",
+              }
+            : result.recovery?.packageRollbackVerified
+              ? result.recovery
+              : undefined,
+      }
     : result;
 }

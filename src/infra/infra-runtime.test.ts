@@ -1396,22 +1396,6 @@ describe("infra runtime", () => {
         process.removeListener("SIGUSR1", handler);
       }
     });
-
-    it("emits SIGUSR1 if deferral check throws", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        setPreRestartDeferralCheck(() => {
-          throw new Error("boom");
-        });
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

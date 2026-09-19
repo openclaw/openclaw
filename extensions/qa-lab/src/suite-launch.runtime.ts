@@ -1,16 +1,22 @@
-// QA Lab plugin module implements suite launch behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
-import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+import { toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
+import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
+import { createQaEvidenceInvocation } from "./evidence-invocation.js";
+import { resolveQaEvidenceContainment } from "./evidence-summary-schema.js";
 import {
   QA_EVIDENCE_FILENAME,
   buildQaSuiteEvidenceSummary,
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
+  type QaEvidenceOccurrence,
   type QaEvidenceSummaryJson,
+  type QaEvidenceSummaryV3Entry,
+  type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
@@ -27,12 +33,15 @@ import {
   readQaBootstrapScenarioCatalog,
   resolveQaScenarioRequiredProviderMode,
   type QaSeedScenarioWithSource,
+  type QaTestFileExecutionKind,
+  type QaTestFileScenario,
 } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
 import {
   invalidateQaSuiteArtifactGeneration,
   publishQaSuiteArtifactFiles,
 } from "./suite-artifacts.js";
+import { rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -43,6 +52,7 @@ import {
   scenarioRequiresIsolatedQaSuiteWorker,
 } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
+import { rejectRemovedQaChannelDriverSelection } from "./suite-types.js";
 import {
   buildQaSuiteSummaryJson,
   shouldLogQaSuiteProgress,
@@ -56,8 +66,6 @@ import * as dockerBatch from "./test-file-scenario-docker-batch.js";
 import {
   isQaTestFileScenario,
   runQaTestFileScenarios,
-  type QaTestFileExecutionKind,
-  type QaTestFileScenario,
   type QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
@@ -119,9 +127,9 @@ type QaUnifiedPartitionResult = {
   scenarioResults: Array<{
     result: QaSuiteScenarioResult;
     scenarioId: string;
+    instanceId?: string;
   }>;
-  startedScenarioIds: readonly string[];
-  submittedScenarioIds: readonly string[];
+  startedInstanceIds: readonly string[];
 };
 
 type QaUnifiedPartitionTask = {
@@ -131,7 +139,323 @@ type QaUnifiedPartitionTask = {
   run: () => Promise<QaUnifiedPartitionResult>;
   scenarios: readonly QaSeedScenarioWithSource[];
   weight: number;
+  evidenceOwners: QaPartitionEvidenceOwner[];
 };
+
+type QaPartitionEvidenceOwner = ReturnType<typeof createQaPartitionEvidenceOwner>;
+
+function createQaPartitionEvidenceOwner(params: {
+  scenarios: readonly QaSeedScenarioWithSource[];
+  channel: string | null;
+  launch: Parameters<typeof createQaEvidenceInvocation>[0]["launch"];
+  outputDir: string;
+  repoRoot: string;
+  evidenceMode: QaSuiteRunParams["evidenceMode"];
+  primaryModel: string;
+  providerMode: ReturnType<typeof normalizeQaProviderMode>;
+}) {
+  const options = () => ({
+    generatedAt: new Date().toISOString(),
+    evidenceMode: params.evidenceMode,
+  });
+  const initial = createQaEvidenceInvocation(params);
+  const scheduledIds = new Set(initial.anchors.map((anchor) => anchor.id));
+  let current = initial.snapshot(options());
+  let active = false;
+  const parentFailures = new Map<number, string>();
+  const unownedOccurrences: QaEvidenceOccurrence[] = [];
+  const unownedEntries: QaEvidenceSummaryV3Entry[] = [];
+  const rawRowOrder = new Map<string, number>();
+  const orderedRows = (entries: readonly QaEvidenceSummaryV3Entry[]) => {
+    const offsets = new Map<string, number>();
+    return entries.map((entry) => {
+      const id = entry.binding.occurrenceId;
+      const offset = offsets.get(id) ?? 0;
+      offsets.set(id, offset + 1);
+      const key = `${id}:${offset}`;
+      if (!rawRowOrder.has(key)) {
+        rawRowOrder.set(key, rawRowOrder.size);
+      }
+      return { entry, order: rawRowOrder.get(key)! };
+    });
+  };
+  const restore = () =>
+    createQaEvidenceInvocation({
+      ...params,
+      anchors: resolveQaEvidenceContainment(current.occurrences, current.entries).rootInstances,
+      continuation: current,
+    });
+  const receive = (summary: QaEvidenceSummaryV3Json) => {
+    const anchors = resolveQaEvidenceContainment(
+      summary.occurrences,
+      summary.entries,
+    ).rootInstances;
+    if (
+      JSON.stringify(anchors.map((item) => item.id)) !==
+      JSON.stringify(initial.anchors.map((item) => item.id))
+    ) {
+      throw new Error("partition evidence replaced its scheduled instances");
+    }
+    const child = createQaEvidenceInvocation({
+      ...params,
+      anchors,
+      continuation: summary,
+    });
+    const next = restore();
+    for (const [index, anchor] of anchors.entries()) {
+      const input = child.childInput(index);
+      next.importChild(index, input);
+      if (anchor.scenario?.kind === "instance") {
+        if (anchor.scenario.resultOccurrenceId === null) {
+          next.select(index, null);
+        } else {
+          next.select(index, anchor.scenario.resultOccurrenceId);
+        }
+      }
+    }
+    current = next.snapshot(options());
+    orderedRows(current.entries);
+  };
+  const failure = (details: string, final: boolean, status: "fail" | "blocked" = "fail") => {
+    const invocation = restore();
+    const diagnostics = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      // This diagnostic identifies the requested lane, not a connected transport.
+      channelId: params.channel ?? normalizeQaTransportId(undefined),
+      ...options(),
+      env: process.env,
+      primaryModel: params.primaryModel,
+      providerMode: params.providerMode,
+      repoRoot: params.repoRoot,
+      scenarioDefinitions: params.scenarios,
+      scenarioResults: params.scenarios.map((scenario) => ({
+        name: scenario.title,
+        status,
+        details,
+      })),
+    }).entries;
+    const results = params.scenarios.map((scenario, index) => {
+      const selected = invocation.anchors[index]!.scenario;
+      const childSelected = selected?.kind === "instance" ? selected.resultOccurrenceId : null;
+      const previous = parentFailures.get(index) ?? null;
+      const id = invocation.begin(index, previous, { diagnostic: true });
+      invocation.complete(id, {
+        status,
+        entries: [{ ...diagnostics[index]!, coverage: [] }],
+      });
+      if (previous !== null || final) {
+        invocation.select(index, id);
+        if (!final && childSelected !== null) {
+          invocation.select(index, childSelected);
+        }
+      }
+      parentFailures.set(index, previous ?? id);
+      const selectedId = final ? invocation.select(index, id) : undefined;
+      const selectedDetails = final
+        ? (invocation.selectedObservation(index)?.entries[0]?.result.failure?.reason ?? details)
+        : details;
+      return {
+        scenarioId: scenario.id,
+        instanceId: invocation.anchors[index]!.id,
+        result: {
+          name: scenario.title,
+          status: "fail" as const,
+          details: selectedDetails,
+          steps: [{ name: "suite partition", status: "fail" as const, details: selectedDetails }],
+          ...(selectedId ? { evidenceOccurrenceId: selectedId } : {}),
+        },
+      };
+    });
+    current = invocation.snapshot(options());
+    orderedRows(current.entries);
+    return results;
+  };
+  const complete = (
+    evidence: QaEvidenceSummaryJson,
+    results: QaUnifiedPartitionResult["scenarioResults"],
+    startedIds: readonly string[],
+  ) => {
+    if (evidence.schemaVersion === 3) {
+      receive(evidence);
+      const selected = new Set(
+        restore().anchors.flatMap((anchor) =>
+          anchor.scenario?.kind === "instance" && anchor.scenario.resultOccurrenceId !== null
+            ? [anchor.scenario.resultOccurrenceId]
+            : [],
+        ),
+      );
+      const returned = results.map(({ result }) => result.evidenceOccurrenceId);
+      if (
+        new Set(returned).size !== returned.length ||
+        returned.some((id) => id === undefined || !selected.has(id))
+      ) {
+        throw new Error("partition result does not match its selected observation");
+      }
+    }
+    const invocation = restore();
+    const remaining = [...results];
+    const normalized: QaUnifiedPartitionResult["scenarioResults"] = [];
+    const legacyOwners = new Map<string, string>();
+    const startedInstances = new Set(
+      invocation
+        .snapshot(options())
+        .occurrences.flatMap((occurrence) =>
+          occurrence.scenario?.kind === "observation"
+            ? [occurrence.scenario.instanceOccurrenceId]
+            : [],
+        ),
+    );
+    for (const [index, scenario] of params.scenarios.entries()) {
+      const anchor = invocation.anchors[index]!;
+      const selected =
+        anchor.scenario?.kind === "instance" ? anchor.scenario.resultOccurrenceId : null;
+      const unambiguous = params.scenarios.filter((item) => item.id === scenario.id).length === 1;
+      const resultIndex = remaining.findIndex((candidate) =>
+        evidence.schemaVersion === 3
+          ? selected !== null && candidate.result.evidenceOccurrenceId === selected
+          : unambiguous && candidate.scenarioId === scenario.id,
+      );
+      const result = resultIndex >= 0 ? remaining.splice(resultIndex, 1)[0] : undefined;
+      const started =
+        evidence.schemaVersion === 3
+          ? startedInstances.has(anchor.id)
+          : unambiguous && startedIds.includes(scenario.id);
+      if (!result && !started) {
+        continue;
+      }
+      if (evidence.schemaVersion === 2 || !result) {
+        const id = invocation.begin(index, undefined, { diagnostic: !result });
+        const status =
+          result?.result.status === "skip" ? "skipped" : (result?.result.status ?? "fail");
+        // Repeated labels cannot identify which scheduled instance owns a v2 row.
+        const rows = unambiguous
+          ? evidence.entries.filter((entry) => entry.test.id === scenario.id)
+          : [];
+        if (result && unambiguous) {
+          legacyOwners.set(scenario.id, id);
+        }
+        invocation.complete(id, {
+          status,
+          entries: result
+            ? rows
+            : [
+                {
+                  test: { kind: "qa-scenario", id: scenario.id, title: scenario.title },
+                  coverage: [],
+                  result: {
+                    status: "fail",
+                    failure: { reason: "suite partition returned no scenario result" },
+                  },
+                },
+              ],
+        });
+        const selectedId = invocation.select(index, id);
+        normalized.push(
+          result
+            ? { ...result, result: { ...result.result, evidenceOccurrenceId: selectedId } }
+            : {
+                scenarioId: scenario.id,
+                result: {
+                  name: scenario.title,
+                  status: "fail",
+                  steps: [],
+                  details: "suite partition returned no scenario result",
+                  evidenceOccurrenceId: selectedId,
+                },
+              },
+        );
+      } else {
+        normalized.push(result);
+      }
+      normalized.at(-1)!.instanceId = anchor.id;
+      normalized.at(-1)!.scenarioId = scenario.id;
+      const previous = parentFailures.get(index);
+      if (previous !== undefined) {
+        // This successful dispatch settles only its own infrastructure failure.
+        // Child observations and the child's selected result remain independent.
+        const selectedResult = normalized.at(-1)!.result.evidenceOccurrenceId!;
+        const id = invocation.begin(index, previous, { diagnostic: true });
+        invocation.complete(id, { status: "pass", entries: [] });
+        invocation.select(index, id);
+        invocation.select(index, selectedResult);
+        parentFailures.delete(index);
+      }
+    }
+    current = invocation.snapshot(options());
+    if (evidence.schemaVersion === 2 && evidence.entries.length > 0) {
+      const unownedId = randomUUID();
+      const rawRows = evidence.entries.map((entry): QaEvidenceSummaryV3Entry => ({
+        ...structuredClone(entry),
+        binding: {
+          occurrenceId: legacyOwners.get(entry.test.id) ?? unownedId,
+          assertionId: null,
+          receiptId: null,
+        },
+        effective: true,
+      }));
+      const unowned = rawRows.filter((entry) => entry.binding.occurrenceId === unownedId);
+      if (unowned.length > 0) {
+        // This invocation consumed these rows, but their labels establish no
+        // scenario owner. Retain every diagnostic and ambiguous row exactly once.
+        unownedOccurrences.push({
+          id: unownedId,
+          parentCell: null,
+          scenario: null,
+          retryOf: null,
+          terminalStatus: null,
+          assertions: null,
+          launch: structuredClone(params.launch),
+          receipts: [],
+        });
+        unownedEntries.push(...unowned);
+      }
+      orderedRows(rawRows);
+    }
+    orderedRows(current.entries);
+    return normalized;
+  };
+  return {
+    anchors: initial.anchors,
+    input() {
+      active = true;
+      return {
+        evidenceAnchors: restore().anchors,
+        evidenceContinuation: current,
+        onEvidence: receive,
+      };
+    },
+    get active() {
+      return active;
+    },
+    startedInstanceIds() {
+      return [
+        ...new Set(
+          current.occurrences.flatMap((occurrence) =>
+            occurrence.scenario?.kind === "observation" &&
+            scheduledIds.has(occurrence.scenario.instanceOccurrenceId)
+              ? [occurrence.scenario.instanceOccurrenceId]
+              : [],
+          ),
+        ),
+      ];
+    },
+    failure,
+    complete,
+    summary() {
+      return rebaseQaSuiteEvidence(
+        {
+          ...current,
+          occurrences: [...current.occurrences, ...unownedOccurrences],
+          entries: orderedRows([...current.entries, ...unownedEntries])
+            .toSorted((left, right) => left.order - right.order)
+            .map(({ entry }) => entry),
+        },
+        params.outputDir,
+        params.repoRoot,
+      );
+    },
+  };
+}
 
 function summarizeQaEvidenceChannel(
   summaries: readonly QaEvidenceSummaryJson[],
@@ -156,7 +480,6 @@ function summarizeQaEvidenceChannel(
 type QaFlowChannelGroup = {
   channel: string | undefined;
   channelId: string | undefined;
-  channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
   isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
@@ -165,12 +488,25 @@ function groupQaScenariosByExecutionCell(
   scenarios: readonly QaSeedScenarioWithSource[],
   cells: readonly QaScenarioExecutionCell[],
 ) {
-  const scenariosById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+  const scenariosById = new Map<string, QaSeedScenarioWithSource[]>();
+  for (const scenario of scenarios) {
+    const instances = scenariosById.get(scenario.id) ?? [];
+    instances.push(scenario);
+    scenariosById.set(scenario.id, instances);
+  }
+  const positions = new Map<string, number>();
   const groups = new Map<string | undefined, QaSeedScenarioWithSource[]>();
   for (const cell of cells) {
     const channel = cell.channel ?? undefined;
     const group = groups.get(channel) ?? [];
-    group.push(scenariosById.get(cell.scenarioId)!);
+    const key = JSON.stringify([cell.scenarioId, channel]);
+    const position = positions.get(key) ?? 0;
+    const scenario = scenariosById.get(cell.scenarioId)?.[position];
+    if (!scenario) {
+      throw new Error("execution cell has no scheduled scenario instance");
+    }
+    group.push(scenario);
+    positions.set(key, position + 1);
     groups.set(channel, group);
   }
   return groups;
@@ -202,12 +538,12 @@ function isQaSuiteInfraRetryableError(error: unknown) {
 }
 
 export async function runQaSuiteWithInfraRetry<Result>(
-  run: () => Promise<Result>,
+  run: (attempt: number) => Promise<Result>,
   maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
 ) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      return await run();
+      return await run(attempt);
     } catch (error) {
       if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
         throw error;
@@ -247,7 +583,7 @@ function resolveRequestedScenarios(params: {
     if (!scenario) {
       throw new Error(`unknown QA scenario id(s): ${scenarioId}`);
     }
-    return scenario;
+    return structuredClone(scenario);
   });
 }
 
@@ -282,7 +618,6 @@ async function resolveQaFlowChannelGroups(
     return [...groups].map(([channel, groupedScenarios]) => ({
       channel,
       channelId: channel,
-      channelDriverSelection: runParams.channelDriverSelection,
       isolatesAdapterInstances: isolatesInstances(channel),
       scenarios: groupedScenarios,
     }));
@@ -290,27 +625,23 @@ async function resolveQaFlowChannelGroups(
   if (runParams?.channelDriver !== "crabline") {
     return [
       {
-        channel: runParams?.channelId ?? runParams?.channelDriverSelection?.channel,
+        channel: runParams?.channelId,
         channelId: runParams?.channelId,
-        channelDriverSelection: runParams?.channelDriverSelection,
         scenarios: [...scenarios],
       },
     ];
   }
   // Package-only live lanes mount the QA harness without its dev tree. Load
   // Crabline only for Crabline-owned runs so unrelated transports stay isolated.
-  const {
-    isCrablineServerChannel,
-    OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-    resolveOpenClawCrablineChannelDriverSelection,
-  } = await import("@openclaw/crabline");
+  const { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } =
+    await import("@openclaw/crabline");
   if (runParams.expandScenarioChannels) {
     const groups = groupQaScenariosByExecutionCell(
       scenarios,
       expandQaScenarioExecutionCells({
         scenarios,
         channelDriver: "crabline",
-        channel: runParams.channelDriverSelection?.channel,
+        channel: runParams.channelId,
         defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
         supportsChannel: isCrablineServerChannel,
         expandChannels: true,
@@ -318,16 +649,13 @@ async function resolveQaFlowChannelGroups(
     );
     return [...groups].map(([channel, groupedScenarios]) => ({
       channel,
-      channelId: undefined,
-      channelDriverSelection: channel
-        ? resolveOpenClawCrablineChannelDriverSelection({ channel })
-        : undefined,
+      channelId: channel,
       scenarios: groupedScenarios,
     }));
   }
   const channels = resolveQaSuiteScenarioChannels({
     defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-    explicitChannel: runParams.channelDriverSelection?.channel,
+    explicitChannel: runParams.channelId,
     scenarios: [...scenarios],
   });
   const [singleChannel] = channels;
@@ -335,10 +663,7 @@ async function resolveQaFlowChannelGroups(
     return [
       {
         channel: singleChannel,
-        channelId: undefined,
-        channelDriverSelection:
-          runParams.channelDriverSelection ??
-          resolveOpenClawCrablineChannelDriverSelection({ channel: singleChannel }),
+        channelId: singleChannel,
         scenarios: [...scenarios],
       },
     ];
@@ -347,8 +672,7 @@ async function resolveQaFlowChannelGroups(
   // launch one flow partition per channel and aggregate them at this owner.
   return channels.map((channel) => ({
     channel,
-    channelId: undefined,
-    channelDriverSelection: resolveOpenClawCrablineChannelDriverSelection({ channel }),
+    channelId: channel,
     scenarios: scenarios.filter(
       (scenario) =>
         (normalizeQaSuiteScenarioChannel(scenario) ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) ===
@@ -419,6 +743,7 @@ async function resolveSuiteExecutionPlan(
 
 async function runQaTestFileSuiteFromRuntime(params: {
   env?: NodeJS.ProcessEnv;
+  preparedDockerEvidence?: dockerBatch.QaPreparedDockerEvidence;
   kind: QaTestFileExecutionKind;
   runParams: QaSuiteRunParams | undefined;
   scenarios: readonly QaTestFileScenario[];
@@ -431,6 +756,10 @@ async function runQaTestFileSuiteFromRuntime(params: {
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   return await runQaTestFileScenarios({
     evidenceMode: runParams?.evidenceMode,
+    evidenceAnchors: runParams?.evidenceAnchors,
+    evidenceContinuation: runParams?.evidenceContinuation,
+    onEvidence: runParams?.onEvidence,
+    preparedDockerEvidence: params.preparedDockerEvidence,
     ...(params.env
       ? { env: params.env, envMode: "replace" as const }
       : params.kind !== "script"
@@ -596,31 +925,6 @@ async function readQaSuiteEvidenceSummary(evidencePath: string) {
   return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(evidencePath, "utf8")));
 }
 
-async function resolveQaSuiteResultEvidenceSummary(result: {
-  evidence?: QaEvidenceSummaryJson;
-  evidencePath: string;
-  outputDir: string;
-  repoRoot: string;
-}) {
-  const summary = result.evidence ?? (await readQaSuiteEvidenceSummary(result.evidencePath));
-  const rebasedSummary = structuredClone(summary);
-  for (const entry of rebasedSummary.entries) {
-    if (!entry.execution) {
-      continue;
-    }
-    for (const artifact of entry.execution.artifacts) {
-      if (artifact.source !== "qa-suite" || !isRepoRootRelativeRef(artifact.path)) {
-        continue;
-      }
-      artifact.path = toRepoRelativePath(
-        result.repoRoot,
-        path.resolve(result.outputDir, artifact.path),
-      );
-    }
-  }
-  return validateQaEvidenceSummaryJson(rebasedSummary);
-}
-
 function hasCredentialPoolUnavailableCode(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -662,6 +966,7 @@ function testFileScenarioResultToSuiteScenario(
   return {
     name: result.scenario.title,
     status: suiteStatus,
+    evidenceOccurrenceId: result.evidenceOccurrenceId,
     details,
     steps: [
       {
@@ -796,7 +1101,7 @@ async function runUnifiedQaSuite(params: {
       : isQaFastModeEnabled({ primaryModel, alternateModel });
   const transportId = normalizeQaTransportId(params.runParams?.transportId);
   const defaultConcurrency =
-    params.runParams?.channelDriver === "crabline" || params.runParams?.channelDriverSelection
+    params.runParams?.channelDriver === "crabline"
       ? 1
       : defaultQaSuiteConcurrencyForTransport(transportId);
   const failFast = params.runParams?.failFast === true;
@@ -807,8 +1112,7 @@ async function runUnifiedQaSuite(params: {
         params.plan.scenarios.length,
         defaultConcurrency,
       );
-  const evidenceSummaries: QaEvidenceSummaryJson[] = [];
-  const scenarioResultsById = new Map<string, QaSuiteScenarioResult[]>();
+
   const observedCellsByKey = new Map<string, QaScenarioExecutionCell>();
   const recordObservedScenarios = (
     scenarios: readonly QaSeedScenarioWithSource[],
@@ -829,7 +1133,39 @@ async function runUnifiedQaSuite(params: {
   const serialScriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   const parallelScriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   const unavailableChannelCredentialDetails = new Map<string, string>();
+  const launch = await captureQaEvidenceLaunchIdentity(repoRoot);
+  const evidenceOwners: QaPartitionEvidenceOwner[] = [];
+  const scenarioOrder = new Map(params.plan.scenarios.map((scenario, index) => [scenario, index]));
+  const scheduledAnchorOrder = new Map<string, number>();
+  const progressEntries = (entries: QaUnifiedPartitionResult["scenarioResults"]) =>
+    entries.flatMap(({ instanceId, result }) => {
+      const scenarioIndex =
+        instanceId === undefined ? undefined : scheduledAnchorOrder.get(instanceId);
+      return scenarioIndex === undefined ? [] : [{ scenarioIndex, result }];
+    });
+  const createOwner = (
+    scenarios: readonly QaSeedScenarioWithSource[],
+    channel: string | null,
+    partitionOutputDir: string,
+  ) => {
+    const owner = createQaPartitionEvidenceOwner({
+      scenarios,
+      channel,
+      launch,
+      outputDir: partitionOutputDir,
+      repoRoot,
+      evidenceMode: params.runParams?.evidenceMode,
+      primaryModel,
+      providerMode,
+    });
+    for (const [index, anchor] of owner.anchors.entries()) {
+      scheduledAnchorOrder.set(anchor.id, scenarioOrder.get(scenarios[index]!)!);
+    }
+    evidenceOwners.push(owner);
+    return owner;
+  };
   let preparedScriptEnv: Readonly<NodeJS.ProcessEnv> | undefined;
+  let preparedDockerEvidence: dockerBatch.QaPreparedDockerEvidence | undefined;
   if (params.plan.channelGroups.length > 0) {
     const channelGroups = params.plan.channelGroups;
     const runFlowSuite = await loadQaFlowSuiteRuntime();
@@ -872,7 +1208,7 @@ async function runUnifiedQaSuite(params: {
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
       const channelDriverFlowRequiresExclusiveWorkers =
-        Boolean(channelGroup.channelDriverSelection || usesContributedChannelDriver) &&
+        (params.runParams?.channelDriver === "crabline" || usesContributedChannelDriver) &&
         !channelGroup.isolatesAdapterInstances;
       const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
@@ -918,49 +1254,28 @@ async function runUnifiedQaSuite(params: {
         ]
           .filter((part): part is string => Boolean(part))
           .join("-");
-        const taskChannelId =
-          channelGroup.channelId ??
-          channelGroup.channelDriverSelection?.channel ??
-          channelGroup.channel ??
-          transportId;
+        const taskChannelId = channelGroup.channelId ?? channelGroup.channel ?? transportId;
+        const partitionOutputDir = partitionName
+          ? flowSuitePartitionOutputDir(outputDir, partitionName)
+          : suitePartitionOutputDir(outputDir, "flow");
+        const owner = createOwner(partition.scenarios, taskChannelId, partitionOutputDir);
         const buildCredentialUnavailableResult = (details: string): QaUnifiedPartitionResult => {
-          const blockedResults = partition.scenarios.map((scenario) => ({
-            name:
-              params.runParams?.expandScenarioChannels && channelGroup.channel
-                ? `${scenario.title} [${channelGroup.channel}]`
-                : scenario.title,
-            status: "blocked" as const,
-            details,
-          }));
+          const blockedResults = owner.failure(details, true, "blocked");
           return {
-            evidenceSummaries: [
-              buildQaSuiteEvidenceSummary({
-                artifactPaths: [],
-                evidenceMode: params.runParams?.evidenceMode,
-                channelId: taskChannelId,
-                env: process.env,
-                generatedAt: new Date().toISOString(),
-                primaryModel,
-                providerMode,
-                repoRoot,
-                scenarioDefinitions: partition.scenarios,
-                scenarioResults: blockedResults,
-              }),
-            ],
-            scenarioResults: partition.scenarios.map((scenario) => ({
-              scenarioId: scenario.id,
+            evidenceSummaries: [owner.summary()],
+            scenarioResults: blockedResults.map(({ scenarioId, instanceId, result }) => ({
+              scenarioId,
+              instanceId,
               result: {
+                ...result,
                 name:
                   params.runParams?.expandScenarioChannels && channelGroup.channel
-                    ? `${scenario.title} [${channelGroup.channel}]`
-                    : scenario.title,
-                status: "fail",
-                details,
+                    ? `${result.name} [${channelGroup.channel}]`
+                    : result.name,
                 steps: [{ name: "Acquire channel credential", status: "fail", details }],
               },
             })),
-            startedScenarioIds: partition.scenarios.map((scenario) => scenario.id),
-            submittedScenarioIds: partition.scenarios.map((scenario) => scenario.id),
+            startedInstanceIds: owner.startedInstanceIds(),
           };
         };
         const task = {
@@ -972,6 +1287,7 @@ async function runUnifiedQaSuite(params: {
             ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,
           scenarios: partition.scenarios,
+          evidenceOwners: [owner],
           weight: partition.concurrency,
           run: async () => {
             const unavailableDetails = channelGroup.channelId
@@ -982,17 +1298,16 @@ async function runUnifiedQaSuite(params: {
             }
             const result = await runFlowSuite({
               ...params.runParams,
+              ...owner.input(),
               adapterFactories,
               ...(progress
                 ? {
                     lab: progress.createPartitionLab(
-                      partition.scenarios.map((scenario) => scenario.id),
+                      partition.scenarios.map((scenario) => scenarioOrder.get(scenario)!),
                     ),
                   }
                 : {}),
-              outputDir: partitionName
-                ? flowSuitePartitionOutputDir(outputDir, partitionName)
-                : suitePartitionOutputDir(outputDir, "flow"),
+              outputDir: partitionOutputDir,
               writeEvidenceFile: false,
               providerMode,
               primaryModel,
@@ -1005,7 +1320,6 @@ async function runUnifiedQaSuite(params: {
                   : params.runParams?.forcedRuntime,
               concurrency: partition.concurrency,
               channelId: channelGroup.channelId,
-              channelDriverSelection: channelGroup.channelDriverSelection,
               workerStartStaggerMs: isolatedPartition
                 ? (params.runParams?.workerStartStaggerMs ??
                   resolveQaSuiteWorkerStartStaggerMs(
@@ -1030,37 +1344,54 @@ async function runUnifiedQaSuite(params: {
             if ("evidenceSummaries" in result) {
               return result;
             }
-            const startedScenarioIdSet = new Set(result.startedScenarioIds);
+            const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
+            const childEvidence =
+              result.evidence ?? (await readQaSuiteEvidenceSummary(result.evidencePath));
+            const childAnchors =
+              childEvidence.schemaVersion === 3
+                ? resolveQaEvidenceContainment(childEvidence.occurrences, childEvidence.entries)
+                    .rootInstances
+                : [];
+            for (const [resultIndex, scenarioResult] of result.scenarios.entries()) {
+              const index =
+                childEvidence.schemaVersion === 3
+                  ? childAnchors.findIndex(
+                      (anchor) =>
+                        anchor.scenario?.kind === "instance" &&
+                        anchor.scenario.resultOccurrenceId === scenarioResult.evidenceOccurrenceId,
+                    )
+                  : resultIndex;
+              const scenario = partition.scenarios[index];
+              if (!scenario) {
+                throw new Error("flow result has no admitted scheduled instance");
+              }
+              scenarioResults.push({
+                scenarioId: scenario.id,
+                result:
+                  params.runParams?.expandScenarioChannels && channelGroup.channel
+                    ? {
+                        ...scenarioResult,
+                        name: `${scenarioResult.name} [${channelGroup.channel}]`,
+                      }
+                    : scenarioResult,
+              });
+            }
+            const normalized = owner.complete(
+              childEvidence,
+              scenarioResults,
+              result.startedScenarioIds,
+            );
+            const started = new Set(owner.startedInstanceIds());
             recordObservedScenarios(
-              partition.scenarios.filter((scenario) => startedScenarioIdSet.has(scenario.id)),
+              partition.scenarios.filter((_scenario, index) =>
+                started.has(owner.anchors[index]!.id),
+              ),
               channelGroup.channel,
             );
-            const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
-            for (const [index, scenario] of partition.scenarios.entries()) {
-              const scenarioResult = result.scenarios[index];
-              if (scenarioResult) {
-                scenarioResults.push({
-                  scenarioId: scenario.id,
-                  result:
-                    params.runParams?.expandScenarioChannels && channelGroup.channel
-                      ? {
-                          ...scenarioResult,
-                          name: `${scenarioResult.name} [${channelGroup.channel}]`,
-                        }
-                      : scenarioResult,
-                });
-              }
-            }
             return {
-              evidenceSummaries: [
-                await resolveQaSuiteResultEvidenceSummary({
-                  ...result,
-                  repoRoot,
-                }),
-              ],
-              scenarioResults,
-              startedScenarioIds: result.startedScenarioIds,
-              submittedScenarioIds: partition.scenarios.map((scenario) => scenario.id),
+              evidenceSummaries: [],
+              scenarioResults: normalized,
+              startedInstanceIds: owner.startedInstanceIds(),
             };
           },
         } satisfies QaUnifiedPartitionTask;
@@ -1076,25 +1407,34 @@ async function runUnifiedQaSuite(params: {
     scenariosByKind: ReadonlyMap<QaTestFileExecutionKind, QaTestFileScenario[]>,
   ) => {
     const taskScenarios = [...scenariosByKind.values()].flat();
+    const owners = new Map(
+      [...scenariosByKind].map(([kind, scenarios]) => [
+        kind,
+        createOwner(scenarios, null, suitePartitionOutputDir(outputDir, kind)),
+      ]),
+    );
     return {
       channelId: transportId,
       scenarios: taskScenarios,
       weight: 1,
+      evidenceOwners: [...owners.values()],
       run: async () => {
-        const testFileEvidenceSummaries: QaEvidenceSummaryJson[] = [];
         const testFileScenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
-        const testFileStartedScenarioIds: string[] = [];
+        const testFileStartedInstanceIds: string[] = [];
         for (const [kind, testFileScenarios] of scenariosByKind) {
+          const owner = owners.get(kind)!;
           progress?.markRunning(
-            (failFast ? testFileScenarios.slice(0, 1) : testFileScenarios).map(
-              (scenario) => scenario.id,
+            (failFast ? testFileScenarios.slice(0, 1) : testFileScenarios).map((scenario) =>
+              scenarioOrder.get(scenario)!,
             ),
           );
           const result = await runQaTestFileSuiteFromRuntime({
             env: kind === "script" ? preparedScriptEnv : undefined,
+            preparedDockerEvidence: kind === "script" ? preparedDockerEvidence : undefined,
             kind,
             runParams: {
               ...params.runParams,
+              ...owner.input(),
               adapterFactories,
               outputDir: suitePartitionOutputDir(outputDir, kind),
               writeEvidenceFile: false,
@@ -1104,46 +1444,37 @@ async function runUnifiedQaSuite(params: {
             },
             scenarios: testFileScenarios,
           });
-          testFileEvidenceSummaries.push(
-            await resolveQaSuiteResultEvidenceSummary({
-              ...result,
-              repoRoot,
-            }),
-          );
           const scenarioResults = result.results.map((scenarioResult) => ({
             scenarioId: scenarioResult.scenario.id,
             result: testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
           }));
-          testFileScenarioResults.push(...scenarioResults);
-          progress?.recordResults(scenarioResults);
-          const resultsByScenarioId = new Map(
-            result.results.map((scenarioResult) => [scenarioResult.scenario.id, scenarioResult]),
+          const normalized = owner.complete(
+            result.evidence,
+            scenarioResults,
+            // A legacy fail-fast native task is dispatched with one scenario.
+            // Its omitted result is a failure; a shared label cannot prove that
+            // any further scheduled instance started.
+            result.evidence.schemaVersion === 2 && failFast && testFileScenarios.length === 1
+              ? [testFileScenarios[0]!.id]
+              : result.results.map((item) => item.scenario.id),
           );
-          let shouldStopNativeKinds = false;
-          for (const scenario of testFileScenarios) {
-            testFileStartedScenarioIds.push(scenario.id);
-            const scenarioResult = resultsByScenarioId.get(scenario.id);
-            // The first missing or non-pass native result owns the stop; later
-            // scenarios and execution kinds have not started and must stay absent.
-            if (failFast && (!scenarioResult || scenarioResult.status !== "pass")) {
-              shouldStopNativeKinds = true;
-              break;
-            }
-          }
+          const started = new Set(owner.startedInstanceIds());
+          testFileStartedInstanceIds.push(...started);
+          recordObservedScenarios(
+            testFileScenarios.filter((_scenario, index) => started.has(owner.anchors[index]!.id)),
+          );
+          const shouldStopNativeKinds =
+            failFast && normalized.some((item) => item.result.status !== "pass");
+          testFileScenarioResults.push(...normalized);
+          progress?.recordResults(progressEntries(normalized));
           if (shouldStopNativeKinds) {
             break;
           }
         }
-        recordObservedScenarios(
-          taskScenarios.filter((scenario) => testFileStartedScenarioIds.includes(scenario.id)),
-        );
         return {
-          evidenceSummaries: testFileEvidenceSummaries,
+          evidenceSummaries: [],
           scenarioResults: testFileScenarioResults,
-          startedScenarioIds: testFileStartedScenarioIds,
-          submittedScenarioIds: [...scenariosByKind.values()].flatMap((scenarios) =>
-            scenarios.map((scenario) => scenario.id),
-          ),
+          startedInstanceIds: testFileStartedInstanceIds,
         };
       },
     } satisfies QaUnifiedPartitionTask;
@@ -1195,126 +1526,31 @@ async function runUnifiedQaSuite(params: {
     ...testFilePartitionTasks,
     ...isolatedFlowPartitionTasks,
   ];
-  const scenarioDefinitionsById = new Map(
-    params.plan.scenarios.map((scenario) => [scenario.id, scenario]),
-  );
-  const startedScenarioIds = new Set<string>();
-  const runFailFastPartition = async (task: QaUnifiedPartitionTask) => {
-    const partition = await task.run();
-    const resultsByScenarioId = new Map(
-      partition.scenarioResults.map((scenario) => [scenario.scenarioId, scenario]),
-    );
-    const expectedScenarioIds: string[] = [];
-    for (const scenarioId of partition.startedScenarioIds) {
-      expectedScenarioIds.push(scenarioId);
-      const scenarioResult = resultsByScenarioId.get(scenarioId);
-      // A missing started result is itself the failure boundary; including the
-      // remaining submitted partition would invent work that never started.
-      if (!scenarioResult || scenarioResult.result.status !== "pass") {
-        break;
-      }
-    }
-    for (const scenarioId of expectedScenarioIds) {
-      startedScenarioIds.add(scenarioId);
-    }
-    const expectedScenarioIdSet = new Set(expectedScenarioIds);
-    const partitionScenarioIdSet = new Set(partition.submittedScenarioIds);
-    const missingScenarioDefinitions = expectedScenarioIds.flatMap((scenarioId) => {
-      if (resultsByScenarioId.has(scenarioId)) {
-        return [];
-      }
-      const scenario = scenarioDefinitionsById.get(scenarioId);
-      return scenario ? [scenario] : [];
-    });
-    const missingScenarioEvidence =
-      missingScenarioDefinitions.length > 0
-        ? (() => {
-            const channel = summarizeQaEvidenceChannel(partition.evidenceSummaries);
-            return [
-              buildQaSuiteEvidenceSummary({
-                artifactPaths: [],
-                evidenceMode: params.runParams?.evidenceMode,
-                channelDriver: channel?.driver,
-                channelId: channel?.id ?? task.channelId,
-                env: process.env,
-                generatedAt: new Date().toISOString(),
-                primaryModel,
-                providerMode,
-                repoRoot,
-                scenarioDefinitions: missingScenarioDefinitions,
-                scenarioResults: missingScenarioDefinitions.map((scenario) => ({
-                  name: scenario.title,
-                  status: "fail" as const,
-                  details: "suite partition returned no scenario result",
-                })),
-              }),
-            ];
-          })()
-        : [];
-    return {
-      ...partition,
-      evidenceSummaries: [
-        ...partition.evidenceSummaries.map((summary) => ({
-          ...summary,
-          // Preserve producer-owned evidence IDs, but remove scenario evidence
-          // belonging to the submitted partition's unstarted fail-fast tail.
-          entries: summary.entries.filter(
-            (entry) =>
-              !partitionScenarioIdSet.has(entry.test.id) ||
-              (expectedScenarioIdSet.has(entry.test.id) && resultsByScenarioId.has(entry.test.id)),
-          ),
-        })),
-        ...missingScenarioEvidence,
-      ],
-      scenarioResults: partition.scenarioResults.filter((scenario) =>
-        expectedScenarioIdSet.has(scenario.scenarioId),
-      ),
-      startedScenarioIds: expectedScenarioIds,
-    } satisfies QaUnifiedPartitionResult;
-  };
   const partitionFailed = (partition: QaUnifiedPartitionResult) => {
-    if (partition.scenarioResults.some((scenario) => scenario.result.status === "fail")) {
+    if (partition.scenarioResults.some((scenario) => scenario.result.status !== "pass")) {
       return true;
     }
-    const returnedScenarioIds = new Set(
-      partition.scenarioResults.map((scenario) => scenario.scenarioId),
+    const returnedInstances = new Set(
+      partition.scenarioResults.map((scenario) => scenario.instanceId),
     );
-    return partition.startedScenarioIds.some((scenarioId) => !returnedScenarioIds.has(scenarioId));
+    return partition.startedInstanceIds.some((id) => !returnedInstances.has(id));
   };
   const capturePartitionFailure = (
-    task: Pick<QaUnifiedPartitionTask, "channelId" | "scenarios">,
+    task: Pick<QaUnifiedPartitionTask, "channelId" | "scenarios" | "evidenceOwners">,
     error: unknown,
     started = true,
+    final = true,
   ): QaUnifiedPartitionResult => {
-    const scenarios = task.scenarios;
     const details = `suite partition failed: ${formatErrorMessage(error)}`;
-    const scenarioResults = scenarios.map((scenario) => ({
-      scenarioId: scenario.id,
-      result: {
-        name: scenario.title,
-        status: "fail" as const,
-        details,
-        steps: [{ name: "suite partition", status: "fail" as const, details }],
-      },
-    }));
+    const scenarioResults = task.evidenceOwners.flatMap((owner) =>
+      owner.active || !started ? owner.failure(details, final) : [],
+    );
     return {
-      evidenceSummaries: [
-        buildQaSuiteEvidenceSummary({
-          artifactPaths: [],
-          evidenceMode: params.runParams?.evidenceMode,
-          channelId: task.channelId,
-          env: process.env,
-          generatedAt: new Date().toISOString(),
-          primaryModel,
-          providerMode,
-          repoRoot,
-          scenarioDefinitions: scenarios,
-          scenarioResults: scenarioResults.map(({ result }) => result),
-        }),
-      ],
+      evidenceSummaries: [],
       scenarioResults,
-      startedScenarioIds: started ? scenarios.map((scenario) => scenario.id) : [],
-      submittedScenarioIds: task.scenarios.map((scenario) => scenario.id),
+      startedInstanceIds: started
+        ? task.evidenceOwners.flatMap((owner) => owner.startedInstanceIds())
+        : [],
     };
   };
   const runPartitionTasks = async (tasks: readonly QaUnifiedPartitionTask[], maxWeight: number) => {
@@ -1323,17 +1559,33 @@ async function runUnifiedQaSuite(params: {
     const retryingTasks = tasks.map((task) => ({
       ...task,
       run: async () => {
+        let failure: QaUnifiedPartitionResult | undefined;
         try {
-          return await runQaSuiteWithInfraRetry(task.run);
+          return await runQaSuiteWithInfraRetry(async (attempt) => {
+            try {
+              return await task.run();
+            } catch (error) {
+              failure = capturePartitionFailure(
+                task,
+                error,
+                true,
+                !isQaSuiteInfraRetryableError(error) || attempt === QA_SUITE_INFRA_RETRY_LIMIT,
+              );
+              throw error;
+            }
+          });
         } catch (error) {
           // Failed partitions still own durable failure evidence; rejecting here would
           // discard completed siblings and prevent the unified artifacts from existing.
-          return capturePartitionFailure(task, error);
+          if (!failure) {
+            throw error;
+          }
+          return failure;
         }
       },
     }));
     return failFast
-      ? await mapQaSuiteWithConcurrency(retryingTasks, 1, runFailFastPartition, {
+      ? await mapQaSuiteWithConcurrency(retryingTasks, 1, (task) => task.run(), {
           shouldStop: partitionFailed,
         })
       : await runWeightedUnifiedPartitionTasks(retryingTasks, maxWeight);
@@ -1353,14 +1605,23 @@ async function runUnifiedQaSuite(params: {
         outputDir,
         repoRoot,
         scenarios: scriptScenarios,
+        onPrepared: (evidence) => {
+          preparedDockerEvidence = evidence;
+        },
       });
     } catch (error) {
       scriptPreparationFailure = capturePartitionFailure(
-        { channelId: transportId, scenarios: scriptScenarios },
+        {
+          channelId: transportId,
+          scenarios: scriptScenarios,
+          evidenceOwners: [...serialScriptPartitionTasks, ...parallelScriptPartitionTasks].flatMap(
+            (task) => task.evidenceOwners,
+          ),
+        },
         new Error(`Docker candidate preparation failed: ${formatErrorMessage(error)}`),
         false,
       );
-      progress?.recordResults(scriptPreparationFailure.scenarioResults);
+      progress?.recordResults(progressEntries(scriptPreparationFailure.scenarioResults));
     }
   }
   // Unmarked scripts may rebuild shared checkout state. Run them exclusively
@@ -1382,53 +1643,45 @@ async function runUnifiedQaSuite(params: {
     ...serialScriptPartitionResults,
     ...parallelScriptPartitionResults,
   ];
-  for (const partitionResult of partitionResults) {
-    for (const scenarioResult of partitionResult.scenarioResults) {
-      const results = scenarioResultsById.get(scenarioResult.scenarioId) ?? [];
-      results.push(scenarioResult.result);
-      scenarioResultsById.set(scenarioResult.scenarioId, results);
-    }
-    evidenceSummaries.push(...partitionResult.evidenceSummaries);
-  }
   const finishedAt = new Date();
   const mergedEvidence = mergeQaEvidenceSummaries({
-    evidenceSummaries,
+    evidenceSummaries: evidenceOwners.map((owner) => owner.summary()),
     generatedAt: finishedAt.toISOString(),
   });
-  const scenarioOrder = new Map(
-    params.plan.scenarios.map((scenario, index) => [scenario.id, index]),
+  if (mergedEvidence.schemaVersion !== 3) {
+    throw new Error("aggregate evidence requires its captured invocation owners");
+  }
+  const orderedAnchors = resolveQaEvidenceContainment(
+    mergedEvidence.occurrences,
+    mergedEvidence.entries,
+  ).rootInstances.toSorted(
+    (left, right) => scheduledAnchorOrder.get(left.id)! - scheduledAnchorOrder.get(right.id)!,
   );
   const evidence = {
     ...mergedEvidence,
-    entries: mergedEvidence.entries.toSorted(
-      (left, right) =>
-        (scenarioOrder.get(left.test.id) ?? Number.MAX_SAFE_INTEGER) -
-        (scenarioOrder.get(right.test.id) ?? Number.MAX_SAFE_INTEGER),
-    ),
+    occurrences: [
+      ...orderedAnchors,
+      ...mergedEvidence.occurrences.filter(
+        (occurrence) => !scheduledAnchorOrder.has(occurrence.id),
+      ),
+    ],
   };
   const channel = summarizeQaEvidenceChannel([evidence]);
-  const scenarios = params.plan.scenarios.flatMap((scenario) => {
-    const results = scenarioResultsById.get(scenario.id);
-    if (results?.length) {
-      return results;
-    }
-    if (failFast && !startedScenarioIds.has(scenario.id)) {
+  const resultsByOccurrence = new Map(
+    partitionResults.flatMap((partition) =>
+      partition.scenarioResults.map(({ result }) => [result.evidenceOccurrenceId, result] as const),
+    ),
+  );
+  const scenarios = orderedAnchors.flatMap((anchor) => {
+    const id = anchor.scenario?.kind === "instance" ? anchor.scenario.resultOccurrenceId : null;
+    if (id === null) {
       return [];
     }
-    return [
-      {
-        name: scenario.title,
-        status: "fail",
-        details: "suite partition returned no scenario result",
-        steps: [
-          {
-            name: "suite partition",
-            status: "fail",
-            details: "suite partition returned no scenario result",
-          },
-        ],
-      } satisfies QaSuiteScenarioResult,
-    ];
+    const result = resultsByOccurrence.get(id);
+    if (!result) {
+      throw new Error("aggregate selected observation has no returned result");
+    }
+    return [result];
   });
   const unifiedResult = await writeUnifiedQaSuiteArtifacts({
     alternateModel,
@@ -1446,42 +1699,26 @@ async function runUnifiedQaSuite(params: {
     scenarios,
     startedAt,
   });
-  const progressResults = params.plan.scenarios.flatMap((scenario) => {
-    const results = scenarioResultsById.get(scenario.id);
-    if (results?.length) {
-      const status: QaSuiteScenarioResult["status"] = results.some(
-        (result) => result.status === "fail",
-      )
-        ? "fail"
+  const resultsByIndex = new Map<number, QaSuiteScenarioResult[]>();
+  for (const { scenarioIndex, result } of progressEntries(
+    partitionResults.flatMap((partition) => partition.scenarioResults),
+  )) {
+    const prior = resultsByIndex.get(scenarioIndex) ?? [];
+    prior.push(result);
+    resultsByIndex.set(scenarioIndex, prior);
+  }
+  const progressResults = [...resultsByIndex].map(([scenarioIndex, results]) => ({
+    scenarioIndex,
+    result: {
+      name: params.plan.scenarios[scenarioIndex]!.title,
+      status: results.some((result) => result.status === "fail")
+        ? ("fail" as const)
         : results.some((result) => result.status === "skip")
-          ? "skip"
-          : "pass";
-      return [
-        {
-          scenarioId: scenario.id,
-          result: {
-            name: scenario.title,
-            status,
-            steps: results.flatMap((result) => result.steps),
-          },
-        },
-      ];
-    }
-    if (failFast && !startedScenarioIds.has(scenario.id)) {
-      return [];
-    }
-    return [
-      {
-        scenarioId: scenario.id,
-        result: {
-          name: scenario.title,
-          status: "fail" as const,
-          details: "suite partition returned no scenario result",
-          steps: [],
-        },
-      },
-    ];
-  });
+          ? ("skip" as const)
+          : ("pass" as const),
+      steps: results.flatMap((result) => result.steps),
+    },
+  }));
   progress?.complete(progressResults, finishedAt.toISOString());
   params.runParams?.lab?.setLatestReport({
     outputPath: unifiedResult.reportPath,
@@ -1498,6 +1735,7 @@ async function runUnifiedQaSuite(params: {
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
   const runParams = args[0];
+  rejectRemovedQaChannelDriverSelection(runParams);
   const plan = await resolveSuiteExecutionPlan(runParams);
   if (plan.kind === "unified") {
     const { observedCells, ...result } = await runUnifiedQaSuite({
@@ -1511,12 +1749,74 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
       result,
     };
   }
-  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args));
-  const startedScenarioIds = new Set(result.startedScenarioIds);
+  const outputDir = await resolveQaSuiteOutputDir(
+    path.resolve(runParams?.repoRoot ?? process.cwd()),
+    runParams?.outputDir,
+  );
+  let continuation = runParams?.evidenceContinuation;
+  const result = await runQaSuiteWithInfraRetry(() =>
+    runQaFlowSuiteFromRuntime({
+      ...runParams,
+      outputDir,
+      ...(continuation
+        ? {
+            evidenceAnchors: resolveQaEvidenceContainment(
+              continuation.occurrences,
+              continuation.entries,
+            ).rootInstances,
+            evidenceContinuation: continuation,
+          }
+        : {}),
+      onEvidence: (summary) => {
+        // Only this invocation's callback supplies retry custody. A suite-wide
+        // cleanup error does not invent a failure for an otherwise passing cell.
+        continuation = structuredClone(summary);
+        runParams?.onEvidence?.(summary);
+      },
+    }),
+  );
+  const evidence = result.evidence;
+  const startedRoots =
+    evidence?.schemaVersion === 3
+      ? resolveQaEvidenceContainment(evidence.occurrences, evidence.entries).rootInstances.filter(
+          (anchor) =>
+            evidence.occurrences.some(
+              (occurrence) =>
+                occurrence.scenario?.kind === "observation" &&
+                occurrence.scenario.instanceOccurrenceId === anchor.id,
+            ),
+        )
+      : [];
+  const observedCells =
+    evidence?.schemaVersion === 3
+      ? startedRoots.flatMap((anchor) => (anchor.parentCell ? [anchor.parentCell] : []))
+      : plan.scenarios
+          .filter(
+            (scenario) =>
+              plan.scenarios.filter((candidate) => candidate.id === scenario.id).length === 1 &&
+              result.startedScenarioIds.includes(scenario.id),
+          )
+          .flatMap((scenario) =>
+            expandQaScenarioExecutionCells({
+              scenarios: [scenario],
+              channelDriver: runParams?.channelDriver ?? "qa-channel",
+              channel: runParams?.channelId,
+              expandChannels: false,
+            }),
+          );
+  const observedKeys = new Set(observedCells.map((cell) => JSON.stringify(cell)));
   return {
     executionKind: "flow",
     expectedCells: plan.expectedCells,
-    observedCells: plan.expectedCells.filter((cell) => startedScenarioIds.has(cell.scenarioId)),
+    // Cell projections are canonical sets; repeated scheduled instances retain
+    // their separate start/unknown state in occurrence evidence above.
+    observedCells: [
+      ...new Map(
+        plan.expectedCells
+          .filter((cell) => observedKeys.has(JSON.stringify(cell)))
+          .map((cell) => [JSON.stringify(cell), cell]),
+      ).values(),
+    ],
     result,
   };
 }

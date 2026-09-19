@@ -364,6 +364,45 @@ describe("Windows Gateway firewall diagnostics", () => {
     });
   });
 
+  it("reports no allow rule when the probe returns no active profiles", async () => {
+    await expect(
+      classify({
+        stateJson: JSON.stringify({
+          ConnectionProfiles: [],
+          ActiveFirewallProfiles: [],
+          LocalFirewallProfiles: [],
+        }),
+        rulesJson: "[]",
+      }),
+    ).resolves.toEqual({
+      applies: true,
+      severity: "warning",
+      code: "windows_firewall_no_allow_rule",
+      message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
+      details: [
+        "Active network profile: unknown.",
+        "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
+        "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
+      ],
+    });
+  });
+
+  it("reports an unblocked active profile before checking allow rules", async () => {
+    await expect(
+      classify({
+        stateJson: stateJson({ defaultInboundAction: "Allow" }),
+        rulesJson: "[]",
+      }),
+    ).resolves.toEqual({
+      applies: true,
+      severity: "info",
+      code: "windows_firewall_unrestricted",
+      message:
+        "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
+      details: ["Active network profile: public."],
+    });
+  });
+
   it("classifies empty successful rule output as no allow rule", async () => {
     const runner = vi.fn<FirewallCommandRunner>(async () => ({
       code: 0,

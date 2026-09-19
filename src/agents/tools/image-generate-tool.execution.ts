@@ -14,7 +14,7 @@ import type {
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import {
   formatGeneratedAttachmentLines,
   sanitizeGeneratedMediaDisplayText,
@@ -33,6 +33,7 @@ import {
   loadMediaToolReferences,
   resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -163,7 +164,7 @@ export async function executeImageGenerationJob(params: {
     type: "image" as const,
     path: image.path,
     mimeType: image.contentType,
-    name: image.id,
+    name: extractOriginalFilename(image.path),
     sizeBytes: image.size,
   }));
   const lines = [
@@ -221,6 +222,8 @@ export async function loadImageGenerationReferences(params: {
   imageInputs: string[];
   maxBytes: number;
   workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
   sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
@@ -237,6 +240,8 @@ export async function loadImageGenerationReferences(params: {
     expectedKind: "image",
     sandbox: params.sandboxConfig,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
+    fsPolicy: params.fsPolicy,
     maxBytes: params.maxBytes,
     ssrfPolicy: params.ssrfPolicy,
     signal: params.signal,

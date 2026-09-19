@@ -13,7 +13,7 @@ import * as authBridge from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
@@ -342,7 +342,7 @@ async function createRunParams(fixture: NativeFixture) {
   params.permissionMode = "full";
   params.timeoutMs = 20_000;
   params.config = { tools: { web: { search: { enabled: false } } } };
-  dynamicToolBuildState.openClawCodingToolsFactory = () => [];
+  setCodexTestToolFactory(params, () => []);
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   return params;
 }

@@ -25,7 +25,6 @@ import { PluginRegistryInspectionResources } from "../plugins/registry-inspectio
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   captureActivePluginRegistrySnapshot,
-  clearActivePluginRegistry,
   createPluginRegistryOwner,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -36,6 +35,7 @@ import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   startPluginServices,
 } from "../plugins/services.js";
+import { createServiceRegistration } from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginService } from "../plugins/types.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
@@ -47,6 +47,10 @@ import type {
   GatewayCloseParams as GatewayTeardownParams,
   GatewayClosePrepareParams,
 } from "./server-close.js";
+import {
+  createGatewayCloseTestDepsFactory,
+  createTestChatRunState,
+} from "./server-close.test-support.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
@@ -178,89 +182,7 @@ function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: read
   return mock.mock.calls[0];
 }
 
-function createTestChatRunState() {
-  const state = createChatRunState();
-  const clear = state.clear;
-  state.clear = vi.fn(() => clear());
-  return state;
-}
-
-function createGatewayCloseTestDeps(
-  overrides: Partial<GatewayCloseParams> = {},
-): GatewayCloseParams {
-  return {
-    resolveGatewayContext: () => undefined,
-    closePluginRegistry: async (onRetirement) => {
-      let retirement: Promise<void> | undefined;
-      const retire = () => (retirement ??= clearActivePluginRegistry());
-      await onRetirement?.(retire);
-      await retire();
-      return { memoryErrors: [] };
-    },
-    pluginMetadata: {
-      beginClose() {},
-      async close(onFinal, retireRegistry) {
-        let retirement: Promise<void> | undefined;
-        const retire = () =>
-          (retirement ??= Promise.resolve()
-            .then(retireRegistry)
-            .then(() => {}));
-        await onFinal?.(retire);
-        await retire();
-      },
-    },
-    bonjourStop: null,
-    tailscaleCleanup: null,
-    stopChannel: vi.fn(async () => undefined),
-    pluginServices: null,
-    disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
-    drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
-    stopGmailWatcher: mocks.stopGmailWatcher,
-    disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
-    closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
-    cron: { stop: vi.fn() },
-    heartbeatRunner: { stop: vi.fn() } as never,
-    updateCheckStop: null,
-    stopTaskRegistryMaintenance: null,
-    nodePresenceTimers: new Map(),
-    broadcast: vi.fn(),
-    maintenance: {
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      startMediaCleanup: vi.fn(),
-      stopMediaCleanup: vi.fn(async () => "drained" as const),
-      stopSessionColdStorageMaintenance: vi.fn(async () => {}),
-      worktreeCleanup: setInterval(() => undefined, 60_000),
-      skillUsageCleanup: vi.fn(),
-    },
-    stopMediaCleanup: vi.fn(async () => "drained" as const),
-    agentUnsub: null,
-    taskUnsub: null,
-    heartbeatUnsub: null,
-    transcriptUnsub: null,
-    lifecycleUnsub: null,
-    chatRunState: createTestChatRunState(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    restartRecoveryCandidates: new Map(),
-    removeChatRun: vi.fn(),
-    agentRunSeq: new Map(),
-    nodeSendToSession: vi.fn(),
-    getPendingReplyCount: vi.fn(() => 0),
-    clients: new Set<GatewayCloseClient>(),
-    configReloader: { stop: vi.fn(async () => undefined) },
-    wss: {
-      clients: new Set(),
-      close: (cb: () => void) => cb(),
-    } as never,
-    httpServer: {
-      close: (cb: (err?: Error | null) => void) => cb(null),
-      closeIdleConnections: vi.fn(),
-    } as never,
-    ...overrides,
-  };
-}
+const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory(mocks);
 
 describe("createGatewayCloseHandler", () => {
   it("joins model work before inventory retirement and shared teardown", async () => {
@@ -365,7 +287,7 @@ describe("createGatewayCloseHandler", () => {
     expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
     const repeated = owner.close();
     expect(owner.close()).toBe(repeated);
-    await expect(repeated).resolves.toEqual({ memoryErrors: [failure] });
+    await expect(repeated).resolves.toEqual({ memoryErrors: [failure], pluginFailures: [] });
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
@@ -504,26 +426,6 @@ describe("createGatewayCloseHandler", () => {
     },
   );
 
-  it("reports failed instance disposal and completes shared dependency teardown", async () => {
-    const failure = new Error("active instance cleanup failed");
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "active-cleanup" });
-    registry.plugins.push(record);
-    const instance = new PluginInstance(record.id, { record, registry });
-    instance.lifecycle.onDispose(() => {
-      throw failure;
-    });
-    setActivePluginRegistry(registry);
-    const clearSecretsRuntimeSnapshot = vi.fn();
-    await createGatewayCloseHandler(createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }))();
-    expect(mocks.logWarn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
-    await expect(instance.dispose()).resolves.toEqual({ errors: [failure] });
-    expect(instance.lifecycle.signal.aborted).toBe(true);
-    expect(getActivePluginRegistry()).toBeNull();
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
-    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
-  });
-
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
@@ -589,7 +491,7 @@ describe("createGatewayCloseHandler", () => {
         onStartFailure: () => true,
         onRemoved,
       });
-      const retireRegistry = vi.fn(async () => {});
+      const retireRegistry = vi.fn(async () => ({ cleanupCount: 0, failures: [] }));
       const closeSdkResources = vi.fn(async () => {});
       const clearSecretsRuntimeSnapshot = vi.fn();
       const close = createGatewayCloseHandler(
@@ -599,7 +501,7 @@ describe("createGatewayCloseHandler", () => {
           clearSecretsRuntimeSnapshot,
           closePluginRegistry: async (onRetirement) => {
             await onRetirement?.(retireRegistry);
-            return { memoryErrors: [] };
+            return { memoryErrors: [], pluginFailures: [] };
           },
         }),
       );
@@ -893,12 +795,9 @@ describe("createGatewayCloseHandler", () => {
         stop,
       });
       const registry = createEmptyPluginRegistry();
-      registry.services.push({
-        pluginId: "diagnostics-otel",
-        service,
-        source: "test",
-        origin: "bundled",
-      });
+      registry.services.push(
+        createServiceRegistration(service, { pluginId: "diagnostics-otel", origin: "bundled" }),
+      );
       setActivePluginRegistry(registry);
       const pluginServices = await startPluginServices({ registry, config: {} });
       if (failureKind === "admission") {
@@ -946,29 +845,45 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for in-flight media cleanup before shutdown completes", async () => {
-    let releaseMediaCleanup = () => {};
-    const stopMediaCleanup = vi.fn(
-      () =>
-        new Promise<"drained">((resolve) => {
-          releaseMediaCleanup = () => resolve("drained");
-        }),
-    );
-    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
-
-    let closed = false;
-    const closing = close({ reason: "test" }).then(() => {
-      closed = true;
-    });
-    await vi.waitFor(() => expect(stopMediaCleanup).toHaveBeenCalledTimes(1));
-    expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
-    expect(closed).toBe(false);
-
-    releaseMediaCleanup();
-    await closing;
-    expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledTimes(1);
-    expect(closed).toBe(true);
-  });
+  it.each(["media", "telemetry"] as const)(
+    "waits for in-flight %s cleanup before shared state closes",
+    async (owner) => {
+      const stopped = createDeferredCore();
+      const deps = createGatewayCloseTestDeps();
+      const stop =
+        owner === "media"
+          ? vi.fn(async () => {
+              await stopped.promise;
+              return "drained" as const;
+            })
+          : vi.fn(() => stopped.promise);
+      if (owner === "media") {
+        deps.stopMediaCleanup = async () => {
+          await stop();
+          return "drained";
+        };
+      } else {
+        deps.maintenance!.stopTelemetryChecks = async () => {
+          await stop();
+        };
+      }
+      const close = createGatewayCloseHandler(deps);
+      let closed = false;
+      const closing = close({ reason: "test" }).then(() => {
+        closed = true;
+      });
+      try {
+        await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+        expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+        expect(closed).toBe(false);
+      } finally {
+        stopped.resolve();
+        await closing;
+      }
+      expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
+      expect(closed).toBe(true);
+    },
+  );
 
   it("joins update discovery before disposing shared runtime resources", async () => {
     const updateCheckStopped = createDeferredCore();
@@ -1620,12 +1535,12 @@ describe("createGatewayCloseHandler", () => {
       const cleanup = createDeferredCore();
       const stop = vi.fn(() => cleanup.promise);
       const registry = createEmptyPluginRegistry();
-      registry.services.push({
-        pluginId: "shutdown-test",
-        service: { id: "pending-cleanup", start() {}, stop },
-        source: "test",
-        origin: "workspace",
-      });
+      registry.services.push(
+        createServiceRegistration(
+          { id: "pending-cleanup", start() {}, stop },
+          { pluginId: "shutdown-test" },
+        ),
+      );
       setActivePluginRegistry(registry);
       const pluginServices = await startPluginServices({ registry, config: {} });
       const strictStopping = pluginServices.stop({

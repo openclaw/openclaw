@@ -82,6 +82,20 @@ export type EmbeddedAgentQueueHandle = {
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
 
+export type EmbeddedAgentQueueFailureReason =
+  | "input_visibility_mismatch"
+  | "no_active_run"
+  | "not_streaming"
+  | "stale_run"
+  | "compacting"
+  | "tool_authority_mismatch"
+  | "image_input_unsupported"
+  | "source_reply_delivery_mode_mismatch"
+  | "task_suggestion_delivery_mode_mismatch"
+  | "transcript_commit_wait_unsupported"
+  | "guarded_injection_unsupported"
+  | "runtime_rejected";
+
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
 export type EmbeddedAgentQueueMessageResult = ReplyBackendQueueMessageResult;

@@ -25,7 +25,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
-import { killPidIfAlive, waitForPidFile } from "../../test-utils/process-tree.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import * as worktreeRunLease from "./run-lease.js";
 import { ManagedWorktreeService, WorktreeSnapshotError } from "./service.js";
 import {
@@ -295,24 +295,32 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       baseRef: "HEAD",
     });
     await fs.writeFile(path.join(created.path, "README.md"), "complete recoverable edit\n");
-    const marker = path.join(root, "removal-child.pid");
+    const childReady = createDeferredCore<number>();
+    let readinessOutput = "";
     const release = path.join(root, "release-removal");
-    let removalStarted = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const args = gitCommandArgs(argv);
       if (args[0] === "worktree" && args[1] === "remove") {
-        removalStarted = true;
         // A real held child models Git after it has removed the first tracked file.
         const partial = await realRunCommand(
           [
             process.execPath,
             "-e",
-            'const fs = require("node:fs"); fs.unlinkSync(process.argv[1]); fs.writeFileSync(process.argv[2], String(process.pid)); const timer = setInterval(() => { if (fs.existsSync(process.argv[3])) clearInterval(timer); }, 10);',
+            'const fs = require("node:fs"); fs.unlinkSync(process.argv[1]); process.stdout.write(String(process.pid) + "\\n"); const timer = setInterval(() => { if (fs.existsSync(process.argv[2])) clearInterval(timer); }, 10);',
             path.join(created.path, "README.md"),
-            marker,
             release,
           ],
-          options,
+          {
+            ...(typeof options === "number" ? { timeoutMs: options } : options),
+            onOutputChunk: (chunk, stream) => {
+              if (stream === "stdout") {
+                readinessOutput += chunk.toString("utf8");
+                if (readinessOutput.endsWith("\n")) {
+                  childReady.resolve(Number(readinessOutput.trim()));
+                }
+              }
+            },
+          },
         );
         if (partial.code !== 0) {
           return partial;
@@ -321,15 +329,22 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       return await realRunCommand(argv, options);
     });
     const abort = new AbortController();
-    const pending = service.remove({ id: created.id, reason: "test", signal: abort.signal }).then(
-      () => false,
-      () => true,
+    const pending = failureMessage(
+      service.remove({ id: created.id, reason: "test", signal: abort.signal }),
     );
     let pid: number | undefined;
     try {
-      pid = await waitForPidFile(marker);
-      expect(removalStarted).toBe(true);
+      // Snapshot preparation and child startup share no fixed readiness deadline.
+      pid = await Promise.race([
+        childReady.promise,
+        pending.then((message) => {
+          throw new Error(`Removal settled before child readiness: ${message}`);
+        }),
+      ]);
       expect(isPidAlive(pid)).toBe(true);
+      await expect(fs.stat(path.join(created.path, "README.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       const snapshotRef = service
         .listRegistryRecords()
         .find((record) => record.id === created.id)?.snapshotRef;
@@ -337,7 +352,7 @@ describe("ManagedWorktreeService failure diagnostics", () => {
       const snapshot = await git(repo, "rev-parse", snapshotRef!);
       abort.abort(new Error("fixture cancellation during deletion"));
       await fs.writeFile(release, "release");
-      expect(await pending).toBe(true);
+      expect(await pending).toContain("managed worktree allocation lease operation was aborted");
       expect(isPidAlive(pid)).toBe(false);
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await git(repo, "rev-parse", snapshotRef!)).toBe(snapshot);
@@ -491,7 +506,7 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
           const command = gitCommandArgs(args[0]);
           if (command[0] === "worktree" && command[1] === "remove") {
             clock += 500;
-          } else if (command[0] === "branch" && command[1] === "-D") {
+          } else if (command[0] === "branch" && command[1] === "-d") {
             clock += 600;
           }
           return await realRunCommand(...args);

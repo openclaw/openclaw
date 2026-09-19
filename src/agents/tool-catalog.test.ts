@@ -3,7 +3,12 @@
  * Verifies built-in profile allowlists include expected core tool groups.
  */
 import { describe, expect, it } from "vitest";
-import { listCoreToolSections, resolveCoreToolProfilePolicy } from "./tool-catalog.js";
+import {
+  listCoreToolSections,
+  resolveCoreToolProfilePolicy,
+  resolveCoreToolProfiles,
+} from "./tool-catalog.js";
+import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
   const policy = resolveCoreToolProfilePolicy(profile);
@@ -22,6 +27,43 @@ function requirePolicyAllow(profile: Parameters<typeof resolveCoreToolProfilePol
 }
 
 describe("tool-catalog", () => {
+  it("lists the setup helper once in Automation without adding restricted profile membership", () => {
+    const sections = listCoreToolSections();
+    expect(
+      sections.flatMap((section) => section.tools).filter((tool) => tool.id === "openclaw"),
+    ).toEqual([
+      {
+        id: "openclaw",
+        label: "openclaw",
+        description: "Delegate OpenClaw setup and repair",
+      },
+    ]);
+    expect(
+      sections.find((section) => section.id === "automation")?.tools.map((tool) => tool.id),
+    ).toContain("openclaw");
+    expect(resolveCoreToolProfiles("openclaw")).toEqual([]);
+  });
+
+  it.each(["group:automation", "group:openclaw"])(
+    "includes the helper in %s allows and denies",
+    (group) => {
+      expect(isToolAllowedByPolicyName("openclaw", { allow: [group] })).toBe(true);
+      expect(isToolAllowedByPolicyName("openclaw", { allow: [group], deny: ["openclaw"] })).toBe(
+        false,
+      );
+      expect(isToolAllowedByPolicyName("openclaw", { allow: ["openclaw"], deny: [group] })).toBe(
+        false,
+      );
+      for (const profile of [undefined, "full"]) {
+        const policy = resolveCoreToolProfilePolicy(profile);
+        expect(isToolAllowedByPolicies("openclaw", [policy])).toBe(true);
+        expect(isToolAllowedByPolicies("message", [policy])).toBe(true);
+        expect(isToolAllowedByPolicies("openclaw", [policy, { deny: [group] }])).toBe(false);
+        expect(isToolAllowedByPolicies("exec", [policy, { deny: ["exec"] }])).toBe(false);
+      }
+    },
+  );
+
   it("lists agents_wait only for a Swarm-enabled catalog", () => {
     const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
       listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
@@ -75,6 +117,7 @@ describe("tool-catalog", () => {
       "suggest_task",
       "dismiss_task",
       "screen",
+      "theme",
       "dashboard",
       "terminal",
       "portal",
@@ -111,6 +154,7 @@ describe("tool-catalog", () => {
       "sessions_yield",
       "subagents",
       "session_status",
+      "theme",
       "message",
       "gateway",
       "ask_user",

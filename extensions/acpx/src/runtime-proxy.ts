@@ -27,6 +27,7 @@ export type CompleteAcpRuntime = Omit<AcpRuntime, "startTurn"> &
     >
   > & {
     startTurn(input: AcpRuntimeTurnInput): CompleteAcpRuntimeTurn;
+    shutdown(): Promise<void>;
   };
 
 /** Start an ACP turn through a lazy runtime resolver without awaiting resolution up front. */
@@ -61,6 +62,9 @@ export function createLazyAcpRuntimeProxy(
 ): CompleteAcpRuntime {
   return {
     ownerAwareSessions: 1,
+    async shutdown() {
+      await (await resolveRuntime()).shutdown();
+    },
     async ensureSession(input) {
       return await (await resolveRuntime()).ensureSession(input);
     },

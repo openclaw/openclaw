@@ -35,6 +35,11 @@ remain successful.
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects, prototypes, and host functions do not cross into QuickJS.
 
+A bridge failure can occur after a tool has performed its action. When a result
+reports `failurePhase: "bridge"` and `replaySafe: false`, check the destination
+before repeating a send or another action that changes state. A failed `exec`
+does not by itself prove that a message was not delivered.
+
 ## Telemetry
 
 Each result's `telemetry` field reports: hidden catalog size and a source

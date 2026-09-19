@@ -1,9 +1,9 @@
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
-  PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import type { WorkboardSqliteResult } from "./sqlite-store-errors.js";
 
@@ -31,18 +31,10 @@ export type WorkboardSqliteOperations = {
   "boards.lookup": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["lookup"]>;
   "boards.delete": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["delete"]>;
   "boards.entries": Operation<WorkboardKeyedStore<PersistedWorkboardBoard>["entries"]>;
-  "subscriptions.register": Operation<
-    WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>["register"]
-  >;
-  "subscriptions.lookup": Operation<
-    WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>["lookup"]
-  >;
-  "subscriptions.delete": Operation<
-    WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>["delete"]
-  >;
-  "subscriptions.entries": Operation<
-    WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>["entries"]
-  >;
+  "subscriptions.register": Operation<WorkboardSubscriptionStore["register"]>;
+  "subscriptions.lookup": Operation<WorkboardSubscriptionStore["lookup"]>;
+  "subscriptions.delete": Operation<WorkboardSubscriptionStore["delete"]>;
+  "subscriptions.entries": Operation<WorkboardSubscriptionStore["entries"]>;
   "attachments.register": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["register"]>;
   "attachments.lookup": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["lookup"]>;
   "attachments.delete": Operation<WorkboardKeyedStore<PersistedWorkboardAttachment>["delete"]>;

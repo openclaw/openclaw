@@ -187,6 +187,36 @@ describe("managed plugin installation", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
+  it("does not apply public feed integrity to a custom ClawHub registry", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mockClawHubInstall("diffs", "@openclaw/diffs");
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+
+    await installManagedPlugin({
+      request: {
+        source: "clawhub",
+        packageName: "@openclaw/diffs",
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+      },
+      env: { OPENCLAW_CLAWHUB_URL: "https://mirror.example.test" },
+    });
+
+    expect(mocks.officialCatalog).not.toHaveBeenCalled();
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/diffs",
+        expectedPluginId: "diffs",
+      }),
+    );
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.not.objectContaining({ expectedIntegrity: expect.anything() }),
+    );
+  });
+
   it.each([false, true])(
     "uses npm first and ClawHub only when npm is absent (%s)",
     async (absent) => {

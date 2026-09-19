@@ -3,7 +3,12 @@
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { sql } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -146,26 +151,12 @@ export function searchSessionTranscripts(params: {
           const sessionFilterValues = params.sessionKeys ?? [
             toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" }),
           ];
-          const whereSession =
-            params.sessionKeys === undefined
-              ? " AND (session_windows.session_key GLOB ? OR session_windows.session_key IN ('global', 'unknown'))"
-              : sessionFilterValues.length > 0
-                ? ` AND session_windows.session_key IN (${sessionFilterValues.map(() => "?").join(", ")})`
-                : "";
-          const whereGeneration = params.sessionId
-            ? " AND session_transcript_fts.session_id = ?"
-            : "";
-          const whereRole = params.role ? " AND session_transcript_fts.role = ?" : "";
-          const order =
-            params.order === "recent"
-              ? "timestamp DESC, session_transcript_fts.rowid DESC"
-              : "rank ASC, timestamp DESC, message_id ASC";
+          const sessionKeySet = sqliteStringSet(sessionFilterValues);
+          const db = getNodeSqliteKysely<DB>(database.db);
           const archivedTranscriptsExcluded =
             executeSqliteQueryTakeFirstSync(
               database.db,
-              getNodeSqliteKysely<Pick<DB, "session_transcript_cold_archives" | "session_windows">>(
-                database.db,
-              )
+              db
                 .selectFrom("session_transcript_cold_archives as cold")
                 .innerJoin("session_windows as window", "window.session_id", "cold.session_id")
                 .select((eb) => eb.fn.countAll<number>().as("count"))
@@ -180,7 +171,7 @@ export function searchSessionTranscripts(params: {
                 )
                 .$if(
                   params.sessionKeys !== undefined && sessionFilterValues.length > 0,
-                  (builder) => builder.where("window.session_key", "in", sessionFilterValues),
+                  (builder) => builder.where("window.session_key", "in", sessionKeySet),
                 )
                 .$if(params.sessionId !== undefined, (builder) =>
                   builder.where("window.session_id", "=", params.sessionId!),
@@ -192,36 +183,71 @@ export function searchSessionTranscripts(params: {
           // are excluded: their rows may still hold rewound-away branch text that
           // sessions_history no longer exposes, so they stay hidden until reconcile
           // rebuilds them (indexing=true tells the caller to retry).
-          const statement = database.db.prepare(/* sqlite-allow-raw: FTS5 MATCH/snippet/bm25 */ `
-    SELECT session_windows.session_key AS session_key, session_transcript_fts.session_id AS session_id,
-      message_id, role, timestamp,
-      snippet(session_transcript_fts, 0, '', '', ' … ', 48) AS snippet,
-      bm25(session_transcript_fts) AS rank
-    FROM session_transcript_fts
-    JOIN session_windows ON session_windows.session_id = session_transcript_fts.session_id
-    WHERE session_transcript_fts MATCH ?${whereSession}${whereGeneration}${whereRole}
-      AND session_transcript_fts.session_id NOT IN (
-        SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild != 0
-      )
-    ORDER BY ${order}
-    LIMIT ?
-    `);
-          const values = [
-            toFtsQuery(query),
-            ...sessionFilterValues,
-            ...(params.sessionId ? [params.sessionId] : []),
-            ...(params.role ? [params.role] : []),
-            limit + 1,
-          ];
-          const rows = statement.all(...values) as Array<{
-            message_id: unknown;
-            rank: unknown;
-            role: unknown;
-            session_id: unknown;
-            session_key: unknown;
-            snippet: unknown;
-            timestamp: unknown;
-          }>;
+          const rows = executeSqliteQuerySync(
+            database.db,
+            db
+              .selectFrom("session_transcript_fts")
+              .innerJoin(
+                "session_windows",
+                "session_windows.session_id",
+                "session_transcript_fts.session_id",
+              )
+              .select([
+                "session_windows.session_key",
+                "session_transcript_fts.session_id",
+                "message_id",
+                "role",
+                "timestamp",
+                /* kysely-allow-raw: FTS5 snippet primitive. */
+                sql`snippet(session_transcript_fts, 0, '', '', ' … ', 48)`.as("snippet"),
+                /* kysely-allow-raw: FTS5 ranking primitive. */
+                sql`bm25(session_transcript_fts)`.as("rank"),
+              ])
+              .where(
+                /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
+                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query)}`,
+              )
+              .$if(params.sessionKeys === undefined, (builder) =>
+                builder.where((eb) =>
+                  eb.or([
+                    /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
+                    sql<boolean>`${eb.ref("session_windows.session_key")} GLOB ${sessionFilterValues[0]}`,
+                    eb("session_windows.session_key", "in", ["global", "unknown"]),
+                  ]),
+                ),
+              )
+              .$if(params.sessionKeys !== undefined && sessionFilterValues.length > 0, (builder) =>
+                builder.where("session_windows.session_key", "in", sessionKeySet),
+              )
+              .$if(Boolean(params.sessionId), (builder) =>
+                builder.where("session_transcript_fts.session_id", "=", params.sessionId!),
+              )
+              .$if(Boolean(params.role), (builder) => builder.where("role", "=", params.role!))
+              .where(
+                "session_transcript_fts.session_id",
+                "not in",
+                db
+                  .selectFrom("session_transcript_index_state")
+                  .select("session_id")
+                  .where("needs_rebuild", "!=", 0)
+                  .$if(Boolean(params.sessionId), (builder) =>
+                    builder.where("session_id", "=", params.sessionId!),
+                  ),
+              )
+              .$if(params.order === "recent", (builder) =>
+                builder
+                  .orderBy("timestamp", "desc")
+                  /* kysely-allow-raw: FTS5 implicit rowid is not a generated schema column. */
+                  .orderBy(sql`session_transcript_fts.rowid`, "desc"),
+              )
+              .$if(params.order !== "recent", (builder) =>
+                builder
+                  .orderBy("rank", "asc")
+                  .orderBy("timestamp", "desc")
+                  .orderBy("message_id", "asc"),
+              )
+              .limit(limit + 1),
+          ).rows;
           const hits = rows.flatMap((row): SessionTranscriptSearchHit[] => {
             if (
               typeof row.session_key !== "string" ||

@@ -395,7 +395,14 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         await created.delivery.deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
-        created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        created.replyOptions.onItemEvent?.({
+          itemId: `tool:${step.name}`,
+          kind: "tool",
+          name: step.name,
+          title: step.name,
+          phase: step.phase === "start" ? "start" : "end",
+          status: step.phase === "start" ? "running" : "completed",
+        });
         break;
       case "final":
         await created.delivery.deliver(

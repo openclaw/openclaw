@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
@@ -13,11 +14,19 @@ import {
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  deleteSessionEntryLifecycle,
+  loadTranscriptEvents,
+  readSessionSubmittedInput,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
+  listSessionPendingInputReceipts,
+  listSessionPendingInputs,
+  readSessionPendingInput,
   stageSessionPendingInput,
+  withSessionPendingInputPersistence,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -34,18 +43,22 @@ describe("committed pending input release", () => {
   const options = () => toDatabaseOptions(resolveSqliteScope(scope()));
   const database = () => openOpenClawAgentDatabase(options());
   const receipts: SessionPendingInputReceipt[] = [];
-  const message = (id: string) => ({
+  const message = (id: string, content = "Synthetic accepted input") => ({
     role: "user" as const,
-    content: "Synthetic accepted input",
+    content,
     timestamp: 1,
     idempotencyKey: `${id}:user`,
   });
-  const stage = async (id: string) => {
+  const stage = async (
+    id: string,
+    stageOptions: Partial<Parameters<typeof stageSessionPendingInput>[1]> = {},
+  ) => {
     const receipt = expectDefined(
       await stageSessionPendingInput(scope(), {
         runId: id,
         message: message(id),
         assertCurrent: () => {},
+        ...stageOptions,
       }),
       "Expected staged input custody",
     );
@@ -69,6 +82,8 @@ describe("committed pending input release", () => {
     expect(
       receipt.run(() => appendTranscriptMessageSync(scope(), { message: receipt.message })),
     ).toMatchObject({ ok: true, value: { appended: true } });
+  const promote = (receipt: SessionPendingInputReceipt) =>
+    receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message }));
 
   beforeEach(async () => {
     await upsertSessionEntryCore(scope(), { sessionId: scope().sessionId, updatedAt: 1 });
@@ -79,6 +94,36 @@ describe("committed pending input release", () => {
     }
     closeOpenClawAgentDatabasesForTest();
   });
+
+  it.each([false, true])(
+    "permits only exact committed persistence after custody closes (collected: %s)",
+    async (collected) => {
+      const source = await stage("closed-persistence");
+      const receipt = collected
+        ? bindSessionPendingInputSources([source], message("closed-aggregate"))!
+        : source;
+      if (collected) {
+        receipts.push(receipt);
+      }
+      await promote(receipt);
+      receipt.finish("cancelled");
+      expect(() => receipt.run(() => {})).toThrow("ownership ended");
+      const before = await loadTranscriptEvents(scope());
+      expect(
+        await withSessionPendingInputPersistence(receipt, () =>
+          appendTranscriptMessage(scope(), { message: receipt.message }),
+        ),
+      ).toMatchObject({ appended: false, messageId: receipt.inputId });
+      expect(await loadTranscriptEvents(scope())).toEqual(before);
+      await replaceTranscriptEvents(scope(), []);
+      await expect(
+        withSessionPendingInputPersistence(receipt, () =>
+          appendTranscriptMessage(scope(), { message: receipt.message }),
+        ),
+      ).rejects.toThrow("custody ended");
+      expect(await loadTranscriptEvents(scope())).toEqual([]);
+    },
+  );
 
   it.each(
     [false, true].flatMap((collected) =>
@@ -136,6 +181,166 @@ describe("committed pending input release", () => {
       );
     },
   );
+
+  it("commits one collected message and retains exact source receipts across rewrite and restart", async () => {
+    const { sessionKey } = scope();
+    const firstMessage = {
+      ...message("collect-a", "First approved input"),
+      __openclaw: { transport: { clients: [{ id: "cli", mode: "cli", displayName: "CLI" }] } },
+    };
+    const secondMessage = {
+      ...message("collect-b", "Second approved input"),
+      __openclaw: { transport: { clients: [{ id: "openclaw-control-ui", mode: "webchat" }] } },
+    };
+    const first = await stage("collect-a", {
+      message: firstMessage,
+    });
+    const second = await stage("collect-b", {
+      message: secondMessage,
+    });
+    const aggregate = bindSessionPendingInputSources(
+      [first, second],
+      message("collect-c", "First approved input\nSecond approved input"),
+    )!;
+    receipts.push(aggregate);
+    expect(listSessionPendingInputs(scope()).total).toBe(2);
+    const appended = await promote(aggregate);
+    expect(appended).toMatchObject({ appended: true, messageId: aggregate.inputId });
+    expect(readSessionSubmittedInput(scope(), "collect-c:user")?.["__openclaw"]).toMatchObject({
+      transport: {
+        clients: [
+          { id: "cli", mode: "cli", displayName: "CLI" },
+          { id: "openclaw-control-ui", mode: "webchat" },
+        ],
+      },
+    });
+    expect(listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
+    expect(readSessionPendingInput(scope(), first.inputId)).toBeUndefined();
+    expect(
+      listSessionPendingInputReceipts(scope(), {
+        runIds: ["collect-a", "collect-b", "unknown"],
+      }),
+    ).toEqual([
+      { runId: "collect-a", state: "consumed", consumedByEventId: aggregate.inputId },
+      { runId: "collect-b", state: "consumed", consumedByEventId: aggregate.inputId },
+    ]);
+    aggregate.finish("cancelled");
+    await replaceTranscriptEvents(scope(), []);
+    rotateAgentEventLifecycleGeneration();
+    closeOpenClawAgentDatabasesForTest();
+    expect(readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
+    expect(readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
+    const duplicate = await stage("collect-a", {
+      message: { ...firstMessage, timestamp: 200 },
+    });
+    expect(duplicate).toMatchObject({
+      state: "consumed",
+      inputId: first.inputId,
+      message: first.message,
+    });
+    expect(() => promote(duplicate)).toThrow("already been consumed");
+    await expect(
+      stage("collect-a", { message: message("collect-a", "Changed input") }),
+    ).rejects.toThrow("conflicts");
+    expect(await loadTranscriptEvents(scope())).toEqual([]);
+    expect(listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
+    expect(
+      database()
+        .db.prepare(
+          "SELECT input_id, message_json, consumed_event_id FROM session_pending_inputs ORDER BY seq",
+        )
+        .all(),
+    ).toEqual([
+      {
+        input_id: first.inputId,
+        message_json: JSON.stringify(first.message),
+        consumed_event_id: aggregate.inputId,
+      },
+      {
+        input_id: second.inputId,
+        message_json: JSON.stringify(second.message),
+        consumed_event_id: aggregate.inputId,
+      },
+    ]);
+    expect(
+      listSessionPendingInputReceipts(
+        { ...scope(), sessionId: "other" },
+        { runIds: ["collect-a"] },
+      ),
+    ).toEqual([]);
+    await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath: fixture.storePath(),
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    expect(database().db.prepare("SELECT count(*) AS n FROM session_pending_inputs").get()).toEqual(
+      { n: 0 },
+    );
+  });
+
+  it.each([
+    "empty-metadata",
+    "sender-metadata",
+    "transport-metadata",
+    "changed-payload",
+    "changed-sender",
+    "changed-provenance",
+    "changed-transport",
+  ] as const)("preserves legacy consumed input identity with %s", async (scenario) => {
+    const originalTransport =
+      scenario === "empty-metadata" || scenario === "sender-metadata"
+        ? {}
+        : { channel: "test", messageId: "original-message" };
+    const original: PersistedUserTurnMessage = {
+      ...message("legacy-client"),
+      provenance: { kind: "external_user", sourceTool: "original-source" },
+      ...(scenario === "empty-metadata"
+        ? {}
+        : {
+            __openclaw: {
+              senderId: "original-sender",
+              ...(Object.keys(originalTransport).length ? { transport: originalTransport } : {}),
+            },
+          }),
+    };
+    const source = await stage("legacy-client", { message: original });
+    const aggregate = expectDefined(
+      bindSessionPendingInputSources([source], message("legacy-collector")),
+      "Expected collected legacy input",
+    );
+    receipts.push(aggregate);
+    await promote(aggregate);
+    aggregate.finish("interrupted");
+    const stored = () =>
+      database().db.prepare("SELECT request_hash, message_json FROM session_pending_inputs").all();
+    const before = stored();
+    const retry: PersistedUserTurnMessage = {
+      ...original,
+      ...(scenario === "changed-payload" ? { content: "Changed input" } : {}),
+      ...(scenario === "changed-provenance"
+        ? { provenance: { kind: "external_user", sourceTool: "another-source" } }
+        : {}),
+      __openclaw: {
+        ...original["__openclaw"],
+        ...(scenario === "changed-sender" ? { senderId: "another-sender" } : {}),
+        transport: {
+          ...originalTransport,
+          ...(scenario === "changed-transport" ? { messageId: "another-message" } : {}),
+          clients: [{ id: "cli", mode: "cli" }],
+        },
+      },
+    };
+    const replay = stage("legacy-client", { message: retry, requestFingerprint: "upgraded" });
+    if (scenario.startsWith("changed-")) {
+      await expect(replay).rejects.toThrow("conflicts with the accepted input");
+    } else {
+      const receipt = await replay;
+      expect(receipt).toMatchObject({ state: "consumed", message: original });
+      expect(() => receipt.run(() => {})).toThrow("already been consumed");
+    }
+    expect(stored()).toEqual(before);
+    expect(readSessionSubmittedInput(scope(), "legacy-client:user")).toEqual(original);
+  });
 
   const stagePrivate = async (text = "private child marker", assertCurrent = () => {}) => {
     const receipt = expectDefined(

@@ -6,11 +6,27 @@ import {
   terminateCodexAppServerDescendants,
   terminateCodexAppServerOrphan,
 } from "./transport-process-containment.js";
-import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import {
+  prepareCodexAppServerProcessRegistration,
+  waitForCodexAppServerProcessRegistrationCleanup,
+} from "./transport-process-registration.js";
 import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
 
-const procfs = vi.hoisted(() => ({ files: new Map<string, string | Error | (() => string)>() }));
+const procfs = vi.hoisted(() => {
+  const files = new Map<string, string | Error | (() => string)>();
+  return {
+    files,
+    readFile: (file: string): string => {
+      const stored = files.get(file);
+      const value = typeof stored === "function" ? stored() : stored;
+      if (typeof value === "string") {
+        return value;
+      }
+      throw value ?? Object.assign(new Error("gone"), { code: "ENOENT" });
+    },
+  };
+});
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -20,11 +36,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       if (typeof file !== "string" || !file.startsWith("/proc/")) {
         return original.readFile(...args);
       }
-      const stored = procfs.files.get(file);
-      const value = typeof stored === "function" ? stored() : stored;
-      return typeof value === "string"
-        ? Promise.resolve(value)
-        : Promise.reject(value ?? Object.assign(new Error("gone"), { code: "ENOENT" }));
+      return Promise.resolve().then(() => procfs.readFile(file));
     },
     readdir: (...args: Parameters<typeof original.readdir>) =>
       args[0] === "/proc"
@@ -35,6 +47,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
           )
         : original.readdir(...args),
   };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  const { createProcfsSyncFixture } = await import("./transport-procfs.test-support.js");
+  return { ...original, ...createProcfsSyncFixture(original, procfs.readFile) };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  const { createProcfsCommandFixture } = await import("./transport-procfs.test-support.js");
+  return { ...original, execFile: createProcfsCommandFixture(original, procfs.readFile) };
 });
 
 const bootId = "00000000-0000-0000-0000-000000000001";
@@ -202,6 +226,7 @@ describe("Codex registration procfs boundary", () => {
       ]);
       expect(kill).not.toHaveBeenCalled();
       spawned.emit("exit", 0, null);
+      await waitForCodexAppServerProcessRegistrationCleanup(spawned);
       expect(store.entries()).toEqual([]);
     },
   );

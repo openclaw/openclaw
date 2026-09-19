@@ -26,27 +26,6 @@ describe("renderSkills", () => {
     await i18n.setLocale("en");
   });
 
-  it("hides the agent selector when only one agent is configured", () => {
-    const container = document.createElement("div");
-    render(
-      renderSkills(
-        createProps({
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "main", name: "Main" }],
-          },
-          selectedAgentId: "main",
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector('openclaw-agent-select[name="skills-agent"]')).toBeNull();
-    expect(container.querySelector('input[name="skills-filter"]')).toBeInstanceOf(HTMLInputElement);
-  });
-
   it("keeps settings focused on installed skills when remote results are available", () => {
     const container = document.createElement("div");
     render(
@@ -67,78 +46,11 @@ describe("renderSkills", () => {
     );
 
     expect(container.querySelector('input[name="skills-filter"]')).not.toBeNull();
+    expect(container.querySelector("openclaw-agent-select")).toBeNull();
     expect(container.querySelector(".skills-group")?.textContent).toContain("Repo Skill");
     expect(container.querySelector('input[name="clawhub-search"]')).toBeNull();
     expect(container.textContent).not.toContain("Remote Skill");
     expect(container.querySelector(".plugin-catalog-card")).toBeNull();
-  });
-
-  it("renders the agent selector and routes agent changes", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onAgentChange = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          selectedAgentId: "research",
-          onAgentChange,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const selector = container.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string; label: string; badge?: string }>;
-        value: string;
-        onSelect: (value: string) => void;
-        updateComplete: Promise<boolean>;
-      }
-    >('openclaw-agent-select[name="skills-agent"]');
-    const filter = container.querySelector<HTMLInputElement>('input[name="skills-filter"]');
-    expect(selector).toBeInstanceOf(HTMLElement);
-    expect(filter).toBeInstanceOf(HTMLInputElement);
-    await selector?.updateComplete;
-    expect(normalizeText(selector!.closest(".plugins-field")!)).toContain("Agent");
-    expect(normalizeText(filter!.closest("label")!)).toContain("Search");
-    expect(selector?.value).toBe("research");
-    expect(selector?.options.map((option) => [option.label, option.badge])).toEqual([
-      ["Main (default)", undefined],
-      ["Research", undefined],
-    ]);
-    await vi.waitFor(() =>
-      expect(selector?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-    );
-
-    selector?.onSelect("main");
-
-    expect(onAgentChange).toHaveBeenCalledWith("main");
-  });
-
-  it("localizes the default-agent label", async () => {
-    await i18n.setLocale("de");
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    render(renderSkills(createProps()), container);
-    const selector = container.querySelector<
-      HTMLElement & {
-        options: Array<{ value: string; label: string }>;
-        updateComplete: Promise<boolean>;
-      }
-    >('openclaw-agent-select[name="skills-agent"]');
-    await selector?.updateComplete;
-
-    expect(selector?.options.find((option) => option.value === "main")?.label).toBe(
-      "Main (Standard)",
-    );
-    expect(selector?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
-      "Standard",
-    );
   });
 
   it.each([
@@ -455,11 +367,6 @@ describe("renderSkills", () => {
     render(renderSkills(props), container);
     await Promise.resolve();
 
-    expect(
-      container.querySelector<HTMLElement & { disabled: boolean }>(
-        'openclaw-agent-select[name="skills-agent"]',
-      )?.disabled,
-    ).toBe(true);
     const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Refresh",
     );

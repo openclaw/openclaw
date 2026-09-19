@@ -2,6 +2,7 @@
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -33,23 +34,22 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
     },
     { env: process.env },
   );
-  const protectedPaths = new Set<string>();
+  const protectedPaths: string[] = [];
   for (const target of targets) {
-    protectedPaths.add(target.storePath);
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
     }).path;
-    if (sqlitePath) {
-      for (const databasePath of resolveSqliteDatabaseFilePaths(sqlitePath)) {
-        protectedPaths.add(databasePath);
-      }
-    }
+    protectedPaths.push(target.storePath, ...resolveSqliteDatabaseFilePaths(sqlitePath));
   }
-  return [...protectedPaths];
+  return [...new Set(protectedPaths)];
 }
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+export async function doctorCommand(
+  runtime?: RuntimeEnv,
+  options?: DoctorOptions,
+  databasePreflight?: DoctorDatabasePreflight,
+): Promise<void> {
   const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
@@ -75,6 +75,8 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       await import("./doctor-sqlite-maintenance-lock.js");
     const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
       await import("./doctor-session-sqlite.js");
+    const { withArtifactPreservingStateReads } =
+      await import("../state/openclaw-state-db-readonly.js");
     const sessionSqliteOptions = {
       mode: sessionSqliteMode,
       ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
@@ -84,17 +86,20 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
     const runSessionSqlite = async () => await runDoctorSessionSqlite(sessionSqliteOptions);
     const reconcileHardlink = (filePath: string) =>
       reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath);
-    const report = isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
-      ? await withDoctorSqliteMaintenanceLock({
-          env: process.env,
-          operation: `session SQLite ${sessionSqliteMode}`,
-          ...(options.sessionSqliteStore
-            ? { protectedPaths: await resolveExplicitSessionSqliteMaintenancePaths(options) }
-            : {}),
-          ...(sessionSqliteMode !== "compact" ? { reconcileHardlink } : {}),
-          run: runSessionSqlite,
-        })
-      : await runSessionSqlite();
+    // Custom-target discovery can create a missing shared WAL before maintenance admission.
+    const report = await withArtifactPreservingStateReads(async () =>
+      isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
+        ? await withDoctorSqliteMaintenanceLock({
+            env: process.env,
+            operation: `session SQLite ${sessionSqliteMode}`,
+            ...(options.sessionSqliteStore
+              ? { protectedPaths: await resolveExplicitSessionSqliteMaintenancePaths(options) }
+              : {}),
+            ...(sessionSqliteMode !== "compact" ? { reconcileHardlink } : {}),
+            run: runSessionSqlite,
+          })
+        : await runSessionSqlite(),
+    );
     if (sessionSqliteMode === "recover" && options.sessionSqliteGithubIssue === true) {
       await maybeCreateSessionSqliteGithubIssue(outputRuntime, report, options);
     }
@@ -162,7 +167,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.runDoctorHealthFlow(runtime, options);
+  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
 }
 
 async function maybeCreateSessionSqliteGithubIssue(

@@ -1,10 +1,15 @@
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  type SessionTranscriptRuntimeTarget,
+  type SessionTranscriptWriteScope,
+} from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 
 export function resolveWorkerTurnTranscriptTarget(
   turn: Pick<SessionPlacementTurnParams, "agentId" | "sessionId" | "sessionKey" | "sessionTarget">,
-): { agentId: string; sessionId: string; sessionKey: string; storePath: string } {
+): SessionTranscriptRuntimeTarget &
+  Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId"> {
   if (
     !turn.sessionTarget?.agentId ||
     !turn.sessionTarget.sessionId ||
@@ -29,7 +34,13 @@ export function resolveWorkerTurnTranscriptTarget(
     sessionKey: turn.sessionTarget.sessionKey,
     storePath: turn.sessionTarget.storePath,
   });
-  if (currentEntry?.sessionId !== turn.sessionId) {
+  if (
+    currentEntry?.sessionId !== turn.sessionId ||
+    (turn.sessionTarget.expectedLifecycleRevision !== undefined &&
+      currentEntry.lifecycleRevision !== turn.sessionTarget.expectedLifecycleRevision) ||
+    (turn.sessionTarget.expectedWriterRunId !== undefined &&
+      currentEntry.activeWriterRunId !== turn.sessionTarget.expectedWriterRunId)
+  ) {
     throw new Error("Cloud worker transcript identity is no longer current");
   }
   return {
@@ -37,5 +48,7 @@ export function resolveWorkerTurnTranscriptTarget(
     sessionId: turn.sessionId,
     sessionKey: turn.sessionTarget.sessionKey,
     storePath: turn.sessionTarget.storePath,
+    expectedLifecycleRevision: turn.sessionTarget.expectedLifecycleRevision,
+    expectedWriterRunId: turn.sessionTarget.expectedWriterRunId,
   };
 }

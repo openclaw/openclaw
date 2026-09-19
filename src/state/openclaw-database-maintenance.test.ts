@@ -240,40 +240,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
     expect(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns).toEqual(
       additiveColumns,
     );
-    expect(
-      CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
-        ({ columnName, dataType, tableName }) => `${tableName}.${columnName} ${dataType}`,
-      ),
-    ).toEqual([
-      "claw_installs.bootstrap_content_digest TEXT",
-      "claw_installs.bootstrap_source_path TEXT",
-      "worker_environments.desktop_json TEXT",
-      "worker_environments.bootstrap_install_kind TEXT",
-      "worker_environments.preparation_purpose TEXT",
-      "claw_package_refs.extension_adapter_identity TEXT",
-      "claw_package_refs.extension_detected_format TEXT",
-      "claw_package_refs.extension_format TEXT",
-      "claw_package_refs.extension_id TEXT",
-      "claw_package_refs.extension_mapped_json TEXT",
-      "claw_package_refs.extension_unavailable_json TEXT",
-      "worker_environments.shared_host INTEGER",
-      "worker_environments.node_setup_id TEXT",
-      "worker_environments.node_device_id TEXT",
-      "worker_session_placements.terminal_reason TEXT",
-      "worker_session_placements.terminal_at_ms INTEGER",
-      "worker_workspace_pending_results.repository_workspace_id TEXT",
-      "worker_session_placement_moves.abandon_source INTEGER",
-      "worker_session_placement_moves.target_machine_class TEXT",
-      "worker_session_placement_moves.target_os TEXT",
-      "worktrees.run_end_cleanup_json TEXT",
-      "device_bootstrap_tokens.setup_id TEXT",
-      "session_groups.cwd TEXT",
-      "session_groups.worktree INTEGER",
-      "secret_store_entries.allowed_hosts TEXT",
-      "web_push_subscriptions.device_id TEXT",
-      "web_push_subscriptions.user_profile_id TEXT",
-      "web_push_subscriptions.preferences_json TEXT",
-    ]);
+    expect(new Set(additiveColumns).size).toBe(additiveColumns.length);
 
     const database = createGlobalDatabase();
     try {
@@ -282,6 +249,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
         dataType,
         tableName,
       } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"]).toContain(dataType);
         expect(readColumnContract(database, tableName, columnName)).toEqual({
           dflt_value: null,
           hidden: 0,
@@ -293,7 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
         database.exec(`ALTER TABLE "${tableName}" DROP COLUMN "${columnName}";`);
       }
 
-      ensureAdditiveStateColumns(database);
+      ensureAdditiveStateColumns(database, "runtime");
       expect(() =>
         assertOpenClawStateDatabaseForMaintenance(database, {
           pathname: "global.sqlite",

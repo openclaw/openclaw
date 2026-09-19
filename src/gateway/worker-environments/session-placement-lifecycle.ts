@@ -64,7 +64,9 @@ type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "f
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
 
 export function isFailedWorkerPlacementEnvironmentGone(params: {
-  environmentService: SessionWorkerPlacementContext["workerEnvironmentService"];
+  environmentService:
+    | Pick<NonNullable<SessionWorkerPlacementContext["workerEnvironmentService"]>, "get">
+    | undefined;
   placement: FailedPlacement;
 }): boolean {
   if (params.placement.environmentId === null) {
@@ -105,7 +107,11 @@ export function resolveWorkerPlacementArchiveRestoreError(params: {
   key: string;
   placement: WorkerSessionPlacementRecord | undefined;
 }): string | undefined {
-  if (!params.placement || isWorkerPlacementSafeForMutation(params.context, params.placement)) {
+  if (
+    !params.placement ||
+    (params.placement.state === "failed" && !params.placement.turnClaim) ||
+    isWorkerPlacementSafeForMutation(params.context, params.placement)
+  ) {
     return undefined;
   }
   return `Session ${params.key} cannot change archive state while cloud worker placement is ${params.placement.state}.`;
@@ -212,6 +218,33 @@ export function prepareSessionWorkerPlacementMutationCheck(
   return assertCurrent;
 }
 
+/** Archive visibility can change while a failed placement retains its physical cleanup. */
+export function prepareSessionWorkerPlacementArchiveCheck(
+  params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
+): { assertCurrent: () => void; cleanupPending: boolean } {
+  const expected = readSessionWorkerPlacement(params);
+  if (expected?.state !== "failed") {
+    return {
+      assertCurrent: prepareSessionWorkerPlacementMutationCheck(params),
+      cleanupPending: false,
+    };
+  }
+  const assertCurrent = () => {
+    const current = readSessionWorkerPlacement(params);
+    if (!samePlacementOwner(expected, current) || current?.turnClaim) {
+      throw new Error(`Worker session placement ${params.sessionId} changed before archive`);
+    }
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    cleanupPending: !isFailedWorkerPlacementEnvironmentGone({
+      environmentService: params.context.workerEnvironmentService,
+      placement: expected,
+    }),
+  };
+}
+
 /** Capture retirement without erasing cloud affinity before fallible session cleanup. */
 export function prepareSessionWorkerPlacementRetirement(
   params: Pick<SessionWorkerPlacementMutationParams, "context" | "sessionId">,
@@ -284,7 +317,12 @@ export function prepareSessionWorkerPlacementStop(params: {
   };
   const stop = async () => {
     beforeDrain();
-    if (!expected || isWorkerPlacementSafeForMutation(context, expected) || !sessionId) {
+    if (
+      !expected ||
+      (params.action === "archive" && expected.state === "failed") ||
+      isWorkerPlacementSafeForMutation(context, expected) ||
+      !sessionId
+    ) {
       return;
     }
     if (!context.workerPlacementDispatchService?.reclaim) {

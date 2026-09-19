@@ -14,6 +14,7 @@ import {
 import { buildSessionCreationStamp } from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveEventSessionRoutingPolicy } from "../../../infra/event-session-routing.js";
 import {
@@ -26,10 +27,8 @@ import {
   normalizeOptionalAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
-import {
-  recordSessionCreated,
-  recordSubagentSpawned,
-} from "../../../sessions/session-state-events.js";
+import { recordSessionCreated } from "../../../sessions/session-created.js";
+import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
@@ -289,6 +288,21 @@ export async function spawnAcpDirect(
     targetAgentId,
     ctx,
   });
+  const ownership = resolveSubagentSpawnOwnership({
+    cfg,
+    agentSessionKey: ctx.agentSessionKey,
+    completionOwnerKey: ctx.completionOwnerKey,
+  });
+  const requesterTarget = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: ownership.completionRequesterSessionKey,
+    agentId: ctx.requesterAgentIdOverride,
+  });
+  const completionRequesterSessionId = loadSessionEntryReadOnly({
+    storePath: requesterTarget.storePath,
+    sessionKey: requesterTarget.canonicalKey,
+    clone: false,
+  })?.sessionId;
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
     cfg,
     store: subagentStore,
@@ -418,11 +432,6 @@ export async function spawnAcpDirect(
     ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
     : undefined;
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
-  const ownership = resolveSubagentSpawnOwnership({
-    cfg,
-    agentSessionKey: ctx.agentSessionKey,
-    completionOwnerKey: ctx.completionOwnerKey,
-  });
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
     channel: requesterOrigin?.channel,
@@ -512,7 +521,7 @@ export async function spawnAcpDirect(
       });
       // ACP bypasses the native adapter, so seed the same child lineage before dispatch.
       if (childCreationEntry) {
-        recordSessionCreated({
+        recordSessionCreated(cfg, {
           sessionKey,
           agentId: targetAgentId,
           entry: childCreationEntry,
@@ -529,6 +538,7 @@ export async function spawnAcpDirect(
           ? startAcpSpawnParentStreamRelay({
               runId,
               parentSessionKey,
+              requesterAgentId,
               childSessionKey: sessionKey,
               childSessionId: state.initializedSession.sessionId,
               agentId: targetAgentId,
@@ -619,6 +629,7 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
         controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
+        completionRequesterSessionId,
         requesterOrigin,
         progressOrigin,
         requesterDisplayKey: ownership.completionRequesterDisplayKey,

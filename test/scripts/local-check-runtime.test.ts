@@ -542,7 +542,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
   );
 });
 
-describe("TypeScript bootstrap dependency ownership", () => {
+describe("Tooling bootstrap dependency ownership", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   function fixture() {
@@ -570,6 +570,100 @@ describe("TypeScript bootstrap dependency ownership", () => {
     fs.writeFileSync(path.join(tsx, "esm.mjs"), "export {};\n");
     return { checkout, modules, entry: pathToFileURL(path.join(tsx, "esm.mjs")).href };
   }
+
+  function nativeFixture() {
+    const root = fs.realpathSync(createTempDir("openclaw-native-toolchain-"));
+    const checkout = path.join(root, "checkout");
+    const lib = path.join(checkout, "scripts", "lib");
+    fs.mkdirSync(lib, { recursive: true });
+    for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts"]) {
+      fs.copyFileSync(path.resolve("scripts", "lib", file), path.join(lib, file));
+    }
+    fs.writeFileSync(
+      path.join(checkout, "scripts", "entry.mjs"),
+      'import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs"; await runNodeCliShim(import.meta.url, { implementation: "./implementation.mts" });\n',
+    );
+    fs.writeFileSync(
+      path.join(checkout, "scripts", "implementation.mts"),
+      'import value from "fixture-dependency"; console.log(value);\n',
+    );
+    const configured = " modules";
+    const modules = path.join(checkout, configured);
+    const dependency = path.join(modules, "fixture-dependency");
+    fs.mkdirSync(dependency, { recursive: true });
+    fs.writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "fixture-dependency", type: "module", exports: "./index.js" }),
+    );
+    fs.writeFileSync(path.join(dependency, "index.js"), 'export default "configured";\n');
+    const run = (overrides: NodeJS.ProcessEnv) =>
+      spawnSync(process.execPath, [path.join(checkout, "scripts", "entry.mjs")], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          PNPM_CONFIG_MODULES_DIR: undefined,
+          pnpm_config_modules_dir: undefined,
+          npm_config_modules_dir: undefined,
+          ...overrides,
+        },
+      });
+    return { checkout, modules, configured, run };
+  }
+
+  it.each(["PNPM_CONFIG_MODULES_DIR", "pnpm_config_modules_dir", "npm_config_modules_dir"])(
+    "loads native child packages without TSX through %s, relative to the shim checkout",
+    (key) => {
+      const { checkout, modules, configured, run } = nativeFixture();
+      const result = run({ [key]: configured });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("configured");
+      expect(fs.realpathSync(path.join(checkout, "node_modules"))).toBe(modules);
+      expect(fs.existsSync(path.join(modules, "tsx"))).toBe(false);
+    },
+  );
+
+  it.each(["directory", "link"])("keeps native child dependencies in the owned %s", (kind) => {
+    const { checkout, modules, configured, run } = nativeFixture();
+    const owned = path.join(checkout, "owned");
+    fs.cpSync(modules, owned, { recursive: true });
+    fs.writeFileSync(
+      path.join(owned, "fixture-dependency", "index.js"),
+      'export default "owned";\n',
+    );
+    const local = path.join(checkout, "node_modules");
+    if (kind === "link") {
+      fs.symlinkSync(owned, local, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.renameSync(owned, local);
+    }
+    const before = fs.lstatSync(local);
+    const result = run({ PNPM_CONFIG_MODULES_DIR: configured });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("owned");
+    expect(fs.lstatSync(local).ino).toBe(before.ino);
+    expect(fs.lstatSync(local).isSymbolicLink()).toBe(kind === "link");
+  });
+
+  it.each([false, true])(
+    "preserves native empty primary alias with npm fallback=%s",
+    (fallback) => {
+      const { checkout, configured, run } = nativeFixture();
+      const result = run({
+        PNPM_CONFIG_MODULES_DIR: "",
+        pnpm_config_modules_dir: configured,
+        npm_config_modules_dir: fallback ? configured : undefined,
+      });
+      expect(result.status, result.stderr).toBe(fallback ? 0 : 1);
+      if (fallback) {
+        expect(result.stdout.trim()).toBe("configured");
+      } else {
+        expect(result.stderr).toContain("Cannot find package 'fixture-dependency'");
+        expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
+      }
+    },
+  );
 
   it.each([false, true])(
     "refuses a missing worktree install with an empty override=%s",

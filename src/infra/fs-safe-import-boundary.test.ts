@@ -70,18 +70,38 @@ function walkSourceFiles(dir: string): string[] {
   return files;
 }
 
-function sourceWithoutOpenShellMoveImports(filePath: string, source: string): string {
-  if (filePath !== "extensions/openshell/src/backend.ts") {
+const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
+  string,
+  Record<string, { values: readonly string[]; types?: readonly string[] }>
+> = {
+  "extensions/openshell/src/backend.ts": {
+    "@openclaw/fs-safe/atomic": {
+      values: ["movePathWithCopyFallback"],
+      types: ["MovePathPublicationReceipt"],
+    },
+  },
+  "extensions/file-transfer/src/node-host/file-write.ts": {
+    "@openclaw/fs-safe/advanced": { values: ["overwriteFileHandle"] },
+  },
+  "extensions/file-transfer/src/tools/dir-fetch-tool.ts": {
+    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+  },
+};
+
+function sourceWithoutPluginOwnedImports(filePath: string, source: string): string {
+  const modules = PLUGIN_OWNED_FS_SAFE_IMPORTS[filePath];
+  if (!modules) {
     return source;
   }
   const parsed = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest);
   let checkedSource = source;
   for (const statement of parsed.statements.toReversed()) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== "@openclaw/fs-safe/atomic"
-    ) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue;
+    }
+    const allowed = modules[statement.moduleSpecifier.text];
+    if (!allowed) {
       continue;
     }
     const clause = statement.importClause;
@@ -95,14 +115,14 @@ function sourceWithoutOpenShellMoveImports(filePath: string, source: string): st
       !bindings.elements.every((element) => {
         const name = (element.propertyName ?? element.name).text;
         return (
-          name === "movePathWithCopyFallback" ||
-          (name === "MovePathPublicationReceipt" && (clause.isTypeOnly || element.isTypeOnly))
+          allowed.values.includes(name) ||
+          (allowed.types?.includes(name) && (clause.isTypeOnly || element.isTypeOnly))
         );
       })
     ) {
       continue;
     }
-    // This plugin owns the move dependency to preserve its supported host floor.
+    // These plugins own their dependency; path admission still uses OpenClaw policy.
     const specifier = statement.moduleSpecifier;
     checkedSource =
       checkedSource.slice(0, specifier.getStart(parsed)) + checkedSource.slice(specifier.end);
@@ -114,11 +134,45 @@ function hasDisallowedFsSafeImport(filePath: string, source: string): boolean {
   if (ALLOWED_PREFIXES.some((prefix) => filePath.startsWith(prefix))) {
     return false;
   }
-  const checked = sourceWithoutOpenShellMoveImports(filePath, source);
+  const checked = sourceWithoutPluginOwnedImports(filePath, source);
   return checked.includes('"@openclaw/fs-safe') || checked.includes("'@openclaw/fs-safe");
 }
 
 describe("fs-safe import boundary", () => {
+  it("limits File Transfer's archive inventory helpers", () => {
+    const owner = "extensions/file-transfer/src/tools/dir-fetch-tool.ts";
+    const source =
+      'import { sha256File as hash } from "@openclaw/fs-safe/durability";\n' +
+      'import { walkDirectory as walk } from "@openclaw/fs-safe/walk";';
+    expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
+    expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(
+        owner,
+        'import { sha256File, publishFileExclusive } from "@openclaw/fs-safe/durability";',
+      ),
+    ).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(owner, `${source}\nimport { root } from "@openclaw/fs-safe/root";`),
+    ).toBe(true);
+  });
+
+  it("limits File Transfer's descriptor overwrite helper", () => {
+    const owner = "extensions/file-transfer/src/node-host/file-write.ts";
+    const source = 'import { overwriteFileHandle as operation } from "@openclaw/fs-safe/advanced";';
+    expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
+    expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(
+        owner,
+        'import { overwriteFileHandle, root } from "@openclaw/fs-safe/advanced";',
+      ),
+    ).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(owner, `${source}\nimport { root } from "@openclaw/fs-safe/root";`),
+    ).toBe(true);
+  });
+
   it.each([
     [
       "move and receipt",

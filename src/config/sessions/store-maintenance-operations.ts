@@ -220,7 +220,7 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     initialUnarchivedCount: countUnarchivedSessionEntries(params.operation.store),
     forceMaintenance: params.forceMaintenance,
-    preserveKeys: params.preserveSessionKeys,
+    readPreserveKeys: () => params.preserveSessionKeys,
     readAgeCandidates: () => params.operation.store,
     readCapCandidates: () => ({
       store: params.operation.store,

@@ -227,6 +227,7 @@ async function prepareSimpleCompletionModelCore(
     params.agentDir,
     params.cfg,
     {
+      assertCurrent,
       modelIdSource: params.modelIdSource,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.allowBundledStaticCatalogFallback !== undefined
@@ -335,11 +336,11 @@ async function prepareSimpleCompletionModelCore(
         forceResolve,
         resolveModel: ({ config, authProfileId, authProfileMode }) =>
           modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
+            assertCurrent,
             modelIdSource: "selected",
             ...(params.agentId ? { agentId: params.agentId } : {}),
             skipAgentDiscovery: true,
             allowBundledStaticCatalogFallback: true,
-            preferBundledStaticCatalogTransport: true,
             authProfileId,
             authProfileMode,
           }),
@@ -517,27 +518,6 @@ async function acquirePreparedSimpleCompletionRuntime(
 type AcquiredSimpleCompletionModel =
   | (Extract<PreparedSimpleCompletionModel, { model: Model }> & AsyncDisposable)
   | Extract<PreparedSimpleCompletionModel, { error: string }>;
-
-/** Acquire the exact provider/model already selected by a finite internal caller. */
-export async function acquireSimpleCompletionModel(
-  params: Omit<Parameters<typeof prepareSimpleCompletionModel>[0], "preparedModelRuntime">,
-): Promise<AcquiredSimpleCompletionModel> {
-  return await acquirePreparedSimpleCompletionModel(
-    params,
-    [
-      {
-        provider: params.provider,
-        modelId: params.modelId,
-        ...(params.agentRuntimeId ? { runtime: params.agentRuntimeId } : {}),
-      },
-    ],
-    (context) =>
-      prepareSimpleCompletionModelCore(
-        { ...params, agentDir: context.preparedModelRuntime.agentDir },
-        context,
-      ),
-  );
-}
 
 type AcquiredSimpleCompletionModelForAgent =
   | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & AsyncDisposable)

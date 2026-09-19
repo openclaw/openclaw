@@ -37,6 +37,10 @@ export class TeamReportsStore {
     return this.execute("latestSourceWarnings", undefined);
   }
 
+  latestPeople() {
+    return this.execute("latestPeople", undefined);
+  }
+
   getDayReports(sinceMs: number, untilMs: number) {
     return this.execute("getDayReports", { sinceMs, untilMs });
   }

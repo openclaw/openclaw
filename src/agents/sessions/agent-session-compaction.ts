@@ -63,11 +63,11 @@ export const agentSessionSetContextReplacementHook: unique symbol = Symbol.for(
 );
 
 export abstract class AgentSessionCompaction extends AgentSessionInspection {
-  private onContextReplaced?: (tokensAfter: number) => void;
+  private onContextReplaced?: (tokensAfter: number, tokensBefore: number) => void;
   private assertContextReplacementActive?: () => void;
 
   [agentSessionSetContextReplacementHook](
-    callback: ((tokensAfter: number) => void) | undefined,
+    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
     assertActive?: () => void,
   ): void {
     this.onContextReplaced = callback;
@@ -452,7 +452,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
             pendingTokens: 0,
           })
         : estimateContextTokens(this.agent.state.messages).tokens;
-      onContextReplaced?.(tokensAfter);
+      onContextReplaced?.(tokensAfter, completedCompaction.tokensBefore);
       return { entryId, tokensAfter };
     });
     if (committed === undefined) {

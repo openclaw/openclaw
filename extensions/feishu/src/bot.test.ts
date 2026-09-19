@@ -2723,7 +2723,7 @@ describe("handleFeishuMessage command authorization", () => {
   });
 
   it("does not partially parse malformed merge_forward create_time values", () => {
-    const content = JSON.stringify([
+    const items = [
       {
         message_id: "container",
         msg_type: "merge_forward",
@@ -2743,15 +2743,15 @@ describe("handleFeishuMessage command authorization", () => {
         body: { content: JSON.stringify({ text: "valid" }) },
         create_time: "1000",
       },
-    ]);
+    ];
 
-    expect(parseMergeForwardContent({ content })).toBe(
+    expect(parseMergeForwardContent(items)).toBe(
       "[Merged and Forwarded Messages]\n- partial\n- valid",
     );
   });
 
   it("bounds merged-forward prompt content and marks truncation", () => {
-    const content = JSON.stringify([
+    const items = [
       {
         message_id: "container",
         msg_type: "merge_forward",
@@ -2763,9 +2763,9 @@ describe("handleFeishuMessage command authorization", () => {
         msg_type: "text",
         body: { content: JSON.stringify({ text: "😀".repeat(20_000) }) },
       },
-    ]);
+    ];
 
-    const parsed = parseMergeForwardContent({ content });
+    const parsed = parseMergeForwardContent(items);
 
     expect(parsed.length).toBeLessThanOrEqual(20_000);
     expect(parsed.endsWith("\n... [Merged-forward content truncated]")).toBe(true);

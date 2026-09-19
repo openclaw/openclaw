@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 export function buildPromotionMarker(candidateKey: string): string {
@@ -21,73 +23,43 @@ export class MemoryWriteConflictError extends Error {
   }
 }
 
-async function realpathMemoryPath(filePath: string): Promise<string> {
-  if (!process.versions.bun || process.platform === "win32") {
-    return await fs.realpath(filePath);
-  }
+export class MemoryAtomicPublicationError extends Error {
+  readonly code: ReturnType<typeof extractErrorCode>;
 
-  // Bun compatibility: keep this segment-wise path walk until fs.realpath preserves
-  // symlink semantics for `symlink/..`; lexical normalization can escape the target dir.
-  const parsed = path.parse(filePath);
-  let current = parsed.root || (await fs.realpath("."));
-  const relative = parsed.root ? filePath.slice(parsed.root.length) : filePath;
-  const assertDirectory = async () => {
-    await fs.stat(`${current}${path.sep}`);
-  };
-  for (const segment of relative.split(path.sep)) {
-    if (!segment) {
-      continue;
-    }
-    if (segment === ".") {
-      await assertDirectory();
-      continue;
-    }
-    if (segment === "..") {
-      await assertDirectory();
-      current = path.dirname(current);
-      continue;
-    }
-    current = await fs.realpath(path.join(current, segment));
+  constructor(
+    readonly publication: "uncertain" | "committed",
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = cause instanceof Error ? cause.name : "Error";
+    this.code = extractErrorCode(cause);
   }
-  if (relative.endsWith(path.sep)) {
-    await assertDirectory();
-  }
-  return current;
 }
 
 export async function resolveMemoryWritePath(filePath: string): Promise<string> {
-  try {
-    return await realpathMemoryPath(filePath);
-  } catch (err) {
-    const hasTrailingSeparator =
-      filePath.endsWith(path.sep) ||
-      (process.platform === "win32" && filePath.endsWith(path.posix.sep));
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" || hasTrailingSeparator) {
-      throw err;
+  // Keep existing-file lookups asynchronous where realpath preserves physical traversal.
+  if (!process.versions.bun || process.platform === "win32") {
+    try {
+      return await fs.realpath(filePath);
+    } catch (error) {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
     }
   }
-
-  // Canonicalize each parent before applying a relative link target. Lexical
-  // normalization would change `..` semantics when an earlier component is a symlink.
-  const parentPath = await realpathMemoryPath(path.dirname(filePath));
-  const canonicalPath = path.join(parentPath, path.basename(filePath));
-  let linkTarget: string;
-  try {
-    linkTarget = await fs.readlink(canonicalPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || code === "EINVAL") {
-      return canonicalPath;
-    }
-    throw err;
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(filePath);
+  if (unresolvedSegments.length === 0) {
+    return existingPath;
   }
-  const isWindowsRootRelative = process.platform === "win32" && /^[\\/](?![\\/])/.test(linkTarget);
-  const targetPath = isWindowsRootRelative
-    ? `${path.parse(parentPath).root.replace(/[\\/]$/, "")}${linkTarget}`
-    : path.isAbsolute(linkTarget)
-      ? linkTarget
-      : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
-  return await resolveMemoryWritePath(targetPath);
+  // Only the leaf may be missing; retain unresolved dots and trailing separators.
+  if (unresolvedSegments.length !== 1) {
+    throw Object.assign(new Error(`ENOENT: no such file or directory, realpath '${filePath}'`), {
+      code: "ENOENT",
+      path: filePath,
+      syscall: "realpath",
+    });
+  }
+  return path.join(existingPath, unresolvedSegments[0]!);
 }
 
 export async function readMemoryContent(filePath: string): Promise<string> {
@@ -182,6 +154,11 @@ export async function commitMemoryContent(
     return;
   }
   const memoryDirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
+  const expectedHash = params.expectedHash;
+  const replacementContent = params.content;
+  const publication: {
+    state: "unattempted" | "unchanged-after-rejection" | "uncertain" | "committed";
+  } = { state: "unattempted" };
   try {
     await replaceFileAtomic({
       filePath: params.filePath,
@@ -208,7 +185,29 @@ export async function commitMemoryContent(
           mkdir: fs.mkdir,
           chmod: fs.chmod,
           writeFile: fs.writeFile,
-          rename: fs.rename,
+          rename: async (from, to) => {
+            publication.state = "uncertain";
+            try {
+              await fs.rename(from, to);
+            } catch (error) {
+              if (
+                isAtomicReplacePermissionError(error) &&
+                expectedHash &&
+                hashMemoryContent(replacementContent) !== expectedHash
+              ) {
+                // Errno alone proves no outcome. Reconcile this rejected rename's target.
+                try {
+                  if (hashMemoryContent(await readMemoryContent(String(to))) === expectedHash) {
+                    publication.state = "unchanged-after-rejection";
+                  }
+                } catch {
+                  // An unavailable preimage leaves the dispatched mutation uncertain.
+                }
+              }
+              throw error;
+            }
+            publication.state = "committed";
+          },
           copyFile: fs.copyFile,
           unlink: fs.unlink,
           rm: fs.rm,
@@ -232,6 +231,9 @@ export async function commitMemoryContent(
         conflictMessage: params.conflictMessage,
       }))
     ) {
+      if (publication.state === "uncertain" || publication.state === "committed") {
+        throw new MemoryAtomicPublicationError(publication.state, error);
+      }
       throw error;
     }
   }

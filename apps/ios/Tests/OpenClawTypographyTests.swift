@@ -22,6 +22,15 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func `gateway picker uses branded typography`() throws {
+        let source = try String(
+            contentsOf: Self.sourceURL("RootSidebarGatewayControl.swift"),
+            encoding: .utf8)
+        #expect(source.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(source.contains(".font(OpenClawType.captionMedium)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `thread controls use branded typography`() throws {
         let support = try String(
             contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),

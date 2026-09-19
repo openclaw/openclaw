@@ -4,6 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { vi } from "vitest";
 import { deleteTestEnvValue } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import * as backupShared from "./backup-shared.js";
 
 const backupTestMocks = vi.hoisted(() => ({
@@ -42,6 +43,7 @@ vi.mock("./backup-verify.js", () => ({
 }));
 
 export async function resetBackupTempHome(tempHome: { home: string }) {
+  await cleanupSessionStateForTest({ stateDir: path.join(tempHome.home, ".openclaw") });
   await fs.rm(tempHome.home, { recursive: true, force: true });
   await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
   deleteTestEnvValue("OPENCLAW_CONFIG_PATH");

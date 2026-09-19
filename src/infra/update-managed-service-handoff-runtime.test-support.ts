@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import type {
   ManagedRepairBoundary,
   ManagedServiceBoundaryOptions,
@@ -42,8 +44,7 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     register({ tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))} });
   `;
   const ledgerRuntimeImport = `
-    ${sourceRuntimeImport}
-    const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
+    const ledger = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)});
   `;
   if (ledger) {
     await fs.appendFile(

@@ -1,4 +1,9 @@
-import { cloudMachinesForOs, defaultCloudOs, type DraftCloudProfile } from "./discovery.ts";
+import {
+  cloudMachinesForOs,
+  defaultCloudMachine,
+  defaultCloudOs,
+  type DraftCloudProfile,
+} from "./discovery.ts";
 
 type CloudOverride = { os?: string; machineClass?: string };
 
@@ -76,7 +81,9 @@ export class DraftCloudMachineState {
     }
     this.applyPending(
       profileId,
-      machine.default === true ? undefined : machine.id,
+      defaultCloudMachine(profile, this.selectedOs(profile))?.id === machine.id
+        ? undefined
+        : machine.id,
       this.resolveOs(profileId),
     );
     onChange?.();

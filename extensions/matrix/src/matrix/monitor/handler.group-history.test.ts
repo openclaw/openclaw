@@ -16,6 +16,7 @@
  *   user: @agent_a msg C     (triggers agent_a; agent_a sees [B] in history)
  */
 
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
@@ -88,17 +89,6 @@ function makeDevRoute(agentId: string) {
 beforeEach(() => {
   installMatrixMonitorTestRuntime();
 });
-
-function deferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 type HistoryHarnessOptions = NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>;
 type FinalizeInboundContext = NonNullable<HistoryHarnessOptions["finalizeInboundContext"]>;
@@ -326,7 +316,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
   });
 
   it("historyLimit=0 does not serialize same-room ingress", async () => {
-    const firstUserId = deferred<string>();
+    const firstUserId = createDeferred<string>();
     let getUserIdCalls = 0;
     const { handler } = createGroupHistoryHandler(undefined, {
       historyLimit: 0,

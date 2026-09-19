@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
+  readdirSync,
   readlinkSync,
   realpathSync,
   symlinkSync,
@@ -9,17 +11,19 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/install-cli.sh";
+const nodeExecutable = requireNodeTool("node");
 
 function fixture() {
   const root = tempDirs.make("openclaw-freebsd-installer-");
   const bin = join(root, "system bin");
   const prefix = join(root, "prefix");
   mkdirSync(bin);
-  symlinkSync(process.execPath, join(bin, "node"));
+  symlinkSync(nodeExecutable, join(bin, "node"));
   writeFileSync(join(bin, "npm"), "#!/usr/bin/env node\nconsole.log('11.19.1');\n", {
     mode: 0o755,
   });
@@ -61,11 +65,11 @@ describe("FreeBSD CLI runtime installation", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain('"method":"system"');
     const active = join(prefix, "tools", "node", "bin");
-    expect(realpathSync(join(active, "node"))).toBe(realpathSync(process.execPath));
+    expect(realpathSync(join(active, "node"))).toBe(realpathSync(nodeExecutable));
     expect(realpathSync(join(active, "npm"))).toBe(join(bin, "npm"));
     const rerun = install(active, prefix);
     expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-    expect(realpathSync(join(active, "node"))).toBe(realpathSync(process.execPath));
+    expect(realpathSync(join(active, "node"))).toBe(realpathSync(nodeExecutable));
     expect(realpathSync(join(active, "npm"))).toBe(join(bin, "npm"));
   });
 
@@ -101,7 +105,7 @@ describe("FreeBSD CLI runtime installation", () => {
         ${failure === "requested" ? "NODE_VERSION=99.0.0; NODE_VERSION_REQUESTED=1" : ""}
         `,
         {
-          FIXTURE_NODE: process.execPath,
+          FIXTURE_NODE: nodeExecutable,
           FIXTURE_CANDIDATE_NODE:
             failure === "missing"
               ? ""
@@ -139,4 +143,127 @@ describe("FreeBSD CLI runtime installation", () => {
     expect(result.stdout).toContain("pkg install git");
     expect(result.stdout).not.toContain("unexpected");
   });
+});
+
+describe("FreeBSD source-install admission", () => {
+  it.each(
+    ["--install-method git", "--method git", "--git", "--github", "--npm --git", ""].flatMap(
+      (args) => [false, true].map((json) => ({ args, json })),
+    ),
+  )("refuses $args before installation side effects (JSON: $json)", ({ args, json }) => {
+    const { root, prefix } = fixture();
+    const oldRuntime = join(root, "old-runtime");
+    const checkout = join(root, "checkout");
+    const temporary = join(root, "temporary");
+    mkdirSync(oldRuntime);
+    mkdirSync(checkout);
+    mkdirSync(temporary);
+    mkdirSync(join(prefix, "bin"), { recursive: true });
+    mkdirSync(join(prefix, "tools"));
+    symlinkSync(oldRuntime, join(prefix, "tools", "node"));
+    writeFileSync(join(prefix, "bin", "openclaw"), "preserve installed CLI");
+    writeFileSync(join(checkout, "pnpm-workspace.yaml"), "preserve source allowlist");
+    const result = run(
+      `
+      os_detect() { printf 'freebsd\\n'; }
+      prepare_tmpdir() { printf 'unexpected temporary setup\\n'; exit 91; }
+      preflight_fresh_git_disk_space() { printf 'unexpected disk preflight\\n'; exit 92; }
+      install_node() { printf 'unexpected runtime change\\n'; exit 93; }
+      install_openclaw_from_git() { printf 'unexpected checkout change\\n'; exit 94; }
+      refresh_gateway_service_if_loaded() { printf 'unexpected service change\\n'; exit 95; }
+      main ${json ? "--json" : ""} ${args}
+      `,
+      {
+        HOME: root,
+        TMPDIR: temporary,
+        OPENCLAW_PREFIX: prefix,
+        OPENCLAW_GIT_DIR: checkout,
+        OPENCLAW_INSTALL_METHOD: args ? "npm" : "git",
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toBe("");
+    const message = json
+      ? (JSON.parse(result.stdout) as { event: string; message: string }).message
+      : result.stdout;
+    if (json) {
+      expect(JSON.parse(result.stdout)).toMatchObject({ event: "error" });
+    } else {
+      expect(result.stdout).toMatch(/^ERROR: /);
+    }
+    expect(message).toContain("Source/git installation is unsupported on FreeBSD");
+    expect(message).toContain("--install-method npm");
+    expect(message).toContain("published version or compatible built .tgz");
+    expect(message).toContain("same --prefix");
+    expect(message).toContain("pkg/Ports-managed");
+    expect(result.stdout).not.toContain("unexpected");
+    expect(readFileSync(join(prefix, "bin", "openclaw"), "utf8")).toBe("preserve installed CLI");
+    expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);
+    expect(readdirSync(join(prefix, "tools"))).toEqual(["node"]);
+    expect(readFileSync(join(checkout, "pnpm-workspace.yaml"), "utf8")).toBe(
+      "preserve source allowlist",
+    );
+    expect(readdirSync(checkout)).toEqual(["pnpm-workspace.yaml"]);
+    expect(readdirSync(temporary)).toEqual([]);
+  });
+
+  it.each([
+    ["freebsd", "--git --npm"],
+    ["freebsd", "--github --install-method npm"],
+    ["freebsd", "--method npm"],
+    ["linux", "--git"],
+    ["darwin", "--git"],
+    ["linux", "--npm"],
+    ["darwin", "--npm"],
+  ])("keeps %s %s on its selected install route", (os, args) => {
+    const result = run(
+      `
+      os_detect() { printf '${os}\\n'; }
+      arch_detect() { printf 'x64\\n'; }
+      prepare_tmpdir() { :; }
+      preflight_fresh_git_disk_space() { :; }
+      install_node() { printf 'selected:%s:%s\\n' "$1" "$INSTALL_METHOD"; exit 73; }
+      main ${args}
+      `,
+      { OPENCLAW_INSTALL_METHOD: "git" },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(73);
+    expect(result.stdout.trim()).toBe(`selected:${os}:${args === "--git" ? "git" : "npm"}`);
+  });
+
+  it("keeps the FreeBSD Node-only refusal ahead of the ignored git method", () => {
+    const { root, prefix } = fixture();
+    const result = run(
+      `
+      os_detect() { printf 'freebsd\\n'; }
+      arch_detect() { printf 'x64\\n'; }
+      main --node-only --git
+      `,
+      { HOME: root, TMPDIR: root, OPENCLAW_PREFIX: prefix },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Private Node.js recovery is unavailable on FreeBSD");
+    expect(result.stdout).not.toContain("Source/git");
+    expect(existsSync(prefix)).toBe(false);
+  });
+
+  it.each(["main", "github:openclaw/openclaw#main"])(
+    "does not recommend git for the rejected npm source target %s",
+    (version) => {
+      const result = run(
+        `
+        os_detect() { printf 'freebsd\\n'; }
+        JSON=1
+        install_openclaw
+        `,
+        { OPENCLAW_VERSION: version },
+      );
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        event: "error",
+        message: expect.stringContaining("--install-method npm"),
+      });
+      expect(result.stdout).not.toContain("--install-method git");
+    },
+  );
 });

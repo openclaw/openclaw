@@ -9,7 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "./relations.js";
 import type { MatrixClient } from "./sdk.js";
-import type { MatrixMessageWireDispatch } from "./sdk/client-base.js";
+import type { MatrixMessageWireDispatch } from "./sdk/message-wire-dispatch.js";
 import { withResolvedMatrixSendClient } from "./send/client.js";
 import { createMatrixSendReceipt, type MatrixReceiptEvent } from "./send/receipt.js";
 import { resolveMatrixRoomId } from "./send/targets.js";

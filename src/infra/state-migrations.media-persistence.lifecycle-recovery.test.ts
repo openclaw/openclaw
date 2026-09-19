@@ -4,6 +4,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -33,6 +34,7 @@ describe("media persistence gateway lifecycle recovery", () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
     database.exec(`
       DROP TABLE session_participants;
       PRAGMA user_version = 14;

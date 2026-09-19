@@ -13,8 +13,9 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
-import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
+import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
+import { dockPanelStyles } from "../dock-panel-styles.ts";
 import { icons } from "../icons.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,

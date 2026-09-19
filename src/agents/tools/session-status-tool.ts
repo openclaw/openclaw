@@ -64,8 +64,8 @@ import {
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalogCore,
 } from "../model-selection.js";
+import { resolveThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
@@ -493,7 +493,6 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
   });
   const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -532,7 +531,7 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     catalog,
     defaultProvider: currentProvider,
-    defaultModel: currentModel,
+    defaultModel: configDefault,
     agentId: params.agentId,
     allowManifestNormalization: true,
     allowPluginNormalization: true,
@@ -1155,18 +1154,14 @@ export function createSessionStatusTool(opts?: {
             resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
             resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
             resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-            resolveDefaultThinkingLevel: () =>
-              resolveThinkingDefaultWithRuntimeCatalogCore({
+            resolveDefaultThinkingLevel: async (selection) =>
+              resolveThinkingDefault({
                 cfg,
-                provider: providerForCard,
-                model: defaultModelForCard,
-                loadRuntimeCatalog: () =>
-                  loadPublishedPreparedModelCatalog({
-                    config: cfg,
-                    agentId,
-                    agentDir: selectedAgentDir,
-                    readOnly: true,
-                  }),
+                agentId,
+                provider: selection?.provider ?? providerForCard,
+                model: selection?.model ?? defaultModelForCard,
+                agentRuntime: selection?.agentRuntime,
+                catalog: thinkingCatalog,
               }),
             isGroup,
             defaultGroupActivation: () => "mention",

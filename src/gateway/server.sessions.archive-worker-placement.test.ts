@@ -46,6 +46,7 @@ function workerPlacement(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? "main",
+    executionMode: "worker-turn",
     state: params.state,
     generation: 2,
     turnClaim: null,
@@ -107,7 +108,7 @@ test.each([false, true])(
     const sessionKey = "agent:main:archive-already-stopping";
     const sessionId = "session-archive-already-stopping";
     await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-    let placement = workerPlacement({ sessionId, sessionKey, state: "failed" });
+    let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
     const environmentStore = createWorkerEnvironmentStore({
       database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: dir } }),
     });
@@ -435,50 +436,53 @@ test("sessions.patch rejects a reclaimed return when its authoritative placement
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
-test("sessions.patch rejects a placement identity changed during the runtime drain", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-cloud-fresh-placement";
-  const sessionId = "session-archive-cloud-fresh-placement";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const drainGate = createDeferredCore();
-  const drainStarted = vi.fn();
-  const release = vi.fn();
-  const reclaim = vi.fn();
+test.each(["active", "failed"] as const)(
+  "sessions.patch rejects a %s placement identity changed during the runtime drain",
+  async (state) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:archive-cloud-fresh-placement";
+    const sessionId = "session-archive-cloud-fresh-placement";
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    let placement = workerPlacement({ sessionId, sessionKey, state });
+    const drainGate = createDeferredCore();
+    const drainStarted = vi.fn();
+    const release = vi.fn();
+    const reclaim = vi.fn();
 
-  const archive = directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, archived: true, expectedSessionId: sessionId },
-    {
-      context: {
-        workerEnvironmentService: createWorkerInferenceDrainService(() => {
-          drainStarted();
-          return { drained: drainGate.promise, hasWork: () => false, release };
-        }),
-        workerSessionPlacementService: placementReader(() => placement),
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+    const archive = directSessionReq(
+      "sessions.patch",
+      { key: sessionKey, archived: true, expectedSessionId: sessionId },
+      {
+        context: {
+          workerEnvironmentService: createWorkerInferenceDrainService(() => {
+            drainStarted();
+            return { drained: drainGate.promise, hasWork: () => false, release };
+          }),
+          workerSessionPlacementService: placementReader(() => placement),
+          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        },
       },
-    },
-  );
+    );
 
-  await vi.waitFor(() => expect(drainStarted).toHaveBeenCalledOnce());
-  placement = workerPlacement({
-    sessionId,
-    sessionKey: "agent:main:replacement-placement",
-    state: "active",
-  });
-  drainGate.resolve();
+    await vi.waitFor(() => expect(drainStarted).toHaveBeenCalledOnce());
+    placement = workerPlacement({
+      sessionId,
+      sessionKey: "agent:main:replacement-placement",
+      state: "active",
+    });
+    drainGate.resolve();
 
-  await expect(archive).resolves.toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", retryable: true },
-  });
-  expect(reclaim).not.toHaveBeenCalled();
-  expect(release).toHaveBeenCalledOnce();
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-});
+    await expect(archive).resolves.toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(reclaim).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  },
+);
 
-test.each(["requested", "provisioning", "syncing", "starting", "draining", "failed"] as const)(
+test.each(["requested", "provisioning", "syncing", "starting", "draining"] as const)(
   "sessions.patch stops %s placement before archiving",
   async (state) => {
     const { storePath } = await createSessionStoreDir();

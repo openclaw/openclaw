@@ -91,6 +91,42 @@ async function runNoteWorkspaceStatusForTest(
 }
 
 describe("noteWorkspaceStatus", () => {
+  it("reports identical registrar failures once across agent workspace loads", () => {
+    const diagnostic = {
+      level: "error" as const,
+      pluginId: "broken-fixture",
+      source: "/plugins/broken-fixture/index.js",
+      message: "board widget registration has invalid kind",
+    };
+    mocks.resolveDefaultAgentId.mockReturnValue("alpha");
+    mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/workspace/${agentId}`);
+    mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => ({
+      workspaceDir,
+      ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
+    }));
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      noteWorkspaceStatus({});
+      const diagnosticCalls = noteSpy.mock.calls.filter(
+        ([, title]) => title === "Plugin diagnostics",
+      );
+      expect(diagnosticCalls).toHaveLength(1);
+      expect(diagnosticCalls[0]?.[0]).toContain("broken-fixture");
+
+      expect(
+        collectWorkspaceStatusHealthFindings({}).filter(
+          (finding) => finding.target === "broken-fixture",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("warns when plugins use legacy compatibility paths", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
@@ -543,30 +579,33 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  it("adds TaskFlow recovery hints for broken blocked flows", async () => {
+  it.each([
+    [undefined, true],
+    ["flow-other", true],
+    ["   ", true],
+    ["flow-123", false],
+    [" flow-123 ", false],
+  ])("checks blocked task ownership for parent %j", async (parentFlowId, needsRecovery) => {
     const noteSpy = await runNoteWorkspaceStatusForTest(createPluginLoadResult(), [], {
       flows: [
         {
           flowId: "flow-123",
           syncMode: "managed",
-          ownerKey: "agent:main:main",
-          revision: 0,
           status: "blocked",
-          notifyPolicy: "done_only",
-          goal: "Investigate PR batch",
           blockedTaskId: "task-missing",
           createdAt: 100,
-          updatedAt: 100,
         },
       ],
-      tasksByFlowId: () => [],
+      tasksByFlowId: () =>
+        parentFlowId === undefined ? [] : [{ taskId: "task-missing", parentFlowId }],
     });
     try {
       const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
-      expect(recoveryCalls).toHaveLength(1);
-      const [body] = expectDefined(recoveryCalls[0], "(recoveryCalls)[0] test invariant");
-      expect(body).toContain("flow-123");
-      expect(body).toContain("openclaw tasks flow show <flow-id>");
+      expect(recoveryCalls).toHaveLength(needsRecovery ? 1 : 0);
+      if (needsRecovery) {
+        expect(recoveryCalls[0]?.[0]).toContain("flow-123");
+        expect(recoveryCalls[0]?.[0]).toContain("openclaw tasks flow show <flow-id>");
+      }
     } finally {
       noteSpy.mockRestore();
     }

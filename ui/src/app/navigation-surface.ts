@@ -143,7 +143,7 @@ export function renderFloatingUpdateCard(params: {
   updateRunAcknowledged?: boolean;
   connected?: boolean;
   onAcknowledge?: () => void;
-  onCheckStatus?: () => Promise<void>;
+  onCheckStatus?: () => Promise<boolean>;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;

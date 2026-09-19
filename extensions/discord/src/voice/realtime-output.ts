@@ -6,7 +6,11 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createDiscordOpusEncodeStream, createRealtimePcmToDiscordConverter } from "./audio.js";
-import type { DiscordRealtimePlayer, DiscordRealtimePlayerRequest } from "./realtime-player.js";
+import {
+  DISCORD_REALTIME_PLAYBACK_IDLE_MS,
+  type DiscordRealtimePlayer,
+  type DiscordRealtimePlayerRequest,
+} from "./realtime-player.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -40,6 +44,8 @@ export class DiscordRealtimeOutput {
   private drainHandler: (() => void) | undefined;
   private watchdog: ReturnType<typeof setTimeout> | undefined;
   private startupTimer: ReturnType<typeof setTimeout> | undefined;
+  private silenceTimer: ReturnType<typeof setTimeout> | undefined;
+  private silentSince: number | undefined;
   private closed = false;
   private failed = false;
 
@@ -69,7 +75,15 @@ export class DiscordRealtimeOutput {
       : Math.max(0, this.activity.snapshot().sourceAudioBytes * 4 - this.playedPcmBytes);
   }
 
-  hasUnplayedAudibleAudio(): boolean {
+  isAcceptingAudio(): boolean {
+    return (
+      !this.closed &&
+      !this.activity.snapshot().streamEnding &&
+      (!this.request || !this.params.player.isRetiring(this.request))
+    );
+  }
+
+  private hasUnplayedAudibleAudio(): boolean {
     return !this.closed && this.playedPcmBytes < this.lastAudiblePcmEndBytes;
   }
 
@@ -121,9 +135,12 @@ export class DiscordRealtimeOutput {
       sinkAudioBytes: sinkBytes - previous.sinkAudioBytes,
     });
     if (audible) {
+      this.clearSilenceTimer();
+      this.silentSince = undefined;
       this.lastAudiblePcmEndBytes = this.activity.snapshot().sinkAudioBytes;
     }
     this.writeConverted(this.converter.process(sourcePcm));
+    this.scheduleSilenceRetirement();
     if (this.params.continuous) {
       this.enqueuePlayback();
     }
@@ -161,6 +178,7 @@ export class DiscordRealtimeOutput {
     if (this.closed) {
       return;
     }
+    this.clearSilenceTimer();
     if (playBuffered) {
       this.writeConverted(this.converter.flush());
     }
@@ -196,6 +214,7 @@ export class DiscordRealtimeOutput {
     const lostPlaybackMarks =
       playbackRetirement && this.playbackMarks.some((mark) => mark.endBytes > this.playedPcmBytes);
     this.closed = true;
+    this.clearSilenceTimer();
     clearTimeout(this.startupTimer);
     this.startupTimer = undefined;
     this.playbackMarks = [];
@@ -321,6 +340,7 @@ export class DiscordRealtimeOutput {
             // the yielding encoder one playback tick to prepare it.
             this.writeConverted(this.converter.drain());
           }
+          this.scheduleSilenceRetirement();
         }
       } catch (error) {
         opusStream.destroy(error instanceof Error ? error : new Error(formatErrorMessage(error)));
@@ -349,6 +369,44 @@ export class DiscordRealtimeOutput {
     } catch (error) {
       this.params.onError(error);
     }
+  }
+
+  private scheduleSilenceRetirement(): void {
+    const activity = this.activity.snapshot();
+    if (
+      !this.params.continuous ||
+      this.closed ||
+      activity.streamEnding ||
+      !activity.playbackStarted ||
+      this.hasUnplayedAudibleAudio()
+    ) {
+      return;
+    }
+    this.silentSince ??= performance.now();
+    // Source silence preserves pauses but must not keep an idle speaker's lane forever.
+    // Without source silence, the SDK still owns ordinary packet-starvation retirement.
+    if (activity.sinkAudioBytes <= this.lastAudiblePcmEndBytes || this.silenceTimer) {
+      return;
+    }
+    this.silenceTimer = setTimeout(
+      () => {
+        this.silenceTimer = undefined;
+        if (
+          !this.closed &&
+          !this.activity.snapshot().streamEnding &&
+          !this.hasUnplayedAudibleAudio()
+        ) {
+          this.finish("continuous-idle", true);
+        }
+      },
+      Math.max(0, DISCORD_REALTIME_PLAYBACK_IDLE_MS - (performance.now() - this.silentSince)),
+    );
+    this.silenceTimer.unref?.();
+  }
+
+  private clearSilenceTimer(): void {
+    clearTimeout(this.silenceTimer);
+    this.silenceTimer = undefined;
   }
 
   private waitForDrain(): void {

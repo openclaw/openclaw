@@ -264,6 +264,7 @@ export async function handleBrowserAct(
       );
       return JSON.stringify(browserToolEnvelope(result, "browser_pointer"));
     }
+    default:
+      return undefined;
   }
-  return undefined;
 }

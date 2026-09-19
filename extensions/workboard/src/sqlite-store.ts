@@ -4,9 +4,9 @@ import { openSqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
-  PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
   WorkboardKeyedStore,
+  WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import type {
   WorkboardSqliteOperations,
@@ -18,7 +18,7 @@ import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
 type WorkboardSqliteStores = {
   cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
-  subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
+  subscriptions: WorkboardSubscriptionStore;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
   ready: Promise<number>;
   dataVersion(this: void): Promise<number>;

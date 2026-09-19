@@ -219,7 +219,7 @@ it.each(["attempted", "consumed"] as const)(
     expect(stored.get(state.receipt.idempotencyKey)?.execution.restartRecovery).toEqual(
       state.receipt,
     );
-    reloadTaskRuntimeStateFromStore();
+    await reloadTaskRuntimeStateFromStore();
     expect(getTaskById(state.task.taskId)).toMatchObject({
       runId: state.source.runId,
       status: "running",

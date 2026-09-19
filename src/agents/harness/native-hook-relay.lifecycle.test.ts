@@ -842,17 +842,16 @@ it("does not restore an old locator when renewal finishes after unregister", asy
         }
       },
     );
-    const relay = registerNativeHookRelay({
+    const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       sessionId: "renewal-close",
       runId: "renewal-close",
     });
     try {
-      await vi.waitFor(async () => {
-        expect(
-          Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId })),
-        ).toBe(true);
-      });
+      await relay.ready;
+      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
+        true,
+      );
       relay.renew(60_000);
       await entered.promise;
       relay.unregister();
@@ -874,37 +873,30 @@ it("does not publish renewal expiry before the durable renewal succeeds", async 
   await withOpenClawTestState({ label: "relay-renewal-expiry" }, async () => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const renewed = createDeferredCore();
     const renew = store.renewOrRestoreNativeHookRelayBridgeRecord;
     vi.spyOn(store, "renewOrRestoreNativeHookRelayBridgeRecord").mockImplementation(
       async (params) => {
         entered.resolve();
         await resume.promise;
-        try {
-          return await renew(params);
-        } finally {
-          renewed.resolve();
-        }
+        return await renew(params);
       },
     );
-    const relay = registerNativeHookRelay({
+    const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       sessionId: "renewal-expiry",
       runId: "renewal-expiry",
     });
     try {
-      await vi.waitFor(async () => {
-        expect(
-          Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId })),
-        ).toBe(true);
-      });
+      await relay.ready;
+      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
+        true,
+      );
       const expiresAtMs = relay.expiresAtMs;
       relay.renew(60_000);
       await entered.promise;
       expect(relay.expiresAtMs).toBe(expiresAtMs);
     } finally {
       resume.resolve();
-      await renewed.promise;
       relay.unregister();
       await testing.clearNativeHookRelaysForTests();
     }

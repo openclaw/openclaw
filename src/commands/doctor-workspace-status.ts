@@ -21,7 +21,6 @@ import {
 } from "../plugins/status.js";
 import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionReadiness?: PluginVersionRestartReadiness;
@@ -29,6 +28,27 @@ type NoteWorkspaceStatusOptions = {
 };
 
 const WORKSPACE_STATUS_CHECK_ID = "core/doctor/workspace-status";
+
+type WorkspacePluginDiagnostic = ReturnType<
+  typeof buildPluginRegistrySnapshotReport
+>["diagnostics"][number];
+
+function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDiagnostic): boolean {
+  const key = [
+    diagnostic.level,
+    diagnostic.pluginId ?? "",
+    diagnostic.code ?? "",
+    diagnostic.source ?? "",
+    diagnostic.message,
+  ]
+    .map((value) => `${value.length}:${value}`)
+    .join("");
+  if (seen.has(key)) {
+    return false;
+  }
+  seen.add(key);
+  return true;
+}
 
 type TaskFlowRecoveryFinding = {
   flowId: string;
@@ -39,25 +59,21 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
   const flows = [...loadTaskFlowRegistryStateFromSqliteReadOnly().flows.values()].toSorted(
     (left, right) => right.createdAt - left.createdAt,
   );
-  const tasksByFlowId = new Map<string, TaskRecord[]>();
-  for (const task of loadTaskRegistryStateFromSqliteReadOnly().tasks.values()) {
+  const tasksById = loadTaskRegistryStateFromSqliteReadOnly().tasks;
+  const flowsWithTasks = new Set<string>();
+  for (const task of tasksById.values()) {
     const flowId = task.parentFlowId?.trim();
     if (flowId) {
-      const linkedTasks = tasksByFlowId.get(flowId);
-      if (linkedTasks) {
-        linkedTasks.push(task);
-      } else {
-        tasksByFlowId.set(flowId, [task]);
-      }
+      flowsWithTasks.add(flowId);
     }
   }
-  return flows.flatMap((flow) => {
-    const linkedTasks = tasksByFlowId.get(flow.flowId) ?? [];
-    const findings: TaskFlowRecoveryFinding[] = [];
+  const findings: TaskFlowRecoveryFinding[] = [];
+  for (const flow of flows) {
+    const hasLinkedTasks = flowsWithTasks.has(flow.flowId);
     if (
       flow.syncMode === "managed" &&
       flow.status === "running" &&
-      linkedTasks.length === 0 &&
+      !hasLinkedTasks &&
       flow.waitJson === undefined
     ) {
       findings.push({
@@ -69,15 +85,15 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
       flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
-      !linkedTasks.some((task) => task.taskId === flow.blockedTaskId)
+      (!hasLinkedTasks || tasksById.get(flow.blockedTaskId)?.parentFlowId?.trim() !== flow.flowId)
     ) {
       findings.push({
         flowId: flow.flowId,
         message: `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
       });
     }
-    return findings;
-  });
+  }
+  return findings;
 }
 
 function noteFlowRecoveryHints() {
@@ -225,6 +241,7 @@ export function collectWorkspaceStatusHealthFindings(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   }));
   const workspaceFindings: HealthFinding[] = [];
+  const reportedPluginDiagnostics = new Set<string>();
   for (const { agentId, workspaceDir } of scopes) {
     const collectForWorkspace = () => {
       const findings: HealthFinding[] = [];
@@ -239,6 +256,9 @@ export function collectWorkspaceStatusHealthFindings(
         findings.push(pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`));
       }
       for (const diagnostic of pluginRegistry.diagnostics) {
+        if (!claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic)) {
+          continue;
+        }
         findings.push(
           pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
         );
@@ -343,6 +363,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     agentId,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   }));
+  const reportedPluginDiagnostics = new Set<string>();
   for (const { agentId, workspaceDir } of scopes) {
     const noteForWorkspace = () => {
       const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
@@ -371,8 +392,11 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
           "Plugin compatibility",
         );
       }
-      if (pluginRegistry.diagnostics.length > 0) {
-        const lines = pluginRegistry.diagnostics.map((diag) => {
+      const diagnostics = pluginRegistry.diagnostics.filter((diagnostic) =>
+        claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic),
+      );
+      if (diagnostics.length > 0) {
+        const lines = diagnostics.map((diag) => {
           const level = diag.level.toUpperCase();
           const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
           const source = diag.source ? ` (${diag.source})` : "";

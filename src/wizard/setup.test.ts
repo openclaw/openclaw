@@ -834,43 +834,6 @@ describe("runSetupWizard", () => {
     setupChannels.mockClear();
   });
 
-  it("exits when config is invalid", async () => {
-    const config = coerceConfig({ routing: { allowFrom: ["*"] } });
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      ...configSnapshot(config),
-      valid: false,
-      issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
-      legacyIssues: [{ path: "routing.allowFrom", message: "Legacy key" }],
-    });
-
-    const select = vi.fn(
-      async (_params: WizardSelectParams<unknown>) => "quickstart",
-    ) as unknown as WizardPrompter["select"];
-    const prompter = buildWizardPrompter({ select });
-    const runtime = createRuntime({ throwsOnExit: true });
-
-    await expect(
-      runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      ),
-    ).rejects.toThrow("exit:1");
-
-    expect(select).not.toHaveBeenCalled();
-    expect(prompter.outro).toHaveBeenCalled();
-  });
-
   it("skips prompts and setup steps when flags are set", async () => {
     const select = vi.fn(
       async (_params: WizardSelectParams<unknown>) => "quickstart",

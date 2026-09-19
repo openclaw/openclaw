@@ -9,13 +9,17 @@ import type { SkillsRouteData } from "./skills-page.ts";
 async function loadSkillsRouteData(
   context: ApplicationContext,
   options: RouteLoaderOptions,
+  surface: "discovery" | "settings",
 ): Promise<SkillsRouteData> {
   const search = new URLSearchParams(options.location.search);
   const clawhubRef = search.get("clawhub") ?? undefined;
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const agents = context.agents;
-  const selection = context.agentSelection.state;
+  const selectionOwner =
+    surface === "settings" ? context.settingsAgentSelection : context.agentSelection;
+  const selection = selectionOwner.state;
+  const selectionIntentRevision = selectionOwner.intentRevision;
   const client = gatewaySnapshot.client;
   if (gatewaySnapshot.phase !== "connected" || !client) {
     return {
@@ -24,7 +28,7 @@ async function loadSkillsRouteData(
       agents,
       agentsList: null,
       selectedAgentId: null,
-      selection,
+      selectionIntentRevision,
       report: null,
       error: null,
       clawhubRef,
@@ -59,7 +63,7 @@ async function loadSkillsRouteData(
     agents,
     agentsList,
     selectedAgentId,
-    selection,
+    selectionIntentRevision,
     report,
     error,
     clawhubRef,
@@ -70,7 +74,8 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
   return definePage({
     ...routePageSpec(routeId),
     loaderDeps: (_context: ApplicationContext, location) => location.search,
-    loader: loadSkillsRouteData,
+    loader: (context: ApplicationContext, options) =>
+      loadSkillsRouteData(context, options, surface),
     component: () =>
       import("./skills-page.ts").then(() => ({
         header: true,

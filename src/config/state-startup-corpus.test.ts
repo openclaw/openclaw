@@ -13,6 +13,7 @@ import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/s
 import { loadGatewayStartupConfigSnapshot } from "../gateway/server-startup-config-helpers.js";
 import { runStartupSessionMigration } from "../gateway/server-startup-session-migration.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveBundledDirFromPackageRoot } from "../plugins/bundled-dir.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -22,12 +23,23 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getUserPreferences } from "../state/user-preferences.js";
+import {
+  listConfigCorpusFixtureNames,
+  readConfigCorpusFixture,
+} from "./config-corpus.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
   readRecentUserAssistantTextForSession,
   resolveDefaultSessionStorePath,
 } from "./sessions.js";
 import { loadSessionEntryReadOnly } from "./sessions/session-accessor.js";
+
+const bundledPluginsDir = resolveBundledDirFromPackageRoot(
+  fileURLToPath(new URL("../../", import.meta.url)),
+);
+if (!bundledPluginsDir) {
+  throw new Error("Missing bundled plugin fixtures for startup corpus");
+}
 
 type StateFixture = {
   release: string;
@@ -52,20 +64,26 @@ type StateFixture = {
 };
 
 const corpusDir = fileURLToPath(new URL("../../test/fixtures/state-corpus/", import.meta.url));
-const configCorpusDir = fileURLToPath(
-  new URL("../../test/fixtures/config-corpus/", import.meta.url),
-);
 const releases = fs
   .readdirSync(corpusDir)
   .filter((name) => fs.statSync(path.join(corpusDir, name)).isDirectory())
   .toSorted();
-const configNames = fs
-  .readdirSync(configCorpusDir)
-  .filter((name) => name.endsWith(".json"))
-  .toSorted();
-const cases = releases.flatMap((release) =>
+const configNames = listConfigCorpusFixtureNames();
+const allCases = releases.flatMap((release) =>
   configNames.map((configName) => [release, configName] as const),
 );
+const shardMatch = process.env.OPENCLAW_TEST_STARTUP_CORPUS_SHARD?.match(/^(\d+)\/(\d+)$/u);
+if (
+  process.env.OPENCLAW_TEST_STARTUP_CORPUS_SHARD &&
+  (!shardMatch || Number(shardMatch[1]) < 1 || Number(shardMatch[1]) > Number(shardMatch[2]))
+) {
+  throw new Error(
+    `Invalid OPENCLAW_TEST_STARTUP_CORPUS_SHARD: ${process.env.OPENCLAW_TEST_STARTUP_CORPUS_SHARD}`,
+  );
+}
+const shardIndex = shardMatch ? Number(shardMatch[1]) - 1 : 0;
+const shardCount = shardMatch ? Number(shardMatch[2]) : 1;
+const cases = allCases.filter((_entry, index) => index % shardCount === shardIndex);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
@@ -83,7 +101,7 @@ function prepareState(release: string, configName: string) {
     OPENCLAW_TEST_HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../extensions/", import.meta.url)),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
   })) {
     vi.stubEnv(key, value);
@@ -105,12 +123,10 @@ function prepareState(release: string, configName: string) {
     path.join(pluginDir, "index.ts"),
     'export default { id: "fixture-extension", register() {} };\n',
   );
-  const config: unknown = JSON.parse(
-    fs.readFileSync(path.join(configCorpusDir, configName), "utf8"),
-    (_key, value: unknown) =>
-      typeof value === "string" && value.startsWith("/home/fixture/")
-        ? path.join(home, value.slice("/home/fixture/".length))
-        : value,
+  const config: unknown = JSON.parse(readConfigCorpusFixture(configName), (_key, value: unknown) =>
+    typeof value === "string" && value.startsWith("/home/fixture/")
+      ? path.join(home, value.slice("/home/fixture/".length))
+      : value,
   );
   fs.writeFileSync(configPath, JSON.stringify(config));
   return { home, stateDir, configPath, fixture };

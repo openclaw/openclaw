@@ -68,12 +68,21 @@ describe("update run wire contract", () => {
       check: "readyz",
       code: "readyz-unhealthy",
       message: "Readiness returned HTTP 503.",
+      errorName: "Error",
+      location: "src/infra/update-runner-git.ts:42:7",
     };
     const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
     const failed = {
       ...run,
+      target: { ...run.target, installationMethod: "git-checkout" },
+      verification: {
+        ...run.verification,
+        rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
+        recovery: { serviceRestartSafe: true, packageRollbackVerified: true, version: "2026.8.1" },
+      },
       steps: [step],
     };
+    expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
     expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
     expect(
       validateUpdateRunsGetResult({
@@ -90,7 +99,33 @@ describe("update run wire contract", () => {
     ).toBe(false);
   });
 
+  it.each([null, { serviceRestartSafe: false, reason: "source-rollback-failed" }])(
+    "carries nullable failure evidence and recovery through history (%j)",
+    (recovery) => {
+      const record = LedgerRecordSchema.parse({
+        ...run,
+        target: { installationMethod: null },
+        steps: [
+          {
+            step: "staging",
+            status: "failed",
+            failureFacts: [{ check: "staging", code: "Error", errorName: null, location: null }],
+          },
+        ],
+        verification: { rollbackOutcome: null, recovery },
+      });
+      expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+      expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+      expect(
+        validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+      ).toBe(true);
+    },
+  );
+
   it.each([
+    { exitCode: 23 },
+    { exitCode: 0 },
+    { exitCode: null },
     {
       snapshotCapacity: {
         reason: "snapshot-location-unavailable",
@@ -199,6 +234,35 @@ describe("update run wire contract", () => {
       },
     ],
     ["invalid service port", { verification: { port: 65536 } }],
+    ["unknown installation method", { target: { installationMethod: "other" } }],
+    [
+      "unknown rollback status",
+      { verification: { rollbackOutcome: { status: "unknown", reason: "unknown" } } },
+    ],
+    [
+      "unknown recovery refusal",
+      { verification: { recovery: { serviceRestartSafe: false, reason: "unknown" } } },
+    ],
+    ...(
+      [
+        ["errorName", 81],
+        ["location", 161],
+      ] as const
+    ).map(
+      ([field, length]) =>
+        [
+          `oversized failure ${field}`,
+          {
+            steps: [
+              {
+                step: "staging",
+                status: "failed",
+                failureFacts: [{ check: "staging", code: "Error", [field]: "x".repeat(length) }],
+              },
+            ],
+          },
+        ] as const,
+    ),
     [
       "oversized driver host",
       { origin: { driver: { ...run.origin.driver, host: "x".repeat(256) } } },
@@ -219,7 +283,7 @@ describe("update run wire contract", () => {
       "oversized plugin errors",
       { verification: { pluginErrors: Array.from({ length: 33 }, () => "failed") } },
     ],
-  ])("rejects %s consistently with the canonical ledger", (_name, fields) => {
+  ] as const)("rejects %s consistently with the canonical ledger", (_name, fields) => {
     const invalid = { ...run, ...fields };
     expect(LedgerRecordSchema.safeParse(invalid).success).toBe(false);
     expect(validateUpdateRunRecord(invalid)).toBe(false);

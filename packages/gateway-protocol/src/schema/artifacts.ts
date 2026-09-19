@@ -15,10 +15,9 @@ const ArtifactQueryParamsProperties = {
   runId: Type.Optional(NonEmptyString),
   taskId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Assistant-delivered artifacts only; omit to include uploaded inputs and tool observations. */
+  messageRole: Type.Optional(Type.Literal("assistant")),
 };
-
-/** Shared artifact filter payload used by list-style requests. */
-const ArtifactQueryParamsSchema = closedObject(ArtifactQueryParamsProperties);
 
 /** Artifact lookup payload with a required artifact id plus optional scope filters. */
 const ArtifactGetParamsSchema = closedObject({
@@ -38,17 +37,25 @@ export const ArtifactSummarySchema = closedObject({
   taskId: Type.Optional(NonEmptyString),
   messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
   source: Type.Optional(NonEmptyString),
+  image: Type.Optional(closedObject({ url: NonEmptyString })),
   download: closedObject({
     mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),
   }),
 });
 
 /** List request payload for artifacts visible in the selected scope. */
-export const ArtifactsListParamsSchema = ArtifactQueryParamsSchema;
+export const ArtifactsListParamsSchema = closedObject({
+  ...ArtifactQueryParamsProperties,
+  type: Type.Optional(Type.Literal("image")),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+});
 
 /** List response containing artifact summaries only. */
 export const ArtifactsListResultSchema = closedObject({
   artifacts: Type.Array(ArtifactSummarySchema),
+  nextCursor: Type.Optional(NonEmptyString),
+  omittedOversized: Type.Optional(Type.Boolean()),
 });
 
 /** Get request payload for one artifact summary. */

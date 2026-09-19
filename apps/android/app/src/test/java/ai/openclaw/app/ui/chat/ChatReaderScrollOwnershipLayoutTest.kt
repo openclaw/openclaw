@@ -1019,7 +1019,7 @@ class ChatReaderScrollOwnershipLayoutTest {
               } else {
                 emptyList()
               }
-            buildChatTimeline(messages, if (streamingLines == null) 0 else 1, pending, stream)
+            prepareChatHistory(messages, "agent:main:telegram:direct:projection", mainSessionKey = "agent:main:main").buildTimeline(if (streamingLines == null) 0 else 1, pending, stream)
           }
         val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }

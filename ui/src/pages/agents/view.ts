@@ -1,7 +1,6 @@
 // Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import "../../components/agent-select-registration.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -24,11 +23,7 @@ import {
 } from "../../components/settings-ui.ts";
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  agentBadgeText,
-  buildAgentContext,
-  normalizeAgentLabel,
-} from "../../lib/agents/display.ts";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
@@ -134,7 +129,6 @@ type AgentsProps = {
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
-  onSelectAgent: (agentId: string) => void;
   onCreateAgent: () => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
@@ -169,61 +163,15 @@ type AgentsProps = {
   onSetDefault: (agentId: string) => void;
 };
 
-type AgentRosterRow = AgentsListResult["agents"][number];
-
-function buildAgentRosterTree(agents: AgentRosterRow[]) {
-  const agentById = new Map(agents.map((agent) => [agent.id, agent]));
-  const childrenById = new Map<string, AgentRosterRow[]>();
-  const roots: AgentRosterRow[] = [];
-
-  for (const agent of agents) {
-    const creatorAgentId = agent.creatorAgentId;
-    if (creatorAgentId && creatorAgentId !== agent.id && agentById.has(creatorAgentId)) {
-      const children = childrenById.get(creatorAgentId) ?? [];
-      children.push(agent);
-      childrenById.set(creatorAgentId, children);
-    } else {
-      roots.push(agent);
-    }
-  }
-
-  const entries: Array<{ agent: AgentRosterRow; creatorAgentId?: string }> = [];
-  const visited = new Set<string>();
-  const append = (agent: AgentRosterRow, depth: number): void => {
-    if (visited.has(agent.id)) {
-      return;
-    }
-    visited.add(agent.id);
-    entries.push({
-      agent,
-      ...(depth > 0 && agent.creatorAgentId ? { creatorAgentId: agent.creatorAgentId } : {}),
-    });
-    for (const child of childrenById.get(agent.id) ?? []) {
-      append(child, depth + 1);
-    }
-  };
-  roots.forEach((agent) => append(agent, 0));
-  // Match the CLI tree: malformed cycles cannot make configured agents disappear.
-  agents.forEach((agent) => append(agent, 0));
-  return entries;
-}
-
 export function renderAgents(props: AgentsProps) {
   const agents = props.agentsList?.agents ?? [];
   const defaultId = props.agentsList?.selectionRequired
     ? null
     : (props.agentsList?.defaultId ?? null);
-  const selectedId = props.selectedAgentId ?? defaultId ?? agents[0]?.id ?? null;
+  const selectedId = props.selectedAgentId;
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
-  const agentOptions = buildAgentRosterTree(agents).map(({ agent, creatorAgentId }) => ({
-    value: agent.id,
-    label: normalizeAgentLabel(agent),
-    agent,
-    description: creatorAgentId ? t("agents.createdBy", { id: creatorAgentId }) : undefined,
-    badge: agentBadgeText(agent.id, defaultId) ?? undefined,
-  }));
   const selectedSkillCount =
     selectedId && props.agentSkills.agentId === selectedId
       ? (props.agentSkills.report?.skills?.length ?? null)
@@ -244,26 +192,9 @@ export function renderAgents(props: AgentsProps) {
     <div class="agents-layout">
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
-          ${
-            agentOptions.length > 1
-              ? html`
-                  <div class="agents-control-select">
-                    <openclaw-agent-select
-                      .options=${agentOptions}
-                      .value=${selectedId ?? ""}
-                      .accessibleLabel=${t("usage.filters.agent")}
-                      .identityById=${props.agentIdentityById}
-                      .disabled=${props.loading}
-                      .onSelect=${props.onSelectAgent}
-                      .onCreateAgent=${props.access.canCreateAgent ? props.onCreateAgent : null}
-                    ></openclaw-agent-select>
-                  </div>
-                `
-              : nothing
-          }
           <div class="agents-toolbar-actions">
             ${
-              agentOptions.length <= 1 && props.access.canCreateAgent
+              props.access.canCreateAgent
                 ? html`
                     <button
                       class="btn btn--sm btn--ghost agents-create-btn"

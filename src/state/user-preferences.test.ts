@@ -208,6 +208,96 @@ describe("user preferences", () => {
     });
   });
 
+  it("checks semantic expectations before any writes in a multi-entry batch", () => {
+    const options = stateOptions();
+    const original = { retained: { nested: { a: 1, b: 2 }, list: [1, 2] }, removed: true };
+    expect(setUserPreferences("profile-a", original, options).ok).toBe(true);
+    const { db } = openOpenClawStateDatabase(options);
+    const before = db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
+    db.exec(`CREATE TRIGGER reject_any_insert BEFORE INSERT ON user_preferences
+      BEGIN SELECT RAISE(FAIL, 'unexpected preference insert'); END;
+      CREATE TRIGGER reject_any_delete BEFORE DELETE ON user_preferences
+      BEGIN SELECT RAISE(FAIL, 'unexpected preference delete'); END;`);
+    try {
+      expect(
+        setUserPreferences(
+          "profile-a",
+          { removed: null, inserted: true },
+          {
+            ...options,
+            expectedEntries: { retained: { nested: { b: 2, a: 1 }, list: [2, 1] } },
+          },
+        ),
+      ).toEqual({ ok: false, error: { code: "conflict" } });
+      expect(db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all()).toEqual(before);
+    } finally {
+      db.exec("DROP TRIGGER reject_any_insert; DROP TRIGGER reject_any_delete;");
+    }
+    expect(
+      setUserPreferences(
+        "profile-a",
+        { removed: null, inserted: true },
+        {
+          ...options,
+          expectedEntries: {
+            retained: { list: [1, 2], nested: { b: 2, a: 1 } },
+            inserted: null,
+          },
+        },
+      ),
+    ).toEqual({ ok: true, value: undefined });
+    expect(getUserPreferences("profile-a", undefined, options)).toEqual({
+      retained: original.retained,
+      inserted: true,
+    });
+    expect(
+      setUserPreferences(
+        "profile-a",
+        {},
+        {
+          ...options,
+          expectedEntries: { inserted: null },
+        },
+      ),
+    ).toEqual({ ok: false, error: { code: "conflict" } });
+    expect(
+      setUserPreferences(
+        "profile-a",
+        {},
+        {
+          ...options,
+          expectedEntries: { removed: null },
+        },
+      ),
+    ).toEqual({ ok: true, value: undefined });
+  });
+
+  it("validates bounded expectations before changing values", () => {
+    const options = stateOptions();
+    const expectations = [
+      {
+        entries: Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`key-${i}`, null])),
+        code: "invalid-entry-count",
+      },
+      { entries: { "": true }, code: "invalid-key" },
+      { entries: { invalid: undefined }, code: "invalid-value" },
+      { entries: { oversized: "🦞".repeat(1_025) }, code: "value-too-large" },
+    ];
+    for (const { entries, code } of expectations) {
+      expect(
+        setUserPreferences(
+          "profile-a",
+          { changed: true },
+          {
+            ...options,
+            expectedEntries: entries,
+          },
+        ),
+      ).toMatchObject({ ok: false, error: { code } });
+    }
+    expect(getUserPreferences("profile-a", undefined, options)).toEqual({});
+  });
+
   it("keeps merged profiles within the same preference cap", () => {
     const options = stateOptions();
     for (let start = 0; start < 127; start += 32) {

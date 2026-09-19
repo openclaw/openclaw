@@ -26,6 +26,10 @@ import * as archiveStore from "./session-accessor.sqlite-archive-store.js";
 import * as archives from "./session-accessor.sqlite-archive.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import {
+  joinSessionHistoryBudgetSweeps,
+  type SessionHistoryBudgetQueueObservation,
+} from "./session-history-budget.test-support.js";
 import * as entryEviction from "./session-history-entry-eviction.runtime.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
@@ -70,14 +74,7 @@ function readRow(databasePath: string, sql: string, ...values: SQLInputValue[]) 
   }
 }
 
-type QueueObservation = {
-  mock: {
-    calls: Array<Parameters<typeof queue.runQueuedStoreWrite>>;
-    results: Array<{ type: string; value: unknown }>;
-  };
-};
-
-function observeFirstSweep(spy: QueueObservation) {
+function observeFirstSweep(spy: SessionHistoryBudgetQueueObservation) {
   const index = spy.mock.calls.findIndex(
     ([params]) => params.label === "enforceSqliteSessionHistoryDiskBudget",
   );
@@ -88,31 +85,6 @@ function observeFirstSweep(spy: QueueObservation) {
   const pending: Promise<unknown> = outcome.value;
   work.push(pending);
   return pending;
-}
-
-async function joinSeedSweeps(spy: QueueObservation): Promise<void> {
-  let joined = 0;
-  for (;;) {
-    const pending = spy.mock.calls.flatMap(([params], index) => {
-      const outcome = spy.mock.results[index];
-      return params.label === "enforceSqliteSessionHistoryDiskBudget" &&
-        outcome?.type === "return" &&
-        outcome.value instanceof Promise
-        ? [outcome.value as Promise<unknown>]
-        : [];
-    });
-    if (joined === pending.length) {
-      return;
-    }
-    const next = pending.slice(joined);
-    joined = pending.length;
-    work.push(...next);
-    await Promise.all(next);
-    // A settled seed sweep may enqueue its existing pending-force continuation.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
 }
 
 it.each([
@@ -185,7 +157,7 @@ it.each([
       );
     }
     // Join seed-triggered real default-budget work; do not use a warn/no-retention drain.
-    await joinSeedSweeps(queueSpy);
+    await joinSessionHistoryBudgetSweeps(queueSpy, work);
     queueSpy.mockClear();
     const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env: state.env });
     const databasePath = target.path;

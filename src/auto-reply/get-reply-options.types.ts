@@ -92,8 +92,10 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
-  /** Reports that a deferred turn is still queued behind an active turn. */
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
+  /** Requested cadence for pre-adoption heartbeats. */
+  deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
@@ -277,6 +279,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    hideFromChannelProgress?: boolean;
+    suppressChannelProgress?: boolean;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.

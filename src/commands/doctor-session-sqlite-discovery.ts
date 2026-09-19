@@ -2,11 +2,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
+} from "../config/sessions/artifacts.js";
+import {
+  isLegacySessionRecordOwnedByTarget,
+  listLegacySessionTranscriptFiles,
+  readLegacySessionStoreEntries,
+  resolveLegacyTranscriptPaths,
+  shouldFilterLegacySessionRecordsByTarget,
+} from "../config/sessions/legacy-store-inspection.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveAllAgentSessionStoreCandidateTargetsSync,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
@@ -23,7 +40,10 @@ import {
   type ReadOnlySqliteValidationSnapshot,
 } from "./doctor-session-sqlite-readers.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
-import type { DoctorSessionSqliteIssue } from "./doctor-session-sqlite-types.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+} from "./doctor-session-sqlite-types.js";
 
 export const HISTORICAL_IMPORT_REASON = "indexed-historical-primary";
 export type LegacySessionRecord = {
@@ -128,17 +148,12 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       record.transcriptPath ? [canonicalMigrationFilePath(record.transcriptPath)] : [],
     ),
   );
-  if (fs.existsSync(directory)) {
-    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
-      const filename = path.join(directory, item.name);
-      if (
-        item.isFile() &&
-        isPrimarySessionTranscriptFileName(item.name) &&
-        !referenced.has(canonicalMigrationFilePath(filename)) &&
-        !params.referencedPaths?.has(canonicalMigrationFilePath(filename))
-      ) {
-        sources.set(filename, { path: filename, originalPath: filename });
-      }
+  for (const filename of listLegacySessionTranscriptFiles(directory)) {
+    if (
+      !referenced.has(canonicalMigrationFilePath(filename)) &&
+      !params.referencedPaths?.has(canonicalMigrationFilePath(filename))
+    ) {
+      sources.set(filename, { path: filename, originalPath: filename });
     }
   }
   const archivedReferences = new Set(
@@ -261,4 +276,143 @@ export async function discoverLegacyHistoricalTranscripts(params: {
     }
   }
   return discovered;
+}
+
+export function gatherLegacyArchiveCoverage(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  targets: readonly SessionStoreTarget[],
+  knownTargets = resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }),
+) {
+  const selectedStorePaths = new Set<string>();
+  const referencedPaths = new Set<string>();
+  const retainedPaths = new Set<string>();
+  const incompleteDirectories = new Set<string>();
+  const retainedDirectories = new Set<string>();
+  const indexIdentities = new Map<string, MigrationArtifactIdentity>();
+  const targetsByStore = new Map<string, SessionStoreTarget[]>();
+  for (const target of targets) {
+    const storePath = canonicalMigrationFilePath(target.storePath);
+    targetsByStore.set(storePath, [...(targetsByStore.get(storePath) ?? []), target]);
+  }
+  const directories = new Set([...targetsByStore.keys()].map((store) => path.dirname(store)));
+  const knownStores = new Map(
+    [...knownTargets, ...targets].map((target) => [
+      canonicalMigrationFilePath(target.storePath),
+      target,
+    ]),
+  );
+  // Only configured/discovered indexes in selected directories can contribute references.
+  // An unreadable index never proves that the directory's remaining files are unreferenced.
+  for (const [storePath, target] of knownStores) {
+    if (
+      storePath.endsWith(".sqlite") ||
+      !directories.has(path.dirname(storePath)) ||
+      !fs.existsSync(storePath)
+    ) {
+      continue;
+    }
+    const storeTargets = targetsByStore.get(storePath) ?? [];
+    const issues: DoctorSessionSqliteIssue[] = [];
+    let records: LegacySessionRecord[];
+    try {
+      // Aliased or unreadable known indexes cannot establish complete reference coverage.
+      assertSafeSessionSqliteMigrationDirectory(path.dirname(storePath));
+      indexIdentities.set(storePath, readMigrationArtifactIdentity(storePath));
+      records = readLegacySessionRecords(target, issues);
+    } catch (error) {
+      if (storeTargets.length > 0) {
+        throw error;
+      }
+      incompleteDirectories.add(path.dirname(storePath));
+      retainedDirectories.add(path.dirname(storePath));
+      continue;
+    }
+    const keys = [
+      ...records.map((record) => record.sessionKey),
+      ...issues.flatMap((issue) => (issue.sessionKey ? [issue.sessionKey] : [])),
+    ];
+    const selected =
+      storeTargets.length > 0 &&
+      issues.every(isSessionSqliteMigrationWarning) &&
+      keys.every((sessionKey) =>
+        storeTargets.some(
+          (candidate) =>
+            !shouldFilterLegacySessionRecordsByTarget(candidate) ||
+            isLegacySessionRecordOwnedByTarget(cfg, candidate, sessionKey),
+        ),
+      );
+    if (issues.length > 0) {
+      incompleteDirectories.add(path.dirname(storePath));
+      if (!selected) {
+        retainedDirectories.add(path.dirname(storePath));
+      }
+    }
+    if (selected) {
+      selectedStorePaths.add(storePath);
+    }
+    for (const record of records) {
+      if (!record.transcriptPath) {
+        continue;
+      }
+      for (const source of [
+        record.transcriptPath,
+        resolveTrajectoryPath(record.transcriptPath),
+        resolveTrajectoryPointerPath(record.transcriptPath),
+      ]) {
+        if (!source) {
+          continue;
+        }
+        const canonical = canonicalMigrationFilePath(source);
+        referencedPaths.add(canonical);
+        if (!selected) {
+          retainedPaths.add(canonical);
+        }
+      }
+    }
+  }
+  for (const [storePath, storeTargets] of targetsByStore) {
+    if (
+      !fs.existsSync(storePath) &&
+      storeTargets.every((target) => !shouldFilterLegacySessionRecordsByTarget(target))
+    ) {
+      selectedStorePaths.add(storePath);
+    }
+  }
+  return {
+    selectedStorePaths,
+    referencedPaths,
+    retainedPaths,
+    incompleteDirectories,
+    retainedDirectories,
+    indexIdentities,
+  };
+}
+
+export function readLegacySessionRecords(
+  target: SessionStoreTarget,
+  issues: DoctorSessionSqliteIssue[],
+  options: {
+    allowMissingStore?: boolean;
+    sourcePath?: string;
+    verifiedSourcePaths?: ReadonlySet<string>;
+  } = {},
+): LegacySessionRecord[] {
+  const records: LegacySessionRecord[] = [];
+  for (const { entry, sessionKey } of readLegacySessionStoreEntries(target, issues, options)
+    .entries) {
+    const { transcriptPath, transcriptDependencies } = resolveLegacyTranscriptPaths(
+      target,
+      entry,
+      options.verifiedSourcePaths,
+    );
+    records.push({
+      // Import repairs file-era fields before canonical SQLite readers can see them.
+      entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
+      sessionKey,
+      transcriptPath,
+      transcriptDependencies,
+    });
+  }
+  return records;
 }

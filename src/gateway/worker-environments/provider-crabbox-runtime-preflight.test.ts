@@ -1,7 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginService, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +48,11 @@ describe("Crabbox runtime preflight cleanup", () => {
     )(
       createTestPluginApi({
         id: "crabbox",
+        runtime: createPluginRuntimeMock({
+          state: {
+            openKeyedStore: (options) => createPluginStateKeyedStoreForTests("crabbox", options),
+          },
+        }),
         rootDir: fileURLToPath(new URL("../../../extensions/crabbox/", import.meta.url)),
         registerWorkerProvider: (provider) => {
           registered = provider;

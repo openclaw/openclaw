@@ -76,4 +76,29 @@ describe.runIf(process.platform !== "win32")("provider-owned remote shell transp
       await session.dispose();
     }
   });
+
+  it("rejects an upload when the remote shell dies from a signal without a status", async () => {
+    // A signal-killed remote (OOM kill, dropped connection, supervisor
+    // teardown) closes with a null exit code. The transfer cannot have
+    // completed, so the upload must fail instead of resolving silently.
+    const root = await fs.realpath(tempDirs.make("remote-shell-signal-"));
+    const localDir = path.join(root, "local");
+    await fs.mkdir(localDir);
+    await fs.writeFile(path.join(localDir, "payload"), "payload-bytes");
+    const session = createRemoteShellSandboxSession({
+      buildCommand: () => ({
+        argv: ["/bin/sh", "-c", 'cat >/dev/null; kill -TERM "$$"'],
+        env: { ...process.env },
+        cwd: root,
+      }),
+    });
+    await expect(
+      session.uploadDirectory({
+        localDir,
+        remoteDir: path.join(root, "remote"),
+        remoteRootDir: root,
+      }),
+    ).rejects.toThrow("remote exited from signal SIGTERM");
+    await session.dispose();
+  });
 });

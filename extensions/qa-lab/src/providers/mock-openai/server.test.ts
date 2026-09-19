@@ -1,19 +1,46 @@
 import { once } from "node:events";
 import { runInNewContext } from "node:vm";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
 import { resolveMockSubagentTurn } from "./mock-openai-input.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
-import { startQaMockOpenAiServer } from "./server.js";
+import {
+  type MockServer,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+  createMockServerTestHarness,
+  requireRecord,
+  postJson,
+  expectOk,
+  fetchOk,
+  fetchOkJson,
+  getJson,
+  postResponses,
+  expectResponses,
+  expectResponsesJson,
+  expectNonStreamingResponsesJson,
+  expectOpenAiNonStreamingResponsesJson,
+  requireArray,
+  outputItem,
+  outputItems,
+  outputToolArgs,
+  outputToolArgsFromItem,
+  outputToolCall,
+  outputToolCallId,
+  outputContentItem,
+  outputText,
+  makeUserInput,
+  makeToolOutputWithCallId,
+} from "./server.test-harness.js";
 
-type MockServer = { baseUrl: string };
+const { startMockServer, cleanups } = createMockServerTestHarness();
 
-const cleanups: Array<() => Promise<void>> = [];
+const ACCEPTED_SPAWN_RESULT = '{"status":"accepted","childSessionKey":"child"}';
+const SUBAGENT_WAITING = "Waiting for the bounded QA subagent";
+
 const QA_IMAGE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
 const QA_IMAGE_INPUT = {
@@ -50,8 +77,6 @@ const QA_REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
-const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const QA_COMPACTION_RETRY_CODE_MODE_WRITE_RESULT = {
   status: "completed",
   value: {
@@ -100,62 +125,12 @@ function expectCurrentCompactionSummaryHeadings(summary: string) {
   expect(summary).not.toContain("## Goal");
 }
 
-afterEach(async () => {
-  while (cleanups.length > 0) {
-    await cleanups.pop()?.();
-  }
-});
-
-async function startMockServer(params?: { finalOnlyMarkerPauseMs?: number; modelRefs?: string[] }) {
-  const server = await startQaMockOpenAiServer({
-    host: "127.0.0.1",
-    port: 0,
-    ...params,
-  });
-  cleanups.push(async () => {
-    await server.stop();
-  });
-  return server;
-}
-
-async function postJson(server: MockServer, path: string, body: unknown) {
-  return fetch(`${server.baseUrl}${path}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-}
-
-async function expectOk(responsePromise: Promise<Response>) {
-  const response = await responsePromise;
-  expect(response.status).toBe(200);
-  return response;
-}
-
-function fetchOk(input: URL | RequestInfo, init?: RequestInit) {
-  return expectOk(fetch(input, init));
-}
-
-async function fetchOkJson<T>(input: URL | RequestInfo, init?: RequestInit) {
-  return (await fetchOk(input, init)).json() as Promise<T>;
-}
-
-function getJson<T>(server: MockServer, path: string) {
-  return fetchOkJson<T>(`${server.baseUrl}${path}`);
-}
-
 function expectPostJson(server: MockServer, path: string, body: unknown) {
   return expectOk(postJson(server, path, body));
 }
 
 async function expectPostJsonJson<T>(server: MockServer, path: string, body: unknown) {
   return (await expectPostJson(server, path, body)).json() as Promise<T>;
-}
-
-async function postResponses(server: MockServer, body: unknown) {
-  return postJson(server, "/v1/responses", body);
 }
 
 function postNonStreamingResponses(server: MockServer, body: Record<string, unknown>) {
@@ -194,16 +169,8 @@ function expectAnthropicMessages(server: MockServer, body: Record<string, unknow
   return expectOk(postAnthropicMessages(server, body));
 }
 
-function expectResponses(server: MockServer, body: unknown) {
-  return expectOk(postResponses(server, body));
-}
-
 async function expectResponsesText(server: MockServer, body: unknown) {
   return (await expectResponses(server, body)).text();
-}
-
-async function expectResponsesJson<T>(server: MockServer, body: unknown) {
-  return (await expectResponses(server, body)).json() as Promise<T>;
 }
 
 function expectStreamingResponsesText(server: MockServer, body: Record<string, unknown>) {
@@ -218,17 +185,6 @@ function expectAnthropicMessagesJson<T>(server: MockServer, body: Record<string,
   });
 }
 
-function expectNonStreamingResponsesJson<T>(server: MockServer, body: Record<string, unknown>) {
-  return expectResponsesJson<T>(server, { stream: false, ...body });
-}
-
-function expectOpenAiNonStreamingResponsesJson<T>(
-  server: MockServer,
-  body: Record<string, unknown>,
-) {
-  return expectNonStreamingResponsesJson<T>(server, { model: "gpt-5.6-luna", ...body });
-}
-
 function expectOpenAiStreamingResponsesText(server: MockServer, body: Record<string, unknown>) {
   return expectStreamingResponsesText(server, { model: "gpt-5.6-luna", ...body });
 }
@@ -238,72 +194,6 @@ function parseStreamingResponseEvents(body: string): StreamEvent[] {
     .split("\n")
     .filter((line) => line.startsWith("data: {") && line.endsWith("}"))
     .map((line) => JSON.parse(line.slice("data: ".length)) as StreamEvent);
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-capitalized");
-
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value;
-}
-
-function outputItem(payload: unknown, index = 0) {
-  const output = requireArray(requireRecord(payload, "response payload").output, "response output");
-  return requireRecord(output[index], `response output ${index}`);
-}
-
-function outputItems(payload: unknown) {
-  return requireArray(requireRecord(payload, "response payload").output, "response output").map(
-    (item, index) => requireRecord(item, `response output ${index}`),
-  );
-}
-
-function outputToolArgs(payload: unknown, index = 0) {
-  const item = outputItem(payload, index);
-  return outputToolArgsFromItem(item);
-}
-
-function outputToolArgsFromItem(item: Record<string, unknown>) {
-  if (typeof item.arguments !== "string") {
-    throw new Error("Expected response output arguments");
-  }
-  return requireRecord(JSON.parse(item.arguments) as unknown, "response output arguments");
-}
-
-function outputToolCall(payload: unknown, name: string) {
-  const toolCall = outputItems(payload).find(
-    (item) => item.type === "function_call" && item.name === name,
-  );
-  if (!toolCall) {
-    throw new Error(`Expected ${name} tool call`);
-  }
-  return toolCall;
-}
-
-function outputToolCallId(item: Record<string, unknown>, fallback: string) {
-  return typeof item.call_id === "string" ? item.call_id : fallback;
-}
-
-function outputContentItem(payload: unknown, outputIndex = 0, contentIndex = 0) {
-  const content = requireArray(outputItem(payload, outputIndex).content, "response output content");
-  return requireRecord(content[contentIndex], `response content ${contentIndex}`);
-}
-
-function outputText(payload: unknown, outputIndex = 0, contentIndex = 0) {
-  const text = outputContentItem(payload, outputIndex, contentIndex).text;
-  if (typeof text !== "string") {
-    throw new Error("Expected response output text");
-  }
-  return text;
-}
-
-function makeUserInput(text: string) {
-  return {
-    role: "user" as const,
-    content: [{ type: "input_text" as const, text }],
-  };
 }
 
 function makeImageUserInput(...content: unknown[]) {
@@ -330,10 +220,6 @@ function readOpenAiPromptResponseText(server: MockServer, prompt: string, ...inp
 
 function makeToolOutput(output: unknown) {
   return { type: "function_call_output" as const, output };
-}
-
-function makeToolOutputWithCallId(callId: string, output: unknown) {
-  return { type: "function_call_output" as const, call_id: callId, output };
 }
 
 async function completeSideEffectScenario(server: MockServer, kind: "recovery" | "exhaustion") {
@@ -571,6 +457,7 @@ describe("qa mock openai server", () => {
     });
 
     expect(failure.status).toBe(503);
+    expect(failure.headers.get("retry-after")).toBe("120");
     expect(await failure.json()).toEqual({
       error: {
         type: "server_error",
@@ -840,69 +727,6 @@ describe("qa mock openai server", () => {
       expect(responseBody).toContain('"text":"QA-FINAL-ONLY-STREAMING-OK"');
     },
   );
-
-  it("plans sessions_send for the A2A message-tool mirror proof scenario", async () => {
-    const server = await startMockServer();
-    const prompt =
-      'qa a2a message-tool mirror check. sessionKey="agent:qa:a2a-target". exact marker: `QA-A2A-MIRROR-OK`';
-
-    const toolPlan = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [{ type: "function", name: "sessions_send" }],
-      input: [makeUserInput(prompt)],
-    });
-
-    const args = outputToolArgs(toolPlan);
-    expect(outputItem(toolPlan).type).toBe("function_call");
-    expect(outputItem(toolPlan).name).toBe("sessions_send");
-    expect(args).toMatchObject({
-      sessionKey: "agent:qa:a2a-target",
-      timeoutSeconds: 0,
-    });
-    expect(String(args.message)).toContain("qa group visible reply tool check");
-    expect(String(args.message)).toContain("QA-A2A-MIRROR-OK");
-
-    const debugPayload = requireRecord(
-      await getJson(server, "/debug/last-request"),
-      "debug request",
-    );
-    expect(debugPayload.plannedToolName).toBe("sessions_send");
-    expect(debugPayload.plannedToolArgs).toMatchObject({
-      sessionKey: "agent:qa:a2a-target",
-      timeoutSeconds: 0,
-    });
-
-    const final = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [{ type: "function", name: "sessions_send" }],
-      input: [
-        makeUserInput(prompt),
-        makeToolOutputWithCallId(
-          "call_mock_sessions_send_fixture",
-          JSON.stringify({ status: "accepted", delivery: { mode: "announce" } }),
-        ),
-      ],
-    });
-    expect(outputText(final)).toBe("");
-
-    const targetToolPlan = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools: [
-        { type: "function", name: "sessions_send" },
-        { type: "function", name: "message" },
-      ],
-      input: [
-        makeUserInput(prompt),
-        makeUserInput(
-          "qa group visible reply tool check. Use the visible room reply path. exact marker: `QA-A2A-MIRROR-OK`",
-        ),
-      ],
-    });
-
-    expect(outputItem(targetToolPlan).type).toBe("function_call");
-    expect(outputItem(targetToolPlan).name).toBe("message");
-    expect(outputToolArgs(targetToolPlan)).toMatchObject({
-      action: "send",
-      message: "QA-A2A-MIRROR-OK",
-    });
-  });
 
   it.each([
     { label: "structured", output: JSON.stringify({ ok: true }) },
@@ -4966,15 +4790,15 @@ Update and merge these partial structured summaries.`,
     });
     expect(await repeatedHandoff.text()).not.toContain('"name":"sessions_spawn"');
 
-    const handoffFinal = await expectNonStreamingResponses(server, {
+    const handoffWaiting = await expectNonStreamingResponses(server, {
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
         makeUserInput(handoffPrompt),
-        makeToolOutput("SUBAGENT-OK"),
+        makeToolOutput(ACCEPTED_SPAWN_RESULT),
         makeUserInput("Continue."),
       ],
     });
-    expect(outputText(await handoffFinal.json())).toContain("Delegated task");
+    expect(outputText(await handoffWaiting.json())).toContain(SUBAGENT_WAITING);
 
     const fanoutPrompt =
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
@@ -7806,13 +7630,7 @@ Update and merge these partial structured summaries.`,
   });
 
   it("dispatches Anthropic /v1/messages tool_result follow-ups through the shared scenario logic", async () => {
-    // This verifies the Anthropic adapter correctly feeds tool_result
-    // content blocks into the shared scenario dispatcher so downstream
-    // "has this scenario already called a tool?" logic fires the same way
-    // it does on the OpenAI /v1/responses route. The subagent handoff
-    // scenario is ideal because the mock has a two-stage flow: first
-    // delegate prompt → sessions_spawn tool_use, then tool_result →
-    // "Delegated task: ..." prose summary.
+    // Both provider routes keep accepted spawn receipts pending.
     const server = await startMockServer();
 
     const body = (await expectAnthropicMessagesJson(server, {
@@ -7831,7 +7649,7 @@ Update and merge these partial structured summaries.`,
             },
           ],
         },
-        makeAnthropicToolResult("toolu_mock_spawn_1", "SUBAGENT-OK"),
+        makeAnthropicToolResult("toolu_mock_spawn_1", ACCEPTED_SPAWN_RESULT),
       ],
     })) as {
       stop_reason: string;
@@ -7841,10 +7659,7 @@ Update and merge these partial structured summaries.`,
     const textBlock = body.content.find((block) => block.type === "text") as
       | { text: string }
       | undefined;
-    // The mock's subagent-handoff branch echoes "Delegated task", a
-    // tool-output evidence line, and a folded-back "Evidence" marker.
-    expect(textBlock?.text).toContain("Delegated task");
-    expect(textBlock?.text).toContain("Evidence");
+    expect(textBlock?.text).toContain(SUBAGENT_WAITING);
   });
 
   it("places tool_result after the parent user message even in mixed-content turns", async () => {
@@ -8187,15 +8002,14 @@ Update and merge these partial structured summaries.`,
             },
           ],
         },
-        makeAnthropicToolResult("toolu_mock_spawn_1", "SUBAGENT-OK"),
+        makeAnthropicToolResult("toolu_mock_spawn_1", ACCEPTED_SPAWN_RESULT),
       ],
     });
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const body = await response.text();
     expect(body).toContain("event: content_block_delta");
     expect(body).toContain('"type":"text_delta"');
-    expect(body).toContain("Delegated task");
-    expect(body).toContain("Evidence");
+    expect(body).toContain(SUBAGENT_WAITING);
   });
 
   it("keeps Anthropic remember prompts on the prose branch even when system text mentions HEARTBEAT", async () => {

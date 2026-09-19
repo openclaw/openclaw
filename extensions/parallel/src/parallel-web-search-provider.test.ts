@@ -533,18 +533,6 @@ describe("parallel web search provider", () => {
     expect(streamed.getReadCount()).toBeLessThan(200);
     expect(streamed.wasCanceled()).toBe(true);
   });
-  it("parses a well-formed Parallel JSON body under the byte cap", async () => {
-    enqueueJson({
-      search_id: "ok",
-      session_id: "ok-session",
-      results: [{ url: "https://example.com/a", title: "A", excerpts: ["alpha"] }],
-    });
-    const result = await paidTool().execute({
-      objective: `parallel-success-ok-${Date.now()}-${Math.random()}`,
-      search_queries: ["openclaw"],
-    });
-    expect(result).toMatchObject({ provider: "parallel", searchId: "ok", count: 1 });
-  });
   it("does not surface a Parallel-generated sessionId on a cache hit", async () => {
     const objective = `parallel-cache-isolation-${Date.now()}-${Math.random()}`;
     enqueueJson({ search_id: "first", session_id: "session-generated-by-parallel", results: [] });

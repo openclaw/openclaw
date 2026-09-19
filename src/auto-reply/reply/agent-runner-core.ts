@@ -191,14 +191,14 @@ export function resolveReplyRunDeliveryContext(params: {
 
 export function hasSuccessfulSourceReplyDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
-  directlySentBlockKeys?: Set<string>;
+  hasDirectlySentBlockReply?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return (
     params.blockReplyPipeline?.didStream() ||
-    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    params.hasDirectlySentBlockReply === true ||
     hasVisibleCommittedMessagingToolDeliveryEvidence(params)
   );
 }
@@ -211,9 +211,10 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
   directBlockDeliveries?: DirectBlockDelivery[];
 }): boolean {
   const sentTerminalBlock = params.directBlockDeliveries?.some(
-    ({ payload, outcome, pending }) =>
+    ({ payload, outcome, pending, source }) =>
       outcome === "delivered" &&
       !pending &&
+      source?.complete !== false &&
       isReplyPayloadTerminalContent(payload) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );

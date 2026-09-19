@@ -149,10 +149,10 @@ export async function loadLocalSetupRecovery(
       ? {
           applyOptions: {
             resume: true as const,
+            // The pending receipt already owns the approved workspace, even with a partial roster.
+            allowWorkspaceChange: true as const,
             assertCommitPreconditions: assertOwner,
-            ...(teamCoordinatorId
-              ? { teamCoordinatorId, allowWorkspaceChange: true as const }
-              : {}),
+            ...(teamCoordinatorId ? { teamCoordinatorId } : {}),
             ...(pending.teamCoordinatorId && !hasResolvedRosterBeforeMigrations(snapshot)
               ? { firstAgent: { name: pending.teamCoordinatorId, team: true as const } }
               : {}),

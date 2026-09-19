@@ -1,7 +1,8 @@
 ---
-summary: "Control-plane tools, node execution, skills, plugins, sandboxing, and per-agent access profiles"
+summary: "Cross-provider messaging, control-plane tools, node execution, plugins, sandboxing, and per-agent access profiles"
 read_when:
   - Deciding which tools an agent may call
+  - Restricting messaging across conversations or channel providers
   - Sandboxing an agent or a delegated sub-agent run
   - Giving several agents different levels of access on one Gateway
 title: "Tool and agent permissions"
@@ -28,6 +29,31 @@ For any agent/surface handling untrusted content, deny these by default:
 ```
 
 `commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
+
+## Cross-provider messaging
+
+Agents with message-tool access can send across conversations and channel providers by default. For example, a WebChat session can send to a configured Discord channel without opting in to cross-provider delivery. Tool access, message-action allowlists, channel/account policy, and the provider's own permissions still apply.
+
+`tools.message.crossContext.allowAcrossProviders` defaults to `true`. Upgrades adopt this default when the setting is omitted; an explicit `false` continues to block guarded message actions from crossing the bound source provider. Set it to `false` if your deployment relies on that restriction.
+
+`allowWithinProvider` also defaults to `true` and independently controls actions targeting another conversation on the same provider. To confine guarded message actions to the current bound conversation, set both options to `false`:
+
+```json5
+{
+  tools: {
+    message: {
+      crossContext: {
+        allowWithinProvider: false,
+        allowAcrossProviders: false,
+      },
+    },
+  },
+}
+```
+
+To apply this policy to one agent, put the same `message` block under `agents.entries.<agentId>.tools`. Per-agent values override the matching global settings; omitted fields inherit them.
+
+These controls guard message mutations such as sends, replies, edits, deletes, and thread creation. They do not restrict every channel action: reads and administrative actions have separate permissions. They also do not confine CLI calls without a bound source conversation or replace filesystem, shell, or sandbox restrictions. See [Tool policy](/gateway/config-tools/tool-policy) and [Per-agent access profiles](/gateway/security/tool-permissions#per-agent-access-profiles-multi-agent) for the related controls.
 
 ## Node execution (`system.run`)
 

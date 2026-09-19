@@ -30,6 +30,7 @@ const routing = createDiagnosticFixtureRouting({
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.resetAllMocks();
   vi.resetModules();
@@ -125,7 +126,7 @@ async function withWindowsDiagnostics(
     expect(reports.length).toBeGreaterThan(0);
     for (const { command, report } of reports) {
       expect(report, `${command} inherited canary presence`).toEqual({
-        present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+        defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
         routingPreserved: true,
       });
     }
@@ -166,8 +167,28 @@ describe("Windows diagnostic child environments (mocked utilities)", () => {
 
   it("keeps cold registry authority and caches root/code-page probes", async () => {
     await withWindowsDiagnostics(false, async ({ roots, encoding }) => {
-      expect(roots.getWindowsInstallRoots().systemRoot).toBe("D:\\RegistryWindows");
       expect(encoding.resolveWindowsConsoleEncoding()).toBe("utf-8");
+      expect(mocks.exec.mock.calls.map(([, args]) => args[3])).toEqual(["SystemRoot"]);
+      expect(roots.getWindowsPowerShellExePath()).toBe(
+        "D:\\RegistryWindows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      );
+      expect(roots.getWindowsWmicExePath()).toBe("D:\\RegistryWindows\\System32\\wbem\\wmic.exe");
+      expect(mocks.exec).toHaveBeenCalledTimes(1);
+      const installRoots = roots.getWindowsInstallRoots();
+      expect(installRoots).toEqual({
+        systemRoot: "D:\\RegistryWindows",
+        programFiles: "D:\\Programs",
+        programFilesX86: "D:\\Programs",
+        programW6432: "D:\\Programs",
+      });
+      expect(roots.getWindowsInstallRoots()).toBe(installRoots);
+      expect(roots.getWindowsProgramFilesRoots()).toEqual(["D:\\Programs"]);
+      expect(mocks.exec.mock.calls.map(([, args]) => args[3])).toEqual([
+        "SystemRoot",
+        "ProgramFilesDir",
+        "ProgramFilesDir (x86)",
+        "ProgramW6432Dir",
+      ]);
       expect(encoding.decodeWindowsTextFileBuffer({ buffer: Buffer.from([0x80]) })).toBe("€");
       expect(encoding.resolveWindowsOemCodePage()).toBe(437);
       expect(roots.getWindowsSystem32ExePath("netstat.exe")).toBe(
@@ -185,6 +206,8 @@ describe("Windows diagnostic child environments (mocked utilities)", () => {
   it.each([false, true])(
     "isolates synchronous listener/argv/start-time reads, fallback=%s",
     async (fallback) => {
+      // Exercise utility environment forwarding without querying a real process with the fixture PID.
+      vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
       await withWindowsDiagnostics(fallback, async ({ pids, start }) => {
         expect(pids.readWindowsListeningPidsOnPortSync(43123)).toEqual([424242]);
         expect(pids.readWindowsProcessArgsSync(424242)).toEqual(["node", "fixture-server"]);

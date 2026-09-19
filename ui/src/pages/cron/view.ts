@@ -1,3 +1,4 @@
+import "../../styles/chat/startup-layout.css";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -43,6 +44,7 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import {
   isCronJobActiveFailure,
   isCronJobRunning,
@@ -54,7 +56,7 @@ import type {
   CronFieldKey,
   CronFormState,
   CronJobsLastStatusFilter,
-} from "../../lib/cron/index.ts";
+} from "../../lib/cron/types.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
@@ -62,6 +64,8 @@ import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+
+registerCronEnglish();
 
 type CronPanelMode = "overview" | "create" | "job";
 
@@ -149,7 +153,7 @@ type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
-  onNavigateToChat?: (sessionKey: string) => void;
+  onViewRunTranscript?: (entry: CronRunLogEntry) => void;
 };
 
 // ── Shared option helpers ──
@@ -288,11 +292,9 @@ function renderFieldRow(params: {
   wide?: boolean;
 }) {
   const controlClass = params.wide ? "cron-control cron-control--wide" : "cron-control";
-  const control = params.error
-    ? html`<div class=${controlClass}>
-        ${params.control}${renderFieldError(params.error, params.errorId)}
-      </div>`
-    : html`<div class=${controlClass}>${params.control}</div>`;
+  const control = html`<div class=${controlClass}>
+    ${params.control}${renderFieldError(params.error, params.errorId)}
+  </div>`;
   return html`
     <div class=${params.stacked ? "settings-row settings-row--stacked" : "settings-row"}>
       <label class="settings-row__text" for=${ifDefined(params.controlId || undefined)}>

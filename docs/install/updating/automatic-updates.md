@@ -2,16 +2,99 @@
 summary: "The auto-updater, per-channel automatic behavior, and how update campaigns apply and report an update"
 read_when:
   - You want unattended updates on a managed Gateway service
+  - You want to control automatic updates of a headless node host
   - You need to know when an automatic update applies and how to postpone it
   - You are turning update checks or automatic updates off
 title: "Automatic updates"
 ---
 
-Enabling the auto-updater, what each channel does automatically, and how update campaigns run. Part of the [Updating](/install/updating) guide.
+Automatic updates for headless nodes and managed Gateway services, including
+when a new version can restart each process. Part of the [Updating](/install/updating) guide.
+
+## Headless node updates
+
+Long-running packaged headless nodes update automatically by default. This
+includes foreground `openclaw node run` and installed node services. After its
+first authenticated connection, the node checks for a newer release and repeats
+the check hourly. It prepares a separate copy of its program
+files and dependencies, and activates it only when the node is idle. The global
+CLI package and any Gateway using that package are not replaced by a node update.
+
+Idle means the node no longer owns active commands, background execution,
+terminal sessions, worker sessions, plugin work, pending output, or cleanup.
+The node stops accepting new commands before activation so work cannot start
+between the idle check and restart. Busy work can postpone the update
+indefinitely. Automatic activations are at least 12 hours apart; this limit never
+forces a busy node to restart.
+
+Plugins must explicitly report that their retained work is idle. An older plugin
+without the idle-work callback postpones automatic activation, even after its
+last command returns. Update that plugin to a compatible version, or finish its
+work and use `openclaw update` followed by a node restart.
+
+The replacement process reconnects with the same identity, pairing, settings,
+and launch options. The separate runtime changes program files, not the node's
+state directory. Activation requires the candidate to reconnect successfully;
+if startup fails, the launcher falls back to the previous runtime.
+
+If the node shares its state directory with a Gateway installed before node
+automatic updates were introduced, update that Gateway once first. Older
+Gateways reject a local node whose version differs from their own. Updated
+Gateways accept a newer local node when its protocol is compatible, so later
+node updates can leave the Gateway running at its existing version.
+
+Automatic node updates require matching state and agent schema versions and an
+exact match for the candidate's required database shapes. Matching numeric
+versions alone is insufficient. A release that needs a migration or startup
+repair is deferred with instructions to use the normal
+[update workflow](/install/updating). The managed replacement consumes existing
+state without running shared Doctor or startup repairs. The normal update
+workflow owns those repairs, migration, and rollback, including coordination
+with a Gateway sharing the state directory.
+
+Native app nodes and private worker processes continue to use their existing
+update owners. Source checkouts and `dev` installs also remain owner-managed.
+Nodes follow `update.channel` for `stable` and `beta` releases; an
+`extended-stable` pin never applies an update automatically.
+
+To opt out, set this on the node machine:
+
+```json5
+{
+  nodeHost: {
+    autoUpdate: {
+      enabled: false,
+    },
+  },
+}
+```
+
+The shared opt-outs `update.checkOnStart: false` and
+`OPENCLAW_NO_AUTO_UPDATE=1` also disable node update checks and automatic
+activation. `update.auto.enabled` controls Gateway updates; it does not control
+this node-specific default.
+
+To check the connected node's runtime version, run `openclaw nodes status --json`
+from a CLI connected to its Gateway and inspect `nodes[].version`.
+`openclaw --version` reports that CLI's installed version, which can differ
+after a node update.
+
+Look in the foreground node's stderr or its service logs for update preparation,
+busy deferral, activation, and fallback messages. If an update is deferred for
+schema migration or repair, run `openclaw update` on the node machine. Then
+restart its service with `openclaw node restart`, or relaunch the foreground
+`openclaw node run` command.
+
+If the launcher reports a stale `node-runtime/activation.lock`, confirm that no
+node update is running before removing the exact lock path from the message.
+Then restart the node. Preserve the runtime selector and its recovery backup;
+the launcher uses them to recover the previously selected runtime after an
+interrupted activation.
 
 ## Auto-updater
 
-Off by default. Enable it in `~/.openclaw/openclaw.json`:
+Gateway automatic updates are off by default. Enable them in
+`~/.openclaw/openclaw.json`:
 
 ```json5
 {

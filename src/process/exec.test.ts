@@ -1,8 +1,7 @@
 // Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { existsSync } from "node:fs";
-import fs from "node:fs/promises";
+import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -19,6 +18,7 @@ import {
   runCommandBuffered,
   runCommandWithTimeout,
   runExec,
+  runUtf8CommandWithTimeout,
   shouldSpawnWithShell,
 } from "./exec.js";
 
@@ -34,7 +34,9 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32").each(["normal", "cooperative", "forced"] as const)(
+  it
+    .skipIf(process.platform === "win32")
+    .each(["normal", "cooperative", "default-signal", "forced"] as const)(
     "reports invocation cleanup and honors the initial SIGINT signal: %s",
     async (mode) => {
       const controller = new AbortController();
@@ -45,7 +47,9 @@ describe("runCommandWithTimeout", () => {
       const program =
         mode === "normal"
           ? "process.stdout.write('ready'); process.exitCode=17;"
-          : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
+          : mode === "default-signal"
+            ? "setInterval(()=>{},1000); process.stdout.write('ready');"
+            : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
       const running = runCommandWithTimeout([process.execPath, "-e", program], {
         signal: controller.signal,
         killProcessTree: true,
@@ -61,8 +65,11 @@ describe("runCommandWithTimeout", () => {
         controller.abort();
       }
       const result = await running;
-      expect(result.cleanup).toBe(mode);
-      if (mode !== "forced") {
+      expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
+      if (mode === "default-signal") {
+        expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
+      }
+      if (mode === "normal" || mode === "cooperative") {
         expect(result.code).toBe(17);
       }
       if (mode === "cooperative") {
@@ -266,6 +273,7 @@ describe("runCommandWithTimeout", () => {
         code: null,
         signal: "SIGTERM",
         termination: "signal",
+        cleanup: "uncertain",
       });
     },
   );
@@ -360,7 +368,7 @@ describe("runCommandWithTimeout", () => {
     ["long unterminated", "x".repeat(10_000), "x".repeat(24)],
     ["UTF-8 boundary", `😀${"x".repeat(22)}`, "x".repeat(22)],
   ])("bounds preserved %s line tails", async (_name, input, expected) => {
-    const result = await runCommandWithTimeout(
+    const result = await runUtf8CommandWithTimeout(
       [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
       {
         input,
@@ -520,7 +528,7 @@ describe("runCommandWithTimeout", () => {
   ] as const)(
     "preserves truncated UTF-8 %s output (%#)",
     async (outputCapture, input, maxOutputBytes, expected, truncatedBytes) => {
-      const result = await runCommandWithTimeout(
+      const result = await runUtf8CommandWithTimeout(
         [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
         {
           input,
@@ -538,7 +546,7 @@ describe("runCommandWithTimeout", () => {
   it.each([1, 2, 3])(
     "discards an entirely partial UTF-8 head at %i bytes",
     async (maxOutputBytes) => {
-      const result = await runCommandWithTimeout(
+      const result = await runUtf8CommandWithTimeout(
         [process.execPath, "-e", "process.stdout.write('😀')"],
         {
           maxOutputBytes,
@@ -848,17 +856,19 @@ describe("runExec", () => {
   });
 
   it("supports an inherited file descriptor as stdin", async () => {
-    const handle = await fs.open(fileURLToPath(import.meta.url), "r");
+    const descriptor = openSync(fileURLToPath(import.meta.url), "r");
+    let running: ReturnType<typeof runExec>;
     try {
-      const { stdout } = await runExec(
-        process.execPath,
-        ["-e", "process.stdin.pipe(process.stdout)"],
-        { stdinFileDescriptor: handle.fd, timeoutMs: 3_000 },
-      );
-      expect(stdout).toContain("// Exec tests cover command execution");
+      running = runExec(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], {
+        stdinFileDescriptor: descriptor,
+        timeoutMs: 3_000,
+      });
     } finally {
-      await handle.close();
+      // The child must own stdin before control returns to the caller.
+      closeSync(descriptor);
     }
+    const { stdout } = await running;
+    expect(stdout).toContain("// Exec tests cover command execution");
   });
 
   it("can keep sensitive output out of verbose logs", async () => {
@@ -917,24 +927,31 @@ describe("attachChildProcessBridge", () => {
 });
 
 describe("child input admission", () => {
-  it("publishes input only after binding the actual spawned PID", async () => {
+  it("publishes input only after binding the actual spawned PID and argv", async () => {
     let admittedPid: number | undefined;
+    let admittedArgv: readonly string[] | undefined;
     const result = await runCommandWithTimeout(
       [
         process.execPath,
         "-e",
-        "let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({pid:process.pid,input})))",
+        "let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({pid:process.pid,argv:[process.argv0,...process.execArgv,...process.argv.slice(1)],input})))",
       ],
       {
         input: "owned",
         timeoutMs: 5_000,
-        beforeInput: (pid) => {
+        beforeInput: (pid, argv) => {
           admittedPid = pid;
+          admittedArgv = argv;
         },
       },
     );
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ pid: admittedPid, input: "owned" });
+    expect(admittedArgv).toBeDefined();
+    expect(JSON.parse(result.stdout)).toEqual({
+      pid: admittedPid,
+      argv: admittedArgv,
+      input: "owned",
+    });
   });
 
   it("joins the child without delivering input when admission rejects", async () => {
@@ -957,6 +974,9 @@ describe("child input admission", () => {
       },
     );
     await expect(work).rejects.toBe(refusal);
+    expect(refusal).toMatchObject({
+      cleanup: process.platform === "win32" ? "forced" : "cooperative",
+    });
     expect(pid).toBeTypeOf("number");
     expect(isPidAlive(pid!)).toBe(false);
   });

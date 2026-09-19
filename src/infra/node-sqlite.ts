@@ -4,12 +4,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { formatErrorMessage } from "./errors.js";
+import { compareValidSemver } from "./semver.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 let extensionLoadingSupported = false;
+let jsonbSupported = false;
 
 type NodeSqliteDatabaseOptions = ConstructorParameters<
   typeof import("node:sqlite").DatabaseSync
@@ -89,6 +91,7 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
       | undefined;
     const version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
+    jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
     const capabilities = database
       .prepare("SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted")
       .get();
@@ -123,6 +126,12 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
 export function supportsNodeSqliteExtensionLoading(): boolean {
   requireNodeSqlite();
   return extensionLoadingSupported;
+}
+
+/** JSONB is absent from the supported SQLite 3.44 maintenance line. */
+export function supportsNodeSqliteJsonb(): boolean {
+  requireNodeSqlite();
+  return jsonbSupported;
 }
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */

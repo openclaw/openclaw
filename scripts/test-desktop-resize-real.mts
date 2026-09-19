@@ -7,13 +7,14 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getFreePort } from "../src/test-utils/ports.ts";
 import { assertPrebuiltUiE2eRuntime } from "../test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
+import { desktopReadinessLines } from "./lib/desktop-readiness-proof.mts";
 import {
-  desktopProofCommit,
-  desktopProofSource,
+  type DesktopProofSourceStatus,
   desktopProofSshdFailure,
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
+  readDesktopProofSource,
   readDesktopProofTestReport,
   withDesktopProofCleanup,
 } from "./lib/desktop-resize-proof.mts";
@@ -42,7 +43,8 @@ const receipt = {
   startedAt: new Date().toISOString(),
   provisioning:
     "Upstream Ubuntu packages and synthetic worker records; not Crabbox installer or cloud provisioning proof",
-  source: null as ReturnType<typeof desktopProofSource> | null,
+  source: null as Awaited<ReturnType<typeof readDesktopProofSource>> | null,
+  sourceStatus: null as DesktopProofSourceStatus | null,
   workflowSha: process.env.DESKTOP_PROOF_WORKFLOW_SHA ?? null,
   runId: process.env.GITHUB_RUN_ID ?? null,
   runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
@@ -280,20 +282,16 @@ async function waitFor(test: () => Promise<boolean>, cleanup = false) {
 }
 
 async function sourceIdentity() {
-  const head = (await run("source-head", "git", ["rev-parse", "--verify", "HEAD"]))
-    .toString()
-    .trim();
-  const commit = await run("source-identity", "git", ["cat-file", "commit", head]);
-  const source = desktopProofSource(desktopProofCommit(head, commit.toString()), {
-    checkout: process.env.DESKTOP_PROOF_CHECKOUT_SHA ?? "",
-    head: process.env.DESKTOP_PROOF_PR_HEAD_SHA,
-    base: process.env.DESKTOP_PROOF_PR_BASE_SHA,
-  });
-  assert.equal(
-    (await run("source-clean", "git", ["status", "--porcelain", "--untracked-files=all"]))
-      .toString()
-      .trim(),
-    "",
+  const source = await readDesktopProofSource(
+    (label, args) => run(label, "git", args),
+    {
+      checkout: process.env.DESKTOP_PROOF_CHECKOUT_SHA ?? "",
+      head: process.env.DESKTOP_PROOF_PR_HEAD_SHA,
+      base: process.env.DESKTOP_PROOF_PR_BASE_SHA,
+    },
+    (status) => {
+      receipt.sourceStatus = status;
+    },
   );
   if (receipt.source) {
     assert.deepEqual(source, receipt.source);
@@ -611,6 +609,16 @@ async function main() {
               try {
                 diagnostic.report = await readDesktopProofTestReport(reportFile);
                 diagnostic.status = "available";
+                for (const file of diagnostic.report.files) {
+                  for (const test of file.assertions) {
+                    for (const line of desktopReadinessLines(
+                      carrier,
+                      (test.gatewayReadiness ?? []).filter((entry) => entry.outcome === "ready"),
+                    )) {
+                      console.log(line);
+                    }
+                  }
+                }
               } catch (error) {
                 diagnostic.status =
                   error instanceof Error && "code" in error && error.code === "ENOENT"
@@ -742,7 +750,20 @@ async function main() {
     }
   }
   if (!receipt.complete) {
-    throw new Error(`Desktop proof incomplete at ${receipt.phase}`);
+    const reasons = receipt.testDiagnostics.flatMap(
+      ({ carrier, report }) =>
+        report?.files.flatMap((file) =>
+          file.assertions.flatMap((test) =>
+            desktopReadinessLines(
+              carrier,
+              (test.gatewayReadiness ?? []).filter((entry) => entry.outcome !== "ready"),
+            ),
+          ),
+        ) ?? [],
+    );
+    throw new Error([`Desktop proof incomplete at ${receipt.phase}`, ...reasons].join("\n"), {
+      cause: failure,
+    });
   }
 }
 

@@ -3,9 +3,10 @@ import { finished } from "node:stream/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { onDecodedOutput } from "../process/decoded-output.js";
+import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
 import type { WorkerProcessResult } from "../worker/worker-process-protocol.js";
 import {
-  observeNodeWorkerChildOutput,
+  observeNodeWorkerChild,
   type NodeWorkerTerminalOutcome,
 } from "./node-worker-launch-observation.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
@@ -31,20 +32,26 @@ function sizedResult(turnId: string, bytes: number): Buffer {
   return encodeResult(turnId, "x".repeat(bytes - encodeResult(turnId, "").length));
 }
 
-function observationHarness() {
+function observationHarness(
+  options: {
+    waitForExtinction?: NodeWorkerChildAdapter["waitForExtinction"];
+    cleanupContainer?: () => Promise<void>;
+    expectedKind?: "confirmed" | "deferred";
+  } = {},
+) {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const journal = createDeferred();
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
   const unsubscribe: Array<() => void> = [];
   const kill = vi.fn();
-  const dispose = vi.fn(() => {
+  const dispose = () => {
     for (const stop of unsubscribe) {
       stop();
     }
     stdout.destroy();
     stderr.destroy();
-  });
+  };
   const adapter = {
     supportsRawOutput: true,
     onStdout: (listener, onRaw) => {
@@ -56,11 +63,12 @@ function observationHarness() {
     onExit: () => {},
     onError: () => {},
     wait: () => exit.promise,
+    waitForExtinction: options.waitForExtinction,
     kill,
     dispose,
   } satisfies NodeWorkerChildAdapter;
   const frames: WorkerProcessResult[] = [];
-  const outcome = observeNodeWorkerChildOutput(
+  const completion = observeNodeWorkerChild(
     {
       adapter,
       journalReady: journal.promise,
@@ -69,7 +77,12 @@ function observationHarness() {
     },
     (frame) => frames.push(frame),
     () => undefined,
+    options.cleanupContainer,
   );
+  const outcome = completion.then((observation) => {
+    expect(observation.kind).toBe(options.expectedKind ?? "confirmed");
+    return observation.outcome;
+  });
   let closing: Promise<NodeWorkerTerminalOutcome> | undefined;
   const close = () =>
     (closing ??= (async () => {
@@ -78,13 +91,22 @@ function observationHarness() {
       await Promise.all([finished(stdout), finished(stderr)]);
       journal.resolve();
       exit.resolve({ code: 0, signal: null });
-      return await outcome;
+      try {
+        return await outcome;
+      } finally {
+        dispose();
+      }
     })());
   return {
     stdout,
     frames,
     kill,
-    dispose,
+    completion,
+    outcome,
+    failWait: (error: Error) => {
+      journal.resolve();
+      exit.reject(error);
+    },
     close,
     releaseJournal: async () => {
       journal.resolve();
@@ -111,7 +133,18 @@ describe("node worker output framing", () => {
       });
       expect(harness.frames).toEqual([resultFrame("first", "hello 漢😀")]);
       expect(harness.kill).not.toHaveBeenCalled();
-      expect(harness.dispose).toHaveBeenCalledOnce();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("does not accept late results while the owner still drains a failed worker", async () => {
+    const harness = observationHarness();
+    try {
+      harness.failWait(new Error("worker wait failed"));
+      expect(await harness.outcome).toMatchObject({ state: "failed" });
+      harness.stdout.write(encodeResult("late"));
+      expect(harness.frames).toEqual([]);
     } finally {
       await harness.close();
     }
@@ -209,4 +242,86 @@ describe("node worker output framing", () => {
       await harness.close();
     }
   });
+});
+
+describe("node worker cleanup observation", () => {
+  const uncertainExtinction = {
+    status: "uncertain",
+    reason: "job-observation-failed",
+    cause: new Error("cleanup failed with framing-fixture-token"),
+  } satisfies ProcessExtinctionResult;
+
+  it.each([
+    { name: "void", extinction: undefined, kind: "confirmed" },
+    { name: "confirmed", extinction: { status: "confirmed" }, kind: "confirmed" },
+    { name: "uncertain", extinction: uncertainExtinction, kind: "deferred" },
+  ] as const)("observes $name native completion", async ({ extinction, kind }) => {
+    const harness = observationHarness({
+      waitForExtinction: async () => extinction,
+      expectedKind: kind,
+    });
+    try {
+      await harness.releaseJournal();
+      harness.stdout.write(encodeResult("first"));
+      const outcome = await harness.close();
+
+      if (kind === "deferred") {
+        expect(outcome).toMatchObject({
+          state: "failed",
+          errorText: expect.stringContaining("cleanup"),
+        });
+        expect(outcome.errorText).not.toContain("framing-fixture-token");
+        expect(outcome.resultJson).toBeUndefined();
+      } else {
+        expect(outcome).toEqual({
+          state: "completed",
+          resultJson: JSON.stringify(resultFrame("first").result),
+        });
+      }
+      expect(harness.frames).toEqual([resultFrame("first")]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it.each([true, false])(
+    "joins authoritative container cleanup after uncertain attach completion (removed=%s)",
+    async (removed) => {
+      const removal = createDeferred();
+      const cleanupContainer = vi.fn(() => removal.promise);
+      const harness = observationHarness({
+        waitForExtinction: async () => uncertainExtinction,
+        cleanupContainer,
+        expectedKind: removed ? "confirmed" : "deferred",
+      });
+      const settled = vi.fn();
+      try {
+        await harness.releaseJournal();
+        harness.stdout.write(encodeResult("first"));
+        const closing = harness.close();
+        void closing.then(settled, settled);
+        await vi.waitFor(() => expect(cleanupContainer).toHaveBeenCalledOnce());
+        expect(settled).not.toHaveBeenCalled();
+
+        if (removed) {
+          removal.resolve();
+        } else {
+          removal.reject(new Error("container removal failed"));
+        }
+        await closing;
+
+        expect(await harness.completion).toEqual({
+          kind: removed ? "confirmed" : "deferred",
+          outcome: {
+            state: "completed",
+            resultJson: JSON.stringify(resultFrame("first").result),
+          },
+        });
+        expect(cleanupContainer).toHaveBeenCalledOnce();
+      } finally {
+        removal.resolve();
+        await harness.close();
+      }
+    },
+  );
 });

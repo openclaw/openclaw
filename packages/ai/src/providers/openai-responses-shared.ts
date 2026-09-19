@@ -4,19 +4,20 @@ import type {
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
+import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import {
   createOpenAIResponsesAssistantOutput,
   createResponsesStreamWithEncryptedContentRetry,
   convertProviderResponsesMessages,
 } from "../transports/openai-responses-replay-internal.js";
+import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
@@ -24,15 +25,7 @@ import {
   finalizeTransportStream,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
-import type {
-  Api,
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamOptions,
-  Usage,
-} from "../types.js";
+import type { Api, AssistantMessage, Context, Model, StreamOptions, Usage } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   createFirstStreamEventAbortController,
@@ -40,11 +33,11 @@ import {
   getFirstStreamEventTimeoutMs,
   type FirstStreamEventInternalOptions,
 } from "../utils/stream-first-event-timeout.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
-  resolveOpenAIModelReasoningEfforts,
-  resolveOpenAIReasoningEffortForModel,
-  supportsOpenAITemperature,
-} from "./openai-reasoning-effort.js";
+  resolveOpenAIRequestReasoning,
+  type OpenAIRequestReasoningEffort,
+} from "./openai-request-reasoning.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 
 interface OpenAIResponsesStreamOptions {
@@ -100,12 +93,10 @@ type ResponsesLifecycleStreamOptions = Pick<
 type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
   FirstStreamEventInternalOptions & { signal?: AbortSignal };
 
-type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
-  reasoningEffort?: ResponsesReasoningEffort;
+  reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
@@ -152,29 +143,6 @@ export function applyResponsesServiceTierPricing(
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
 }
 
-export function resolveResponsesReasoningEffort<TApi extends Api>(
-  model: Model<TApi>,
-  reasoning: SimpleStreamOptions["reasoning"] | undefined,
-): ResponsesReasoningEffort | undefined {
-  const clampedReasoning = reasoning ? clampThinkingLevel(model, reasoning) : undefined;
-  return clampedReasoning === "off" ? undefined : clampedReasoning;
-}
-
-export function resolveResponsesRequestReasoningEffort<TApi extends Api>(
-  model: Model<TApi>,
-  reasoning: ResponsesReasoningEffort | "none" | "off",
-): string | undefined {
-  const mapped = model.thinkingLevelMap?.[reasoning === "none" ? "off" : reasoning];
-  if (mapped !== undefined) {
-    return mapped ?? undefined;
-  }
-  return resolveOpenAIModelReasoningEfforts(model) === undefined
-    ? reasoning === "off"
-      ? "none"
-      : reasoning
-    : resolveOpenAIReasoningEffortForModel({ model, effort: reasoning });
-}
-
 export function applyCommonResponsesParams<TApi extends Api>(
   params: ResponseCreateParamsStreaming,
   model: Model<TApi>,
@@ -211,12 +179,12 @@ export function applyCommonResponsesParams<TApi extends Api>(
   const effort =
     requestedEffort === undefined
       ? undefined
-      : resolveResponsesRequestReasoningEffort(model, requestedEffort);
+      : resolveOpenAIRequestReasoning(model, requestedEffort).effort;
   if (effort === undefined) {
     return;
   }
   params.reasoning = { effort: effort as NonNullable<typeof params.reasoning>["effort"] };
-  if (options?.reasoningEffort || options?.reasoningSummary) {
+  if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary)) {
     params.reasoning.summary = options?.reasoningSummary || "auto";
     params.include = ["reasoning.encrypted_content"];
   }
@@ -272,6 +240,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const firstEvent = createFirstStreamEventAbortController(options?.signal);
     firstEventAbort = firstEvent;
     let started = false;
+    let admittedRequest: ResponsesLifecycleRequest | undefined;
     const { stream: hookedOpenAIStream } = await createResponsesStreamWithEncryptedContentRetry({
       client: client as never,
       request: requestParams as never,
@@ -284,8 +253,9 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       canRetryStream: () => output.content.length === 0,
-      wrapStream: ({ stream: openaiStream, response }) =>
-        withProviderResponseHook({
+      wrapStream: ({ stream: openaiStream, response, attempt }) => {
+        admittedRequest = attempt.kind === "initial" ? attempt.request : undefined;
+        return withProviderResponseHook({
           stream: openaiStream,
           signal: firstEvent.signal,
           abort: firstEvent.abort,
@@ -296,7 +266,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
               stream.push({ type: "start", partial: output });
             }
           },
-        }),
+        });
+      },
     });
 
     const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
@@ -316,14 +287,25 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
             signal: params.processStreamOptions?.signal ?? options?.signal,
           }
         : undefined;
-    await processResponsesStream(hookedOpenAIStream, output, stream, model, {
+    const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
+      canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,
         authProfileId: options?.authProfileId,
       }),
     });
 
+    if (terminal && admittedRequest && !options?.signal?.aborted) {
+      recordResponsesContextUsage(
+        output,
+        model,
+        options,
+        admittedRequest,
+        terminal.output,
+        "provider",
+      );
+    }
     finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
     failTransportStream({

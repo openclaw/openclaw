@@ -88,7 +88,7 @@ export const agentVitestProjectOwners = {
     root: embeddedRoot,
     dir: agentsRoot,
     include: [`${embeddedRoot}/*.test.ts`],
-    exclude: [...incompleteTurnFiles, ...overflowCompactionFiles],
+    exclude: [...incompleteTurnFiles, ...overflowCompactionFiles, ...databaseWorkerCoreTestFiles],
   },
   embeddedIncompleteTurn: {
     kind: "agentEmbeddedIncompleteTurn",
@@ -115,7 +115,7 @@ export const agentVitestProjectOwners = {
     root: `${embeddedRoot}/run`,
     dir: `${embeddedRoot}/run`,
     include: [`${embeddedRoot}/run/**/*.test.ts`],
-    exclude: [],
+    exclude: databaseWorkerCoreTestFiles,
   },
   support: {
     kind: "agentSupport",
@@ -125,6 +125,7 @@ export const agentVitestProjectOwners = {
     dir: agentsRoot,
     include: [`${agentsRoot}/*/**/*.test.ts`],
     exclude: [
+      ...databaseWorkerCoreTestFiles,
       ...spawnProductionBoundaryFiles,
       ...coreIsolatedFiles,
       `${embeddedRoot}/**`,
@@ -138,7 +139,7 @@ export const agentVitestProjectOwners = {
     root: `${agentsRoot}/tools`,
     dir: agentsRoot,
     include: [`${agentsRoot}/tools/**/*.test.ts`],
-    exclude: [],
+    exclude: databaseWorkerCoreTestFiles,
   },
 };
 

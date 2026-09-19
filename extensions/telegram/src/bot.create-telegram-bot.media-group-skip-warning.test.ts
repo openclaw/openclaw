@@ -1,5 +1,6 @@
 // Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
@@ -129,10 +130,21 @@ function createChannelPostContext(params: {
       date: params.date,
       ...(params.caption ? { caption: params.caption } : {}),
       media_group_id: params.mediaGroupId,
-      photo: [{ file_id: params.photoFileId }],
+      photo: [
+        {
+          file_id: params.photoFileId,
+          file_unique_id: `unique-${params.photoFileId}`,
+          width: 1,
+          height: 1,
+        },
+      ],
     },
     me: { username: "openclaw_bot" },
-    getFile: async () => ({ file_path: `photos/${params.photoFileId}.jpg` }),
+    getFile: async () => ({
+      file_id: params.photoFileId,
+      file_unique_id: `unique-${params.photoFileId}`,
+      file_path: `photos/${params.photoFileId}.jpg`,
+    }),
   };
 }
 
@@ -192,7 +204,12 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     saveRemoteMedia.mockImplementation(async (...args: unknown[]) => {
       const url = urlOf(args);
       if (url.includes("photos/p1.jpg")) {
-        return { path: "/tmp/p1.jpg", contentType: "image/png" };
+        return {
+          id: "p1.jpg",
+          path: "/tmp/p1.jpg",
+          size: 4,
+          contentType: "image/png",
+        } satisfies SavedRemoteMedia;
       }
       throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}`);
     });
@@ -268,7 +285,12 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     saveRemoteMedia.mockImplementation(async (...args: unknown[]) => {
       const url = urlOf(args);
       if (url.includes("photos/p1.jpg")) {
-        return { path: "/tmp/p1.jpg", contentType: "image/png" };
+        return {
+          id: "p1.jpg",
+          path: "/tmp/p1.jpg",
+          size: 4,
+          contentType: "image/png",
+        } satisfies SavedRemoteMedia;
       }
       throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}`);
     });

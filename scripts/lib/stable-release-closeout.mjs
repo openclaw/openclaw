@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { escapeRegExp } from "./regexp.mjs";
+import { evaluateStableRollbackDrill } from "./release-publish-gates.mts";
 import {
   classifyReleaseTrain,
   compareReleaseVersions,
@@ -10,7 +11,6 @@ const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*
 const STABLE_PACKAGE_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>[1-9]\d*))?$/u;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
-const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 function parseStableReleaseTagDetails(tag) {
   const match = STABLE_RELEASE_TAG_RE.exec(tag);
@@ -113,16 +113,16 @@ function readVerifiedAssetNames(assets) {
 }
 
 export function requiresLinuxUpdaterObservation({ release, existingManifest }) {
-  const selectors = readReleaseAssets(release).filter((asset) => asset.name === "latest.json");
-  const recorded = existingManifest?.githubReleaseAssets?.find(
-    (asset) => asset.name === "latest.json",
-  );
-  return (
-    selectors.length > 0 &&
-    (selectors.length !== 1 ||
-      !isCanonicalAssetDigest(selectors[0].digest) ||
-      selectors[0].digest !== recorded?.digest)
-  );
+  return ["latest.json", `OpenClaw-${release.tagName?.slice(1)}-linux.json`].some((name) => {
+    const selectors = readReleaseAssets(release).filter((asset) => asset.name === name);
+    const recorded = existingManifest?.githubReleaseAssets?.find((asset) => asset.name === name);
+    return (
+      selectors.length > 0 &&
+      (selectors.length !== 1 ||
+        !isCanonicalAssetDigest(selectors[0].digest) ||
+        selectors[0].digest !== recorded?.digest)
+    );
+  });
 }
 
 function copyOwnFields(source, ...keys) {
@@ -148,38 +148,6 @@ function isCloseoutEvidenceAsset(assetName, tag) {
     assetName === `openclaw-${releaseVersion}-stable-main-closeout.json` ||
     assetName === `openclaw-${releaseVersion}-stable-main-closeout.json.sha256`
   );
-}
-
-function parseRollbackDrillDate(value) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
-    return null;
-  }
-
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
-    ? parsed.getTime()
-    : null;
-}
-
-function verifyRollbackDrill(params, errors) {
-  if (!params.rollbackDrillId?.trim()) {
-    errors.push("rollback drill id is required.");
-  }
-
-  const drillDateMs = parseRollbackDrillDate(params.rollbackDrillDate);
-  if (drillDateMs === null) {
-    errors.push(`rollback drill date is invalid: ${params.rollbackDrillDate ?? "<missing>"}.`);
-    return;
-  }
-
-  const ageMs = params.nowMs - drillDateMs;
-  if (ageMs < 0) {
-    errors.push(`rollback drill date is in the future: ${params.rollbackDrillDate}.`);
-  } else if (!params.allowStaleRollbackDrill && ageMs > MAX_ROLLBACK_DRILL_AGE_MS) {
-    errors.push(
-      `rollback drill is older than 90 days: ${params.rollbackDrillDate}. Run the private rollback drill before stable closeout.`,
-    );
-  }
 }
 
 export function verifyStableMainCloseout(params) {
@@ -294,10 +262,36 @@ export function verifyStableMainCloseout(params) {
       classifyReleaseTrain(source) === "stable" &&
       sourceComparison !== null &&
       sourceComparison <= 0;
-    if (!verifiedLinuxSelector) {
+    const recordedSelector = existingManifest?.githubReleaseAssets?.find(
+      (asset) => asset.name === "latest.json",
+    );
+    if (
+      selectors.length > 0 &&
+      (selectors.length !== 1 ||
+        !isCanonicalAssetDigest(selectors[0].digest) ||
+        selectors[0].digest !== recordedSelector?.digest) &&
+      !verifiedLinuxSelector
+    ) {
       errors.push(
         "New or changed Linux updater selector requires a validated observation bound to this carrier and asset digest.",
       );
+    }
+    const immutableName = `OpenClaw-${tagVersion}-linux.json`;
+    const immutable = observedAssets.filter((asset) => asset.name === immutableName);
+    if (immutable.length > 0) {
+      const verified =
+        immutable.length === 1 &&
+        observation?.carrierTag === params.tag &&
+        observation?.immutableManifest?.name === immutableName &&
+        isSha256Hex(observation?.immutableManifest?.sha256) &&
+        immutable[0].digest === `sha256:${observation.immutableManifest.sha256}`;
+      if (verified) {
+        allowedLateAssets.add(immutableName);
+      } else {
+        errors.push(
+          "Late immutable Linux metadata requires a validated exact-name and digest observation.",
+        );
+      }
     }
   }
   const releaseAssets =
@@ -409,7 +403,11 @@ export function verifyStableMainCloseout(params) {
       "Recorded split publication recovery must be independently reverified without changes.",
     );
   }
-  verifyRollbackDrill(params, errors);
+  errors.push(
+    ...evaluateStableRollbackDrill(params)
+      .filter((gate) => gate.status === "FAIL")
+      .map((gate) => gate.message),
+  );
 
   if (errors.length > 0) {
     return { errors, manifest: null };

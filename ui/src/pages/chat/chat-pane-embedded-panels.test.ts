@@ -257,6 +257,8 @@ describe("chat pane embedded panels", () => {
     });
     await file.promise;
     await renderPanels();
+    // Lit update completion does not include the editor's detached module load.
+    await vi.dynamicImportSettled();
     const editorElement = await vi.waitFor(() =>
       expectDefined(mount.querySelector<HTMLElement>(".cm-editor"), "file editor"),
     );
@@ -309,7 +311,27 @@ describe("chat pane embedded panels", () => {
     );
     save.click();
     await vi.waitFor(() => expect(save.disabled).toBe(true));
-    const savedText = editor.state.doc.toString();
+    let savedText = editor.state.doc.toString();
+    const saved = (await file.promise)!;
+    const pendingRead = createDeferred<SessionWorkspaceGetResult | null>();
+    vi.mocked(sessions.getFile).mockReturnValueOnce(pendingRead.promise);
+    openSessionWorkspaceFile(state, { path: "navigation.txt" });
+    await renderPanels();
+    editor.dispatch({ changes: { from: 0, to: 0, insert: "newer " } });
+    await renderPanels();
+    sessions.setFile = vi.fn().mockResolvedValue({ file: { hash: "newer-saved" } });
+    save.click();
+    await vi.waitFor(() => expect(save.disabled).toBe(true));
+    pendingRead.resolve({ ...saved, file: { ...saved.file, content: savedText, hash: "saved" } });
+    await pendingRead.promise;
+    await renderPanels();
+    expect(mount.querySelector(".cm-editor")).toBe(editorElement);
+    expect(editor.state.doc.toString()).toBe(`newer ${savedText}`);
+    savedText = editor.state.doc.toString();
+    vi.mocked(sessions.getFile).mockResolvedValue({
+      ...saved,
+      file: { ...saved.file, content: savedText, hash: "newer-saved" },
+    });
     const discard = expectDefined(
       [...mount.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => button.textContent?.trim() === "Discard",
@@ -932,12 +954,14 @@ describe("chat pane embedded panels", () => {
   it("enumerates a structural loading variant for every side-panel tab", async () => {
     const expected = {
       browser: "browser",
+      "link-reader": "files",
       companion: "chat",
       conversation: "chat",
       dashboard: "board",
       desktop: "desktop",
       detail: "review",
       discussion: "discussion",
+      portal: "browser",
       tasks: "tasks",
       terminal: "terminal",
       workspace: "files",
@@ -949,6 +973,8 @@ describe("chat pane embedded panels", () => {
       "detail",
       "terminal",
       "browser",
+      "link-reader",
+      "portal",
       "workspace",
       "companion",
       "tasks",
@@ -971,6 +997,7 @@ describe("chat pane embedded panels", () => {
     const onRefreshTasks = vi.fn();
     const params = {} as NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]>;
     params.connected = true;
+    params.companion = { turns: [], loading: false, draft: "" };
     params.onRefreshTasks = onRefreshTasks;
     params.tasksLoading = false;
     const tasks = sidebarPanelDefinitions(params).find((definition) => definition.slot === "tasks");

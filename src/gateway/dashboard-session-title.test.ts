@@ -25,12 +25,11 @@ import type { ChatAttachment } from "./chat-attachments.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
-  hasExplicitSessionName,
   maybeGenerateDashboardSessionTitle,
   prepareDashboardSessionTitle,
-  resolveExplicitSessionName,
 } from "./dashboard-session-title.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
+import { hasExplicitSessionName, resolveExplicitSessionName } from "./session-title-state.js";
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },

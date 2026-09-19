@@ -1257,10 +1257,17 @@ pub async fn quickchat_ready(
 }
 
 #[tauri::command]
-pub fn quickchat_show_dashboard(webview: Webview, app: AppHandle) -> Result<(), String> {
+pub async fn quickchat_show_dashboard(webview: Webview, app: AppHandle) -> Result<(), String> {
     require_quickchat_webview(&webview)?;
-    tray::open_dashboard(&app);
-    Ok(())
+    let handle = app.clone();
+    let (reply, result) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = reply.send(crate::gateway_windows::show_primary(&handle));
+    })
+    .map_err(|error| error.to_string())?;
+    result
+        .await
+        .map_err(|_| "The Primary Gateway window closed.".to_string())?
 }
 
 #[cfg(test)]

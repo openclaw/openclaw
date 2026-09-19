@@ -28,10 +28,15 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder", () => {
-  it("decodes every shipped glyph through the bounded SVG loader into a transparent PNG mask", async () => {
-    const assets = Object.entries(bundledActivityIcons);
+  const assets = Object.entries(bundledActivityIcons);
+
+  it("includes shipped activity glyphs", () => {
     expect(assets.length).toBeGreaterThan(0);
-    for (const [path, source] of assets) {
+  });
+
+  it.each(assets)(
+    "decodes %s through the bounded SVG loader into a transparent PNG mask",
+    async (path, source) => {
       vi.stubGlobal(
         "fetch",
         vi.fn(
@@ -48,7 +53,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
       });
       expect(url, path).not.toBeNull();
       if (!url) {
-        continue;
+        return;
       }
       try {
         const blob = await (await nativeFetch(url)).blob();
@@ -78,8 +83,8 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
       } finally {
         URL.revokeObjectURL(url);
       }
-    }
-  });
+    },
+  );
 
   it("authenticates the distinct activity route and preserves exact tool names", async () => {
     const fetch = vi

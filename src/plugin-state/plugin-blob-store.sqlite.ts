@@ -13,10 +13,8 @@ import {
   coerceRequiredSqliteNumber as sqliteNumber,
   normalizeSqliteNumber,
 } from "../infra/sqlite-number.js";
-import {
-  hasOpenClawStateTablesBeyondStartupCheckpoint,
-  withExistingOpenClawStateDatabaseReadOnly,
-} from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { hasOpenClawStateTablesBeyondStartupCheckpoint } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -556,7 +554,7 @@ export function pluginBlobLookup<TMetadata>(params: {
       return row
         ? {
             ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
-            bytes: Uint8Array.from(row.blob),
+            bytes: row.blob,
           }
         : undefined;
     },

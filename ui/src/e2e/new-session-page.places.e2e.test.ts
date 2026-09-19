@@ -471,10 +471,12 @@ suite.define(() => {
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
         "New worktree from main",
       );
-      await checkoutSelect.getByLabel("From").waitFor();
+      await checkoutSelect.getByLabel("From", { exact: true }).waitFor();
       await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
       await checkoutSelect
-        .getByText("Creates branch openclaw/<name> in a separate checkout.", { exact: true })
+        .getByText("Creates a branch from the session title in a separate checkout.", {
+          exact: true,
+        })
         .waitFor();
       await page.keyboard.press("Escape");
       await expect.poll(() => checkoutTrigger.getAttribute("aria-expanded")).toBe("false");
@@ -597,7 +599,7 @@ suite.define(() => {
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await captureProjectUiProof(suite, page, "project-selected.png", {
         surface: checkout.locator('wa-popup [part="popup"]'),
-        content: [checkout.getByLabel("From")],
+        content: [checkout.getByLabel("From", { exact: true })],
       });
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("inspect the project");

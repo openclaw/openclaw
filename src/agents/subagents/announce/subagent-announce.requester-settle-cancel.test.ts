@@ -1,12 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../../infra/system-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
+import { tasksWithPendingDelivery } from "../../../tasks/task-registry-state.js";
+import {
+  cancelTaskById,
+  findTaskByRunId,
+  getTaskById,
+  maybeDeliverTaskTerminalUpdate,
+} from "../../../tasks/task-registry.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../registry/subagent-registry-state.js";
 import {
   adoptPausedSubagentRunForFollowUp,
@@ -27,7 +34,10 @@ import {
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
-afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
+afterEach(() => {
+  setSubagentAnnounceDeliveryDepsForTest();
+  resetSystemEventsForTest();
+});
 
 it.each([
   "pending",
@@ -177,6 +187,79 @@ it.each([
     } finally {
       execute.resolve();
       await settleSubagentRegistryPersistenceWork();
+    }
+  },
+);
+
+it.each(["batch", "ordinary"] as const)(
+  "keeps %s cancellation delivery with its current owner",
+  async (mode) => {
+    const parentKey = `agent:main:cancel-notification-${mode}`;
+    const childKey = `agent:main:subagent:cancel-notification-${mode}`;
+    const siblingKey = `agent:main:subagent:cancel-sibling-${mode}`;
+    const parentRunId = `parent-${mode}`;
+    const childRunId = `cancel-${mode}`;
+    for (const sessionKey of [parentKey, childKey, siblingKey]) {
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey,
+        defaultSessionId: `${sessionKey}-session`,
+      });
+    }
+    const acceptedSessionSpawns = [
+      { runId: childRunId, childSessionKey: childKey, expectsCompletionMessage: true },
+      { runId: `sibling-${mode}`, childSessionKey: siblingKey, expectsCompletionMessage: true },
+    ];
+    for (const spawn of acceptedSessionSpawns) {
+      registerSubagentRun({
+        ...spawn,
+        requesterSessionKey: parentKey,
+        requesterAgentId: "main",
+        requesterTurnRunId: parentRunId,
+        requesterDisplayKey: parentKey,
+        task: "Read an independently held result",
+        cleanup: "keep",
+      });
+    }
+    if (mode === "batch") {
+      expect(
+        markRequesterTurnYielded({
+          requesterSessionKey: parentKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: parentRunId,
+        }),
+      ).toBe(2);
+      expect(
+        settleRequesterAfterSessionSpawns({
+          requesterSessionKey: parentKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: parentRunId,
+          requesterYielded: true,
+          acceptedSessionSpawns,
+        }),
+      ).toBe(true);
+    }
+    const task = findTaskByRunId(childRunId)!;
+    const result = await cancelTaskById({
+      cfg: getRuntimeConfig(),
+      taskId: task.taskId,
+      reason: "Operator cancelled this retrieval",
+    });
+    expect(result).toMatchObject({ found: true, cancelled: true });
+    // Cancellation starts delivery independently; join its claim before redriving.
+    await vi.waitFor(() => expect(tasksWithPendingDelivery.has(task.taskId)).toBe(false));
+    // Redrive the public delivery path as well as the immediate cancellation notification.
+    await maybeDeliverTaskTerminalUpdate(task.taskId);
+    expect(getTaskById(task.taskId)).toMatchObject({
+      status: "cancelled",
+      error: "Operator cancelled this retrieval",
+      deliveryStatus: mode === "batch" ? "pending" : "session_queued",
+    });
+    expect(peekSystemEvents(parentKey)).toHaveLength(mode === "batch" ? 0 : 1);
+    if (mode === "batch") {
+      expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeDefined();
+      expect(subagentRuns.get(`sibling-${mode}`)?.execution.endedAt).toBeUndefined();
     }
   },
 );

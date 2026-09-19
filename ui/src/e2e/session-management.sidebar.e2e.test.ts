@@ -40,7 +40,7 @@ function sessionActionPresentation(button: Locator) {
 }
 
 suite.define(() => {
-  it("expands and manages child sessions inline before opening a child chat", async () => {
+  it.each([false, true])("nests and manages spawned sessions (pinned: %s)", async (pinned) => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
@@ -92,6 +92,7 @@ suite.define(() => {
     ];
     const parentRow = sessionRow(parentKey, "Plan release", baseTime, {
       childSessions: [childOneKey, childTwoKey, staleRunningChildKey, failedChildKey],
+      pinned,
     });
     const gateway = await installMockGateway(page, {
       // Direct routes resolve canonical identity before the sidebar list arrives.
@@ -177,6 +178,22 @@ suite.define(() => {
       }
       await captureUiProof(suite, page, "child-sessions-expanded.png");
       await captureUiProof(suite, page, "child-sessions-run-state-precedence.png");
+
+      const tree = page.locator(`[data-session-tree="${parentKey}"]`);
+      expect(await tree.locator("xpath=ancestor::nav").count()).toBe(pinned ? 1 : 0);
+      const nesting = await tree.evaluate((element) => {
+        const parentElement = element.querySelector(".sidebar-recent-session")!;
+        const childContainer = element.querySelector(".sidebar-session-tree__children")!;
+        return {
+          parentLeft: parentElement.getBoundingClientRect().left,
+          childLeft: childContainer
+            .querySelector(".sidebar-recent-session")!
+            .getBoundingClientRect().left,
+          guide: getComputedStyle(childContainer).backgroundImage,
+        };
+      });
+      expect(nesting.childLeft - nesting.parentLeft).toBeGreaterThan(8);
+      expect(nesting.guide).not.toBe("none");
 
       const completedChild = childRows.nth(1);
       const childMenuButton = completedChild.getByRole("button", {

@@ -1,4 +1,3 @@
-// Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -320,7 +319,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channel,
     client: interaction.client,
     hasGuild: Boolean(interaction.guild),
-    channelIdFallback: "",
+    channelIdFallback: interaction.rawData.channel_id ?? "",
   });
   if (policy?.isCurrent() === false) {
     await respond("Access policy changed. Try this interaction again.", { ephemeral: true });

@@ -92,6 +92,49 @@ if os.name == "nt":
     set_job = bind("SetInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD)
     query_job = bind("QueryInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p)
     terminate_job = bind("TerminateJobObject", w.BOOL, w.HANDLE, w.UINT)
+    open_process = bind("OpenProcess", w.HANDLE, w.DWORD, w.BOOL, w.DWORD)
+    in_job = bind("IsProcessInJob", w.BOOL, w.HANDLE, w.HANDLE, c.POINTER(w.BOOL))
+    wait_process = kernel.WaitForSingleObject
+    wait_process.argtypes, wait_process.restype = [w.HANDLE, w.DWORD], w.DWORD
+
+    def job_members(job, deadline):
+        # PIDs are discovery hints only. Hold query/synchronize handles and verify
+        # job membership before using them; never signal a process found by PID.
+        before = Accounting()
+        query_job(job, 1, c.byref(before), c.sizeof(before), None)
+        capacity = max(16, before.ActiveProcesses + 1)
+        while True:
+            if time.monotonic() >= deadline or capacity > 65536:
+                raise RuntimeError("Job member census did not complete")
+            class Members(c.Structure):
+                _fields_ = [("assigned", w.DWORD), ("count", w.DWORD),
+                            ("pids", c.c_size_t * capacity)]
+            members = Members()
+            try:
+                query_job(job, 3, c.byref(members), c.sizeof(members), None)
+                break
+            except OSError as error:
+                if error.winerror != 234:  # ERROR_MORE_DATA: retry the census, not cleanup.
+                    raise
+                capacity *= 2
+        handles = []
+        try:
+            for pid in members.pids[:members.count]:
+                handle = open_process(0x00100000 | 0x1000, False, pid)
+                handles.append(handle)
+                member = w.BOOL()
+                in_job(handle, job, c.byref(member))
+                if not member.value:
+                    raise RuntimeError("Job member identity changed during census")
+            after = Accounting()
+            query_job(job, 1, c.byref(after), c.sizeof(after), None)
+            if after.TotalProcesses != before.TotalProcesses:
+                raise RuntimeError("Job membership grew during census")
+            return handles, after.TotalProcesses
+        except BaseException:
+            for handle in handles:
+                close_handle(handle)
+            raise
     bootstrap = windows_api + '''
 job = int(sys.argv[1])
 assign = bind("AssignProcessToJobObject", w.BOOL, w.HANDLE, w.HANDLE)
@@ -166,15 +209,36 @@ def drain(child, job):
         # an empty Job alone cannot prove that no Git will start afterwards.
         child.kill()
         child.wait(timeout=max(0.001, deadline - time.monotonic()))
-        terminate_job(job, 1)
-        accounting = Accounting()
-        while True:
-            query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
-            if accounting.ActiveProcesses == 0:
-                return
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Job cleanup did not complete")
-            time.sleep(0.05)
+        handles = []
+        terminated = False
+        try:
+            handles, total = job_members(job, deadline)
+            terminate_job(job, 1)
+            terminated = True
+            accounting = Accounting()
+            while True:
+                settled = True
+                for handle in handles:
+                    status = wait_process(handle, 0)
+                    if status == 258:  # WAIT_TIMEOUT: accounting can reach zero first.
+                        settled = False
+                    elif status != 0:
+                        raise c.WinError(c.get_last_error())
+                query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
+                if accounting.TotalProcesses != total:
+                    raise RuntimeError("Job membership grew during cleanup")
+                if accounting.ActiveProcesses == 0 and settled:
+                    return
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Job cleanup did not complete")
+                time.sleep(0.05)
+        finally:
+            try:
+                if not terminated:
+                    terminate_job(job, 1)
+            finally:
+                for handle in handles:
+                    close_handle(handle)
     else:
         # The group remains ours after leader exit. Reserve half the existing
         # cleanup allowance for KILL and extinction verification after TERM.

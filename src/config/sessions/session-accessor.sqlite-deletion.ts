@@ -34,6 +34,7 @@ import {
   type ResolvedSqliteReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
+import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
 import type { SessionEntry } from "./types.js";
 
 type DeletionEntry = { sessionKey: string; entry: SessionEntry };
@@ -62,20 +63,21 @@ export function hasPreparedNativeSessionDeletion(): boolean {
 type PreparedSessionWrite<T> = {
   deletedEntries: readonly DeletionEntry[];
   beforeCommit?: () => Promise<void>;
-  commit: () => T | Promise<T>;
+  commit: (assertSourceCurrent?: () => void) => T | Promise<T>;
 };
 
-/** Keep ordinary updates serialized; release the writer only for native or artifact preparation. */
+/** Keep ordinary updates serialized; release the writer for preparation or source custody. */
 export async function runPreparedSqliteSessionWrite<T>(
   scope: ResolvedSqliteReadScope,
   prepare: () => Promise<PreparedSessionWrite<T>>,
   operation: SqliteSessionWriteOperation,
+  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"],
 ): Promise<{ deletedEntries: number; result: T }> {
   const prepared = await runExclusiveSqliteSessionWrite(
     scope,
     async () => {
       const write = await prepare();
-      return write.deletedEntries.length || write.beforeCommit
+      return write.deletedEntries.length || write.beforeCommit || withCommit
         ? { write }
         : { result: await write.commit() };
     },
@@ -85,24 +87,26 @@ export async function runPreparedSqliteSessionWrite<T>(
     return { deletedEntries: 0, result: prepared.result };
   }
   const write = prepared.write;
-  const result = await withSqliteSessionDeletions(
-    scope,
-    write.deletedEntries,
-    async (assertCurrent) => {
-      await write.beforeCommit?.();
-      return await runExclusiveSqliteSessionWrite(
+  const commit = async (assertCurrent?: () => void) => {
+    await write.beforeCommit?.();
+    const runCommit = async (assertSourceCurrent?: () => void) =>
+      await runExclusiveSqliteSessionWrite(
         scope,
         async () => {
           return await withSqliteSessionDatabase(
             toDatabaseOptions(scope),
-            () => write.commit(),
+            () => write.commit(assertSourceCurrent),
             assertCurrent,
           );
         },
         operation,
       );
-    },
-  );
+    return withCommit ? await withCommit(runCommit) : await runCommit();
+  };
+  const result =
+    write.deletedEntries.length || write.beforeCommit
+      ? await withSqliteSessionDeletions(scope, write.deletedEntries, commit)
+      : await commit();
   return { deletedEntries: write.deletedEntries.length, result };
 }
 

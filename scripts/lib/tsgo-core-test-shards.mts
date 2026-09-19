@@ -68,6 +68,17 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.test.packages.json",
     sparseRoots: ["packages", "src", "ui/src"],
   },
+  {
+    name: "plugin-sdk",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.plugin-sdk.json",
+  },
+  // Append new splits to preserve the existing CI stripe assignments.
+  {
+    name: "commands-doctor",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.commands-doctor.json",
+  },
 ] as const;
 
 export const TSGO_CORE_GRAPHS = [

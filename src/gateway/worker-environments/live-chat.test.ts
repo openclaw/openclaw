@@ -254,6 +254,11 @@ describe("worker live Gateway chat projection", () => {
     for (let index = 0; index < 32; index += 1) {
       live.start();
       live.end(message("x".repeat(16_000)));
+      await vi.waitFor(() => {
+        expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer?.length).toBe(
+          Math.min((index + 1) * 16_000 + index * 2, 500_000),
+        );
+      });
     }
     // The 31 paragraph separators leave 3,938 characters of the first item after capping.
     const retainedPrefix = "x".repeat(3_938) + ("\n\n" + "x".repeat(16_000)).repeat(30);

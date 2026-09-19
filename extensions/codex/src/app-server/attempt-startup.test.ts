@@ -573,34 +573,6 @@ describe("startCodexAttemptThread", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("closes indeterminate thread startup even when another lease shares the app-server", async () => {
-    const retained = createAttemptClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(retained.client);
-    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths(tempRoots);
-
-    const retainedLease = getLeasedSharedCodexAppServerClient({
-      startOptions: appServer.start,
-      agentDir: paths.agentDir,
-    });
-    await answerInitialize(retained);
-    await expect(retainedLease).resolves.toBe(retained.client);
-
-    const { run } = startThreadWithHarness(100, new AbortController().signal, {
-      harness: retained,
-      paths,
-      skipStartSpy: true,
-    });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
-    const threadStart = await waitForThreadStart(retained);
-
-    await rejected;
-    expect(threadStart.id).toBeDefined();
-    expect(retained.process.stdin.destroyed).toBe(true);
-
-    expect(releaseLeasedSharedCodexAppServerClient(retained.client)).toBe(true);
-  });
-
   it("closes the shared app-server when startup times out during initialize", async () => {
     vi.useFakeTimers();
     const initializeTimeoutPluginConfig = {

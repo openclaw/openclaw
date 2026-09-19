@@ -567,22 +567,33 @@ describe("configured plugin install release step", () => {
     ).toStrictEqual([]);
   });
 
-  it("marks the release step complete when there is nothing to install", async () => {
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {},
-      currentVersion: "2026.5.2",
-      touchedVersion: "2026.5.1",
-      env: {},
-    });
+  it.each(["standalone", "pre-plugin", "post-plugin"])(
+    "completes without touching config when there is nothing to install (%s)",
+    async (phase) => {
+      const result = await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg: {},
+        currentVersion: "2026.5.2",
+        touchedVersion: "2026.5.1",
+        env:
+          phase === "standalone"
+            ? {}
+            : {
+                OPENCLAW_UPDATE_IN_PROGRESS: "1",
+                OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+                OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+                ...(phase === "post-plugin" ? { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" } : {}),
+              },
+      });
 
-    expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      changes: [],
-      warnings: [],
-      completed: true,
-      touchedConfig: true,
-    });
-  });
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        changes: [],
+        warnings: [],
+        completed: true,
+        touchedConfig: false,
+      });
+    },
+  );
 
   it("repairs used plugin installs and touches config only on success", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({

@@ -10,7 +10,7 @@ import {
   readQaScenarioById,
   type QaEvidenceSummaryJson,
   type QaSeedScenarioWithSource,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 

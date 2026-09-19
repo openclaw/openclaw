@@ -37,8 +37,8 @@ function unsupportedNodeFinding(
   };
 }
 
-function collectCurrentNodeRuntimeFindings(): readonly HealthFinding[] {
-  const runtime = detectRuntime();
+async function collectCurrentNodeRuntimeFindings(): Promise<readonly HealthFinding[]> {
+  const runtime = await detectRuntime();
   if (runtime.kind !== "node" || !runtime.sqliteProbe) {
     return [];
   }
@@ -64,7 +64,7 @@ export async function collectNodeRuntimeFindings(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<HealthFinding[]> {
   return [
-    ...collectCurrentNodeRuntimeFindings(),
+    ...(await collectCurrentNodeRuntimeFindings()),
     ...(await collectServiceNodeRuntimeFindings(env)),
   ];
 }

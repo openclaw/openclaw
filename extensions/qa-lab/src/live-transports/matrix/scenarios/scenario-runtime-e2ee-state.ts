@@ -1,5 +1,5 @@
 // QA Lab Matrix destructive E2EE state-loss helpers.
-import { access, mkdir, readdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -9,35 +9,7 @@ import {
 import { loadMatrixQaE2eeRuntime } from "../substrate/e2ee-client.js";
 import { requestMatrixJson } from "../substrate/request.js";
 import type { MatrixQaCliRuntime } from "./scenario-runtime-e2ee-destructive-recovery.js";
-
-async function findFilesByName(params: { filename: string; rootDir: string }): Promise<string[]> {
-  const matches: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (depth > 10) {
-      return;
-    }
-    let entries: Array<{
-      isDirectory(): boolean;
-      isFile(): boolean;
-      name: string;
-    }>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === params.filename) {
-        matches.push(entryPath);
-      } else if (entry.isDirectory()) {
-        await visit(entryPath, depth + 1);
-      }
-    }
-  }
-  await visit(params.rootDir, 0);
-  return matches.toSorted();
-}
+import { findFilesByName } from "./scenario-runtime-find-files.js";
 
 async function findMatrixQaCliAccountRoot(params: {
   deviceId: string;
@@ -48,10 +20,12 @@ async function findMatrixQaCliAccountRoot(params: {
   const sqlitePaths = await findFilesByName({
     filename: "openclaw.sqlite",
     rootDir: params.runtime.stateDir,
+    maxDepth: 10,
   });
   const legacyMetadataPaths = await findFilesByName({
     filename: "storage-meta.json",
     rootDir: params.runtime.stateDir,
+    maxDepth: 10,
   });
   // Current account metadata lives in account-local SQLite. Keep legacy JSON
   // discovery for older tagged fixtures without making it the canonical path.

@@ -121,11 +121,70 @@ describe("chat pane typing presence", () => {
       "Hello **world**",
     );
     expect(container.querySelector(".agent-chat__typing-preview-label")?.textContent?.trim()).toBe(
-      "Alice is typing…",
+      "Alice",
     );
+    expect(
+      container.querySelector(".chat-group--typing .chat-group-footer")?.textContent,
+    ).toContain("Typing · not sent");
+    expect(container.querySelectorAll(".chat-group.user.chat-group--peer")).toHaveLength(2);
+    expect(
+      container.querySelector(".chat-group--typing .chat-bubble .chat-text")?.textContent,
+    ).toContain("Hello **world**");
+    expect(
+      container
+        .querySelector(".agent-chat__typing-preview-bubble")
+        ?.closest("[aria-live]")
+        ?.getAttribute("aria-live"),
+    ).toBe("off");
     expect(container.querySelectorAll(".agent-chat__typing-bubble > span")).toHaveLength(3);
     expect(container.querySelector(".sr-only")?.textContent).toBe("Alice, Bob are typing…");
   });
+
+  it("keeps each actor’s bubble stable across draft, dots, and peer updates without interpreting markup", () => {
+    const container = document.createElement("div");
+    const alice = {
+      id: "alice",
+      label: "Alice",
+      preview: "<img src=x onerror=alert(1)> **draft**",
+    };
+    const bob = { id: "bob", label: "Bob", preview: "Hello" };
+    render(renderChatTypingIndicator([alice, bob]), container);
+    const aliceGroup = container.querySelector(".chat-group--typing");
+    const aliceBubble = aliceGroup?.querySelector(".chat-bubble");
+    expect(aliceGroup?.querySelector(".chat-text")?.textContent).toBe(alice.preview);
+    expect(aliceGroup?.querySelectorAll(".chat-text img, .chat-text strong")).toHaveLength(0);
+    render(renderChatTypingIndicator([bob, { ...alice, preview: "   " }]), container);
+    expect(container.querySelectorAll(".chat-group--typing")[1]).toBe(aliceGroup);
+    expect(aliceGroup?.querySelector(".chat-bubble")).toBe(aliceBubble);
+    expect(aliceGroup?.querySelectorAll(".agent-chat__typing-bubble > span")).toHaveLength(3);
+    render(renderChatTypingIndicator([{ ...alice, preview: "Edited draft" }]), container);
+    expect(container.querySelector(".chat-group--typing")).toBe(aliceGroup);
+    expect(aliceGroup?.querySelector(".chat-bubble")).toBe(aliceBubble);
+    expect(aliceGroup?.querySelector(".chat-text")?.textContent).toBe("Edited draft");
+    expect(container.querySelector("[role=status]")?.textContent).toBe("Alice is typing…");
+    render(renderChatTypingIndicator([]), container);
+    expect(container.querySelector(".agent-chat__typing-indicator")).toBeNull();
+  });
+
+  it.each(["gutter", "footer", "none"] as const)(
+    "uses the transcript’s %s avatar placement",
+    (placement) => {
+      const container = document.createElement("div");
+      render(
+        renderChatTypingIndicator([{ id: "alice", label: "Alice", preview: "A draft" }], placement),
+        container,
+      );
+      expect(
+        container.querySelectorAll(
+          ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
+        ),
+      ).toHaveLength(placement === "gutter" ? 1 : 0);
+      expect(container.querySelectorAll(".chat-group-footer .chat-author-avatar")).toHaveLength(
+        placement === "footer" ? 1 : 0,
+      );
+      expect(container.querySelector(".chat-sender-name")?.textContent).toBe("Alice");
+    },
+  );
 
   it("sends only the last 300 draft code points and omits previews when typing stops", () => {
     const request = vi.fn().mockResolvedValue({ ok: true, broadcast: true });

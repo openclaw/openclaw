@@ -17,6 +17,12 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const sessionKey = "agent:main:stop-finished";
 const replyText = "Finished reply from the fixture provider.";
+type SessionDescriptor = {
+  key?: string;
+  lastRunId?: string | null;
+  hasActiveRun?: boolean;
+  status?: string;
+};
 type EventPayload = {
   sessionKey?: string;
   sessionId?: string;
@@ -30,7 +36,8 @@ type EventPayload = {
   phase?: string;
   stream?: string;
   data?: { phase?: string };
-  session?: { lastRunId?: string | null; hasActiveRun?: boolean; status?: string };
+  session?: SessionDescriptor;
+  sessions?: SessionDescriptor[];
   ok?: boolean;
   aborted?: boolean;
   runIds?: string[];
@@ -317,15 +324,24 @@ suite.define(() => {
                       socket.send(message);
                     };
                     const session = frame.payload?.session;
+                    const hasTerminalDescriptor =
+                      (request?.method === "sessions.describe" &&
+                        request.params?.key === sessionKey &&
+                        session?.lastRunId === runId &&
+                        session?.status === "done") ||
+                      (request?.method === "sessions.list" &&
+                        frame.payload?.sessions?.some(
+                          (row) =>
+                            row.key === sessionKey &&
+                            row.lastRunId === runId &&
+                            row.status === "done",
+                        ));
                     if (
                       delayTerminalDescriptors &&
                       runId &&
                       frame.type === "res" &&
                       frame.ok === true &&
-                      request?.method === "sessions.describe" &&
-                      request.params?.key === sessionKey &&
-                      session?.lastRunId === runId &&
-                      session.status === "done"
+                      hasTerminalDescriptor
                     ) {
                       // Shared descriptor observations can settle ownership before Stop.
                       // Delay this exact terminal fact, then deliver the real reply unchanged.

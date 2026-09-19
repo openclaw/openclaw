@@ -10,6 +10,35 @@ const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
+  it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
+    emitAgentEvent.mockClear();
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId: "run",
+      getLifecycleGeneration: () => "generation",
+      resolveTerminationFields: () => ({}),
+    });
+    terminal.note({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error: "first failure",
+        assistantTranscriptIdempotencyKey: "saved-A",
+      },
+    });
+    terminal.capture("error", new Error("first failure"));
+    expect(emitAgentEvent).not.toHaveBeenCalled();
+    if (retry) {
+      // Preparation fails before the next lifecycle start can be emitted.
+      terminal.beginAttempt();
+    }
+    terminal.emit("error", new Error(retry ? "preparation failed" : "first failure"));
+    expect(emitAgentEvent).toHaveBeenCalledOnce();
+    const data = emitAgentEvent.mock.calls[0]?.[0]?.data;
+    expect(data.assistantTranscriptIdempotencyKey).toBe(retry ? undefined : "saved-A");
+    expect(data.error).toBe(retry ? "preparation failed" : "first failure");
+    expect(data.executionSettled).toBe(true);
+  });
+
   it("publishes the provider-owned OAuth summary instead of the wrapped diagnostic", () => {
     emitAgentEvent.mockClear();
     const summary =

@@ -3,7 +3,10 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { activeSessions } from "./capture.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -11,9 +14,10 @@ import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 

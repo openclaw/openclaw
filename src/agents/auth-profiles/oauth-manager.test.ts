@@ -18,6 +18,7 @@ import {
 } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import {
@@ -78,6 +79,9 @@ beforeEach(() => {
 afterEach(async () => {
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
+  for (const stateDir of tempDirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
   closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });

@@ -3,57 +3,26 @@
  */
 import type { Command } from "commander";
 import { vi } from "vitest";
-import * as browserCliSharedModule from "./browser-cli-shared.js";
+import { mockBrowserGateway } from "./browser-cli.test-support.js";
 import * as cliCoreApiModule from "./core-api.js";
 
-type BrowserRequest = {
-  path?: string;
-  query?: Record<string, string | number | boolean | undefined>;
-};
-type BrowserRuntimeOptions = { timeoutMs?: number };
-
-type BrowserManageCall = [
-  { timeout?: string } | undefined,
-  BrowserRequest,
-  BrowserRuntimeOptions | undefined,
-];
-
-const browserManageMocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn<
-    (
-      opts: unknown,
-      req: BrowserRequest,
-      runtimeOpts?: BrowserRuntimeOptions,
-    ) => Promise<Record<string, unknown>>
-  >(async (_opts: unknown, req: BrowserRequest) =>
-    req.path === "/"
-      ? {
-          enabled: true,
-          running: true,
-          pid: 1,
-          cdpPort: 18800,
-          chosenBrowser: "chrome",
-          userDataDir: "/tmp/openclaw",
-          color: "blue",
-          headless: true,
-          attachOnly: false,
-        }
-      : {},
-  ),
-}));
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
-  browserManageMocks.callBrowserRequest,
+const gatewayMock = mockBrowserGateway();
+gatewayMock.mockImplementation(async (_method, _opts, request) =>
+  request.path === "/"
+    ? {
+        enabled: true,
+        running: true,
+        pid: 1,
+        cdpPort: 18800,
+        chosenBrowser: "chrome",
+        userDataDir: "/tmp/openclaw",
+        color: "blue",
+        headless: true,
+        attachOnly: false,
+      }
+    : {},
 );
-vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
-  async (_runtime, action, onError) => {
-    try {
-      await action();
-    } catch (err) {
-      onError?.(err);
-    }
-  },
-);
+
 const { createBrowserProgram, getBrowserCliRuntime } =
   await import("./browser-cli.test-support.js");
 const browserCliRuntime = getBrowserCliRuntime();
@@ -76,14 +45,12 @@ export function createBrowserManageProgram(params?: { withParentTimeout?: boolea
   return program;
 }
 
-/** Returns the mocked callBrowserRequest used by manage command tests. */
-export function getBrowserManageCallBrowserRequestMock() {
-  return browserManageMocks.callBrowserRequest;
+/** Returns the Gateway mock used by manage command tests. */
+export function getBrowserManageGatewayMock() {
+  return gatewayMock;
 }
 
 /** Finds the first mocked Browser manage request for a route path. */
-export function findBrowserManageCall(path: string): BrowserManageCall | undefined {
-  return browserManageMocks.callBrowserRequest.mock.calls.find(
-    (call) => (call[1] ?? {}).path === path,
-  ) as BrowserManageCall | undefined;
+export function findBrowserManageCall(path: string) {
+  return gatewayMock.mock.calls.find((call) => call[2].path === path);
 }

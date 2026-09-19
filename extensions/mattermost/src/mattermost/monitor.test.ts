@@ -602,11 +602,11 @@ describe("resolveMattermostThreadSessionContext", () => {
 });
 
 describe("resolveMattermostPendingHistoryKey", () => {
-  it("does not retain pending history buckets for thread-scoped direct messages", () => {
+  it("does not retain pending history buckets for flat direct messages", () => {
     expect(
       resolveMattermostPendingHistoryKey({
         kind: "direct",
-        sessionKey: "agent:main:mattermost:direct:user-1:thread:post-123",
+        sessionKey: "agent:main:mattermost:direct:user-1",
       }),
     ).toBeNull();
   });

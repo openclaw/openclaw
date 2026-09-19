@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createHookRunner } from "../plugins/hooks.js";
@@ -6,6 +6,7 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { activeSessions } from "../transcripts/capture.js";
 import type {
   TranscriptOccupancyWatchRequest,
   TranscriptSourceProvider,
@@ -133,15 +134,25 @@ export function registerTranscriptFixture(api: OpenClawPluginApi, owner: "first"
     },
     stop,
   });
+  const waitForCapture = async (count: number, signal: AbortSignal) => {
+    while (captures.length < count) {
+      await racePromiseWithAbortSignal(nextCapture.promise, signal);
+    }
+  };
   return {
     watches,
     captures,
     unwatch,
     stop,
-    async waitForCapture(count: number, signal: AbortSignal) {
-      while (captures.length < count) {
-        await racePromiseWithAbortSignal(nextCapture.promise, signal);
-      }
+    waitForCapture,
+    async waitForActiveCapture(count: number, signal: AbortSignal) {
+      // Gateway readiness precedes deferred capture startup and its session write.
+      await waitForCapture(count, signal);
+      await vi.waitFor(() => {
+        expect(captures).toHaveLength(count);
+        expect(activeSessions.get(captures[count - 1]!.session.sessionId)?.phase).toBe("active");
+      });
+      return captures[count - 1]!;
     },
   };
 }

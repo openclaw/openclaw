@@ -1,12 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractArchive } from "openclaw/plugin-sdk/archive";
-import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
@@ -98,6 +93,11 @@ export function resolveManagedCrabboxBinaryPath(env: NodeJS.ProcessEnv = process
 }
 
 async function downloadReleaseFile(name: string, maxBytes: number, signal: AbortSignal) {
+  const [{ buildTimeoutAbortSignal }, { fetchWithSsrFGuard }] = await Promise.all([
+    import("openclaw/plugin-sdk/extension-shared"),
+    import("openclaw/plugin-sdk/ssrf-runtime"),
+  ]);
+  signal.throwIfAborted();
   const deadline = buildTimeoutAbortSignal({
     timeoutMs: DOWNLOAD_TOTAL_TIMEOUT_MS,
     signal,
@@ -175,6 +175,7 @@ async function inspectInstallationDirectory(destination: string) {
   try {
     stat = await fs.lstat(destination);
   } catch (error) {
+    const { extractErrorCode } = await import("openclaw/plugin-sdk/error-runtime");
     if (extractErrorCode(error) === "ENOENT") {
       return undefined;
     }
@@ -195,6 +196,8 @@ async function publishInstallation(params: {
 }): Promise<CrabboxBinary> {
   const { binary, payload, runCommand, signal } = params;
   const destination = path.dirname(binary);
+  const { withFileLock } = await import("openclaw/plugin-sdk/file-lock");
+  signal.throwIfAborted();
   return withFileLock(
     `${destination}.publication`,
     {
@@ -287,6 +290,7 @@ async function installManagedBinary(
     if (createHash("sha256").update(archive).digest("hex") !== hashes[0]) {
       throw new Error(`Crabbox release checksum mismatch for ${target.asset}`);
     }
+    const { extractArchive } = await import("openclaw/plugin-sdk/archive");
     signal.throwIfAborted();
     const archivePath = path.join(staging, target.asset);
     const payload = path.join(staging, "distribution");
@@ -356,6 +360,8 @@ export async function ensureManagedCrabboxBinary(
   if (preferred.status === "supported") {
     return { binary: candidate, version: preferred.version };
   }
+  const { toErrorObject } = await import("openclaw/plugin-sdk/error-runtime");
+  signal?.throwIfAborted();
   let acquisition = acquisitions.get(binary);
   if (acquisition?.controller.signal.aborted) {
     await acquisition.promise.catch(() => undefined);

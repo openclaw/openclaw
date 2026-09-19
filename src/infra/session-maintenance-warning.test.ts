@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 
 type DeliveryCall = {
   channel?: string;
@@ -55,6 +56,7 @@ function createParams(
   const sessionKey = overrides.sessionKey ?? `agent:${randomUUID()}:main`;
   return {
     cfg: {},
+    agentId: parseAgentSessionKey(sessionKey)?.agentId ?? "main",
     sessionKey,
     entry: {} as never,
     warning: {

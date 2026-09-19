@@ -27,6 +27,7 @@ import {
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
+  settleSubagentRegistryPersistenceWork,
 } from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistry,
@@ -119,9 +120,10 @@ export function useSubagentRestartRecoveryFixture() {
   });
 
   afterEach(async () => {
+    await settleSubagentRegistryPersistenceWork();
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await cleanupSessionStateForTest();
+    await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     if (tempStateDir) {

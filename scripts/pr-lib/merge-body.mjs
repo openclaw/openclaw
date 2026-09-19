@@ -34,7 +34,7 @@ function snapshot(path) {
 function trailers(body) {
   // Parse only: mutating interpret-trailers can execute configured commands.
   const parsed = spawnSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     [
       "-c",
       "trailer.separators=:",
@@ -69,6 +69,7 @@ const MACHINE_CREDIT_EMAILS = new Set([
   "198982749+copilot@users.noreply.github.com",
   "223556219+copilot@users.noreply.github.com",
   "309084314+roboclaw-bot@users.noreply.github.com",
+  "services+roboclaw@openclaw.org",
 ]);
 const GITHUB_APP_BOT_EMAIL = /^(?:\d+\+)?[^@\s]*\[bot\]@users\.noreply\.github\.com$/;
 const LOCAL_CREDIT_EMAIL =

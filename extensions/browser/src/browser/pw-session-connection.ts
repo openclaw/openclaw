@@ -26,7 +26,6 @@ import {
   blockedTargetsByCdpUrl,
   cachedByCdpUrl,
   closeConnectionPromises,
-  closedConnections,
   connectingByCdpUrl,
   contextStates,
   observedContexts,
@@ -200,9 +199,6 @@ function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void 
 export async function closeTrackedPlaywrightConnection(
   connection: ConnectedBrowser,
 ): Promise<void> {
-  if (closedConnections.has(connection)) {
-    return;
-  }
   const existing = closeConnectionPromises.get(connection);
   if (existing) {
     return await existing;
@@ -211,10 +207,10 @@ export async function closeTrackedPlaywrightConnection(
   const closing = (async () => {
     try {
       await connection.browser.close();
-      closedConnections.add(connection);
       releaseClosingPlaywrightConnection(connection);
-    } finally {
+    } catch (error) {
       closeConnectionPromises.delete(connection);
+      throw error;
     }
   })();
   closeConnectionPromises.set(connection, closing);
@@ -248,65 +244,44 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
   clearBlockedTargetsForCdpUrl(normalized);
   clearBlockedPageRefsForCdpUrl(normalized);
-  const connections = new Set<ConnectedBrowser>();
-  const closeAttempts = new Map<ConnectedBrowser, Promise<void>>();
+  const connections = new Map<ConnectedBrowser, Promise<void> | undefined>();
   const pendingCollections = new Set<Promise<void>>();
   let retired = false;
-  const startClosing = () => {
-    for (const connection of connections) {
-      if (closeAttempts.has(connection)) {
-        continue;
-      }
-      const closing = closeTrackedPlaywrightConnection(connection);
-      closeAttempts.set(connection, closing);
-      void closing.catch(() => {});
+  const captureConnection = (connection: ConnectedBrowser) => {
+    const existing = connections.get(connection);
+    if (existing) {
+      return existing;
     }
-  };
-  const awaitClosing = async () => {
-    const attempts = [...closeAttempts];
-    const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
-    let firstError: Error | undefined;
-    for (const [index, result] of results.entries()) {
-      if (result.status === "rejected") {
-        const [connection, closing] = attempts[index] ?? [];
-        if (connection && closeAttempts.get(connection) === closing) {
-          closeAttempts.delete(connection);
-        }
-        firstError ??= toErrorObject(result.reason, "Playwright adapter disconnect failed.");
-      }
-    }
-    if (firstError) {
-      throw firstError;
-    }
+    const closing = closeTrackedPlaywrightConnection(connection);
+    connections.set(connection, closing);
+    void closing.catch(() => {});
+    return closing;
   };
   const capture = () => {
     const pending = connectingByCdpUrl.get(normalized);
     const cached = takeCachedPlaywrightBrowserConnection(normalized);
     for (const connection of retainedClosingByCdpUrl.get(normalized) ?? []) {
-      connections.add(connection);
+      void captureConnection(connection);
     }
     if (cached) {
-      connections.add(cached);
-      retainClosingPlaywrightConnection(cached);
+      void captureConnection(cached);
     }
     if (pending) {
       const collection = pending.promise.then(
         (connection) => {
-          connections.add(connection);
+          void captureConnection(connection);
         },
         () => {
           if (pending.attempt.retired) {
-            connections.add(pending.attempt.retired);
+            void captureConnection(pending.attempt.retired);
           }
         },
       );
       pendingCollections.add(collection);
       void collection.then(() => {
         pendingCollections.delete(collection);
-        startClosing();
       });
     }
-    startClosing();
     const captured = Boolean(pending || connections.size > 0);
     retired ||= captured;
     return captured;
@@ -320,10 +295,28 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
     close: async () => {
       await withPlaywrightCloseTimeout(
         (async () => {
-          startClosing();
+          for (const connection of connections.keys()) {
+            void captureConnection(connection);
+          }
           await Promise.all(pendingCollections);
-          startClosing();
-          await awaitClosing();
+          const attempts = [...connections.keys()].map(
+            (connection) => [connection, captureConnection(connection)] as const,
+          );
+          const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
+          let firstError: Error | undefined;
+          for (const [index, result] of results.entries()) {
+            if (result.status !== "rejected") {
+              continue;
+            }
+            const [connection, closing] = attempts[index]!;
+            if (connections.get(connection) === closing) {
+              connections.set(connection, undefined);
+            }
+            firstError ??= toErrorObject(result.reason, "Playwright adapter disconnect failed.");
+          }
+          if (firstError) {
+            throw firstError;
+          }
         })(),
       );
     },

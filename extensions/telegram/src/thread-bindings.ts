@@ -1,4 +1,3 @@
-// Telegram plugin module implements thread bindings behavior.
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

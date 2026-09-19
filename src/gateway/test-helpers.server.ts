@@ -10,7 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -20,7 +20,7 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSystemMainSessionTarget, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -45,6 +45,7 @@ import {
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
@@ -128,14 +129,9 @@ const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
   // Use the fixture's config seam; transitive runtime readers can retain real IO bindings.
-  const resolved = resolveSystemMainSessionKey(getRuntimeConfig());
-  const keys = new Set<string>();
-  if (resolved) {
-    keys.add(resolved);
-  }
+  const { sessionKey: resolved, agentId } = resolveSystemMainSessionTarget(getRuntimeConfig());
+  const keys = new Set([resolveSystemEventQueueKey(resolved, agentId)]);
   if (resolved !== "global") {
-    const parsed = parseAgentSessionKey(resolved);
-    const agentId = parsed?.agentId ?? DEFAULT_AGENT_ID;
     keys.add(`agent:${agentId}:main`);
     const configuredMainKey = normalizeMainKey(
       (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
@@ -741,7 +737,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
       cleanup();
       reject(new Error(`closed ${code}: ${reason.toString()}`));
     }
-    function handler(data: WebSocket.RawData) {
+    function handler(data: RawData) {
       const obj = JSON.parse(rawDataToString(data)) as T;
       if (filter(obj)) {
         cleanup();

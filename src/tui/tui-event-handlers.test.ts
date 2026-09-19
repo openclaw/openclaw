@@ -1,7 +1,7 @@
 // Covers TUI event handler routing for keyboard and backend events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as failoverClassifier from "../agents/failover/classify.js";
+import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -2541,7 +2541,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleChatEvent({ runId: "run-stale", seq: 1, message: { content: "complete reply" } });
       handleChatEvent({ runId: "run-terminal", seq: 2, state: terminal });
 
-      handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+      handleSessionsChangedEvent({ reason: "agent.input.settled", activeRunIds: [] });
 
       expect(state.activeChatRunId).toBeNull();
       expect(state.activityStatus).toBe("idle");
@@ -2565,7 +2565,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
         state: { activeChatRunId: "run-restored", activityStatus: "streaming" },
       });
 
-      handleSessionsChangedEvent({ reason: "chat.run.settled", ...event });
+      handleSessionsChangedEvent({ reason: "agent.input.settled", ...event });
 
       expect(state.activeChatRunId).toBe("run-restored");
       expect(state.activityStatus).toBe("streaming");
@@ -2583,7 +2583,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     handleSessionsChangedEvent({
-      reason: "chat.run.settled",
+      reason: "agent.input.settled",
       sessionId: "session-old",
       activeRunIds: [],
     });
@@ -2614,7 +2614,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       handleSessionsChangedEvent({
         sessionKey: "main",
         ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        reason: "chat.run.settled",
+        reason: "agent.input.settled",
         activeRunIds: [],
       });
 
@@ -2636,7 +2636,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     Object.assign(state, pending);
     setActivityStatus.mockClear();
 
-    handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+    handleSessionsChangedEvent({ reason: "agent.input.settled", activeRunIds: [] });
 
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingSubmit).toEqual(pending.pendingSubmit);
@@ -2857,7 +2857,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   it("renders non-auth failures without invoking provider classification", () => {
     const classify = vi
-      .spyOn(failoverClassifier, "classifyFailoverReason")
+      .spyOn(failoverClassifier, "classifyFailoverReasonCore")
       .mockImplementation(() => {
         throw new Error("provider classification must not block non-auth error rendering");
       });
@@ -4092,7 +4092,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     handlers.handleSessionsChangedEvent({
       sessionKey: state.currentSessionKey,
-      reason: "chat.run.settled",
+      reason: "agent.input.settled",
       activeRunIds: [],
     });
 

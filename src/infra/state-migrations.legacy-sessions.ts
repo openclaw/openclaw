@@ -5,6 +5,7 @@ import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
+import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
 import { isErrno } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPathInside } from "./path-guards.js";
@@ -162,7 +163,18 @@ export async function migrateLegacySessions(
       warnings: [...options.legacySessionSurfaces.failures],
     };
   }
-
+  if (
+    readDeferredPluginMigrations({ env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir } })
+      .length > 0
+  ) {
+    return {
+      changes,
+      warnings,
+      notices: [
+        "Preserved legacy session sources until pending plugin migrations complete; Doctor still imports and verifies canonical sessions.",
+      ],
+    };
+  }
   ensureMigrationDir(detected.sessions.targetDir);
 
   const legacyParsed = migrationFileExists(detected.sessions.legacyStorePath)

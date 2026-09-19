@@ -1,4 +1,3 @@
-// Discord plugin module implements session key normalization behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordSessionKeyContext = {

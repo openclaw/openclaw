@@ -58,6 +58,51 @@ callback preserves existing behavior. Set `allowProfileFallback: false` when
 the selected profile represents an account boundary that must not rotate to a
 different configured profile.
 
+## Bounded model context
+
+`SessionManager.openModelContext` and `openModelContextAsync` from
+`openclaw/plugin-sdk/agent-sessions` accept optional `limits: { maxBytes, maxEvents }`.
+The reader measures projected payload bytes in SQLite before loading them and
+selects a recent context with its latest compaction or reset boundary. It preserves
+tool-result ownership and rejects a limit that cannot retain the newest complete
+frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
+keeps the full selected context. Async reads retain admission, anchor, and
+cancellation checks.
+
+## Scoped session visibility
+
+`createSessionVisibilityChecker` from
+`openclaw/plugin-sdk/session-visibility` supports narrow host-owned session
+grants through `registerScopedAccessProvider(syncProvider, { resolveAsync })`.
+Both callbacks receive `{ action, requesterSessionKey, targetSessionKey }` and
+return `{ expectedSessionId }` only for an authorized, exact session incarnation,
+or `undefined` when no scoped grant applies. The optional `resolveAsync`
+callback returns a promise. Providers own matching the action and both session
+keys against current authoritative state.
+
+Session tools await `createSessionVisibilityChecker.resolveScopedAccessAsync(...)`.
+For each registration, it uses `resolveAsync` when supplied, otherwise the
+synchronous provider. Providers run in registration order. An empty, invalid,
+or rejected async result does not retry that registration's synchronous callback;
+other registered providers and then ordinary visibility policy still apply.
+Incognito targets cannot receive scoped grants.
+
+The direct checker's `check(...)`, the guard's `check(...)`, and
+`resolveScopedAccess(...)` remain synchronous and call the synchronous provider
+afresh. Existing external callers keep this contract. Older hosts ignore the
+optional registration argument, so plugins supporting those hosts must retain
+a fresh synchronous implementation; an asynchronously populated startup cache
+is not a replacement.
+
+One registration owns both callbacks. Its returned cleanup function unregisters
+both. Re-registering the same synchronous function replaces that registration
+without changing its position; an old cleanup function cannot remove the
+replacement. Async resolution checks the exact registration after awaiting it
+and discards results from an unregistered or replaced owner. Newly registered
+providers participate only in subsequent resolutions. Wire cleanup into the
+plugin's existing runtime lifecycle and revalidate plugin-owned authority after
+the provider's own awaited work.
+
 ## Agent and session namespaces
 
 <AccordionGroup>
@@ -115,7 +160,11 @@ different configured profile.
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
+    The optional `githubPublicationAvailable` input shipped in 2026.9.4 is deprecated and ignored. Remove it from plugin calls: the host checks the current session and Gateway for every attempt. The SDK accepts the old input until the next Plugin SDK major; it does not grant or disable publication tools.
+
     `resolveCliBackendDispatchEligibility({ provider, model, agentId, authProfileId, config, agentDir, workspaceDir })` shares the embedded runner's CLI-backend dispatch decision (route, the backend's declared `subscriptionAuthDispatch` capability, stored credential mode — honoring an explicitly pinned `authProfileId`) with callers that opt embedded runs into `cliBackendDispatch: "subscription-auth"`. It returns `{ provider }` when the run would execute through the CLI backend and `undefined` when it stays on the direct passthrough, so callers can budget timeouts for the run that will actually execute.
+
+    Raw calls using this CLI opt-in keep the saved session fallback for same-agent child model selection. Explicit and configured child models still take precedence.
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
@@ -201,6 +250,8 @@ different configured profile.
     A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the canonical session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
 
 Read-only native session catalogs use `readSessionTranscriptCatalogPage({ agentId, sessionKey, storePath?, limit, cursor, sourceDomain, pluginId })` from the same subpath. It returns `{ items, nextCursor? }` in newest-first catalog order; the optional opaque cursor continues toward older items and malformed cursors are rejected. The reader resolves the configured session store when `storePath` is omitted and binds the cursor to the selected store and session. Only nonempty user and assistant text from the local chat display projection is included; tool calls, tool results, reasoning, and other non-conversation blocks are omitted. Text redacts credential patterns and is bounded per item with `truncated` set when clipped. Reads scan at most 1,000 source messages per page, so a page containing only omitted activity can have no items and still return a continuation cursor. Cursors from the earlier tool-inclusive projection are rejected with a reload message. Raw page reads are bounded to 8 MiB; an oversized entry returns an explicit error. Cold history requires restoration by the source Gateway; the catalog reader never opens a writer to restore it. User sender attribution is portable: source-local profiles become remote identities in the caller's plugin/domain namespace, using a verified numeric GitHub account ID when available and a source profile ID otherwise. Existing remote and observed identities remain portable. The caller must authorize each session read separately; a cursor or identity claim never grants access. [Session Share](/plugins/session-share) uses this reader for its paired-node publication.
+
+Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId, sourceDomain, actors })` from the same subpath after selecting a page. Call the returned function for each actor in that page, synchronously and in publication order. It shares profile and verified GitHub reads while keeping each actor's label. Only human creators stamped with `source: "profile"` resolve local profiles; the resulting remote claims never grant access. Create a new projector for each page or request so profile merges, display names, and primary GitHub accounts are refreshed.
 
     A harness host may provide `hostCapabilities.prepareContextMedia({ message, maxChars })` to reconstruct retained document text and images from canonical user media. The host captures the current run's config, workspace, channel, account, and authority; preparation rechecks that authority across asynchronous work. `maxChars` must be finite and limits extraction for each file. Fit all returned text, attachment notes, and images into the native context budget, and deliver image bytes through the native input path. Preparation reuses ordinary local-root, URL, MIME, byte, page, and image limits without rewriting transcript rows or echoing channel media. An older host without this optional capability may still project ordinary text history, but attachment restoration must fail explicitly rather than silently omit the saved input.
 

@@ -127,6 +127,24 @@ works, because the join request is redirected to the Access login page.
 **Control UI.** Open `https://gateway.example` and sign in through Access. With
 trusted-proxy auth the Gateway maps your Access identity to an operator session.
 
+If Access expires while a chat is open, the chat connection can remain active
+while new image and file requests require renewed website access. The Control UI
+first attempts automatic renewal through a hidden, sandboxed browser navigation.
+If your global Cloudflare Access session is still valid and your browser permits
+its cookies, Access can issue a fresh application cookie without another login.
+OpenClaw verifies access before retrying failed attachments, keeping your
+conversation and unsent draft open.
+
+If renewal still requires sign-in, the Control UI opens one **Sign in to continue
+loading content** dialog. An expired global session, an identity-provider challenge,
+or blocked third-party cookies can require this manual step. Automatic renewal
+does not extend the session durations configured in Cloudflare Access.
+Choose **Sign in**, finish authentication in the new tab, and return to the
+conversation. Visible failed attachments retry after access is verified; the
+original conversation and unsent draft stay open. **Check again** repeats the
+access check, and **Not now** dismisses the prompt without interrupting the chat.
+Ordinary network failures and missing files do not trigger this dialog.
+
 **CLI and TUI.** These do not carry browser cookies, so they present an Access token on
 the WebSocket upgrade. Configure `gateway.remote.edgeAuth` as described in
 [Remote access](/gateway/remote#gateway-behind-an-identity-aware-proxy), then run

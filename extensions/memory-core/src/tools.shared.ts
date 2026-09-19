@@ -1,4 +1,3 @@
-// Memory Core plugin module implements tools.shared behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
@@ -11,6 +10,7 @@ import {
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 
 // Core owns this session-store error; Memory Core must preserve its exact code
 // without importing a core-internal module across the plugin boundary.
@@ -137,6 +137,7 @@ export function buildMemorySearchUnavailableResult(
     results: [],
     disabled: true,
     unavailable: true,
+    ...(isSearchDeadline ? { timedOut: true, timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } : {}),
     error: reason,
     warning,
     action,

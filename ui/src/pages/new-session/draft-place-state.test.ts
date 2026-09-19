@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
+import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -33,6 +34,8 @@ function createRepositoryFixture(
   );
   const context = {
     gateway: {
+      connection: { gatewayUrl: "ws://gateway.example" },
+      subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
       snapshot: {
         phase: "connected",
@@ -94,6 +97,165 @@ function createRepositoryFixture(
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it("captures pending placement preferences instead of transient discovery defaults", () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    const discovery = createDeferred<WorktreesBranchesResult>();
+    request.mockReturnValue(discovery.promise);
+    readPreference.mockReturnValue({
+      worktree: true,
+      where: { kind: "device", id: "desktop" },
+      projectId: "pending-project",
+      baseRef: "release/next",
+    });
+    state.adoptAgentDefaults();
+    expect(state.placementPreferenceReady).toBe(false);
+    expect(state.worktree).toBe(false);
+    expect(state.preferenceSelection()).toMatchObject({
+      worktree: true,
+      where: { kind: "device", id: "desktop" },
+      projectId: "pending-project",
+      baseRef: "release/next",
+    });
+    discovery.resolve({ repositoryStatus: "git", branches: [] });
+  });
+
+  it.each(["device", "cloud"] as const)(
+    "starts a new workspace on %s while the default workspace Git probe is pending",
+    async (destination) => {
+      const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+      const discovery = createDeferred<WorktreesBranchesResult>();
+      request.mockReturnValue(discovery.promise);
+      readPreference.mockReturnValue({});
+      state.adoptAgentDefaults();
+      expect(state.repository.kind).toBe("checking");
+
+      if (destination === "device") {
+        state.selectDevice("desktop");
+      } else {
+        state.selectCloudProfile("aws");
+      }
+
+      expect(state.freshWorkspace).toBe(true);
+      expect(state.placementPreferenceReady).toBe(true);
+      expect(
+        buildSelectedSessionCreateParams(state, { message: "Start empty", visibility: "normal" }),
+      ).toEqual({
+        agentId: "main",
+        message: "",
+        titleSource: "Start empty",
+        worktree: true,
+        worktreeSource: "empty",
+      });
+      discovery.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(state.freshWorkspace).toBe(true);
+      expect(
+        buildSelectedSessionCreateParams(state, { message: "Start empty", visibility: "normal" }),
+      ).not.toHaveProperty("worktreeBaseRef");
+    },
+  );
+
+  it.each(["device", "cloud"] as const)(
+    "preserves an explicit folder through pending Git discovery when choosing %s",
+    async (destination) => {
+      const { state, request } = createRepositoryFixture();
+      state.adoptAgentDefaults();
+      const discovery = createDeferred<WorktreesBranchesResult>();
+      request.mockReturnValue(discovery.promise);
+      state.applyFolder("/chosen/project");
+      expect(state.repository.kind).toBe("checking");
+      if (destination === "device") {
+        state.selectDevice("desktop");
+      } else {
+        state.selectCloudProfile("aws");
+      }
+
+      expect(state.remotePlacement).toBe(true);
+      expect(state.freshWorkspace).toBe(false);
+      expect(state.folder).toBe("/chosen/project");
+      discovery.resolve({ repositoryStatus: "not_git", branches: [] });
+      await vi.waitFor(() => expect(state.repository.kind).toBe("direct"));
+      expect(state.freshWorkspace).toBe(false);
+
+      state.selectNewWorkspace();
+      expect(state.freshWorkspace).toBe(true);
+      expect(
+        buildSelectedSessionCreateParams(state, { message: "Start empty", visibility: "normal" }),
+      ).toMatchObject({
+        worktree: true,
+        worktreeSource: "empty",
+      });
+      expect(
+        buildSelectedSessionCreateParams(state, { message: "Start empty", visibility: "normal" }),
+      ).not.toHaveProperty("cwd");
+    },
+  );
+
+  it("restores an explicit empty workspace across reconnect without waiting for Git", () => {
+    const { state, readPreference, request } = createRepositoryFixture({ workspaceGit: true });
+    const discovery = createDeferred<WorktreesBranchesResult>();
+    request.mockReturnValue(discovery.promise);
+    readPreference.mockReturnValue({
+      freshWorkspace: true,
+      where: { kind: "cloud", id: "aws" },
+      worktree: true,
+    });
+    state.adoptAgentDefaults();
+    state.restorePreferenceSelections();
+    expect(state.freshWorkspace).toBe(true);
+    expect(state.placementPreferenceReady).toBe(true);
+
+    state.invalidateGatewayDiscovery(false);
+    state.adoptAgentDefaults();
+    state.restorePreferenceSelections();
+    expect(state.repository.kind).toBe("checking");
+    expect(state.freshWorkspace).toBe(true);
+    expect(state.placementPreferenceReady).toBe(true);
+  });
+
+  it.each(["device", "cloud"] as const)(
+    "preserves a legacy %s worktree preference until New workspace is explicitly selected",
+    async (destination) => {
+      const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+      const discovery = createDeferred<WorktreesBranchesResult>();
+      request.mockReturnValue(discovery.promise);
+      readPreference.mockReturnValue({
+        workspace: "/workspace",
+        folder: "/workspace",
+        where:
+          destination === "device"
+            ? { kind: "device", id: "desktop" }
+            : { kind: "cloud", id: "aws" },
+        worktree: true,
+        baseRef: "release",
+        worktreeName: "saved-task",
+      });
+
+      state.adoptAgentDefaults();
+      state.restorePreferenceSelections();
+      expect(state.remotePlacement).toBe(true);
+      expect(state.freshWorkspace).toBe(false);
+      expect(state.placementPreferenceReady).toBe(false);
+      expect(state.baseRef).toBe("release");
+      expect(state.worktreeName).toBe("saved-task");
+
+      state.selectNewWorkspace();
+      expect(state.freshWorkspace).toBe(true);
+      expect(state.placementPreferenceReady).toBe(true);
+      discovery.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+      await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+      expect(
+        buildSelectedSessionCreateParams(state, { message: "Start empty", visibility: "normal" }),
+      ).toEqual({
+        agentId: "main",
+        message: "",
+        titleSource: "Start empty",
+        worktree: true,
+        worktreeSource: "empty",
+      });
+    },
+  );
+
   it.each(["local", "device", "cloud"] as const)(
     "closes after selecting Auto and clears Auto when choosing %s",
     (destination) => {
@@ -215,7 +377,7 @@ describe("DraftPlaceState repository selection", () => {
   );
 
   it.each([false, true])(
-    "finishes restoring a saved cloud preference for a non-Git workspace (unavailable: %s)",
+    "restores a saved cloud preference into a new workspace without usable Git (unavailable: %s)",
     async (unavailable) => {
       const { state, readPreference, persistPreference } = createRepositoryFixture({
         workspaceGit: unavailable,
@@ -230,15 +392,10 @@ describe("DraftPlaceState repository selection", () => {
       state.restorePreferenceSelections();
 
       expect(state.placementPreferenceReady).toBe(true);
-      expect(state.cloudProfileId).toBe("");
-      expect(state.worktree).toBe(false);
-      if (unavailable) {
-        expect(persistPreference).not.toHaveBeenCalled();
-      } else {
-        expect(persistPreference).toHaveBeenCalledWith("main", "/workspace", {
-          where: { kind: "local" },
-        });
-      }
+      expect(state.cloudProfileId).toBe("aws");
+      expect(state.worktree).toBe(true);
+      expect(state.freshWorkspace).toBe(true);
+      expect(persistPreference).not.toHaveBeenCalled();
     },
   );
 

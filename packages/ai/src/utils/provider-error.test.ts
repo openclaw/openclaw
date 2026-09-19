@@ -132,11 +132,14 @@ describe("projectProviderError", () => {
     expect(projectProviderError(error).errorMessage).toBe(expected);
   });
 
-  it("preserves an SDK message that already contains the response body", () => {
+  it("preserves an SDK response body and its known HTTP status", () => {
     const body = '{"error":{"message":"permission denied"}}';
     const error = Object.assign(new Error(body), { status: 403, body });
 
-    expect(projectProviderError(error).errorMessage).toBe(body);
+    expect(projectProviderError(error)).toMatchObject({
+      errorMessage: `403: ${body}`,
+      errorBody: body,
+    });
   });
 
   it("preserves a meaningful SDK message alongside its structured body", () => {
@@ -206,6 +209,18 @@ describe("projectProviderError", () => {
     expect(projection.errorMessage).toContain("Cache control limit exceeded");
     expect(projection.errorMessage?.length).toBeLessThanOrEqual(4111);
     expect(projection.errorBody?.length).toBeLessThanOrEqual(515);
+  });
+
+  it("preserves known HTTP status with a short message and a response body", () => {
+    const error = Object.assign(new Error("Provider request failed"), {
+      status: 429,
+      body: { error: { message: "Try later" } },
+    });
+
+    expect(projectProviderError(error)).toMatchObject({
+      errorMessage: "429: Provider request failed",
+      errorCode: "429",
+    });
   });
 
   it("bounds repeated structured diagnostic fragments before extraction", () => {

@@ -155,6 +155,21 @@ description: *missing
   });
 });
 
+describe("resolveSkillManifestMetadata skill keys", () => {
+  it("ignores empty optional keys without changing existing nonempty config keys", () => {
+    for (const [value, expected] of [
+      ["", undefined],
+      [" foo ", " foo "],
+    ]) {
+      expect(
+        resolveSkillManifestMetadata({
+          metadata: JSON.stringify({ openclaw: { skillKey: value } }),
+        })?.skillKey,
+      ).toBe(expected);
+    }
+  });
+});
+
 describe("resolveSkillManifestMetadata install validation", () => {
   function resolveInstall(frontmatter: Record<string, string>) {
     return resolveSkillManifestMetadata(frontmatter)?.install;

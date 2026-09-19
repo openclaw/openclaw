@@ -62,6 +62,24 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it.each(["docker", "browser"] as const)(
+    "validates %s bind sources without trimming path bytes",
+    (backend) => {
+      for (const [bind, accepted] of [
+        [" /home/user/source:/data", false],
+        ["/home/user/source :/data ", true],
+      ] as const) {
+        const result = validateConfigObject({
+          agents: { defaults: { sandbox: { [backend]: { binds: [bind] } } } },
+        });
+        expect(result.ok, bind).toBe(accepted);
+        if (result.ok) {
+          expect(result.config.agents?.defaults?.sandbox?.[backend]?.binds).toEqual([bind]);
+        }
+      }
+    },
+  );
+
   it("accepts Windows drive-letter binds in sandbox.docker config", () => {
     const res = validateConfigObject({
       agents: {

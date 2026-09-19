@@ -1030,7 +1030,9 @@ extension QuickChatModel {
         guard self.canUseModelControls, !self.isUpdatingModel, let target = self.routingTarget else { return }
         let normalized = selectionID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized == OpenClawChatViewModel.defaultModelSelectionID ||
-            self.modelChoices.contains(where: { $0.selectionID == normalized && $0.available != false })
+            self.modelChoices.contains(where: {
+                $0.selectionID == normalized && $0.manualSelectionAllowed != false && $0.available != false
+            })
         else { return }
         guard normalized != self.selectedModelSelectionID else { return }
         let patchDecision = QuickChatModelControlLogic.modelPatchDecision(

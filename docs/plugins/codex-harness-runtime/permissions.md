@@ -85,6 +85,9 @@ do not create a waiting tool call or use the blocking question queue above.
 They follow the same tool and message-delivery restrictions as other native
 async messages. Silence and preselected answers never grant approval.
 
+Scrolling away from a question and back preserves its draft and any in-progress
+submission. The card shows the result when that submission finishes.
+
 Channels receive Codex's readable question text and choices and accept normal
 replies. The Control UI supports up to 12 questions per message and four choices
 per question, with titles up to 4,096 characters and choices up to 256 characters.

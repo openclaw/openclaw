@@ -27,6 +27,8 @@ export {
   type WizardNotFoundErrorDetails,
   type SetupAdmissionBusyErrorDetails,
   type GitHubPublicationSelectionRejectedErrorDetails,
+  type SessionWorkspaceRecoveryRequiredErrorDetails,
+  type TaskWorktreeSourceRequiredErrorDetails,
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
@@ -95,6 +97,24 @@ export const SkillProposalRevisionChangedErrorDetailsSchema = closedObject({
   currentRevisionHash: RevisionHashSchema,
 });
 
+export const SessionWorkspaceRecoveryRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SESSION_WORKSPACE_RECOVERY_REQUIRED),
+  cause: Type.Literal("device_offline"),
+  recoveryAction: Type.Literal("continue_on_gateway"),
+  sessionId: NonEmptyString,
+  source: closedObject({
+    generation: Type.Integer({ minimum: 0 }),
+    environmentId: NonEmptyString,
+    ownerEpoch: Type.Integer({ minimum: 1 }),
+  }),
+});
+
+/** Structured details emitted by method-level failures. */
+export const TaskWorktreeSourceRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED),
+  cwd: NonEmptyString,
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
@@ -108,6 +128,8 @@ export const GatewayErrorDetailsSchema = Type.Union([
   WizardNotFoundErrorDetailsSchema,
   SetupAdmissionBusyErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
+  SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
+  TaskWorktreeSourceRequiredErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

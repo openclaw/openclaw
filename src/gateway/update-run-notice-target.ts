@@ -6,7 +6,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionDeliveryRoute } from "../infra/session-delivery-queue-storage.js";
+import type { SessionDeliveryRoute } from "../infra/session-delivery-queue.records.js";
 import { getUpdateRun, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";

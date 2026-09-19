@@ -218,20 +218,40 @@ async function trace(read: () => Promise<unknown>) {
   return { queries: [...queries.values()], jsonParseCalls, jsonParseBytes, jsonStringifyCalls };
 }
 
+async function closeBenchmarkState(stateDir: string): Promise<void> {
+  const [
+    { closeSessionTranscriptReconcileWorkerPool },
+    { closeOpenClawAgentDatabasesAsync },
+    { closeOpenClawStateDatabaseAsync },
+  ] = await Promise.all([
+    import("../src/config/sessions/session-transcript-reconcile-pool.js"),
+    import("../src/state/openclaw-agent-db.js"),
+    import("../src/state/openclaw-state-db.js"),
+  ]);
+  await closeSessionTranscriptReconcileWorkerPool();
+  await closeOpenClawAgentDatabasesAsync(stateDir);
+  await closeOpenClawStateDatabaseAsync();
+}
+
 async function worker(stateDir: string, profile: Profile, operation: Operation) {
   const scope = scopeFor(stateDir, profile);
   const importStarted = performance.now();
   const history = await import("../src/config/sessions/session-accessor.sqlite-history-events.js");
   const gateway =
     operation === "gateway-tail"
-      ? await import("../src/gateway/session-history-tail.js")
+      ? {
+          tail: await import("../src/gateway/session-history-tail.js"),
+          readers: await import("../src/gateway/session-transcript-readers.js"),
+          profile: await import("../src/gateway/current-user-profile-display.js"),
+        }
       : undefined;
-  const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesForTest } =
-    await import("../src/state/openclaw-agent-db.js");
+  const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");
   const importMs = performance.now() - importStarted;
   const read = async () => {
     if (gateway) {
-      const result = await gateway.readIncrementalChatHistoryTail({
+      const result = await gateway.tail.readIncrementalChatHistoryTail({
+        readers: gateway.readers,
+        resolveCurrentUserProfileDisplay: gateway.profile.resolveCurrentUserProfileDisplay,
         entry: undefined,
         readScope: scope,
         effectiveMaxChars: 8000,
@@ -307,7 +327,7 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
       }),
     );
   } finally {
-    closeOpenClawAgentDatabasesForTest(stateDir);
+    await closeBenchmarkState(stateDir);
   }
 }
 
@@ -341,25 +361,23 @@ async function main() {
   process.env.OPENCLAW_CONFIG_PATH = configPath;
   const { replaceTranscriptEvents } =
     await import("../src/config/sessions/session-accessor.sqlite-transcript-write.js");
-  const { waitForSessionTranscriptProjection } =
+  const { waitForSessionTranscriptIndexReconcilesInStateDir } =
     await import("../src/config/sessions/session-transcript-reconcile.js");
-  const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesForTest } =
-    await import("../src/state/openclaw-agent-db.js");
-  const { closeOpenClawStateDatabaseForTest } = await import("../src/state/openclaw-state-db.js");
+  const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");
   const results: unknown[] = [];
   try {
     for (const name of selected) {
       const profile = name as Profile;
       await replaceTranscriptEvents(scopeFor(stateDir, profile), fixture(profile));
-      await waitForSessionTranscriptProjection(scopeFor(stateDir, profile));
+      // Projection readiness precedes lease release; a synchronous child would block that cleanup.
+      await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
       if (values.analyze) {
         openOpenClawAgentDatabase({
           agentId: "main",
           env: scopeFor(stateDir, profile).env,
         }).db.exec("ANALYZE");
       }
-      closeOpenClawAgentDatabasesForTest(stateDir);
-      closeOpenClawStateDatabaseForTest();
+      await closeBenchmarkState(stateDir);
       for (const operation of selectedOperations) {
         const child = spawnSync(
           process.execPath,
@@ -403,8 +421,7 @@ async function main() {
     }
     console.log(output);
   } finally {
-    closeOpenClawAgentDatabasesForTest(stateDir);
-    closeOpenClawStateDatabaseForTest();
+    await closeBenchmarkState(stateDir);
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 }

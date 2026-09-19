@@ -68,8 +68,6 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
-const ACCEPTED_SESSION_SPAWN_CONTINUATION_TEXT =
-  "I’m continuing this work and will send the result when it is ready.";
 
 type TerminalPresentationObservation = {
   terminalPresentation?: string;
@@ -571,10 +569,12 @@ async function completeEmbeddedRun(
     });
     input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   }
-  const acceptedSessionSpawnContinuation = shouldContinueInteractiveAcceptedSessionSpawns({
-    attempt: input.attempt,
-    run: input.runParams,
-  });
+  const acceptedSessionSpawnContinuation =
+    !error &&
+    shouldContinueInteractiveAcceptedSessionSpawns({
+      attempt: input.attempt,
+      run: input.runParams,
+    });
   // A subagent's blank success is delivery evidence; nonblank classified silence stays silent.
   // The lifecycle owner needs that distinction to close only intentional non-delivery.
   const keepEmptyReplySilent =
@@ -613,11 +613,9 @@ async function completeEmbeddedRun(
             ? isTruncatedPartialReply
               ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
               : input.payloadsForTerminalPath
-            : acceptedSessionSpawnContinuation
-              ? [{ text: ACCEPTED_SESSION_SPAWN_CONTINUATION_TEXT }]
-              : input.attempt.yieldDetected && !yieldHasContinuation
-                ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
-                : input.payloadsForTerminalPath;
+            : input.attempt.yieldDetected && !yieldHasContinuation
+              ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
+              : input.payloadsForTerminalPath;
   if (!error) {
     input.setTerminalLifecycleMeta({
       replayInvalid,

@@ -9,13 +9,17 @@ import type {
 } from "../infra/outbound/session-binding-service.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import * as openClawStateDb from "../state/openclaw-state-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { seedPluginConversationBindingApprovalForTest } from "./conversation-binding.test-fixtures.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import {
+  createDiscordCodexBindRequest,
+  seedPluginConversationBindingApprovalForTest,
+} from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -163,7 +167,8 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
   };
 }
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir == null) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -194,25 +199,6 @@ afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
   vi.useRealTimers();
 });
-
-function createDiscordCodexBindRequest(
-  conversationId: string,
-  summary: string,
-  accountId = "isolated",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot: "/plugins/codex-a",
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "discord",
-      accountId,
-      conversationId,
-    },
-    binding: { summary },
-  };
-}
 
 function createTelegramCodexBindRequest(
   conversationId: string,
@@ -444,18 +430,6 @@ function readPluginBindingApprovalRows(): Array<{
   ).rows;
 }
 
-function insertPluginBindingApprovalRow(params: {
-  pluginRoot: string;
-  channel: string;
-  accountId: string;
-  pluginId: string;
-}): void {
-  seedPluginConversationBindingApprovalForTest({
-    ...params,
-    approvedAt: 1,
-  });
-}
-
 describe("plugin conversation binding approvals", () => {
   beforeEach(async () => {
     await drainGlobalSingletonLifecycleState();
@@ -613,6 +587,8 @@ describe("plugin conversation binding approvals", () => {
       status: "expired",
     });
     expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    // Retire storage's independent idle timer before counting approval timers.
+    await closeOpenClawStateDatabaseAsync();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -630,6 +606,8 @@ describe("plugin conversation binding approvals", () => {
       );
     }
 
+    // Pending approvals outlive database actors; count only their owned timers.
+    await closeOpenClawStateDatabaseAsync();
     expect(vi.getTimerCount()).toBe(512);
     const oldest = requests[0];
     const newest = requests[512];
@@ -697,14 +675,12 @@ describe("plugin conversation binding approvals", () => {
     );
 
     const writeSpy = vi
-      .spyOn(openClawStateDb, "runOpenClawStateWriteTransaction")
-      .mockImplementationOnce(() => {
-        throw new Error("SQLITE_BUSY: database is locked");
-      });
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockRejectedValueOnce(new Error("approval operation unavailable"));
 
     // A failed persist must propagate; the grant was never durably recorded.
     await expect(approveBindingRequest(pendingRequest.approvalId, "allow-always")).rejects.toThrow(
-      "SQLITE_BUSY",
+      "approval operation unavailable",
     );
 
     writeSpy.mockRestore();
@@ -782,7 +758,8 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("does not remove approval rows written outside the process cache", async () => {
-    insertPluginBindingApprovalRow({
+    await seedPluginConversationBindingApprovalForTest({
+      approvedAt: 1,
       pluginRoot: "/plugins/other",
       channel: "discord",
       accountId: "default",

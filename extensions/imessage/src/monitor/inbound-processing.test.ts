@@ -575,7 +575,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "p:0/imsg-production",
       chatGuid: "any;-;+15555550123",

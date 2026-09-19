@@ -1,7 +1,10 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
+
+registerModelControlsEnglish();
 
 export type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
 

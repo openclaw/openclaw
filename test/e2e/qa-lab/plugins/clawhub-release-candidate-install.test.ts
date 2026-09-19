@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/api.js";
+import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
 import { runClawHubReleaseCandidateInstallProducer } from "./clawhub-release-candidate-install.js";
 
 const tempRoots: string[] = [];

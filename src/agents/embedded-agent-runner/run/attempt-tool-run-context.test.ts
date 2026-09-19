@@ -5,6 +5,7 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
   it("projects originating capabilities without copying execution or session ownership", () => {
     const input = {
       clientCaps: ["inline-widgets"],
+      gatewayUiCommandTarget: { connId: "requester-tab", profileId: "requester" },
       pinnedWidgetAuthoring: true,
       toolBindings: { browser: { kind: "tab", tabId: 7 } },
       memberRoleIds: ["maintainer-role"],
@@ -15,11 +16,16 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       sessionId: "source-session",
       runId: "source-run",
       onYield: () => undefined,
+      provider: "custom",
+      modelId: "alias",
+      model: { provider: "custom", id: "resolved-model", headers: { "x-private": "fixture" } },
     };
     const context = buildEmbeddedAttemptToolRunContext(input);
+    input.model.id = "next-model";
 
     expect(context).toMatchObject({
       clientCaps: ["inline-widgets"],
+      gatewayUiCommandTarget: input.gatewayUiCommandTarget,
       pinnedWidgetAuthoring: true,
       toolBindings: input.toolBindings,
       memberRoleIds: ["maintainer-role"],
@@ -27,9 +33,10 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       taskSuggestionDeliveryMode: "gateway",
       nativeChannelId: "native-conversation",
     });
-    for (const ownedField of ["sessionKey", "sessionId", "runId", "onYield"]) {
+    for (const ownedField of ["sessionKey", "sessionId", "runId", "onYield", "model"]) {
       expect(context).not.toHaveProperty(ownedField);
     }
+    expect(context.requesterModel).toEqual({ provider: "custom", model: "resolved-model" });
   });
 
   it("carries runtime toolsAllow into coding tool construction", () => {

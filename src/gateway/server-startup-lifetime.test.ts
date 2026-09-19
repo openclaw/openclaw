@@ -515,8 +515,9 @@ describe("Gateway startup lifetime", () => {
           const released = vi.fn();
           const close = owner.close.bind(owner);
           vi.spyOn(owner, "close").mockImplementation(async (...args) => {
-            await close(...args);
+            const result = await close(...args);
             released();
+            return result;
           });
           metadataOwners.push({ owner, released });
           return owner;

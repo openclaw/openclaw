@@ -25,11 +25,12 @@ type ActivePrompt = {
   internal: boolean;
 };
 
-export function createEmbeddedRunSessionPromptState(input: {
+export async function createEmbeddedRunSessionPromptState(input: {
   runParams: PreparedEmbeddedRunInput["runParams"];
   sessionAgentId: string;
   resolvedSessionKey: string;
   lifecycleGeneration: PreparedEmbeddedRunInput["lifecycleGeneration"];
+  onInterrupt: (reason: Error) => void;
 }) {
   const { runParams: params, sessionAgentId, resolvedSessionKey, lifecycleGeneration } = input;
   let activeSessionId = params.sessionId;
@@ -50,10 +51,12 @@ export function createEmbeddedRunSessionPromptState(input: {
         expectedWriterRunId,
       }
     : undefined;
-  const initialWriter = prepareInitialSessionWriter({
+  const initialOwner = await prepareInitialSessionWriter({
     runParams: params,
     target: activeSessionTarget,
+    onInterrupt: input.onInterrupt,
   });
+  const initialWriter = initialOwner?.writer;
   const initialTarget = initialWriter ? { ...activeSessionTarget } : undefined;
   let sessionTargetAdopted = false;
   let committedCompactionSuccessor: AcceptedCompactionSuccessor | undefined;
@@ -161,6 +164,7 @@ export function createEmbeddedRunSessionPromptState(input: {
   };
 
   return {
+    [Symbol.asyncDispose]: async () => await initialOwner?.close(),
     get sessionId() {
       return activeSessionId;
     },
@@ -188,17 +192,20 @@ export function createEmbeddedRunSessionPromptState(input: {
     get sessionWriterFence() {
       return existingWriterFence ?? initialWriter?.committedFence;
     },
-    withSessionWriterContext: <T>(run: () => Promise<T>): Promise<T> =>
-      initialWriter && !initialWriter.committedFence
-        ? withOwnedSessionTranscriptWrites(
-            {
-              sessionTarget: initialTarget,
-              initialWriter,
-              withTranscriptWrite: async (write) => await write(),
-            },
-            run,
-          )
-        : runWithoutOwnedSessionTranscriptWrites(run),
+    withSessionWriterContext: <T>(run: () => Promise<T>): Promise<T> => {
+      const withContext = () =>
+        initialWriter && !initialWriter.committedFence
+          ? withOwnedSessionTranscriptWrites(
+              {
+                sessionTarget: initialTarget,
+                initialWriter,
+                withTranscriptWrite: initialWriter.withTranscriptWrite,
+              },
+              run,
+            )
+          : runWithoutOwnedSessionTranscriptWrites(run);
+      return initialOwner ? initialOwner.run(withContext) : withContext();
+    },
     get activePrompt() {
       return activePrompt;
     },

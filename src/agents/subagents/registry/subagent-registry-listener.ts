@@ -9,10 +9,8 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
-import {
-  markSubagentRunPausedAfterYield,
-  preserveSubagentRunForRestart,
-} from "./subagent-registry-run-manager.js";
+import { preserveSubagentRunForRestart } from "./subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryListener(config: {

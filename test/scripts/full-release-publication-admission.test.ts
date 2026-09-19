@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -27,11 +27,13 @@ import {
   type PublicationSourceFact,
 } from "../../scripts/full-release-publication-contract.mjs";
 import { resolveReleaseContextIdentity } from "../../scripts/lib/release-context.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
+const nodeExecutable = realpathSync(requireNodeTool("node"));
 const workflowPath = ".github/workflows/full-release-validation.yml";
 type Step = {
   name: string;
@@ -57,6 +59,7 @@ const toolingPaths = [
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/frozen-target-compat.sh",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
@@ -263,7 +266,7 @@ console.log('{"status":"identical"}');
       for (const step of resolveTarget.steps.slice(decoderIndex, identityIndex + 1)) {
         const output = join(root, `${step.id}.out`);
         const env: Record<string, string> = {
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
           HOME: root,
           GITHUB_REPOSITORY: "openclaw/openclaw",
           GITHUB_OUTPUT: output,
@@ -378,6 +381,13 @@ function fixture(
     uploadFault?: "failure" | "wrong-descriptor" | "late-admission";
     fault?:
       | "readme"
+      | "size-missing"
+      | "size-wrong-oid"
+      | "size-unterminated"
+      | "size-extra"
+      | "size-individual-limit"
+      | "size-total-limit"
+      | "size-limit-before-truncated"
       | "candidate-object"
       | "tooling-object"
       | "bootstrap"
@@ -489,15 +499,25 @@ function fixture(
     rmSync(join(target, "extensions/demo-plugin/README.md"));
     symlinkSync("package.json", join(target, "extensions/demo-plugin/README.md"));
   }
-  if (options.fault === "non-utf8") {
-    const directory = Buffer.concat([
-      Buffer.from(join(target, "extensions") + "/"),
-      Buffer.from([0xff]),
-    ]);
-    mkdirSync(directory);
-    writeFileSync(Buffer.concat([directory, Buffer.from("/package.json")]), "{}");
-  }
   let targetSha = commit(target);
+  if (options.fault === "non-utf8") {
+    const blobSha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: target,
+      encoding: "utf8",
+      input: "{}",
+    }).trim();
+    execFileSync("git", ["update-index", "--add", "-z", "--index-info"], {
+      cwd: target,
+      input: Buffer.concat([
+        Buffer.from(`100644 ${blobSha}\t`),
+        Buffer.from("extensions/"),
+        Buffer.from([0xff]),
+        Buffer.from("/package.json\0"),
+      ]),
+    });
+    git(target, "commit", "-qm", "non-utf8 fixture");
+    targetSha = git(target, "rev-parse", "HEAD");
+  }
   git(tooling, "init", "-q", "-b", "main");
   for (const path of toolingPaths) {
     write(tooling, path, readFileSync(join(repo, path)));
@@ -515,6 +535,30 @@ const { appendFileSync } = await import("node:fs");
 const { basename } = await import("node:path");
 const record = (value) => appendFileSync(${JSON.stringify(registryCalls)}, JSON.stringify(value) + "\\n");
 const worker = basename(process.argv[1] ?? "") === "full-release-publication-observations.mts";
+const sizeFault = ${JSON.stringify(options.fault)};
+if (sizeFault?.startsWith("size-")) {
+  const childProcess = (await import("node:child_process")).default;
+  const original = childProcess.execFileSync;
+  childProcess.execFileSync = (file, args, ...rest) => {
+    if (file === "git" && args.includes("pack-objects")) record({ kind: "source-pack" });
+    const output = original(file, args, ...rest);
+    if (file !== "git" || !args.includes("--batch-check=%(objectname) %(objectsize)")) return output;
+    record({ kind: "object-size-batch" });
+    const rows = output.toString().split("\\n");
+    const oid = rows[0].split(" ")[0];
+    if (sizeFault === "size-missing") rows[0] = oid + " missing";
+    if (sizeFault === "size-wrong-oid") rows[0] = (oid[0] === "0" ? "1" : "0") + rows[0].slice(1);
+    if (sizeFault === "size-unterminated") rows.pop();
+    if (sizeFault === "size-extra") rows.push(rows[0], "");
+    if (["size-individual-limit", "size-limit-before-truncated"].includes(sizeFault)) rows[0] = oid + " 16777217";
+    if (sizeFault === "size-limit-before-truncated") rows.splice(-2);
+    if (sizeFault === "size-total-limit") {
+      for (let i = 0; i < rows.length - 1; i++) rows[i] = rows[i].split(" ")[0] + " 16777216";
+    }
+    return Buffer.from(rows.join("\\n"));
+  };
+  (await import("node:module")).syncBuiltinESMExports();
+}
 record({
   kind: "runtime",
   worker,
@@ -957,7 +1001,7 @@ process.stdout.write(${JSON.stringify(
     }
     const output = join(temporary, `output-${effects.length}`);
     const env: Record<string, string> = {
-      PATH: `${bin}:${process.env.PATH}`,
+      PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
       HOME: root,
       LANG: "C.UTF-8",
       GIT_CONFIG_GLOBAL: "/dev/null",
@@ -1149,7 +1193,7 @@ globalThis.Date = class extends OriginalDate {
   }
   if (workerBoundary) {
     expect(workerBoundary).toMatchObject({
-      executable: process.execPath,
+      executable: nodeExecutable,
       args: ["--import", pathToFileURL(join(tooling, "scripts/tsx.mjs")).href],
       cwd: tooling,
       snapshotPresent: true,
@@ -1163,6 +1207,7 @@ globalThis.Date = class extends OriginalDate {
         "LANG",
         "LC_ALL",
         "TSX_DISABLE_CACHE",
+        ...(process.platform === "darwin" ? ["__CF_USER_TEXT_ENCODING"] : []),
       ].toSorted(),
     });
     for (const path of [
@@ -1674,6 +1719,30 @@ describe("FRV observation worker boundary", () => {
 });
 
 describe("FRV publication source admission", () => {
+  it.each([
+    ["size-missing", "invalid publication source object-size response"],
+    ["size-wrong-oid", "invalid publication source object-size response"],
+    ["size-unterminated", "invalid publication source object-size response"],
+    ["size-extra", "invalid publication source object-size response"],
+    ["size-individual-limit", "metadata exceeds byte limit"],
+    ["size-total-limit", "metadata exceeds byte limit"],
+    ["size-limit-before-truncated", "metadata exceeds byte limit"],
+  ] as const)(
+    "rejects %s before packing or registry reads",
+    (fault, error) => {
+      const result = fixture({ fault, registry: "healthy" });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(error);
+      expect(result.fact).toBeUndefined();
+      expect(
+        result.registryCalls.filter((entry) => entry.kind === "object-size-batch"),
+      ).toHaveLength(1);
+      expect(result.registryCalls.filter((entry) => entry.kind === "source-pack")).toEqual([]);
+      expect(result.registryCalls.filter((entry) => entry.kind === "request")).toEqual([]);
+      expect(result.firstHopJobs).toEqual([]);
+    },
+    30_000,
+  );
   it.each([
     ["2026.9.9", "normal", false],
     ["2026.9.9-1", "normal", false],

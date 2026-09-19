@@ -8,7 +8,7 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { listOpenClawAgentDatabasesForTest as listSeedAgentDatabases } from "../../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest as listSeedAgentDatabases } from "../../../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../../../state/openclaw-state-db.js";
 import "./subagent-registry.mocks.shared.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -48,7 +48,7 @@ let callGatewayModule: typeof import("../../../gateway/call.js");
 let agentEventsModule: typeof import("../../../infra/agent-events.js");
 let registryDepsModule: typeof import("./subagent-registry-deps.js");
 let registrySessionCleanupModule: typeof import("../../../test-utils/session-state-cleanup.js");
-let registryAgentDbModule: typeof import("../../../state/openclaw-agent-db.js");
+let registryAgentDbTestModule: typeof import("../../../state/openclaw-agent-db.test-support.js");
 let registryStateDbModule: typeof import("../../../state/openclaw-state-db.js");
 
 function listFixtureAgentDatabases(listDatabases: typeof listSeedAgentDatabases, stateDir: string) {
@@ -87,7 +87,7 @@ describe("subagent registry persistence resume", () => {
     agentEventsModule = await import("../../../infra/agent-events.js");
     registryStateDbModule = await import("../../../state/openclaw-state-db.js");
     registryDepsModule = await import("./subagent-registry-deps.js");
-    registryAgentDbModule = await import("../../../state/openclaw-agent-db.js");
+    registryAgentDbTestModule = await import("../../../state/openclaw-agent-db.test-support.js");
     registrySessionCleanupModule = await import("../../../test-utils/session-state-cleanup.js");
   });
 
@@ -118,7 +118,7 @@ describe("subagent registry persistence resume", () => {
           await registrySessionCleanupModule.cleanupSessionStateForTest({ stateDir });
           for (const [label, listDatabases] of [
             ["seed", listSeedAgentDatabases],
-            ["post-reset", registryAgentDbModule.listOpenClawAgentDatabasesForTest],
+            ["post-reset", registryAgentDbTestModule.listOpenClawAgentDatabasesForTest],
           ] as const) {
             expect(
               listFixtureAgentDatabases(listDatabases, stateDir),
@@ -214,7 +214,7 @@ describe("subagent registry persistence resume", () => {
       ).toHaveLength(1);
       expect(
         listFixtureAgentDatabases(
-          registryAgentDbModule.listOpenClawAgentDatabasesForTest,
+          registryAgentDbTestModule.listOpenClawAgentDatabasesForTest,
           stateDir,
         ),
         "resumed completion timing acquired a post-reset agent handle",
@@ -874,7 +874,7 @@ describe("subagent registry persistence resume", () => {
           const runId = `run-restored-wake-${index}`;
           return createDeliveredWake(
             runId,
-            activationSettlement ? undefined : { status: "pending", attemptCount: 0 },
+            requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
             {
               childSessionKey: `agent:main:subagent:restored-wake-${index}`,
               requesterSessionKey: `agent:main:requester-${index}`,
@@ -1023,10 +1023,15 @@ describe("subagent registry persistence resume", () => {
         } else {
           expect(restored?.requesterSettleWake).toBeUndefined();
         }
-        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
-          timeout: 1_000,
-          interval: 10,
-        });
+        if (requesterYielded) {
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+            timeout: 1_000,
+            interval: 10,
+          });
+        } else {
+          await nextTask();
+          expect(wakeRequester).not.toHaveBeenCalled();
+        }
       });
     },
   );

@@ -117,9 +117,7 @@ export function createTelegramPromptContextProjectionSequence(params: {
     const record = pending;
     pending = undefined;
     const projection = cursor?.take(finalPart);
-    const recorded = await params
-      .record({ ...record, ...(projection ? { projection } : {}) })
-      .catch(() => false);
+    const recorded = await params.record({ ...record, ...(projection ? { projection } : {}) });
     if (!recorded) {
       invalidate();
     }

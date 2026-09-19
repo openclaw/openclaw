@@ -39,7 +39,8 @@ export async function createManagedUpdateRequesterAuthority(
       { ensureCliPluginRegistryLoaded },
     ] = await Promise.all([
       import("../auto-reply/command-auth.js"),
-      import("../config/io.runtime.js"),
+      // Keep synchronous authority checks on the reader loaded at admission.
+      import("../config/io.js"),
       import("../cli/plugin-registry-loader.js"),
     ]);
     const readCurrentConfig = () =>

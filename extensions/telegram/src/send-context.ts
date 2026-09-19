@@ -22,6 +22,10 @@ import {
   isTelegramQuoteParamError,
   removeTelegramNativeQuoteParam,
 } from "./reply-parameters.js";
+import {
+  bindTelegramRequestAuthority,
+  findTelegramRequestAuthorityError,
+} from "./request-authority.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { requireRuntimeConfig, type OpenClawConfig } from "./send.runtime.js";
@@ -424,14 +428,29 @@ function resolveTelegramApiContext(opts: {
     // One op-level lease covers the full send/action (including pre-request work
     // and retries) so eviction cannot close the transport mid-operation.
     clientOptionsLease = client.lease();
-    const bot = new Bot(token, client.clientOptions ? { client: client.clientOptions } : undefined);
+    const fetch = client.clientOptions?.fetch;
+    const clientOptions =
+      fetch && opts.assertPlatformSendAuthorized
+        ? {
+            ...client.clientOptions,
+            fetch: bindTelegramRequestAuthority(fetch, opts.assertPlatformSendAuthorized),
+          }
+        : client.clientOptions;
+    const bot = new Bot(token, clientOptions ? { client: clientOptions } : undefined);
     if (opts.signal || opts.assertPlatformSendAuthorized) {
       // grammY wraps later transformers around earlier ones. Check authority
       // after the account queue drains, immediately before its HTTP client runs.
       bot.api.config.use((prev, method, payload, signal) => {
         opts.signal?.throwIfAborted();
         opts.assertPlatformSendAuthorized?.();
-        return prev(method, payload, signal);
+        return prev(method, payload, signal).catch((error: unknown) => {
+          const rejection =
+            error instanceof HttpError ? findTelegramRequestAuthorityError(error.error) : undefined;
+          if (rejection) {
+            throw rejection.originalError;
+          }
+          throw error;
+        });
       });
     }
     bot.api.config.use(getOrCreateAccountThrottler(token).transformer);

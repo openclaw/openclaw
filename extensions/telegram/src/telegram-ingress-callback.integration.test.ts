@@ -14,8 +14,13 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
+import {
+  enqueueTelegramMenuSync,
+  resolveTelegramMenuRemoteOwner,
+} from "./bot-native-command-menu-state.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
@@ -262,6 +267,14 @@ it.each(["none", "middleware", "handler"] as const)(
       }
       await monitor?.waitForIdle();
       await monitor?.stop();
+      // Menu sync has its own queue; finish it before closing the loopback API.
+      await new Promise<void>((resolve, reject) => {
+        enqueueTelegramMenuSync({
+          ownerKey: resolveTelegramMenuRemoteOwner({ botId: telegramBotInfoForTest.id }).queueKey,
+          sync: async () => resolve(),
+          onError: reject,
+        });
+      });
       readHandlerAnswer.mockRestore();
       await telegramTransport.close();
       server.closeAllConnections();
@@ -270,6 +283,7 @@ it.each(["none", "middleware", "handler"] as const)(
       });
       clearTelegramRuntimeForTest();
       resetTelegramAccountThrottlersForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       resetPluginStateStoreForTests({ closeDatabase: false });
       if (previousStateDir === undefined) {

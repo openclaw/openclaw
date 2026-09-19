@@ -47,6 +47,7 @@ extension DashboardWindowController {
                 profileName: AppProfile.current.name),
             app: .init(
                 showDockIcon: state.showDockIcon,
+                nativeExperienceEnabled: state.nativeExperienceEnabled,
                 iconStyle: .init(
                     selectedId: iconStyle.rawValue,
                     available: AppIconStyle.allCases.filter { AppIconArtwork.isAvailable($0) }

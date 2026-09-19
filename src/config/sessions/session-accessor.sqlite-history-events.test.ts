@@ -1,13 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, vi } from "vitest";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -17,22 +14,21 @@ import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readTranscriptDisplayDelta,
   readRecentSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryAnchorPage,
-  readSessionTranscriptHistoryEvents,
-  readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
   readSessionTranscriptHistoryEventPage,
 } from "./session-accessor.sqlite-history-events.js";
+import {
+  historyEventId,
+  insertSyntheticHistory,
+  readSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEventById,
+  readSessionTranscriptHistoryAnchorPage,
+  useHistoryEventScope,
+} from "./session-accessor.sqlite-history.test-support.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const REGRESSION_SQLITE_VARIABLE_LIMIT = 64;
 const REGRESSION_MAX_MESSAGES = 32;
-
-function historyEventId(entry: { event: unknown } | undefined): unknown {
-  const event = entry?.event;
-  return event && typeof event === "object" && "id" in event ? event.id : undefined;
-}
 
 function enforceSqliteVariableLimit(
   database: OpenClawAgentDatabase,
@@ -48,86 +44,67 @@ function enforceSqliteVariableLimit(
   });
 }
 
-function insertSyntheticHistory(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-  count: number,
-  boundaries = false,
-): void {
-  const lastSeq = count * (boundaries ? 2 : 1) + 1;
-  const insertEvent = database.db.prepare(
-    "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
-  );
-  const insertIdentity = database.db.prepare(
-    `INSERT INTO transcript_event_identities
-       (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
-     VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
-  );
-  const insertActive = database.db.prepare(
-    `INSERT INTO session_transcript_active_events
-       (session_id, active_position, event_seq, message_position, context_eligible)
-     VALUES (?, ?, ?, ?, 1)`,
-  );
-  runSqliteImmediateTransactionSync(database.db, () => {
-    for (let seq = 2; seq <= lastSeq; seq += 1) {
-      const isBoundary = boundaries && seq % 2 === 0;
-      const id = `synthetic-${isBoundary ? "boundary" : "message"}-${String(seq)}`;
-      const type = isBoundary ? "compaction" : "message";
-      const event = {
-        type,
-        id,
-        parentId: null,
-        timestamp: "2026-08-15T00:00:00.000Z",
-        ...(isBoundary
-          ? { summary: "synthetic" }
-          : { message: { role: "user", content: "synthetic" } }),
-      };
-      insertEvent.run(sessionId, seq, JSON.stringify(event), seq);
-      insertIdentity.run(sessionId, id, seq, type, seq);
-      insertActive.run(
-        sessionId,
-        seq - 1,
-        seq,
-        isBoundary ? null : boundaries ? Math.floor(seq / 2) : seq - 1,
-      );
-    }
-    database.db
-      .prepare(
-        `UPDATE session_transcript_index_state
-         SET indexed_seq = ?, leaf_event_id = ?, active_event_count = ?, active_message_count = ?
-         WHERE session_id = ?`,
-      )
-      .run(
-        lastSeq,
-        `synthetic-message-${String(lastSeq)}`,
-        lastSeq,
-        boundaries ? count + 1 : lastSeq,
-        sessionId,
-      );
-  });
-}
-
 describe("SQLite transcript history events", () => {
-  let scope: {
-    agentId: string;
-    env: NodeJS.ProcessEnv;
-    sessionId: string;
-    sessionKey: string;
-  };
+  const scope = useHistoryEventScope();
 
-  beforeEach(() => {
-    scope = {
-      agentId: "main",
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-events-") },
-      sessionId: "history-events-test",
-      sessionKey: "agent:main:history-events-test",
-    };
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+  it("reuses recent payloads with fresh result ownership until append or rewrite", async () => {
+    const events = [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "original",
+        parentId: null,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "cache-window-original" }],
+        },
+      },
+      {
+        type: "message",
+        id: "initial",
+        parentId: "original",
+        message: { role: "assistant", content: "reply" },
+      },
+    ];
+    await replaceTranscriptEvents(scope, events);
+    const limits = { maxMessages: 20, maxLines: 20, maxBytes: 64 * 1024 };
+    const read = () => readRecentSessionTranscriptHistoryEvents(scope, limits);
+    const first = read();
+    const parse = vi.spyOn(JSON, "parse");
+    const second = read();
+    expect(parse.mock.calls.filter(([json]) => json.includes("cache-window-original"))).toEqual([]);
+    parse.mockRestore();
+    for (const page of [first, second]) {
+      const message = asOptionalRecord(page.events[0]?.event)?.message;
+      if (!isRecord(message) || !Array.isArray(message.content) || !isRecord(message.content[0])) {
+        throw new Error("expected the original message content");
+      }
+      message.content[0].text = "caller mutation";
+      expect(asOptionalRecord(read().events[0]?.event)?.message).toEqual(events[1]?.message);
+    }
+    await persistSessionTranscriptTurn(scope, {
+      messages: [transcriptMessage("appended", "initial", { role: "user", content: "next" })],
+      touchSessionEntry: false,
+    });
+    expect(read().events.map(historyEventId)).toEqual(["original", "initial", "appended"]);
+    const replacement = [
+      ...events,
+      {
+        type: "message",
+        id: "appended",
+        parentId: "initial",
+        message: { role: "user", content: "rewritten" },
+      },
+    ];
+    await replaceTranscriptEvents(scope, replacement);
+    expect(asOptionalRecord(read().events.at(-1)?.event)?.message).toEqual(
+      replacement.at(-1)?.message,
+    );
+    expect(
+      readRecentSessionTranscriptHistoryEvents(scope, { ...limits, maxMessages: 1 }).events.map(
+        historyEventId,
+      ),
+    ).toEqual(["appended"]);
   });
 
   it("reads fresh generations and rows across empty and populated sessions", async () => {
@@ -210,125 +187,133 @@ describe("SQLite transcript history events", () => {
     });
   });
 
-  it("preserves physical dispatch cuts across history pages and deltas", async () => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [transcriptMessage("exec", null, { role: "assistant", content: "exec" })],
-      touchSessionEntry: false,
-    });
-    await appendTranscriptEvent(scope, {
-      type: "custom",
-      id: "control",
-      parentId: "exec",
-      customType: "test",
-    });
-    await appendTranscriptEvent(scope, {
-      type: "custom_message",
-      id: "notice",
-      parentId: "control",
-      customType: "run-failed-before-reply",
-      content: "This turn ended before a reply.",
-      display: true,
-      timestamp: "2026-09-08T00:00:00.000Z",
-    });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("wait", "notice", { role: "assistant", content: "wait" }),
-        ...["control", "first"].map((afterEntryId, startOrder) => {
-          const id = startOrder === 0 ? "first" : "later";
-          return {
-            eventId: id,
-            parentId: startOrder === 0 ? "wait" : "first",
-            message: createNestedToolActivity({
-              runId: "run",
-              scopeId: "attempt",
-              afterEntryId,
-              startOrder,
-              parentToolCallId: "exec",
-              toolCallId: id,
-              toolName: "read",
-              input: {},
-              result: { content: [{ type: "text", text: "done" }] },
-              isError: false,
-              startedAt: 1,
-              timestamp: 2,
-            }),
-          };
-        }),
-      ],
-      touchSessionEntry: false,
-    });
-    const raw = readTranscriptRawDelta(scope);
-    const delta = readTranscriptDisplayDelta(scope);
-    expect(raw.kind).toBe("page");
-    expect(delta.kind).toBe("page");
-    if (raw.kind !== "page" || delta.kind !== "page") {
-      throw new Error("missing transcript page");
-    }
-    const rawSeq = new Map(raw.events.map((row) => [historyEventId(row), row.seq]));
-    const history = readSessionTranscriptHistoryEvents(scope);
-    expect(history.map(historyEventId)).toEqual(["exec", "notice", "wait", "first", "later"]);
-    expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4, 5]);
-    expect(delta.events.find((row) => historyEventId(row) === "notice")).toMatchObject({
-      messageSeq: 2,
-      displayPosition: { rawSeq: rawSeq.get("notice") },
-    });
-    expect(delta.events.find((row) => historyEventId(row) === "wait")).toMatchObject({
-      messageSeq: 3,
-    });
-    const source = history[0]?.displayPosition?.source;
-    expect(source).toEqual(expect.any(String));
-    for (const [id, afterId, startOrder] of [
-      ["first", "control", 0],
-      ["later", "first", 1],
-    ] as const) {
-      const position = {
-        source,
-        rawSeq: rawSeq.get(id),
-        activity: { afterRawSeq: rawSeq.get(afterId), scopeId: "attempt", startOrder },
-      };
-      const expected = { displayPosition: position };
-      expect(history.find((row) => historyEventId(row) === id)).toMatchObject(expected);
-      expect(delta.events.find((row) => historyEventId(row) === id)).toMatchObject(expected);
-      expect(readSessionTranscriptHistoryEventById(scope, id)).toMatchObject(expected);
-      const page = readSessionTranscriptHistoryEventPage(scope, {
-        offset: id === "later" ? 0 : 1,
-        maxMessages: 1,
+  it.each([false, true])(
+    "preserves physical dispatch cuts across history pages and deltas (legacy=%s)",
+    async (legacy) => {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [transcriptMessage("exec", null, { role: "assistant", content: "exec" })],
+        touchSessionEntry: false,
       });
-      expect(page.events).toHaveLength(1);
-      expect(page.events[0]).toMatchObject(expected);
-      expect(
-        readRecentSessionTranscriptHistoryEvents(scope, {
-          maxBytes: 65536,
-          maxLines: 1,
+      await appendTranscriptEvent(scope, {
+        type: "custom",
+        id: "control",
+        parentId: "exec",
+        customType: "test",
+      });
+      await appendTranscriptEvent(scope, {
+        type: "custom_message",
+        id: "notice",
+        parentId: "control",
+        customType: "run-failed-before-reply",
+        content: "This turn ended before a reply.",
+        display: true,
+        timestamp: "2026-09-08T00:00:00.000Z",
+      });
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          transcriptMessage("wait", "notice", { role: "assistant", content: "wait" }),
+          ...["control", "first"].map((afterEntryId, startOrder) => {
+            const id = startOrder === 0 ? "first" : "later";
+            return {
+              eventId: id,
+              parentId: startOrder === 0 ? "wait" : "first",
+              message: createNestedToolActivity({
+                runId: "run",
+                scopeId: "attempt",
+                afterEntryId,
+                startOrder,
+                parentToolCallId: "exec",
+                toolCallId: id,
+                toolName: "read",
+                input: {},
+                result: { content: [{ type: "text", text: "done" }] },
+                isError: false,
+                startedAt: 1,
+                timestamp: 2,
+              }),
+            };
+          }),
+        ],
+        touchSessionEntry: false,
+      });
+      if (legacy) {
+        openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env })
+          .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
+          .run(scope.sessionId);
+      }
+      const raw = readTranscriptRawDelta(scope);
+      const delta = readTranscriptDisplayDelta(scope);
+      expect(raw.kind).toBe("page");
+      expect(delta.kind).toBe("page");
+      if (raw.kind !== "page" || delta.kind !== "page") {
+        throw new Error("missing transcript page");
+      }
+      const rawSeq = new Map(raw.events.map((row) => [historyEventId(row), row.seq]));
+      const history = readSessionTranscriptHistoryEvents(scope);
+      expect(history.map(historyEventId)).toEqual(["exec", "notice", "wait", "first", "later"]);
+      expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4, 5]);
+      expect(delta.events.find((row) => historyEventId(row) === "notice")).toMatchObject({
+        messageSeq: 2,
+        displayPosition: { rawSeq: rawSeq.get("notice") },
+      });
+      expect(delta.events.find((row) => historyEventId(row) === "wait")).toMatchObject({
+        messageSeq: 3,
+      });
+      const source = history[0]?.displayPosition?.source;
+      expect(source).toEqual(expect.any(String));
+      for (const [id, afterId, startOrder] of [
+        ["first", "control", 0],
+        ["later", "first", 1],
+      ] as const) {
+        const position = {
+          source,
+          rawSeq: rawSeq.get(id),
+          activity: { afterRawSeq: rawSeq.get(afterId), scopeId: "attempt", startOrder },
+        };
+        const expected = { displayPosition: position };
+        expect(history.find((row) => historyEventId(row) === id)).toMatchObject(expected);
+        expect(delta.events.find((row) => historyEventId(row) === id)).toMatchObject(expected);
+        expect(readSessionTranscriptHistoryEventById(scope, id)).toMatchObject(expected);
+        const page = readSessionTranscriptHistoryEventPage(scope, {
+          offset: id === "later" ? 0 : 1,
           maxMessages: 1,
-        }).events[0],
-      ).toMatchObject({ displayPosition: { rawSeq: rawSeq.get("later") } });
-    }
-    expect(delta.cursor).toBe(raw.cursor);
-    expect(delta.serializedBytes).toBe(raw.serializedBytes);
-    expect(delta.events.map(({ event, seq }) => ({ event, seq }))).toEqual(raw.events);
-    const blocked = readTranscriptDisplayDelta(scope, { maxBytes: 1 });
-    expect(blocked.kind).toBe("page");
-    if (blocked.kind !== "page") {
-      throw new Error("missing byte-blocked transcript page");
-    }
-    expect(blocked).toMatchObject({
-      activeLeafEntryId: "later",
-      events: [],
-      hasMore: true,
-      requiredBytes: Buffer.byteLength(JSON.stringify(raw.events[0]?.event), "utf8") + 1,
-      serializedBytes: 0,
-    });
-    expect(readTranscriptDisplayDelta(scope, { cursor: blocked.cursor })).toEqual(delta);
-    expect(readTranscriptDisplayDelta(scope, { cursor: delta.cursor })).toEqual({
-      kind: "page",
-      cursor: delta.cursor,
-      activeLeafEntryId: "later",
-      events: [],
-      hasMore: false,
-      serializedBytes: 0,
-    });
-  });
+        });
+        expect(page.events).toHaveLength(1);
+        expect(page.events[0]).toMatchObject(expected);
+        expect(
+          readRecentSessionTranscriptHistoryEvents(scope, {
+            maxBytes: 65536,
+            maxLines: 1,
+            maxMessages: 1,
+          }).events[0],
+        ).toMatchObject({ displayPosition: { rawSeq: rawSeq.get("later") } });
+      }
+      expect(delta.cursor).toBe(raw.cursor);
+      expect(delta.serializedBytes).toBe(raw.serializedBytes);
+      expect(delta.events.map(({ event, seq }) => ({ event, seq }))).toEqual(raw.events);
+      const blocked = readTranscriptDisplayDelta(scope, { maxBytes: 1 });
+      expect(blocked.kind).toBe("page");
+      if (blocked.kind !== "page") {
+        throw new Error("missing byte-blocked transcript page");
+      }
+      expect(blocked).toMatchObject({
+        activeLeafEntryId: "later",
+        events: [],
+        hasMore: true,
+        requiredBytes: Buffer.byteLength(JSON.stringify(raw.events[0]?.event), "utf8") + 1,
+        serializedBytes: 0,
+      });
+      expect(readTranscriptDisplayDelta(scope, { cursor: blocked.cursor })).toEqual(delta);
+      expect(readTranscriptDisplayDelta(scope, { cursor: delta.cursor })).toEqual({
+        kind: "page",
+        cursor: delta.cursor,
+        activeLeafEntryId: "later",
+        events: [],
+        hasMore: false,
+        serializedBytes: 0,
+      });
+    },
+  );
 
   it.each(["message", "custom_message"])(
     "retains an oversized newest %s without parsing excluded older payloads",

@@ -2,12 +2,16 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
+import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
+import { coerceConfig } from "../config/io.read-helpers.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
+import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
@@ -235,9 +239,9 @@ function configApplyHintForOperations(
     : "No gateway restart needed.";
 }
 
-async function loadMutationSchema(): Promise<JsonSchemaRecord | undefined> {
+async function loadMutationSchema() {
   try {
-    return (await readBestEffortRuntimeConfigSchema()).schema as JsonSchemaRecord;
+    return await readBestEffortRuntimeConfigSchema();
   } catch {
     return undefined;
   }
@@ -370,6 +374,7 @@ export async function runConfigOperations(params: {
           assertStrictConfigForMutation(
             currentConfig,
             mutationStart.writeOptions.basePluginMetadataSnapshot,
+            getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
           );
         }
         throw new Error(message);
@@ -383,7 +388,7 @@ export async function runConfigOperations(params: {
       numericObjectKeys: params.successMode === "patch",
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
-      schema: mutationSchema,
+      schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
     };
     if (merge) {
       mergeAtPath(next, operation.setPath, operation.value, pathOptions);
@@ -403,7 +408,20 @@ export async function runConfigOperations(params: {
   // Only final deletions may be replayed by the persistence owner.
   unsetPaths = unsetPaths.filter((path) => !getAtPath(next, path).found);
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({ root: next, operations });
-  let nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
+  let hasRedactedValues = false;
+  visitConfigValueTree(next, (candidate) => {
+    hasRedactedValues ||= candidate === REDACTED_SENTINEL;
+    return !hasRedactedValues;
+  });
+  let nextConfig = coerceConfig(next);
+  if (hasRedactedValues) {
+    const restored = restoreRedactedValues(next, snapshot.resolved, mutationSchema?.uiHints);
+    if (!restored.ok) {
+      throw new Error(restored.humanReadableMessage ?? "Cannot restore redacted config values.");
+    }
+    nextConfig = coerceConfig(restored.result);
+  }
+  nextConfig = normalizeConfigMutationModelRefs(nextConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   if (options.dryRun) {
     nextConfig = prepareConfigWriteTopology({
@@ -423,6 +441,7 @@ export async function runConfigOperations(params: {
     configPath: snapshot.path,
     unchanged: params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig),
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+    deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
   });
   if (validation.kind === "dry-run") {
     printConfigDryRunResult(validation.result, runtime, options.json);

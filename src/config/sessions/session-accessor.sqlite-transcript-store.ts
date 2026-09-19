@@ -88,7 +88,7 @@ export function createTranscriptEventInserter(database: OpenClawAgentDatabase, s
   );
 }
 
-function createTranscriptIdentityInserter(
+export function createTranscriptIdentityInserter(
   database: OpenClawAgentDatabase,
   sessionId: string,
   ignoreConflicts: boolean,

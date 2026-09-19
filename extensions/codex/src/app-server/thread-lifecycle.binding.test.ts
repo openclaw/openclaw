@@ -16,6 +16,7 @@ import {
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import {
   isJsonObject,
@@ -49,6 +50,7 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
+import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import {
   buildThreadResumeParams,
   startOrResumeThread as startOrResumeThreadImpl,
@@ -601,6 +603,7 @@ setupRunAttemptTestHooks();
 async function createLeasedLifecycleWireClient(
   agentDir: string,
   respond: (request: RpcRequest) => unknown,
+  transport: "stdio" | "websocket" | "unix" | "proxy" = "stdio",
 ) {
   const wire = createClientHarness();
   const appendWrites = wire.writes.push.bind(wire.writes);
@@ -628,7 +631,14 @@ async function createLeasedLifecycleWireClient(
   const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(wire.client);
   try {
     await getLeasedSharedCodexAppServerClient({
-      startOptions: { ...createThreadLifecycleAppServerOptions().start, command: process.execPath },
+      startOptions: {
+        ...createThreadLifecycleAppServerOptions().start,
+        command: process.execPath,
+        transport: transport === "proxy" ? "stdio" : transport,
+        args: transport === "proxy" ? ["app-server", "proxy"] : ["app-server"],
+        ...(transport === "websocket" ? { url: "ws://127.0.0.1:8123" } : {}),
+        ...(transport === "unix" ? { url: "unix:///tmp/synthetic-codex.sock" } : {}),
+      },
       authProfileId: null,
       agentDir,
       config: {},
@@ -977,236 +987,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(error).toBeInstanceOf(AgentHarnessPreflightError);
     expect(error).toMatchObject({ scope: undefined });
   });
-  it.each([
-    { developerInstructions: "replacement policy", fault: "none" },
-    { developerInstructions: "", fault: "none" },
-    { developerInstructions: "replacement policy", fault: "unload" },
-    { developerInstructions: "replacement policy", fault: "client retired" },
-    { developerInstructions: "replacement policy", fault: "unknown write" },
-    { developerInstructions: "replacement policy", fault: "retirement failure" },
-    { developerInstructions: "replacement policy", fault: "binding commit" },
-  ])(
-    "refreshes ordinary generic policy before admitting a resumed turn: $developerInstructions / $fault",
-    async ({ developerInstructions, fault }) => {
-      const sessionFile = path.join(tempDir, "ordinary-policy.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const threadId = "ordinary-policy";
-      const response = threadStartResult(threadId);
-      const requests: RpcRequest[] = [];
-      const wire = await createLeasedLifecycleWireClient(path.join(tempDir, "agent"), (request) => {
-        requests.push(request);
-        if (request.method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (request.method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (request.method === "thread/read") {
-          return {
-            thread: {
-              ...response.thread,
-              status: { type: fault === "unload" ? "idle" : "notLoaded" },
-            },
-          };
-        }
-        if (request.method === "thread/resume") {
-          if (fault === "client retired") {
-            retireSharedCodexAppServerClientIfCurrent(wire.client);
-          }
-          return response;
-        }
-        if (request.method === "thread/inject_items") {
-          if (fault === "unknown write" || fault === "retirement failure") {
-            throw new CodexAppServerRpcError(
-              { code: -32603, message: "policy flush failed after write" },
-              "thread/inject_items",
-            );
-          }
-          return {};
-        }
-        if (request.method === "thread/unsubscribe") {
-          return { status: "unsubscribed" };
-        }
-        throw new Error(`unexpected method: ${request.method}`);
-      });
-      await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
-      const before = await readCodexAppServerBinding(sessionFile);
-      if (fault === "binding commit") {
-        vi.spyOn(testCodexAppServerBindingStore, "mutate").mockRejectedValueOnce(
-          new Error("binding commit failed"),
-        );
-      }
-      try {
-        const run = startOrResumeThread({
-          client: wire.client,
-          params: {
-            ...createParams(sessionFile, workspaceDir),
-            agentDir: path.join(tempDir, "agent"),
-          },
-          cwd: workspaceDir,
-          dynamicTools: [],
-          appServer: createThreadLifecycleAppServerOptions(),
-          userMcpServersEnabled: false,
-          developerInstructions,
-          signal: new AbortController().signal,
-          ...(fault === "retirement failure"
-            ? {
-                abandonClient: async () => {
-                  throw new Error("client retirement failed");
-                },
-              }
-            : {}),
-        });
-        if (fault !== "none") {
-          await expect(run).rejects.toBeInstanceOf(AgentHarnessPreflightError);
-          await expect(run).rejects.toMatchObject({
-            name: "CodexThreadPolicyHandoffError",
-            scope: undefined,
-            outcome:
-              fault === "unknown write" || fault === "retirement failure"
-                ? "unknown"
-                : fault === "binding commit"
-                  ? "acknowledged"
-                  : "not-written",
-          });
-          expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
-          expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
-          expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(
-            fault === "unknown write" ||
-              fault === "retirement failure" ||
-              fault === "binding commit"
-              ? 1
-              : 0,
-          );
-          expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
-          return;
-        }
-        await run;
-        expect(requests.map(({ method }) => method)).toEqual([
-          "config/read",
-          "configRequirements/read",
-          "thread/read",
-          "thread/resume",
-          "thread/inject_items",
-        ]);
-        const policy = JSON.stringify(requests.at(-1)?.params);
-        expect(policy).toContain(
-          developerInstructions || "earlier OpenClaw generic policy is withdrawn",
-        );
-        expect(policy).toContain("It replaces earlier OpenClaw-supplied generic policy");
-        expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
-      } finally {
-        releaseLeasedSharedCodexAppServerClient(wire.client);
-        wire.client.close();
-      }
-    },
-  );
-
-  it.each(
-    ["idle", "systemError"].flatMap((nativeStatus) =>
-      ["initial policy", "replacement policy", ""].map((developerInstructions) => ({
-        nativeStatus,
-        developerInstructions,
-      })),
-    ),
-  )(
-    "keeps ordinary warm configuration honest across $nativeStatus and policy $developerInstructions",
-    async ({ nativeStatus, developerInstructions }) => {
-      const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      const threadId = "ordinary-warm-policy";
-      const response = threadStartResult(threadId);
-      const methods: string[] = [];
-      let subscribed = true;
-      const wire = await createLeasedLifecycleWireClient(path.join(tempDir, "agent"), (request) => {
-        methods.push(request.method);
-        if (request.method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (request.method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (request.method === "thread/start" || request.method === "thread/resume") {
-          if (!subscribed && nativeStatus === "idle") {
-            wire.send({
-              method: "thread/status/changed",
-              params: { threadId, status: { type: "notLoaded" } },
-            });
-          }
-          subscribed = true;
-          return response;
-        }
-        if (request.method === "thread/read") {
-          return { thread: { ...response.thread, status: { type: nativeStatus } } };
-        }
-        if (request.method === "thread/unsubscribe") {
-          subscribed = false;
-          return { status: "unsubscribed" };
-        }
-        if (request.method === "thread/inject_items") {
-          return {};
-        }
-        throw new Error(`unexpected method: ${request.method}`);
-      });
-      const common = {
-        client: wire.client,
-        params: {
-          ...createParams(sessionFile, workspaceDir),
-          agentDir: path.join(tempDir, "agent"),
-        },
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-        userMcpServersEnabled: false,
-        signal: new AbortController().signal,
-      };
-      try {
-        const first = await startOrResumeThread({
-          ...common,
-          developerInstructions: "initial policy",
-        });
-        await retainCodexAppServerLiveThread(
-          wire.client,
-          first.threadId,
-          undefined,
-          first.liveThreadConfigFingerprint,
-        );
-        const resume = startOrResumeThread({ ...common, developerInstructions });
-        if (nativeStatus === "systemError" && developerInstructions !== "initial policy") {
-          await expect(resume).rejects.toThrow("did not confirm unloading");
-          expect(methods).not.toContain("thread/inject_items");
-          expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
-          return;
-        }
-        const second = await resume;
-        expect(second.threadId).toBe(first.threadId);
-        expect(methods).toEqual(
-          developerInstructions === "initial policy"
-            ? [
-                "config/read",
-                "configRequirements/read",
-                "thread/start",
-                "config/read",
-                "configRequirements/read",
-              ]
-            : [
-                "config/read",
-                "configRequirements/read",
-                "thread/start",
-                "config/read",
-                "configRequirements/read",
-                "thread/read",
-                "thread/unsubscribe",
-                "thread/resume",
-                "thread/inject_items",
-              ],
-        );
-      } finally {
-        releaseLeasedSharedCodexAppServerClient(wire.client);
-        wire.client.close();
-      }
-    },
-  );
+  registerThreadPolicyRefreshTests({
+    createParams,
+    createThreadLifecycleAppServerOptions,
+    createLeasedLifecycleWireClient,
+    startOrResumeThread,
+    writeCodexAppServerBinding,
+  });
 
   it.each(["openai", "lmstudio"])(
     "preserves %s native thread identity across start and resume",
@@ -1770,70 +1557,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
-  it("rebinds a resumed thread to its replacement physical client before warm reuse", async () => {
-    const sessionFile = path.join(tempDir, "replacement-client-session.jsonl");
-    const workspaceDir = path.join(tempDir, "replacement-client-workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-reused",
-      clientId: "client-before-restart",
-      cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
-    });
-    const respond = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/resume") {
-        return threadStartResult("thread-reused");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond,
-      persistedThreads: ["thread-reused"],
-    });
-    const { client, request } = fixture;
-    const common = {
-      client,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
-    };
-
-    const resumed = await startOrResumeThread(common);
-
-    expect(resumed.clientId).toBe(client.getInstanceId());
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-reused",
-      clientId: client.getInstanceId(),
-    });
-    await retainCodexAppServerLiveThread(
-      client,
-      resumed.threadId,
-      undefined,
-      resumed.liveThreadConfigFingerprint,
-    );
-    await expect(startOrResumeThread(common)).resolves.toMatchObject({
-      threadId: "thread-reused",
-      clientId: client.getInstanceId(),
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-      "config/read",
-      "configRequirements/read",
-    ]);
-  });
-
   it.each([
     {
       label: "loaded native thread",
@@ -1899,14 +1622,21 @@ describe("Codex app-server thread lifecycle bindings", () => {
     async ({ options, error }) => {
       const fixture = await createManualResumeFixture(options);
       const before = await readCodexAppServerBinding(fixture.sessionFile);
-      const handlers = fixture.notifications.length;
       try {
+        await resolveCodexNativeSkillIsolation({
+          client: fixture.client,
+          cwd: fixture.common.cwd,
+          codexHome: fixture.common.appServer.start.env?.CODEX_HOME,
+          home: fixture.common.appServer.start.env?.HOME,
+          userProfile: fixture.common.appServer.start.env?.USERPROFILE,
+        });
+        const handlers = [...fixture.notifications];
         await expect(fixture.start()).rejects.toThrow(error);
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
         );
-        expect(fixture.notifications).toHaveLength(handlers);
+        expect([...fixture.notifications]).toEqual(handlers);
       } finally {
         fixture.close();
       }
@@ -2225,94 +1955,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
     },
   );
-
-  it("reuses an isolated retained thread without dropping native skill isolation", async () => {
-    vi.stubEnv("HOME", tempDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "isolated-state"));
-    const sessionFile = path.join(tempDir, "warm-isolated-session.jsonl");
-    const workspaceDir = path.join(tempDir, "warm-isolated-workspace");
-    const personalSkill = path.join(tempDir, ".claude", "skills", "personal", "SKILL.md");
-    await fs.mkdir(path.dirname(personalSkill), { recursive: true });
-    await fs.writeFile(personalSkill, "personal");
-    const personalSkillRealPath = await fs.realpath(personalSkill);
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "skills/list") {
-        return {
-          data: [
-            {
-              cwd: workspaceDir,
-              errors: [],
-              skills: [
-                {
-                  name: "personal",
-                  description: "Personal skill",
-                  path: personalSkillRealPath,
-                  scope: "user",
-                  enabled: true,
-                },
-              ],
-            },
-          ],
-        };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-warm-isolated");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const client = {
-      getInstanceId: () => "client-warm-isolated",
-      request,
-      addNotificationHandler: () => () => undefined,
-      addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
-    } as never;
-    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
-    const common = {
-      client,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      userMcpServersEnabled: false,
-    };
-
-    const started = await startOrResumeThread(common);
-    await expect(
-      retainCodexAppServerLiveThread(
-        client,
-        started.threadId,
-        undefined,
-        started.liveThreadConfigFingerprint,
-      ),
-    ).resolves.toBe(true);
-    await expect(startOrResumeThread(common)).resolves.toMatchObject({
-      threadId: "thread-warm-isolated",
-      lifecycle: { action: "resumed" },
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "skills/list",
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-      "config/read",
-      "configRequirements/read",
-    ]);
-    const startRequest = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
-    expect(startRequest).toMatchObject({
-      config: {
-        "skills.include_instructions": false,
-        "skills.config": [{ path: personalSkillRealPath, enabled: false }],
-      },
-    });
-  });
 
   it("refreshes model and workspace ownership when reusing a turn-mutable native session", async () => {
     const sessionFile = path.join(tempDir, "warm-model-workspace.jsonl");

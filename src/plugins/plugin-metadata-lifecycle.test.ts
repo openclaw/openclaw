@@ -226,14 +226,18 @@ it("fences admission before retirement while an admitted sibling stays usable", 
 function retainDistinctMetadataOwners() {
   const firstCache = getPluginCache();
   const first = retainGatewayPluginMetadata();
-  onTestFinished(() => first.close());
+  onTestFinished(async () => {
+    await first.close();
+  });
   const firstSnapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
   first.publish(firstSnapshot);
   selectCurrentPluginMetadataCache(firstCache);
   setGatewayPluginMetadataSnapshot(firstSnapshot);
   const secondCache = createPluginCache();
   const second = withPluginCache(secondCache, () => retainGatewayPluginMetadata());
-  onTestFinished(() => second.close());
+  onTestFinished(async () => {
+    await second.close();
+  });
   const secondSnapshot = second.runBootstrap(() => createPluginMetadataSnapshotFixture());
   second.publish(secondSnapshot);
   selectCurrentPluginMetadataCache(secondCache);
@@ -260,7 +264,7 @@ it("keeps final inventory usable before joining concurrent cache retirements", a
   const useFinalDependency = secondInstance.wrap(() => "available");
   const firstFinal = vi.fn();
   let sharedClosed = false;
-  const lastFinal = vi.fn(async (retire: () => Promise<void>) => {
+  const lastFinal = vi.fn<NonNullable<Parameters<typeof second.close>[0]>>(async (retire) => {
     finalEntered.resolve();
     await finalReleased.promise;
     await retire();

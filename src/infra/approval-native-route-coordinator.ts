@@ -671,6 +671,14 @@ export type ApprovalNativeRouteCoordinator = {
   close: () => void;
 };
 
+/** Reads native route activity from the owning Gateway coordinator, else the process default. */
+export function hasActiveNativeApprovalRoute(
+  coordinator: ApprovalNativeRouteCoordinator | undefined,
+  params: Parameters<typeof hasActiveApprovalNativeRouteRuntime>[0],
+): boolean {
+  return coordinator?.hasActiveRuntime(params) ?? hasActiveApprovalNativeRouteRuntime(params);
+}
+
 /** Creates an instance-local route coordinator so Gateway runtimes cannot share account state. */
 export function createApprovalNativeRouteCoordinator(): ApprovalNativeRouteCoordinator {
   const state = createApprovalNativeRouteCoordinatorState();

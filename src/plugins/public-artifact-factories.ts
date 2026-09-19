@@ -1,4 +1,12 @@
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
+
+export type BundledPublicArtifactParams = {
+  dirName: string;
+  pluginId: string;
+  env?: NodeJS.ProcessEnv;
+  owner?: Pick<PluginManifestRecord, "id" | "rootDir" | "source" | "origin">;
+};
 
 /** Factory order is observable when plugins initialize and when their entries are consumed. */
 export function collectPublicArtifactFactories<T>(params: {
@@ -37,17 +45,19 @@ export function collectPublicArtifactFactories<T>(params: {
 }
 
 /** Loads a typed artifact surface without activating the plugin's runtime entry. */
-export function loadBundledPublicArtifactEntries<T extends object>(params: {
-  dirName: string;
-  pluginId: string;
-  artifactCandidates: readonly string[];
-  suffix: string;
-  isArtifact: (value: unknown) => value is T;
-  partialFailureLabel?: string;
-}): Array<T & { pluginId: string }> | null {
+export function loadBundledPublicArtifactEntries<T extends object>(
+  params: BundledPublicArtifactParams & {
+    artifactCandidates: readonly string[];
+    suffix: string;
+    isArtifact: (value: unknown) => value is T;
+    partialFailureLabel?: string;
+  },
+): Array<T & { pluginId: string }> | null {
   const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
     dirName: params.dirName,
     artifactCandidates: params.artifactCandidates,
+    env: params.env,
+    owner: params.owner,
   });
   if (!mod) {
     return null;

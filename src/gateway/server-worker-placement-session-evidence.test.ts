@@ -92,7 +92,7 @@ describe("worker placement session evidence", () => {
     { count: 12, prompt: "saved prompt ".repeat(16_384) },
     { count: 401, prompt: "" },
   ])(
-    "does not duplicate exact-current payloads for $count placements",
+    "reads bounded metadata without duplicating exact-current payloads for $count placements",
     async ({ count, prompt }) => {
       const stateDir = tempDirs.make("openclaw-placement-exact-first-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -114,18 +114,27 @@ describe("worker placement session evidence", () => {
           placements.map(() => "current"),
         );
         const database = openOpenClawAgentDatabase({ agentId: "main" });
-        const statements = trackSqliteStatementExecutions(database.db, ["fallback"], (sql) => {
-          const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");
-          return normalized.includes('from "session_nodes"') &&
-            normalized.includes('where "current_session_id" in')
-            ? "fallback"
-            : null;
-        });
+        const statements = trackSqliteStatementExecutions(
+          database.db,
+          ["exact", "fallback"],
+          (sql) => {
+            const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");
+            if (!normalized.includes('from "session_nodes"')) {
+              return null;
+            }
+            if (normalized.includes('where "session_key" in')) {
+              return "exact";
+            }
+            return normalized.includes('where "current_session_id" in') ? "fallback" : null;
+          },
+        );
         try {
           const resolve = await createWorkerPlacementSessionEvidenceResolver(placements);
           await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
             placements.map(() => "current"),
           );
+          expect(statements.rowCounts.exact).toBe(count);
+          expect(statements.textBytes.exact).toBeLessThan(count * 512);
           expect(
             statements.textBytes.fallback,
             JSON.stringify({

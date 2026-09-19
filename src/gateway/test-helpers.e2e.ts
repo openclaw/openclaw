@@ -4,9 +4,12 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectNestedErrorCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "../../packages/gateway-client/src/websocket.js";
 import {
   type HelloOk,
   type ModelCatalogTarget,
@@ -36,8 +39,10 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { reserveGatewayTestListener } from "./test-helpers.listener.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
 export async function getGatewayE2ePortBlock(): Promise<number> {
@@ -73,7 +78,10 @@ export async function connectGatewayClient(params: {
   maxProtocol?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
+  signal?: AbortSignal;
+  verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
 }) {
+  params.signal?.throwIfAborted();
   const role = params.role ?? "operator";
   const scopes = params.scopes ?? (role === "node" ? [] : undefined);
   const platform = params.platform ?? process.platform;
@@ -128,6 +136,8 @@ export async function connectGatewayClient(params: {
       timeoutMessage: params.timeoutMessage ?? "gateway connect timeout",
       closeMessage: "gateway closed during connect",
       unrefTimeout: true,
+      signal: params.signal,
+      verifyCleanup: params.verifyCleanup,
     },
   );
 }
@@ -146,7 +156,7 @@ type DeviceAuthConnectResponse = {
 
 function waitForDeviceAuthMessage<T>(
   ws: WebSocket,
-  read: (data: WebSocket.RawData) => T | undefined,
+  read: (data: RawData) => T | undefined,
   timeoutMessage: string,
 ): Promise<T> {
   const message = new Promise<T>((resolve, reject) => {
@@ -162,7 +172,7 @@ function waitForDeviceAuthMessage<T>(
     };
     const onClose = (code: number, reason: Buffer) =>
       onError(new Error(`closed ${code}: ${rawDataToString(reason)}`));
-    const onMessage = (data: WebSocket.RawData) => {
+    const onMessage = (data: RawData) => {
       try {
         const value = read(data);
         if (value !== undefined) {
@@ -296,6 +306,7 @@ export async function startGatewayWithClient(params: {
     "OPENCLAW_CONFIG_PATH",
   ]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let listener: Awaited<ReturnType<typeof reserveGatewayTestListener>> | undefined;
   try {
     await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
     process.env.OPENCLAW_CONFIG_PATH = params.configPath;
@@ -303,13 +314,15 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = params.port ?? (await getGatewayE2ePortBlock());
-    const startedServer = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token: params.token },
-      controlUiEnabled: false,
-      hotReloadRecovery: params.hotReloadRecovery,
-    });
+    const port = params.port ?? (listener = await reserveGatewayTestListener()).port;
+    const start = () =>
+      startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: params.token },
+        controlUiEnabled: false,
+        hotReloadRecovery: params.hotReloadRecovery,
+      });
+    const startedServer = await (listener ? listener.start(start) : start());
     server = startedServer;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
@@ -341,7 +354,18 @@ export async function startGatewayWithClient(params: {
         throw error;
       },
       async () => {
+        if (
+          !server &&
+          collectNestedErrorCandidates(error).some(
+            (candidate) => candidate instanceof GatewayStartupCleanupError,
+          )
+        ) {
+          await listener?.closeUnadopted();
+          // Failed kernel cleanup retains selectors, but cannot own an unadopted listener.
+          return;
+        }
         await server?.close({ reason: "gateway E2E client setup failed" });
+        await listener?.closeUnadopted();
         gatewayStartupEnv.restore();
       },
     );

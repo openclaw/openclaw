@@ -150,9 +150,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
+    expect(gemfile).toContain('gem "fastlane", "2.239.0"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.238.0)");
+    expect(lockfile).toContain("fastlane (2.239.0)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -598,6 +598,186 @@ end
     ]);
   });
 
+  it.each([
+    {
+      name: "existing access disappears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      disappear: true,
+      error: "not assigned",
+    },
+    {
+      name: "other access appears at final readback",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+      finalBroaden: true,
+      error: "outside",
+    },
+    {
+      name: "automatic access already verified",
+      automatic: true,
+      assigned: ["group-id"],
+      writes: 0,
+    },
+    { name: "manual access already verified", automatic: false, assigned: ["group-id"], writes: 0 },
+    {
+      name: "automatic flag is not access proof",
+      automatic: true,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "unknown automatic flag fails closed",
+      automatic: null,
+      assigned: [],
+      writes: 0,
+      error: "not assigned",
+    },
+    {
+      name: "existing other access blocks mutation",
+      automatic: false,
+      assigned: ["other-id"],
+      writes: 0,
+      error: "outside",
+    },
+    { name: "manual missing access assigns once", automatic: false, assigned: [], writes: 1 },
+    {
+      name: "readback failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      readError: true,
+      error: "read failed",
+    },
+    {
+      name: "assignment failure propagates",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      writeError: true,
+      error: "write failed",
+    },
+    {
+      name: "target changes before assignment",
+      automatic: false,
+      assigned: [],
+      writes: 0,
+      flip: true,
+      error: "must be internal",
+    },
+    {
+      name: "other access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      broaden: true,
+      error: "outside",
+    },
+    {
+      name: "other automatic access appears after assignment",
+      automatic: false,
+      assigned: [],
+      writes: 1,
+      otherAutomatic: true,
+      error: "disable automatic",
+    },
+  ])("reconciles TestFlight access: $name", (scenario) => {
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const verifier = functionDefinition(
+      readFastfile(),
+      "assign_and_verify_ci_testflight_internal_group!",
+    );
+    const source = `
+require "json"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+module Spaceship
+  class ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+$scenario = JSON.parse(ARGV.fetch(0))
+$writes = 0
+$reads = 0
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    raise "read failed" if $scenario["readError"]
+    builds
+  end
+end
+Build = Struct.new(:id, :app_version, :version, :platform) do
+  def add_beta_groups(beta_groups:)
+    $writes += 1
+    raise "write failed" if $scenario["writeError"]
+    raise "duplicate assignment rejected" if beta_groups.any? { |group| group.builds.include?(self) }
+    raise "automatic assignment rejected" if beta_groups.any? { |group| group.has_access_to_all_builds != false }
+    raise "wrong immutable group" unless beta_groups.map(&:id) == ["group-id"]
+    beta_groups.each { |group| group.builds << self }
+    $groups.last.builds << self if $scenario["broaden"]
+    $groups.last.has_access_to_all_builds = true if $scenario["otherAutomatic"]
+  end
+end
+App = Struct.new(:build) do
+  def get_beta_groups
+    $reads += 1
+    $groups.first.is_internal_group = false if $scenario["flip"] && $reads >= 3
+    $groups.first.builds.clear if $scenario["disappear"] && $reads >= 3
+    $groups.last.builds << build if $scenario["finalBroaden"] && $reads >= 3
+    $groups
+  end
+  def get_builds(filter:, includes:)
+    raise "wrong build query" unless filter == { "preReleaseVersion.version" => "2026.9.20", version: "1" } && includes == "preReleaseVersion"
+    [build]
+  end
+end
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  $app
+end
+${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
+${verifier}
+build = Build.new("build-id", "2026.9.20", "1", "IOS")
+$groups = [
+  Group.new("group-id", "Internal", true, $scenario["automatic"], []),
+  Group.new("other-id", "Other", true, false, [])
+]
+$groups.each { |group| group.builds << build if $scenario.fetch("assigned").include?(group.id) }
+$app = App.new(build)
+begin
+  result = assign_and_verify_ci_testflight_internal_group!(group_id: "group-id", app_store_version: "2026.9.20", build_number: "1")
+  puts JSON.generate({ group: result.fetch(:group).id, writes: $writes })
+rescue => error
+  puts JSON.generate({ error: error.message, writes: $writes })
+end
+`;
+    const result = spawnSync("ruby", ["-e", source, JSON.stringify(scenario)], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as { group?: string; error?: string; writes: number };
+    expect(output.writes).toBe(scenario.writes);
+    if (scenario.error) {
+      expect(output.error).toContain(scenario.error);
+    } else {
+      expect(output).toEqual({ group: "group-id", writes: scenario.writes });
+    }
+  });
+
   it("freshly resolves and directly assigns the exact internal group to the uploaded build", () => {
     const selector = functionDefinition(
       readFastfile(),
@@ -647,6 +827,8 @@ def resolve_app_store_connect_app(app_identifier:, app_id:)
   $fresh_app
 end
 ${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
 ${verifier}
 
 def run_case(label, post_groups:, app_builds:)

@@ -2,9 +2,11 @@ import { expect, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-manager.js";
+import type * as RegistryPersistence from "./subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 type GatewayRequest = { method?: string };
@@ -43,6 +45,28 @@ export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
   fallback = {} as TResult,
 ): void {
   mock.mockImplementation(createGatewayMethodMock(responses, fallback));
+}
+
+export function createSubagentPersistenceMock(
+  methods: Pick<
+    typeof RegistryPersistence,
+    "persistSubagentRunsToDisk" | "persistSubagentRunsToDiskOrThrow" | "restoreSubagentRunsFromDisk"
+  >,
+) {
+  const listeners = new Set<() => void>();
+  const publishAfter =
+    <Args extends unknown[], Result>(operation: (...args: Args) => Result) =>
+    (...args: Args): Result => {
+      const result = operation(...args);
+      notifyListeners(listeners, undefined);
+      return result;
+    };
+  return {
+    onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
+    persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
+    persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
+    restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
+  };
 }
 
 export type SessionEntryFixture = Partial<InternalSessionEntry> & {

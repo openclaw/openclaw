@@ -209,17 +209,116 @@ it("registered plugin service logger projects ordered native argument masks into
   expect(JSON.stringify(result.records)).not.toContain("PRIVATE_VALUE");
 });
 
-it("registered plugin service logger masks opaque credential headers with the default policy", async () => {
+it("registered plugin service logger preserves default credential and benign field handling", async () => {
   const result = await logFromPlugin("header proof", {
     "x-pomerium-jwt-assertion": "opaque-value",
+    bare: "zQ7mL2rV9aN4cT6xH8pS1dF3kJ5uW0yB7eG2nR9i",
+    ordinary: "worker finished normally",
   });
   expect(result.records).toHaveLength(1);
   expect(result.console).toHaveLength(1);
-  expect(result.records[0]["1"]["x-pomerium-jwt-assertion"]).toBe("***");
-  expect(result.console[0]["x-pomerium-jwt-assertion"]).toBe("***");
+  for (const record of [result.records[0]["1"], result.console[0]]) {
+    expect(record).toMatchObject({
+      "x-pomerium-jwt-assertion": "***",
+      bare: "zQ7mL2…nR9i",
+      ordinary: "worker finished normally",
+    });
+  }
   expect(JSON.stringify(result.records)).not.toContain("opaque-value");
   expect(JSON.stringify(result.console)).not.toContain("opaque-value");
 });
+
+it.each([
+  { key: "Kam_abcdefghij", expected: "K***", registered: undefined, masked: "am_abcdefghij" },
+  {
+    key: "https://abc def:opaque@host.invalid",
+    expected: "https://***:***@host.invalid",
+    registered: "abc def",
+    masked: "opaque",
+  },
+])("registered plugin logger preserves serialized property-name masks: $key", async (fixture) => {
+  if (fixture.registered) {
+    registerSecretValueForRedaction(fixture.registered);
+  }
+  const result = await logFromPlugin("ordinary record", { [fixture.key]: "benign" });
+  for (const record of [result.records[0]["1"], result.console[0]]) {
+    expect(record[fixture.expected]).toBe("benign");
+    expect(Object.hasOwn(record, fixture.key)).toBe(false);
+  }
+  expect(JSON.stringify(result.records)).not.toContain(fixture.masked);
+  expect(JSON.stringify(result.console)).not.toContain(fixture.masked);
+});
+
+it.each([":", "="])(
+  "registered plugin logger masks line-separated JWT header diagnostics (%s)",
+  async (separator) => {
+    const result = await logFromPlugin(
+      `x-pomerium-jwt-assertion${separator} opaque7\nfollowing-diagnostic-line`,
+    );
+    expect(result.records).toHaveLength(1);
+    expect(result.console).toHaveLength(1);
+    for (const record of [...result.records, ...result.console]) {
+      expect(record.message).not.toContain("opaque");
+      expect(record.message).toContain(`x-pomerium-jwt-assertion${separator} ***`);
+    }
+  },
+);
+
+it.each([
+  {
+    name: "unchanged audit fields",
+    fields: { kind: "forwarded", host: "example.invalid", substituted: false },
+    patterns: [],
+    expected: '{"kind":"forwarded","host":"example.invalid","substituted":false}',
+  },
+  {
+    name: "colliding masked property names",
+    fields: { keyA: "first", keyB: "last" },
+    patterns: ["/key[AB]/g"],
+    expected: '{"***":"last"}',
+  },
+  {
+    name: "masked integer property order",
+    fields: { "0": "zero", "1": "one", other: "tail" },
+    patterns: ['/"(0)":"zero"/g'],
+    expected: '{"1":"one","***":"zero","other":"tail"}',
+  },
+  {
+    name: "a masked surrogate half",
+    fields: { value: "😀" },
+    patterns: [String.raw`/\uDE00/g`],
+    expected: String.raw`{"value":"\ud83d***"}`,
+  },
+])("registered plugin logger preserves canonical file bytes for $name", async (fixture) => {
+  const result = await logFromPlugin("canonical proof", fixture.fields, fixture.patterns);
+  expect(result.lines).toHaveLength(1);
+  expect(result.lines[0]).toContain(`"1":${fixture.expected}`);
+  expect(result.records[0]["1"]).toEqual(JSON.parse(fixture.expected));
+});
+
+it.each([
+  { patterns: [], one: "one" },
+  { patterns: ['/"1":"(one)","0":"zero"/g'], one: "***" },
+])(
+  "registered plugin logger preserves canonical metadata-only native values: $patterns",
+  async ({ patterns, one }) => {
+    let conversions = 0;
+    class NativeValue {
+      toJSON() {
+        conversions += 1;
+        return new Proxy({ 0: "zero", 1: "one" }, { ownKeys: () => ["1", "0"] });
+      }
+    }
+    const result = await logFromPlugin("", undefined, patterns, (logger) => {
+      logger.info({ value: new NativeValue() });
+    });
+    expect(conversions).toBe(1);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].message).toBeUndefined();
+    expect(result.records[0]["1"].value).toEqual({ 0: "zero", 1: one });
+    expect(result.lines[0]).toContain(`"value":{"0":"zero","1":"${one}"}`);
+  },
+);
 
 it("registered plugin service logger protects a credential-header receiver before one file conversion", async () => {
   let conversions = 0;
@@ -376,6 +475,18 @@ it.each([
   {
     fields: { text: "abcd-efgh-ijkl-mnop", next: "SECOND_PRIVATE_VALUE" },
     patterns: ['/"text":"abcd-e…mnop","next":"(SECOND_PRIVATE_VALUE)"/g'],
+  },
+  {
+    fields: {
+      alpha: "FIRST_PRIVATE_VALUE_1234567890",
+      beta: "OTHER_PRIVATE_VALUE_0987654321",
+      next: "SECOND_PRIVATE_VALUE",
+    },
+    patterns: [
+      "FIRST_PRIVATE_VALUE_1234567890",
+      "OTHER_PRIVATE_VALUE_0987654321",
+      '/"alpha":"FIRST_…7890","beta":"OTHER_…4321","next":"(SECOND_PRIVATE_VALUE)"/g',
+    ],
   },
   {
     fields: { publicShare: { id: "ABCDEFGHIJKLMNOPQRSTUVWX" }, next: "SECOND_PRIVATE_VALUE" },

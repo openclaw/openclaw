@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 type ManagedSystemdPostExitState = {
   activeState: string;
@@ -24,6 +27,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
   launchdTeardown?: {
     bootoutDelayMs?: number;
+    waitForNativeTimeout?: boolean;
     clockEachCommandMs?: number;
     loadedPrints?: number;
     pendingBootstrapFailures?: number;
@@ -293,18 +297,19 @@ export function createManagedServiceManagerFixtureScript(params: {
   options?: ManagedServiceManagerBoundaryOptions;
 }): string {
   const { commandsPath, kind, options, parentPid, statePath } = params;
-  return `#!${process.execPath}
+  return `#!${testNodeExecPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 fs.appendFileSync(${JSON.stringify(commandsPath)}, args.join(" ") + "\\n");
 const action = args.find((arg) => ["show", "stop", "reset-failed", "start", "print", "disable", "bootout", "enable", "bootstrap", "kickstart"].includes(arg));
 void (async () => {
+  const { isPidDefinitelyDead } = action === ${JSON.stringify(kind === "systemd" ? "stop" : "print")}
+    ? await import(${JSON.stringify(new URL("../shared/pid-alive.ts", import.meta.url).href)})
+    : {};
   if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
     ${managedServiceStateUpdateScript(statePath, "state.parked = true")};
-    for (;;) {
-      try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
-    }
+    while (!isPidDefinitelyDead(${parentPid})) sleep(10);
     sleep(${options?.systemdStopDelayMs ?? 0});
     ${managedServiceStateUpdateScript(
       statePath,
@@ -383,8 +388,7 @@ if (${JSON.stringify(kind)} === "systemd") {
     } else state.restored = true;
   }
   if (action === "print") {
-    let parentAlive = false;
-    try { process.kill(${parentPid}, 0); parentAlive = true; } catch {}
+    const parentAlive = !isPidDefinitelyDead(${parentPid});
     if (state.parked && !state.restored && !parentAlive) {
       if (state.loadedPrintsRemaining > 0) {
         state.loadedPrintsRemaining -= 1;
@@ -408,7 +412,10 @@ if (${JSON.stringify(kind)} === "systemd") {
 }
   `,
   )};
-  if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
+  if (action === "bootout" && ${Boolean(options?.launchdTeardown?.bootoutDelayMs || options?.launchdTeardown?.waitForNativeTimeout)}) {
+    if (${options?.launchdTeardown?.waitForNativeTimeout === true}) {
+      while (!fs.existsSync(${JSON.stringify(statePath + ".native-timeout")})) sleep(5);
+    }
     await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
     ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
   }

@@ -16,3 +16,4 @@ export const createWebSocketStream: typeof import("ws").createWebSocketStream = 
 
 export type WebSocket = import("ws").WebSocket;
 export type WebSocketServer = import("ws").WebSocketServer;
+export type { ClientOptions, Data, RawData } from "ws";

@@ -4,19 +4,17 @@ import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/a
 import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/subagent-announce.runtime.js";
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   markRequesterTurnYielded,
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { testing as registryTesting } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import * as transcriptArchive from "../../config/sessions/session-accessor.sqlite-archive.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { findTaskByRunId, getTaskById } from "../../tasks/runtime-internal.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
@@ -24,7 +22,7 @@ import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-s
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 const chatSend = vi.hoisted(() => vi.fn<GatewayRequestHandler>());
-vi.mock("./chat.js", () => ({ chatHandlers: { "chat.send": chatSend } }));
+vi.mock("./chat-send-external-entry.js", () => ({ handleDirectExternalChatSend: chatSend }));
 
 const fixture = useSubagentControlFixture();
 afterEach(() => {
@@ -34,6 +32,7 @@ afterEach(() => {
 
 it("resumes a yielded child through sessions.send and wakes its original parent after the same batch settles", async () => {
   vi.useFakeTimers();
+  const archiveRead = vi.spyOn(transcriptArchive, "runSqliteTranscriptArchiveReadWorker");
   const requesterSessionKey = "agent:main:main";
   const childSessionKey = "agent:main:subagent:paused-child";
   const siblingSessionKey = "agent:main:subagent:completed-sibling";
@@ -41,6 +40,31 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   const nextRunId = "resumed-child-run";
   const siblingRunId = "sibling-run";
   const requesterTurnRunId = "parent-turn";
+  const expectCompletedRun = (runId: string, resultText: string) => {
+    const entry = expectDefined(subagentRuns.get(runId), `completed run ${runId}`);
+    expect(entry).toMatchObject({
+      execution: { status: "terminal", outcome: { status: "ok" } },
+      completion: { resultText },
+      cleanupCompletedAt: expect.any(Number),
+    });
+  };
+  const expectSharedRequesterWake = (runIds: string[], batchRunIds: string[]) => {
+    const wakes = runIds.map(
+      (runId) => expectDefined(subagentRuns.get(runId), `wake owner ${runId}`).requesterSettleWake,
+    );
+    for (const wake of wakes) {
+      expect(wake).toMatchObject({
+        batchRunIds: batchRunIds.toSorted(),
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      });
+    }
+    const nextAttemptAt = wakes[0]?.nextAttemptAt;
+    expect(Number.isFinite(nextAttemptAt), "durable requester wake deadline").toBe(true);
+    expect(nextAttemptAt).toBeGreaterThan(Date.now());
+    expect(wakes.map((wake) => wake?.nextAttemptAt)).toEqual(runIds.map(() => nextAttemptAt));
+    return nextAttemptAt!;
+  };
   const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
   context.resolveGatewayContext = () => context;
   const delivery = { dispatch: dispatchGatewayMethodInProcess };
@@ -106,8 +130,15 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
       },
     });
   complete(siblingRunId, siblingSessionKey, "Sibling result is ready.");
-  await settleSubagentRegistryPersistenceWork();
-  expect(dispatch).not.toHaveBeenCalled();
+  await vi.dynamicImportSettled();
+  await vi.waitFor(
+    () => {
+      expectCompletedRun(siblingRunId, "Sibling result is ready.");
+      expectSharedRequesterWake([previousRunId, siblingRunId], [previousRunId, siblingRunId]);
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+    { interval: 0 },
+  );
 
   const followup = "Read the completed tool outputs and finish the existing task.";
   chatSend.mockImplementation(async ({ respond }) => {
@@ -159,21 +190,40 @@ it("resumes a yielded child through sessions.send and wakes its original parent 
   expect(subagentRuns.get(nextRunId)).toBe(resumed);
 
   complete(nextRunId, childSessionKey, "Recovered child consumed its tool results.");
-  await settleSubagentRegistryPersistenceWork();
-  const nextAttemptAt = subagentRuns.get(nextRunId)?.requesterSettleWake?.nextAttemptAt;
-  await vi.advanceTimersByTimeAsync(Math.max(0, (nextAttemptAt ?? Date.now()) - Date.now()) + 1);
+  let nextAttemptAt = Date.now();
+  await vi.dynamicImportSettled();
+  await vi.waitFor(
+    () => {
+      expectCompletedRun(nextRunId, "Recovered child consumed its tool results.");
+      nextAttemptAt = expectSharedRequesterWake(
+        [nextRunId, siblingRunId],
+        [nextRunId, siblingRunId],
+      );
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+    { interval: 0 },
+  );
+  await vi.advanceTimersByTimeAsync(Math.max(0, nextAttemptAt - Date.now()) + 1);
   await registryTesting.sweepOnceForTests();
-  await settleSubagentRegistryPersistenceWork();
-  expect(dispatch).toHaveBeenCalledTimes(1);
-  expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
-    sessionKey: requesterSessionKey,
-    inputProvenance: { sourceTool: "subagent_settle" },
-    message: expect.stringContaining("Recovered child consumed its tool results."),
-  });
-  expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
-  expect(getTaskById(originalTask.taskId)).toMatchObject({
-    status: "succeeded",
-    deliveryStatus: "delivered",
-  });
-  expect(subagentRuns.get(nextRunId)?.requesterSettleWake).toBeUndefined();
+  await vi.dynamicImportSettled();
+  await vi.waitFor(
+    () => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+        sessionKey: requesterSessionKey,
+        inputProvenance: { sourceTool: "subagent_settle" },
+        message: expect.stringContaining("Recovered child consumed its tool results."),
+      });
+      expect(dispatch.mock.calls[0]?.[1]?.message).toContain("Sibling result is ready.");
+      expect(getTaskById(originalTask.taskId)).toMatchObject({
+        status: "succeeded",
+        deliveryStatus: "delivered",
+      });
+      for (const runId of [nextRunId, siblingRunId]) {
+        expect(subagentRuns.get(runId)?.requesterSettleWake).toBeUndefined();
+      }
+    },
+    { interval: 0 },
+  );
+  expect(archiveRead).not.toHaveBeenCalled();
 });

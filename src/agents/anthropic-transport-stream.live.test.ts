@@ -3,18 +3,32 @@
  * Runs only when live credentials are enabled and verifies the native messages
  * transport against the configured provider.
  */
+import { randomUUID } from "node:crypto";
 import http from "node:http";
+import path from "node:path";
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import { createAnthropicMessagesTransportStreamFn } from "@openclaw/ai/transports";
-import type { Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Message, Model, Tool } from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import { isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
+import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
+import { SessionManager } from "./sessions/session-manager.js";
 
 const LIVE = isLiveTestEnabled(["ANTHROPIC_TRANSPORT_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
+if (isTruthyEnvValue(process.env.ANTHROPIC_LIVE_TEST) && !ANTHROPIC_KEY) {
+  throw new Error("ANTHROPIC_LIVE_TEST=1 requires ANTHROPIC_API_KEY");
+}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const PROVIDER_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]) && Boolean(ANTHROPIC_KEY);
 const describeProviderLive = PROVIDER_LIVE ? describe : describe.skip;
 const OPUS_TUPLE_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]) && Boolean(ANTHROPIC_KEY);
@@ -67,17 +81,6 @@ async function readRequestBody(request: http.IncomingMessage): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-function skipAnthropicBillingDrift(
-  label: string,
-  result: { stopReason: string; errorMessage?: string },
-): boolean {
-  if (result.stopReason !== "error" || !isLiveBillingDrift(result.errorMessage ?? "")) {
-    return false;
-  }
-  console.warn(`[anthropic:live] skip ${label}: billing drift`);
-  return true;
 }
 
 function classifyProviderError(errorMessage: string | undefined): string {
@@ -182,7 +185,7 @@ describeLive("anthropic transport stream live", () => {
 });
 
 describeOpusTupleLive("anthropic Opus tuple schema provider live", () => {
-  it("accepts a draft-07 tuple tool after Anthropic projection", async () => {
+  it("accepts a draft-07 tuple tool after Anthropic projection", async ({ skip }) => {
     const model: AnthropicMessagesModel = {
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",
@@ -228,8 +231,8 @@ describeOpusTupleLive("anthropic Opus tuple schema provider live", () => {
     );
 
     const result = await stream.result();
-    if (skipAnthropicBillingDrift("Opus tuple schema", result)) {
-      return;
+    if (result.stopReason === "error" && isLiveBillingDrift(result.errorMessage ?? "")) {
+      skip("Anthropic billing drift");
     }
     const toolCall = result.content.find(
       (block) => block.type === "toolCall" && block.name === "tuple_probe",
@@ -248,7 +251,170 @@ describeOpusTupleLive("anthropic Opus tuple schema provider live", () => {
 });
 
 describeProviderLive("anthropic transport stream provider live", () => {
-  it("keeps a healthy forced tool when a sibling descriptor is unreadable", async () => {
+  it(
+    "replays streamed native compaction from SQLite without losing tool-only memory",
+    async () => {
+      const root = tempDirs.make("openclaw-anthropic-compaction-live-");
+      const sessionId = randomUUID();
+      const target = {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:anthropic-compaction:${sessionId}`,
+        storePath: path.join(root, "openclaw-agent.sqlite"),
+      };
+      const model: AnthropicMessagesModel = {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 1_024,
+      };
+      const tool: Tool = {
+        name: "read_synthetic_context",
+        description: "Read the synthetic records and their durable verification marker.",
+        parameters: Type.Object({}, { additionalProperties: false }),
+      };
+      const marker = `ANTHROPIC-TOOL-MEMORY-${randomUUID()}`;
+      const streamFn = createAnthropicMessagesTransportStreamFn();
+      let replayPayload: Record<string, unknown> | undefined;
+      const options = {
+        apiKey: ANTHROPIC_KEY,
+        sessionId,
+        maxTokens: 1_024,
+        timeoutMs: 2 * 60 * 1000,
+        thinkingEnabled: false,
+        anthropicServerCompaction: true,
+        anthropicCompactThreshold: 50_000,
+        onPayload: (payload: unknown) => {
+          if (!isRecord(payload)) {
+            throw new Error("Anthropic emitted no inspectable request payload");
+          }
+          replayPayload = structuredClone(payload);
+        },
+      } satisfies NonNullable<Parameters<typeof streamAnthropic>[2]>;
+      await upsertSessionEntryCore(target, { sessionId, updatedAt: Date.now() });
+      let manager = SessionManager.open(target, root);
+      const append = async (message: Message) => {
+        await withSessionManagerWrite(manager, () => manager.appendMessage(message));
+      };
+      const messages = () =>
+        manager
+          .buildSessionContext()
+          .messages.filter(
+            (message): message is Message =>
+              message.role === "user" ||
+              message.role === "assistant" ||
+              message.role === "toolResult",
+          );
+      const complete = async (requireTool = false) => {
+        const requestOptions = {
+          ...options,
+          toolChoice: requireTool ? { type: "tool", name: tool.name } : "none",
+        } satisfies NonNullable<Parameters<typeof streamAnthropic>[2]>;
+        const stream = await streamFn(
+          model,
+          {
+            systemPrompt:
+              "Remember the durable verification marker from tool output across compaction. Follow the user's output instructions exactly. Use plain text without Markdown, backticks, or quotation marks.",
+            messages: messages(),
+            tools: [tool],
+          },
+          requestOptions,
+        );
+        const result = await stream.result();
+        expect(result.errorMessage).toBeUndefined();
+        expect(result.stopReason).toBe(requireTool ? "toolUse" : "stop");
+        await append(result);
+        return result;
+      };
+      try {
+        await append({
+          role: "user",
+          content:
+            "Read the synthetic context once, remember its durable verification marker, and reply exactly STORED.",
+          timestamp: Date.now(),
+        });
+        const requested = await complete(true);
+        const calls = requested.content.filter((block) => block.type === "toolCall");
+        expect(calls).toHaveLength(1);
+        const call = calls[0];
+        if (!call || call.name !== tool.name) {
+          throw new Error("Anthropic did not request the synthetic context tool");
+        }
+        // Anthropic's native compaction threshold has a 50k-token minimum.
+        await append({
+          role: "toolResult",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: [
+            {
+              type: "text",
+              text: `Durable verification marker: ${marker}.\n${"copper lighthouse violet weather. ".repeat(12_000)}`,
+            },
+          ],
+          isError: false,
+          timestamp: Date.now(),
+        });
+        const compacted = await complete();
+        expect(compacted.providerReplay).toMatchObject({ type: "anthropic-compaction" });
+        const checkpoint = compacted.providerReplay;
+        if (!checkpoint || checkpoint.type !== "anthropic-compaction") {
+          throw new Error("Anthropic did not emit a native compaction checkpoint");
+        }
+        expect(checkpoint.data).toContain(marker);
+        disposeOpenClawAgentDatabaseByPath(target.storePath);
+        manager = SessionManager.open(target, root);
+        const saved = messages().findLast(
+          (message) => message.role === "assistant" && message.providerReplay,
+        );
+        expect(saved?.role).toBe("assistant");
+        expect(saved?.role === "assistant" ? saved.providerReplay : undefined).toEqual(checkpoint);
+        await append({
+          role: "user",
+          content:
+            "Reply exactly with the durable verification marker from the tool output as plain text, without Markdown, backticks, or quotation marks. Do not call tools.",
+          timestamp: Date.now(),
+        });
+        const replayed = await complete();
+        const blocks =
+          isRecord(replayPayload) && Array.isArray(replayPayload.messages)
+            ? replayPayload.messages.flatMap((message) =>
+                isRecord(message) && Array.isArray(message.content) ? message.content : [],
+              )
+            : [];
+        const compactBlocks = blocks.filter(
+          (block) => isRecord(block) && block.type === "compaction",
+        );
+        expect(compactBlocks).toHaveLength(1);
+        expect(compactBlocks[0]).toMatchObject({ type: "compaction", content: checkpoint.data });
+        if ("encryptedContent" in checkpoint) {
+          expect(compactBlocks[0]).toHaveProperty("encrypted_content", checkpoint.encryptedContent);
+        }
+        expect(blocks.some((block) => isRecord(block) && block.type === "tool_result")).toBe(false);
+        expect(
+          replayed.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("")
+            .trim(),
+        ).toBe(marker);
+        expect(replayed.providerReplay?.type).not.toBe("anthropic-compaction-suppression");
+        process.stderr.write(
+          `[anthropic-compaction-live] sqliteReplay=passed toolMarker=preserved summaryChars=${checkpoint.data.length} encryptedField=${"encryptedContent" in checkpoint}\n`,
+        );
+      } finally {
+        disposeOpenClawAgentDatabaseByPath(target.storePath);
+      }
+    },
+    8 * 60 * 1000,
+  );
+
+  it("keeps a healthy forced tool when a sibling descriptor is unreadable", async ({ skip }) => {
     const modelId = process.env.OPENCLAW_LIVE_ANTHROPIC_TOOL_MODEL || "claude-haiku-4-5-20251001";
     const model: AnthropicMessagesModel = {
       id: modelId,
@@ -296,8 +462,8 @@ describeProviderLive("anthropic transport stream provider live", () => {
     );
 
     const result = await stream.result();
-    if (skipAnthropicBillingDrift("forced tool projection", result)) {
-      return;
+    if (result.stopReason === "error" && isLiveBillingDrift(result.errorMessage ?? "")) {
+      skip("Anthropic billing drift");
     }
     const toolCall = result.content.find(
       (block) => block.type === "toolCall" && block.name === "healthy_probe",
@@ -314,7 +480,7 @@ describeProviderLive("anthropic transport stream provider live", () => {
     });
   }, 45_000);
 
-  it("keeps a healthy forced tool through the Anthropic SDK provider", async () => {
+  it("keeps a healthy forced tool through the Anthropic SDK provider", async ({ skip }) => {
     const modelId = process.env.OPENCLAW_LIVE_ANTHROPIC_TOOL_MODEL || "claude-haiku-4-5-20251001";
     const model: AnthropicMessagesModel = {
       id: modelId,
@@ -361,8 +527,8 @@ describeProviderLive("anthropic transport stream provider live", () => {
     );
 
     const result = await stream.result();
-    if (skipAnthropicBillingDrift("SDK forced tool projection", result)) {
-      return;
+    if (result.stopReason === "error" && isLiveBillingDrift(result.errorMessage ?? "")) {
+      skip("Anthropic billing drift");
     }
     const toolCall = result.content.find(
       (block) => block.type === "toolCall" && block.name === "healthy_probe",

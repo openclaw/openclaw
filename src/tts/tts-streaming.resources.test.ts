@@ -509,21 +509,15 @@ describe("streaming speech registration ownership", () => {
         await fixture.withEnvironment(async () => {
           const result = await fixture.run();
           const reader = result.audioStream!.getReader();
-          let closed = false;
-          void reader.closed.then(
-            () => {
-              closed = true;
-            },
-            () => {
-              closed = true;
-            },
-          );
           try {
             if (initialState === "chunk") {
               expect((await reader.read()).value).toEqual(pcm);
             }
-            await nextTurn();
-            expect(closed).toBe(true);
+            if (initialState === "error") {
+              await expect(reader.closed).rejects.toThrow("native initial failure");
+            } else {
+              await expect(reader.closed).resolves.toBeUndefined();
+            }
             expectClosed(fixture);
             if (initialState === "error") {
               await expect(reader.read()).rejects.toThrow("native initial failure");

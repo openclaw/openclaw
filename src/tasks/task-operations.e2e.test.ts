@@ -17,9 +17,11 @@ import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRunningTaskRunCore, recordTaskRunProgressByRunIdCore } from "./task-executor.js";
-import { createTaskRecord, getTaskById, reloadTaskRegistryFromStore } from "./task-registry.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
+import { createTaskRecord, getTaskById } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -158,7 +160,7 @@ describe("task operations product boundary", () => {
           }
 
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             runId: "run-a07-operator",
             status: "running",
@@ -214,7 +216,7 @@ describe("task operations product boundary", () => {
           });
 
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             notifyPolicy: "state_changes",
             progressSummary: "Indexed 3 records",
@@ -280,7 +282,7 @@ describe("task operations product boundary", () => {
           expect(cancel.exits).toEqual([1]);
           expect(cancel.logs).toEqual([]);
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(requireTask(operatorTask.taskId)).toMatchObject({
             status: "running",
           });

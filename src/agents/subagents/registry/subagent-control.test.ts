@@ -1,10 +1,9 @@
 // Subagent control tests cover listing, killing, and admin cleanup of
 // child runs recorded in the subagent registry and session store.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -24,6 +23,7 @@ import {
   getActiveSessionLifecycleMutationCount,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
@@ -131,16 +131,14 @@ function mockSessionPatchForStore(storePath: string, implementation: typeof patc
   );
 }
 
-let tempRoot = "";
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(tempRoot);
+    cleanup();
+  }),
+);
+const tempRoot = tempDirs.make("openclaw-subagent-control-");
 let tempStoreIndex = 0;
-
-beforeAll(() => {
-  tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-control-"));
-});
-
-afterAll(() => {
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-});
 
 function nextSessionStorePath(label: string) {
   tempStoreIndex += 1;

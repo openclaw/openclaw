@@ -253,7 +253,8 @@ describe("assistant failure recovery", () => {
     async (fallbackConfigured) => {
       for (const [message, reason, status] of [
         ['  400 {"error":{"message":"credit balance is too low"}}  ', "billing", 400],
-        ["500 provider returned HTTP 500", "timeout", 500],
+        // An untyped 500 is a provider-side server error; only 408/499/504/522/524 are timeouts.
+        ["500 provider returned HTTP 500", "server_error", 500],
         ["503 service unavailable", "overloaded", 503],
         ["request timed out", "timeout", 408],
         ["401 invalid api key", "auth", 401],
@@ -304,27 +305,18 @@ describe("assistant failure recovery", () => {
   );
 
   it.each([
-    { terminal: { kind: "ok" }, expected: {} },
-    { terminal: { kind: "timeout", phase: "compaction", source: "observation" }, expected: {} },
-    {
-      terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
-      expected: { stopReason: "timeout" },
-    },
-    {
-      terminal: { kind: "timeout", phase: "tool_execution", source: "runtime" },
-      expected: { stopReason: "timeout" },
-    },
-    {
-      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-      expected: { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
-    },
-    {
-      terminal: { kind: "timeout", phase: "compaction", source: "idle" },
-      expected: { stopReason: "timeout" },
-    },
-  ] satisfies Array<{ terminal: AgentRunAttemptTerminal; expected: object }>)(
-    "keeps recorded timeout facts independent of provider status: $terminal",
-    async ({ terminal, expected }) => {
+    [{ kind: "ok" }, {}],
+    [{ kind: "timeout", phase: "compaction", source: "observation" }, {}],
+    [{ kind: "timeout", phase: "compaction", source: "runtime" }, { stopReason: "timeout" }],
+    [{ kind: "timeout", phase: "tool_execution", source: "runtime" }, { stopReason: "timeout" }],
+    [
+      { kind: "timeout", phase: "prompt", source: "idle" },
+      { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },
+    ],
+    [{ kind: "timeout", phase: "compaction", source: "idle" }, { stopReason: "timeout" }],
+  ] satisfies Array<readonly [AgentRunAttemptTerminal, object]>)(
+    "keeps recorded timeout facts independent of provider status: %s",
+    async (terminal, expected) => {
       const input = makeInput("500 injected provider failure", { terminal });
       const failure = await expectFailure(input);
       expect(failure.status).toBe(500);

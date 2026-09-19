@@ -12,7 +12,7 @@ import {
  */
 import { isPathInside } from "../../infra/path-guards.js";
 import { expandTildePath } from "../../shared/tilde-path.js";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { CONFIG_DIR_NAME } from "../package-metadata.js";
 import { parsePromptFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 

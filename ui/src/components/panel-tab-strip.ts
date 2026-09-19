@@ -51,12 +51,12 @@ function activeElementFor(element: Element): Element | null {
     : document.activeElement;
 }
 
-function deepestActiveElement(): Element | null {
+function deepestActiveElementId(): string | null {
   let active = document.activeElement;
   while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
     active = active.shadowRoot.activeElement;
   }
-  return active;
+  return active instanceof HTMLElement ? active.id : null;
 }
 
 function focusNeedsRecovery(element: Element, current: Element | null): boolean {
@@ -229,12 +229,11 @@ export function renderPanelTabStrip(params: {
     // visible. Keep the new-session control outside the group until one exists.
     return newButton(false);
   }
-  const activeElement = deepestActiveElement();
-  const focusedTabDomId =
-    activeElement instanceof HTMLElement &&
-    params.tabs.some((tab) => tab.domId === activeElement.id)
-      ? activeElement.id
-      : null;
+  // Event callbacks retain this render scope; keep focus identity without retaining its DOM tree.
+  const activeElementId = deepestActiveElementId();
+  const focusedTabDomId = params.tabs.some((tab) => tab.domId === activeElementId)
+    ? activeElementId
+    : null;
   // Selection belongs in the key: activating a clipped tab has to scroll it back
   // into view, otherwise it stays cut off at the viewport edge as icon-only.
   // Serialized rather than joined: a delimiter can appear inside an id, and two

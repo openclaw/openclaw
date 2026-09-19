@@ -4,7 +4,9 @@ import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
+import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   createToolSearchTools,
@@ -39,6 +41,45 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each(["direct", "search", "code"] as const)(
+    "keeps overlapping allowlists callable through the %s surface",
+    (mode) => {
+      const toolsAllow = attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]);
+      const runtime = createAgentHarnessToolSurfaceRuntime({
+        config: {
+          agents: { defaults: { experimental: { localModelLean: false } } },
+          tools: { codeMode: mode === "code", toolSearch: mode === "search" },
+        },
+        executeTool: async () => ({ content: [], details: {} }),
+        modelToolsEnabled: true,
+        toolsAllow,
+        runtimeToolAllowlist: toolsAllow,
+      });
+      try {
+        const allowedTools = applyEmbeddedAttemptToolsAllow(
+          [
+            ...createToolSearchTools({
+              config: runtime.config,
+              catalogRef: runtime.toolSearchCatalogRef,
+              executeTool: runtime.toolSearchCatalogExecutor,
+            }),
+            ...tools(["web_search", "web_fetch", "memory_search"]),
+          ],
+          runtime.runtimeToolAllowlist,
+        );
+        const surface = runtime.compactTools(allowedTools);
+        const callableNames = surface.promptToolPolicy.apply().callableToolNames;
+        expect(callableNames).toContain("web_search");
+        expect(callableNames).not.toContain("web_fetch");
+        expect(callableNames).not.toContain("memory_search");
+        expect(runtime.codeModeControlsEnabled).toBe(mode === "code");
+        expect(runtime.toolSearchControlsEnabled).toBe(mode === "search");
+      } finally {
+        runtime.cleanup();
+      }
+    },
+  );
+
   it.each([
     { name: "automatic replies", delivery: {}, directMessage: false },
     { name: "forced message replies", delivery: { forceMessageTool: true }, directMessage: true },

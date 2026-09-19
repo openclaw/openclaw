@@ -142,7 +142,7 @@ export class DiscordVoiceRecording {
     const releaseBudget = reserveRecordingWav(bytes + VOICE_WAV_HEADER_BYTES);
     let wav: Awaited<ReturnType<typeof writeVoiceWavFile>>;
     try {
-      wav = await writeVoiceWavFile(Buffer.concat(chunks, bytes));
+      wav = await writeVoiceWavFile(chunks);
     } catch (error) {
       releaseBudget();
       throw error;

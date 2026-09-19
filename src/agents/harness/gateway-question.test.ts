@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   QuestionDispatchRefusedError,
   type AgentHarnessQuestionGatewayCall,
@@ -37,7 +38,14 @@ const questions = [
 ] as const;
 
 describe("gateway harness questions", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      for (const dir of tempDirs.dirs) {
+        await closeOpenClawAgentDatabasesAsync(dir);
+      }
+      cleanup();
+    }),
+  );
   it.each([
     "committed",
     "failed",

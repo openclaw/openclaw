@@ -173,7 +173,9 @@ which keeps the draft quiet: the headline, enabled commentary and reasoning,
 plan milestones, and approval requests still appear. Intermediate tool failures
 and nonzero command exits are hidden along with other tool rows; failures that
 prevent the turn from completing still appear through normal error delivery.
-Set it to `true` for the full rolling tool log.
+Set it to `true` for the rolling tool log. Successful background-process polls
+and internal waits do not add routine rows. Failed calls still follow the
+selected tool-progress policy; `/verbose` retains their diagnostic summaries.
 
 Native subagent spawn and activity events follow the same policy. They start
 the quiet work indicator; with the tool log enabled, lifecycle updates reuse a
@@ -435,6 +437,11 @@ full runtime-behavior breakdown per channel.
 ## Finalization
 
 When the final answer is ready, OpenClaw tries to keep the chat clean:
+
+- A Telegram progress card handed off to accepted subagents stays visible across
+  parent yield. Core updates that same card while delegated work continues;
+  the eventual final answer is separate. See
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 
 - In `progress` mode on Discord, the final answer is sent as a fresh message
   and the status draft is deleted once that answer is delivered. Busy channels

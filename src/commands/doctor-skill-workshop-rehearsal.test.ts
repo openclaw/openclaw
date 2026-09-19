@@ -155,7 +155,6 @@ describe("Workshop migration in an update rehearsal", () => {
         const result = await migrateLegacySkillWorkshopProposals({
           config,
           env,
-          retireMissingDrafts: true,
         });
 
         expect(result.warnings).toEqual([]);

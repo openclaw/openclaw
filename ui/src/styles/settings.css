@@ -683,6 +683,10 @@ textarea.settings-input {
   }
 }
 
+.updates-status-check-failed .settings-status {
+  color: var(--warn);
+}
+
 .updates-attempt-details {
   width: 100%;
 }

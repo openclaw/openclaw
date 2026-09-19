@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createSessionPlacementSettlementClosedAbortError } from "../../agents/run-termination.js";
 import type {
   SessionPlacementTurnParams,
   LocalTurnPlacementClaim,
@@ -43,7 +44,7 @@ export async function waitForPendingWorkerResult(params: {
   if (
     !params.placements.get(params.sessionId)?.turnClaim &&
     params.placements
-      .listPendingWorkspaceResults()
+      .listPendingWorkspaceResults(params.sessionId)
       .some((pending) => pending.sessionId === params.sessionId)
   ) {
     throw new Error(
@@ -106,15 +107,6 @@ export async function waitForInitialWorkerPlacement(params: {
     placement: requireActivePlacement(params.placements.get(identity.sessionId)!),
     assertCurrent,
   };
-}
-
-const CURRENT_WORKER_BUILD_REMEDIATION =
-  "redispatch the session so its worker can bootstrap the current build before retrying.";
-
-function withCurrentWorkerBuildRemediation(reason: string): string {
-  return reason.endsWith(CURRENT_WORKER_BUILD_REMEDIATION)
-    ? reason
-    : `${reason}; ${CURRENT_WORKER_BUILD_REMEDIATION}`;
 }
 
 function required(value: string | undefined, field: string): string {
@@ -218,10 +210,7 @@ export function resolvePlacementIdentity(
 export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
-  const failureDetail =
-    placement.state === "failed"
-      ? `: ${withCurrentWorkerBuildRemediation(placement.recoveryError)}`
-      : "";
+  const failureDetail = placement.state === "failed" ? `: ${placement.recoveryError}` : "";
   if (
     placement.state !== "active" ||
     !placement.remoteWorkspaceDir ||
@@ -278,7 +267,7 @@ export async function executeLocalTurn<T>(params: {
       settle,
       () => {
         if (closed || !params.placements.validateTurnClaim(turnClaim)) {
-          throw createAbortError("session placement turn settlement is closed");
+          throw createSessionPlacementSettlementClosedAbortError();
         }
       },
       params.runLocal,
@@ -319,7 +308,7 @@ export async function claimWorkerTurn(params: {
       throw error;
     }
     const resultIsReconciling = params.placements
-      .listPendingWorkspaceResults()
+      .listPendingWorkspaceResults(params.identity.sessionId)
       .some(
         (pending) =>
           activeClaim?.owner === "worker" &&

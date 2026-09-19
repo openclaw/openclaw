@@ -3,7 +3,6 @@ import {
   listRuntimePluginIdsFromRegistry,
   createRuntimePluginManifestLookup,
 } from "../plugins/active-runtime-registry.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -11,6 +10,7 @@ import {
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
+import { getReusablePluginRuntimeActivation } from "../plugins/runtime/load-context.js";
 import type { RuntimePluginLoadPurpose } from "./harness/runtime-plugin-load-plan.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
@@ -67,19 +67,20 @@ export function loadPreparedInboundPluginRegistry(
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
   const activeRegistry = getActivePluginRegistry();
-  // Identity is the generation authority. Manifest equivalence alone could let a
-  // stale active registry satisfy a newer bundled snapshot.
+  // Registry-owned facts survive an outer reload cache without allowing stale
+  // metadata or changed activation inputs to reuse already-registered callbacks.
   const reusableGatewayRegistry =
     input.allowGatewaySubagentBinding === true &&
     input.env === undefined &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
     activeRegistry &&
     getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
-    getCurrentPluginMetadataSnapshot({
+    getReusablePluginRuntimeActivation(activeRegistry, {
       config: input.config,
+      env: process.env,
       workspaceDir: metadataSnapshot.workspaceDir,
-      allowWorkspaceScopedSnapshot: true,
-    }) === metadataSnapshot &&
+      metadataSnapshot,
+    }) &&
     listRuntimePluginIdsFromRegistry(activeRegistry).every(
       createRuntimePluginManifestLookup(activeRegistry, metadataSnapshot.manifestRegistry.plugins),
     )
@@ -149,12 +150,15 @@ type PreparedWorkspacePluginRegistries = {
 export function prepareWorkspacePluginRegistries(
   input: PreparedModelRuntimeInput,
   metadataSnapshot: PluginMetadataSnapshot,
+  retainRegistry: (registry: PluginRegistry) => void,
   loadInboundRegistry?: PreparedInboundRegistryLoader,
   preferBuiltPluginArtifacts = false,
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
   getConfiguredHarnessRuntimes?: () => readonly string[],
   basePluginIds?: readonly string[],
-  registryResources?: PreparedModelRuntimeBuildResources,
+  loadRuntimeRegistry:
+    | PreparedModelRuntimeBuildResources["load"]
+    | typeof loadAgentRuntimePluginRegistryHandle = loadAgentRuntimePluginRegistryHandle,
   purpose?: RuntimePluginLoadPurpose,
 ): PreparedWorkspacePluginRegistries | Promise<PreparedWorkspacePluginRegistries> {
   // Passive reads stay runtime-free; catalog workers and executable probes carry explicit scope.
@@ -181,11 +185,13 @@ export function prepareWorkspacePluginRegistries(
           },
         ));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
+  for (const registry of new Set([inboundPluginRegistry, baseRegistry])) {
+    if (registry) {
+      retainRegistry(registry);
+    }
+  }
   primaryRegistry ??= reusableGeneration?.mediaCapabilityProviderSource?.registry ?? baseRegistry;
   let loadedPrimaryRegistry: PluginRegistry | undefined;
-  const loadRuntimeRegistry = registryResources
-    ? registryResources.load.bind(registryResources)
-    : loadAgentRuntimePluginRegistryHandle;
   const runtimePluginRegistry =
     purpose === "model-catalog" || input.runtimePluginSelections || !baseRegistry
       ? loadRuntimeRegistry(
@@ -220,14 +226,19 @@ export function prepareWorkspacePluginRegistries(
           },
         )
       : baseRegistry;
-  const prepared = (registry: PluginRegistry | undefined): PreparedWorkspacePluginRegistries => ({
-    runtimePluginRegistry: registry,
-    primaryRegistry:
-      registry === baseRegistry
-        ? (primaryRegistry ?? registry)
-        : (loadedPrimaryRegistry ?? registry),
-    ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-  });
+  const prepared = (registry: PluginRegistry | undefined): PreparedWorkspacePluginRegistries => {
+    if (registry) {
+      retainRegistry(registry);
+    }
+    return {
+      runtimePluginRegistry: registry,
+      primaryRegistry:
+        registry === baseRegistry
+          ? (primaryRegistry ?? registry)
+          : (loadedPrimaryRegistry ?? registry),
+      ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
+    };
+  };
   return runtimePluginRegistry instanceof Promise
     ? runtimePluginRegistry.then(prepared)
     : prepared(runtimePluginRegistry);

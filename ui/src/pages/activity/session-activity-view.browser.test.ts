@@ -95,20 +95,22 @@ it.each([
             error: controller.error,
             loading: controller.loading,
             retrying: controller.retrying,
-            onRetry: () => controller.load(client, props.filters, "retry"),
+            onRetry: () => {
+              void controller.load(client, props.filters, "retry");
+            },
           }),
           container,
         ),
     });
     try {
-      controller.load(client, props.filters);
+      void controller.load(client, props.filters);
       await vi.waitFor(() => expect(controller.loading).toBe(false));
       const retained = container.querySelector<HTMLElement>(
         personId ? "[data-activity-identity]" : ".activity-feed__summary",
       )!;
       const retainedTop = retained.getBoundingClientRect().top;
       request.mockRejectedValueOnce(new Error("Refresh failed"));
-      controller.load(client, props.filters, "refresh");
+      void controller.load(client, props.filters, "refresh");
       await vi.waitFor(() => expect(controller.error).toBe("Refresh failed"));
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const retryButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -142,6 +144,8 @@ it.each([
     }
 
     render(renderSessionActivityView({ ...props, result: undefined, loading: true }), container);
-    expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+    expect(
+      container.querySelector('.activity-feed__loading [role="status"]')?.textContent,
+    ).toContain("Loading");
   },
 );

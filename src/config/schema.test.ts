@@ -3,7 +3,6 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
@@ -171,9 +170,7 @@ describe("config schema", () => {
     }
     expect(res.uiHints["channels.sms.authToken"]?.presentation).toBeUndefined();
     expect(res.uiHints["channels.signal.configPath"]?.presentation).toBeUndefined();
-    expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
-      expect.arrayContaining(["security", "network", "storage"]),
-    );
+    expect(res.uiHints["proxy.tls.caFile"]?.tags).toBeUndefined();
     expect(res.version).toBeTypeOf("string");
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
@@ -848,46 +845,6 @@ describe("config schema", () => {
     expect(
       second.uiHints["plugins.entries.secret-path-cache.config.routes.*.credential"],
     ).toBeUndefined();
-  });
-
-  it("derives tags for security, network, storage, tools, and performance paths", () => {
-    const tagged = applyDerivedTags({
-      "gateway.auth.token": {},
-      "proxy.tls.caFile": {},
-      "tools.web.fetch.timeoutSeconds": {},
-      "SESSION.SHARING.peer": {
-        tags: [" Custom ", "AUTH", "security", "custom", "unknown"],
-      },
-    });
-    expect(tagged["gateway.auth.token"]?.tags).toEqual(
-      expect.arrayContaining(["security", "auth"]),
-    );
-    expect(tagged["proxy.tls.caFile"]?.tags).toEqual(
-      expect.arrayContaining(["security", "network", "storage"]),
-    );
-    expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
-      expect.arrayContaining(["tools", "performance"]),
-    );
-    expect(tagged["SESSION.SHARING.peer"]?.tags).toEqual([
-      "security",
-      "auth",
-      "access",
-      "privacy",
-      "storage",
-      "custom",
-      "unknown",
-    ]);
-  });
-
-  it("only derives the advanced tag from an explicit advanced hint", () => {
-    const tagged = applyDerivedTags({
-      "update.channel": { advanced: false },
-      "update.auto.enabled": { advanced: false },
-      "update.auto.interval": { advanced: true },
-    });
-    expect(tagged["update.channel"]?.tags).toEqual([]);
-    expect(tagged["update.auto.enabled"]?.tags).toEqual([]);
-    expect(tagged["update.auto.interval"]?.tags).toEqual(["performance", "advanced"]);
   });
 
   it("rejects removed Firecrawl config from the core web fetch schema", () => {

@@ -2,6 +2,7 @@ import type { GitHubPublicationPublisher } from "../../packages/gateway-protocol
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -56,6 +57,16 @@ export async function prepareCurrentGitHubPublicationIdentity(
   await requestCurrentGitHubOAuthRefresh(agentId);
   const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationIdentity({
+    config: snapshot.config,
+    sourceConfig: snapshot.sourceConfig,
+    agentId,
+  });
+}
+
+export async function prepareCurrentGitHubPublicationOptionsIdentity(agentId: string) {
+  await requestCurrentGitHubOAuthRefresh(agentId);
+  const snapshot = publicationConfigSnapshot();
+  return await prepareGitHubPublicationOptionsIdentity({
     config: snapshot.config,
     sourceConfig: snapshot.sourceConfig,
     agentId,

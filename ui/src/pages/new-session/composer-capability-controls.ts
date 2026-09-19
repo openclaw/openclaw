@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import {
@@ -9,6 +10,8 @@ import {
 } from "../chat/components/chat-composer-plus-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
+
+registerNewSessionSetupEnglish();
 
 type NewSessionComposerCapabilityOptions = {
   submitting: boolean;

@@ -9,8 +9,6 @@ openclaw-sidebar-agent-roster {
 }
 .sidebar-workspace-header .sidebar-agent-card__name-text {
   padding-inline-end: 0;
-  mask-image: none;
-  text-overflow: ellipsis;
 }
 
 .sidebar-agent-roster__header {
@@ -40,6 +38,7 @@ openclaw-sidebar-agent-roster {
   text-decoration: none;
 }
 
+.sidebar-agent-roster__row[aria-current="page"],
 .sidebar-agent-roster__row:hover,
 .sidebar-agent-roster__link:hover {
   background: var(--bg-hover);
@@ -155,10 +154,42 @@ openclaw-sidebar-agent-roster {
   opacity: 1;
   pointer-events: auto;
 }
-.sidebar-agent-roster__header:is(:hover, :focus-within, :has(wa-dropdown[open]))
-  .sidebar-agent-roster__signals {
-  visibility: hidden;
+.sidebar-agent-roster__header:is(:hover, :focus-within, :has(wa-dropdown[open])) {
+  .sidebar-session-team-state__counts,
+  &:not(:has([data-session-attention])) .sidebar-agent-roster__signals {
+    visibility: hidden;
+  }
 }
+
+/* Counts share the action slot; attention keeps its own reachable target. */
+.sidebar-agent-roster__header:has([data-session-attention]) {
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  column-gap: 2px;
+
+  .sidebar-agent-roster__signals,
+  .sidebar-session-team-state {
+    display: contents;
+  }
+
+  .sidebar-session-team-state__status {
+    grid-area: 1 / 3;
+  }
+
+  .sidebar-session-team-state__counts,
+  .sidebar-agent-roster__actions {
+    grid-area: 1 / 4;
+    justify-self: end;
+  }
+
+  .sidebar-agent-roster__actions {
+    gap: 0;
+  }
+}
+
+.sidebar-session-team-state__counts {
+  gap: var(--team-slot-gap);
+}
+
 .sidebar-session-team-state {
   display: flex;
   gap: var(--team-slot-gap);
@@ -205,9 +236,13 @@ openclaw-sidebar-agent-roster {
   grid-column: 2;
   grid-row: 1;
   display: flex;
-  gap: var(--team-slot-gap);
+  gap: 8px;
   min-height: 32px;
   padding: 0;
+}
+.sidebar-recent-session--team .sidebar-session-indicator {
+  width: 20px;
+  flex-basis: 20px;
 }
 .sidebar-recent-session--team .sidebar-recent-session__text,
 .sidebar-recent-session--team .sidebar-recent-session__details {
@@ -226,11 +261,6 @@ openclaw-sidebar-agent-roster {
   align-items: center;
   gap: var(--team-slot-gap);
   margin: 0;
-}
-.sidebar-recent-session--team .sidebar-session-indicator {
-  width: auto;
-  min-width: 0;
-  flex: none;
 }
 .sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
 .sidebar-recent-session--team
@@ -276,7 +306,8 @@ openclaw-sidebar-agent-roster {
   .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
     padding-right: 0;
   }
-  .sidebar-agent-roster__signals {
+  .sidebar-agent-roster__header .sidebar-session-team-state__counts,
+  .sidebar-agent-roster__header:not(:has([data-session-attention])) .sidebar-agent-roster__signals {
     visibility: hidden;
   }
   .sidebar-agent-roster__actions {

@@ -1,4 +1,5 @@
 import { isRecord } from "../utils.js";
+import type { ConfigHealthEntry, ConfigHealthFingerprint } from "./io.health-state.types.js";
 
 type ConfigObserveSuspiciousBaseline = {
   bytes: number;
@@ -47,4 +48,36 @@ export function resolveConfigObserveSuspiciousReasons(params: {
     reasons.push("update-channel-only-root");
   }
   return reasons;
+}
+
+function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
+  return (
+    reason === "missing-meta-vs-last-good" ||
+    reason === "gateway-mode-missing-vs-last-good" ||
+    reason === "update-channel-only-root" ||
+    reason.startsWith("size-drop-vs-last-good:")
+  );
+}
+
+export function resolveConfigReadRecoveryContext(params: {
+  current: ConfigHealthFingerprint;
+  parsed: unknown;
+  entry: ConfigHealthEntry;
+  backupBaseline?: ConfigHealthFingerprint;
+}): { suspicious: string[]; suspiciousSignature: string } | null {
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: params.current.bytes,
+    hasMeta: params.current.hasMeta,
+    gatewayMode: params.current.gatewayMode,
+    parsed: params.parsed,
+    lastKnownGood: params.backupBaseline,
+  });
+  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
+    return null;
+  }
+  const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;
+  if (params.entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+    return null;
+  }
+  return { suspicious, suspiciousSignature };
 }

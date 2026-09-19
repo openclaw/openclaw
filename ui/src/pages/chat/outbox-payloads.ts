@@ -101,6 +101,7 @@ async function preparePayload(
         return (
           attachment.mimeType !== expected.mimeType ||
           attachment.fileName !== expected.fileName ||
+          attachment.origin !== expected.origin ||
           attachment.sizeBytes !== expected.sizeBytes
         );
       })
@@ -115,6 +116,9 @@ async function preparePayload(
       const attachments = await Promise.all(
         result.value.map(async (attachment, index) => ({
           ...metadata[index]!,
+          ...(attachment.selectionAnnotation
+            ? { selectionAnnotation: attachment.selectionAnnotation }
+            : {}),
           dataUrl: await readBlobAsDataUrl(attachment.blob),
         })),
       );
@@ -195,7 +199,12 @@ export async function prepareOutboxPayload(
     host.settings?.gatewayUrl,
     host.client?.recoveryScope,
     purpose,
-    item.attachments?.map(({ mimeType, fileName, sizeBytes }) => [mimeType, fileName, sizeBytes]),
+    item.attachments?.map(({ mimeType, fileName, sizeBytes, origin }) => [
+      mimeType,
+      fileName,
+      sizeBytes,
+      origin,
+    ]),
   ]);
   const isCurrent = captureOutboxPayloadOwner(host);
   let pending = pendingPayloads.get(key);

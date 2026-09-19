@@ -1,9 +1,8 @@
+/** Owns the shared checkpoint lifecycle around both compaction entry points. */
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
-/** Owns the shared checkpoint lifecycle around both compaction entry points. */
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  createFileBackedCompactionCheckpointStore,
+  persistSessionCompactionCheckpoint,
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
   resolveSessionCompactionCheckpointReason,
@@ -12,39 +11,33 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { log } from "./logger.js";
 
-export const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+export {
+  captureCompactionCheckpointSnapshotAsync,
+  cleanupCompactionCheckpointSnapshot,
+} from "../../gateway/session-compaction-checkpoints.js";
 
 export async function persistCompactionCheckpoint(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId: string;
+  sessionTarget: SessionTranscriptRuntimeTarget;
   trigger?: "budget" | "overflow" | "manual";
   snapshot?: CapturedCompactionCheckpointSnapshot | null;
   summary?: string;
   firstKeptEntryId?: string;
   tokensBefore?: number;
   tokensAfter?: number;
-  sessionFile: string;
-  sessionTarget?: SessionTranscriptRuntimeTarget;
   leafId?: string;
   createdAt?: number;
 }): Promise<boolean> {
-  if (!params.config || !params.sessionKey || !params.snapshot) {
+  if (!params.snapshot) {
     return false;
   }
   try {
-    const transcriptState = await readSessionLeafStateFromTranscriptAsync(
-      params.sessionTarget ?? params.sessionFile,
-    );
+    const transcriptState = await readSessionLeafStateFromTranscriptAsync(params.sessionTarget);
     const checkpointPosition = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: params.leafId,
       transcriptState,
     });
-    const stored = await compactionCheckpointStore.persistCheckpoint({
-      cfg: params.config,
-      ...(params.sessionTarget?.agentId ? { agentId: params.sessionTarget.agentId } : {}),
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
+    const stored = await persistSessionCompactionCheckpoint({
+      sessionTarget: params.sessionTarget,
       reason: resolveSessionCompactionCheckpointReason({ trigger: params.trigger }),
       snapshot: params.snapshot,
       summary: params.summary,
@@ -52,9 +45,7 @@ export async function persistCompactionCheckpoint(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       // Keep the full successor location for cross-key/store checkpoint recovery.
-      postSessionFile: params.sessionTarget
-        ? formatSqliteSessionFileMarker(params.sessionTarget)
-        : params.sessionFile,
+      postSessionFile: formatSqliteSessionFileMarker(params.sessionTarget),
       postLeafId: checkpointPosition.leafId,
       postEntryId: checkpointPosition.entryId,
       createdAt: params.createdAt,

@@ -31,6 +31,7 @@ export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) 
     ...snapshot,
     metadataSnapshot: createEmptyPluginMetadataSnapshot(snapshot.workspaceDir),
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
   };
 }

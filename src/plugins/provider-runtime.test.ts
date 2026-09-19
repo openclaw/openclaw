@@ -10,6 +10,7 @@ import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-supp
 import type { ProviderExternalAuthProfile } from "./provider-external-auth.types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
+  createProviderRuntimeLogger,
   expectAugmentedCodexCatalog,
   expectCodexMissingAuthHint,
 } from "./provider-runtime.test-support.js";
@@ -262,19 +263,6 @@ async function expectResolvedMatches(
   );
 }
 
-async function expectResolvedAsyncValues(
-  cases: ReadonlyArray<{
-    actual: () => Promise<unknown>;
-    expected: unknown;
-  }>,
-) {
-  await Promise.all(
-    cases.map(async ({ actual, expected }) => {
-      await expect(actual()).resolves.toEqual(expected);
-    }),
-  );
-}
-
 describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
@@ -358,12 +346,7 @@ describe("provider-runtime", () => {
       return createProviderExternalAuthResolver(hooks);
     });
     vi.doMock("../logging/subsystem.js", () => ({
-      createSubsystemLogger: () => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: providerRuntimeWarnMock,
-        error: vi.fn(),
-      }),
+      createSubsystemLogger: () => createProviderRuntimeLogger(providerRuntimeWarnMock),
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
@@ -946,7 +929,9 @@ describe("provider-runtime", () => {
   it("reuses the attempt-prepared provider handle at the model transport boundary", () => {
     const streamFn = vi.fn();
     const createStreamFn = vi.fn(() => streamFn);
-    const wrapSimpleCompletionStreamFn = vi.fn(() => streamFn);
+    const wrapSimpleCompletionStreamFn = vi.fn<
+      NonNullable<ProviderPlugin["wrapSimpleCompletionStreamFn"]>
+    >(() => streamFn);
     const resolveTransportTurnState = vi.fn(() => ({
       headers: { "x-demo-turn": "turn-1" },
     }));
@@ -990,12 +975,14 @@ describe("provider-runtime", () => {
     const context = { messages: [] };
     void registeredStream?.(model, context);
     expect(streamFn).toHaveBeenCalledWith(model, context, undefined);
-    expect(
-      getAiTransportHost().plugin.wrapSimpleCompletionStream({
-        provider: DEMO_PROVIDER_ID,
-        context: createDemoResolvedModelContext({ model, streamFn }),
-      }),
-    ).toBe(streamFn);
+    const simpleStream = getAiTransportHost().plugin.wrapSimpleCompletionStream({
+      provider: DEMO_PROVIDER_ID,
+      context: createDemoResolvedModelContext({ model, streamFn }),
+    });
+    for (const reasoning of ["off", "max", undefined] as const) {
+      void simpleStream?.(model, context, { reasoning });
+      expect(streamFn).toHaveBeenLastCalledWith(model, context, { reasoning });
+    }
     expect(createStreamFn).toHaveBeenCalledOnce();
     expect(wrapSimpleCompletionStreamFn).toHaveBeenCalledOnce();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
@@ -1858,47 +1845,29 @@ describe("provider-runtime", () => {
     );
   });
 
-  it("keeps OpenAI plugin personality fallback for OpenAI-family GPT-5 providers", () => {
-    const contribution = resolveProviderSystemPromptContribution({
-      provider: "openai",
-      config: {
-        plugins: {
-          entries: {
-            openai: { config: { personality: "off" } },
+  it.each(["openai", "azure-openai-responses"])(
+    "keeps OpenAI plugin personality fallback for %s GPT-5 providers",
+    (provider) => {
+      const contribution = resolveProviderSystemPromptContribution({
+        provider,
+        config: {
+          plugins: {
+            entries: {
+              openai: { config: { personality: "off" } },
+            },
           },
         },
-      },
-      context: {
-        provider: "openai",
-        modelId: "gpt-5.4",
-        promptMode: "full",
-      } as never,
-    });
+        context: {
+          provider,
+          modelId: "gpt-5.4",
+          promptMode: "full",
+        } as never,
+      });
 
-    expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toStrictEqual({});
-  });
-
-  it("keeps OpenAI plugin personality fallback for Azure OpenAI GPT-5 providers", () => {
-    const contribution = resolveProviderSystemPromptContribution({
-      provider: "azure-openai-responses",
-      config: {
-        plugins: {
-          entries: {
-            openai: { config: { personality: "off" } },
-          },
-        },
-      },
-      context: {
-        provider: "azure-openai-responses",
-        modelId: "gpt-5.4",
-        promptMode: "full",
-      } as never,
-    });
-
-    expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toStrictEqual({});
-  });
+      expect(contribution?.stablePrefix).toContain("<persona_latch>");
+      expect(contribution?.sectionOverrides).toStrictEqual({});
+    },
+  );
 
   it("does not apply the shared GPT-5 prompt overlay to non-GPT-5 models", () => {
     expect(
@@ -2243,26 +2212,37 @@ describe("provider-runtime", () => {
     expect(wrappedStreamFn).toHaveBeenCalledOnce();
   });
 
-  it("resolves opt-in simple-completion stream wrappers", () => {
+  it.each([false, true])("honors simple-completion wrapper opt-in %s", (optedIn) => {
     const wrappedStreamFn = vi.fn();
+    const wrapStreamFn = vi.fn(() => wrappedStreamFn);
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "moonshot",
         label: "Moonshot",
         auth: [],
-        wrapSimpleCompletionStreamFn: ({ streamFn }) => streamFn ?? wrappedStreamFn,
+        wrapStreamFn,
+        ...(optedIn ? { wrapSimpleCompletionStreamFn: () => wrappedStreamFn } : {}),
       },
     ]);
 
-    expect(
-      wrapProviderSimpleCompletionStreamFn({
+    const stream = wrapProviderSimpleCompletionStreamFn({
+      provider: "moonshot",
+      context: createDemoResolvedModelContext({
         provider: "moonshot",
-        context: createDemoResolvedModelContext({
-          provider: "moonshot",
-          streamFn: wrappedStreamFn,
-        }),
+        streamFn: wrappedStreamFn,
       }),
-    ).toBe(wrappedStreamFn);
+    });
+    if (optedIn) {
+      void stream?.(MODEL, { messages: [] }, { reasoning: "off" });
+      expect(wrappedStreamFn).toHaveBeenCalledExactlyOnceWith(
+        MODEL,
+        { messages: [] },
+        { reasoning: "off" },
+      );
+    } else {
+      expect(stream).toBeUndefined();
+    }
+    expect(wrapStreamFn).not.toHaveBeenCalled();
   });
 
   it("does not run broad provider-hook scans for reasoning output mode", () => {
@@ -2840,19 +2820,15 @@ describe("provider-runtime", () => {
       }),
     ).toBe('{"token":"oauth-access"}');
 
-    await expectResolvedAsyncValues([
-      {
-        actual: () =>
-          buildProviderAuthDoctorHintWithPlugin({
-            provider: DEMO_PROVIDER_ID,
-            context: createDemoProviderContext({
-              profileId: "demo:default",
-              store: { version: 1, profiles: {} },
-            }),
-          }),
-        expected: "Repair demo:default",
-      },
-    ]);
+    await expect(
+      buildProviderAuthDoctorHintWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoProviderContext({
+          profileId: "demo:default",
+          store: { version: 1, profiles: {} },
+        }),
+      }),
+    ).resolves.toEqual("Repair demo:default");
 
     expectResolvedValues([
       {

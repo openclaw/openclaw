@@ -285,6 +285,7 @@ describe("plugin lifecycle protocol validators", () => {
     expect(
       validatePluginsCatalogBrowseParams({
         query: "memory",
+        searchSource: "openclaw-control-ui",
         intent: "official",
         category: "memory",
         cursor: "opaque-cursor",
@@ -295,6 +296,11 @@ describe("plugin lifecycle protocol validators", () => {
     expect(validatePluginsCatalogBrowseParams({ pageSize: 101 })).toBe(false);
     expect(validatePluginsCatalogBrowseParams({ cursor: "x".repeat(4097) })).toBe(false);
     expect(validatePluginsCatalogBrowseParams({ intent: "popular" })).toBe(false);
+    expect(
+      validatePluginsCatalogBrowseParams({ query: "memory", searchSource: "clawhub-web" }),
+    ).toBe(false);
+    expect(validatePluginsCatalogBrowseParams({ query: "memory", searchSource: true })).toBe(false);
+    expect(validatePluginsCatalogBrowseParams({ query: "memory", userId: "operator" })).toBe(false);
   });
 
   it("accepts only URL-safe plugin discovery ids", () => {

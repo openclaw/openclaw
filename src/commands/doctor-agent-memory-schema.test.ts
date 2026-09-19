@@ -11,6 +11,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -103,6 +104,7 @@ describe("doctor agent memory schema repair", () => {
       recreateUnreleasedInlineMemoryMetadata(databasePath);
       if (version === 17) {
         const legacy = openNodeSqliteDatabase(databasePath);
+        removeCanonicalValidationFromHistoricalAgentFixture(legacy);
         legacy.exec(
           "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
         );

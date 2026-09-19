@@ -6,12 +6,15 @@ import type {
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
-import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript.worker.js";
+import type { SessionTranscriptHistoryWorkerInput } from "../config/sessions/session-transcript-worker.types.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 
 const runWorker = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
-  runSessionHistoryWorkerRequest: runWorker,
+  withSessionHistoryWorkerDatabase: (
+    _options: unknown,
+    operation: (owner: { generation: number; run: typeof runWorker }) => unknown,
+  ) => operation({ generation: 1, run: runWorker }),
 }));
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => read(),
@@ -95,6 +98,9 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
 
 it.each([
   { max: 2 },
+  { provider: "other" },
+  { ignoreCliSessionImports: true },
+  { canonicalKey: "agent:main:other" },
   { maxHistoryBytes: 512 },
   { effectiveMaxChars: 20 },
   { offset: 2 },
@@ -175,3 +181,75 @@ it("bounds coalesced waiters and releases their capacity without cloning cancell
     });
   }
 });
+
+it.each([
+  {
+    entry: { sessionId: "history-worker", updatedAt: 1 },
+    key: "agent:main:history-worker",
+    validate: false,
+  },
+  { entry: undefined, key: "", validate: false },
+  { entry: undefined, key: "agent:main:history-worker", validate: true },
+  {
+    entry: { sessionId: "successor", updatedAt: 1 },
+    key: "agent:main:history-worker",
+    validate: true,
+  },
+])(
+  "carries conditional validation without reading or retargeting on enqueue: %j",
+  async ({ entry, key, validate }) => {
+    const pending = readSessionHistoryPageInWorker(request({ entry, canonicalKey: key }));
+    expect(queued).toHaveLength(1);
+    const input = queued[0]!.prepare();
+    expect(input.target.transcript.sessionId).toBe("history-worker");
+    expect(input.target.entryValidationKey).toBe(validate ? key : undefined);
+    expect(input.database).toEqual({
+      agentId: "main",
+      path: expect.stringMatching(/openclaw-agent\.sqlite$/),
+    });
+    expect(input.target).not.toHaveProperty("database");
+    expect(input.target).not.toHaveProperty("env");
+    expect(runWorker.mock.calls[0]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+    queued[0]!.result.resolve(page("requested transcript"));
+    await pending;
+  },
+);
+
+it.each([{ limit: 2 }, { cursor: "7" }, { maxChars: 20 }])(
+  "includes HTTP pagination selectors in coalescing and byte admission: %j",
+  async (difference) => {
+    const rpc = request().params;
+    const params = {
+      target: {
+        agentId: rpc.sessionAgentId,
+        sessionKey: rpc.canonicalKey,
+        sessionId: rpc.sessionId,
+        sessionEntry: rpc.entry,
+        storePath: rpc.storePath,
+      },
+      limit: 10,
+      maxChars: 8000,
+      cursor: undefined as string | undefined,
+    };
+    const first = readSessionHistoryPageInWorker({ kind: "http", params });
+    const second = readSessionHistoryPageInWorker({
+      kind: "http",
+      params: { ...params, ...difference },
+    });
+    expect(queued).toHaveLength(2);
+    for (const [index, job] of queued.entries()) {
+      const input = job.prepare();
+      expect(runWorker.mock.calls[index]![1]).toBe(`1:${JSON.stringify(input)}`.length * 2);
+      job.result.resolve({
+        kind: "http",
+        snapshot: {
+          history: { items: [], messages: [], hasMore: false },
+          rawTranscriptSeq: 0,
+          turnBoundaryPending: false,
+          assistantErrorPending: false,
+        },
+      });
+    }
+    await Promise.all([first, second]);
+  },
+);

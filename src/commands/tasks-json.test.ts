@@ -127,6 +127,47 @@ describe("tasks JSON commands", () => {
     });
   });
 
+  it("preserves full records and newest-insertion ties after filtering", async () => {
+    await withTaskJsonStateDir(async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_800_000_000_000);
+      const first = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-first",
+        status: "running",
+        task: "First selected task",
+        detail: { nested: { values: ["line\nvalue", "\u0000", "🦞"], complete: true } },
+      });
+      createTaskRecord({
+        runtime: "cron",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-out",
+        status: "queued",
+        task: "Unselected task between tied records",
+      });
+      const last = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "filtered-last",
+        status: "running",
+        task: "Last selected task",
+        detail: { nested: { values: [0, false, null], complete: true } },
+      });
+      const runtime = createTestRuntime();
+      await tasksListJsonCommand({ json: true, runtime: "cli", status: "running" }, runtime);
+      expect(readJsonLog(runtime)).toStrictEqual({
+        count: 2,
+        runtime: "cli",
+        status: "running",
+        tasks: [jsonRoundTrip(last), jsonRoundTrip(first)],
+      });
+    });
+  });
+
   it("filters blocked completion outcomes without changing stored statuses or JSON", async () => {
     await withTaskJsonStateDir(async () => {
       const task = createTaskRecord({

@@ -1,4 +1,5 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   placementTurnOwner,
@@ -142,6 +143,7 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
         if (removed.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during failure`);
         }
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return {
           record: getRequired(db, sessionId),
           releasedClaim,

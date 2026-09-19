@@ -63,7 +63,7 @@ extension DashboardWindowController {
     }
 
     private func canUseBrowserDocument(sourceID: String) -> Bool {
-        self.window != nil && self.canDeliverNativeCommands &&
+        self.window != nil && !self.isHiddenForExperience && self.canDeliverNativeCommands &&
             self.notificationSourceID == sourceID && self.hasCurrentBrowserSession &&
             Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }

@@ -6,9 +6,11 @@ import {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
+import { defaultCliWatchdogClock } from "./execute-plugin-watchdog.js";
 import { writeCliSystemPromptFile } from "./helpers.js";
 
 export const executeDeps = {
+  watchdogClock: defaultCliWatchdogClock,
   getProcessSupervisor: getProcessSupervisorImpl,
   enqueueSystemEvent: enqueueSystemEventImpl,
   requestHeartbeat: requestHeartbeatImpl,

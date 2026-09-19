@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.account behavior.
 import * as crypto from "node:crypto";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -28,7 +27,11 @@ import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
-import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
+import {
+  normalizeFeishuEventChatType,
+  type FeishuChatType,
+  type ResolvedFeishuAccount,
+} from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
@@ -121,7 +124,7 @@ export async function resolveReactionSyntheticEvent(
   }
 
   const fallbackChatType = reactedMsg.chatType;
-  const normalizedEventChatType = normalizeFeishuChatType(event.chat_type);
+  const normalizedEventChatType = normalizeFeishuEventChatType(event.chat_type);
   const resolvedChatType = normalizedEventChatType ?? fallbackChatType;
   if (!resolvedChatType) {
     logger?.(
@@ -159,12 +162,6 @@ export async function resolveReactionSyntheticEvent(
       }),
     },
   };
-}
-
-function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
-    ? value
-    : undefined;
 }
 
 type RegisterEventHandlersContext = {

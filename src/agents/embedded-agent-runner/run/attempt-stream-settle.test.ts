@@ -19,6 +19,7 @@ import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/gener
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -58,6 +59,9 @@ vi.mock("../../provider-stream.js", async (importOriginal) => ({
 type SettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
 type PrepareTransportInput = Parameters<typeof prepareEmbeddedAttemptTransport>[0];
 const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
+const admittedRunContext = {
+  operationalRunInstance: createOperationalRunInstanceRef("test-run"),
+};
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
@@ -512,6 +516,7 @@ function createTransportFixture(testCase: {
       resolvedApiKey: undefined,
       authStorage: { getApiKey: async () => testCase.apiKey },
       runId: "run-transport-1",
+      admittedRunContext,
       runtimePlan: {
         auth: { forwardedAuthProfileId: undefined },
         transport: {
@@ -702,6 +707,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
           modelId: model.id,
           provider: model.provider,
           runId: "run-native-video",
+          admittedRunContext,
           runtimePlan: {
             auth: { forwardedAuthProfileId: undefined },
             transport: { resolveExtraParams: () => ({}) },
@@ -764,6 +770,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         modelId: model.id,
         provider: model.provider,
         runId: "run-native-image-failure",
+        admittedRunContext,
         runtimePlan: {
           auth: { forwardedAuthProfileId: undefined },
           transport: { resolveExtraParams: () => ({}) },

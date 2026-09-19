@@ -1,4 +1,3 @@
-// Memory Core plugin module implements mmr behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jaccardSimilarity, tokenize } from "./tokenize.js";
 

@@ -31,7 +31,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(result).toEqual({ ok: true, moduleExport: { marker: "native" } });
   });
 
-  it("declines modules that need source-transform fallback", () => {
+  it("uses source-transform fallback only when native TLA loading needs it", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.mjs");
     fs.writeFileSync(
@@ -40,35 +40,45 @@ describe("tryNativeRequireJavaScriptModule", () => {
       "utf8",
     );
 
-    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-      ok: false,
-    });
-  });
-
-  it("declines an in-flight ESM require race for source-transform fallback", () => {
-    const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "plugin.cjs");
-    fs.writeFileSync(modulePath, "module.exports = {};\n", "utf8");
-    const error = Object.assign(new Error("ESM is still loading"), {
-      code: "ERR_REQUIRE_ESM_RACE_CONDITION",
-    });
-    type ModuleLoad = (
-      request: string,
-      parent: NodeJS.Module | undefined,
-      isMain: boolean,
-    ) => unknown;
-    const originalLoad = Reflect.get(Module, "_load") as ModuleLoad;
-    Reflect.set(Module, "_load", () => {
-      throw error;
-    });
-
-    try {
-      expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
-        ok: false,
-      });
-    } finally {
-      Reflect.set(Module, "_load", originalLoad);
+    const result = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
+    if (process.versions.bun) {
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.moduleExport).toMatchObject({ marker: "esm" });
+      }
+    } else {
+      expect(result).toEqual({ ok: false });
     }
   });
+
+  // Bun does not route module loads through Node's private Module._load hook.
+  it.runIf(!process.versions.bun)(
+    "declines an in-flight ESM require race for source-transform fallback",
+    () => {
+      const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "plugin.cjs");
+      fs.writeFileSync(modulePath, "module.exports = {};\n", "utf8");
+      const error = Object.assign(new Error("ESM is still loading"), {
+        code: "ERR_REQUIRE_ESM_RACE_CONDITION",
+      });
+      type ModuleLoad = (
+        request: string,
+        parent: NodeJS.Module | undefined,
+        isMain: boolean,
+      ) => unknown;
+      const originalLoad = Reflect.get(Module, "_load") as ModuleLoad;
+      Reflect.set(Module, "_load", () => {
+        throw error;
+      });
+
+      try {
+        expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
+          ok: false,
+        });
+      } finally {
+        Reflect.set(Module, "_load", originalLoad);
+      }
+    },
+  );
 
   it("declines missing target modules so callers can try source fallback", () => {
     const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "missing.cjs");
@@ -88,17 +98,17 @@ describe("tryNativeRequireJavaScriptModule", () => {
     );
   });
 
-  it("declines missing dependency errors when source-transform fallback is available", () => {
+  it("does not retry an existing module after a missing dependency error", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.cjs");
     fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk/core");\n', "utf8");
 
-    expect(
+    expect(() =>
       tryNativeRequireJavaScriptModule(modulePath, {
         allowWindows: true,
         fallbackOnMissingDependency: true,
       }),
-    ).toEqual({ ok: false });
+    ).toThrow("openclaw/plugin-sdk/core");
   });
 
   beforeAll(() => {
@@ -153,18 +163,17 @@ describe("tryNativeRequireJavaScriptModule", () => {
     expect(nativeEsmGraphProbe.stdout.trim()).toBe("adapter");
   });
 
-  it("declines missing dependency errors when the caller can use source transform fallback", () => {
+  it("uses source transform only when native JavaScript-to-TypeScript lookup needs it", () => {
     const dir = tempDirs.make("openclaw-native-require-");
     const modulePath = path.join(dir, "plugin.cjs");
     fs.writeFileSync(modulePath, 'require("./helper.js");\n', "utf8");
     fs.writeFileSync(path.join(dir, "helper.ts"), "export const loaded = true;\n", "utf8");
 
-    expect(
-      tryNativeRequireJavaScriptModule(modulePath, {
-        allowWindows: true,
-        fallbackOnNativeError: true,
-      }),
-    ).toEqual({ ok: false });
+    const result = tryNativeRequireJavaScriptModule(modulePath, {
+      allowWindows: true,
+      fallbackOnNativeError: true,
+    });
+    expect(result).toEqual(process.versions.bun ? { ok: true, moduleExport: {} } : { ok: false });
   });
 
   it("propagates real module evaluation errors instead of falling back", () => {
@@ -245,21 +254,24 @@ console.log("native path + file URL process identity; missing target/dependency 
     );
   });
 
-  it("retains terminal ESM failures across eviction and alias changes until a new path loads", async () => {
-    const dir = tempDirs.make("openclaw-native-failed-generation-");
-    const ownerPath = path.join(dir, "native-require.mjs");
-    await build({
-      entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
-      bundle: true,
-      platform: "node",
-      format: "esm",
-      outfile: ownerPath,
-      logLevel: "silent",
-    });
-    const probePath = path.join(dir, "probe.mjs");
-    fs.writeFileSync(
-      probePath,
-      `import assert from "node:assert/strict";
+  // Bun's public resolver owns aliases; this case exercises Node's private _resolveFilename hook.
+  it.runIf(!process.versions.bun)(
+    "retains terminal ESM failures across eviction and alias changes until a new path loads",
+    async () => {
+      const dir = tempDirs.make("openclaw-native-failed-generation-");
+      const ownerPath = path.join(dir, "native-require.mjs");
+      await build({
+        entryPoints: [path.resolve("src/plugins/native-module-require.ts")],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        outfile: ownerPath,
+        logLevel: "silent",
+      });
+      const probePath = path.join(dir, "probe.mjs");
+      fs.writeFileSync(
+        probePath,
+        `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -317,18 +329,19 @@ assert.deepEqual(load(aliasRequest, {
 }), { ok: true, moduleExport: "first" });
 console.log("terminal error retained; new generation recovered");
 `,
-    );
-    // tsx changes named-import linking, so this contract needs an unhooked Node process.
-    const result = spawnSync(process.execPath, [probePath], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      encoding: "utf8",
-      timeout: 30_000,
-    });
+      );
+      // tsx changes named-import linking, so this contract needs an unhooked Node process.
+      const result = spawnSync(process.execPath, [probePath], {
+        cwd: process.cwd(),
+        env: { ...process.env, NODE_OPTIONS: "" },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("terminal error retained; new generation recovered");
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("terminal error retained; new generation recovered");
+    },
+  );
 });
 
 describe("isJavaScriptModulePath", () => {

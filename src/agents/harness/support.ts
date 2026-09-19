@@ -1,8 +1,7 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString as readStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
+  findConfiguredProviderModel,
   createModelProviderRouteOverrideResolver,
 } from "../../config/model-provider-config.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
@@ -119,13 +118,11 @@ export function buildAgentHarnessSupportContext(
   const authoredConfig = params.config
     ? projectConfigOntoRuntimeSourceSnapshot(params.config)
     : undefined;
-  const modelId = params.modelId ? normalizeModelId(params.provider, params.modelId) : undefined;
+  const modelId = params.modelId?.trim();
   const modelConfig = modelId
-    ? resolveMergedModelProviderModels({
-        models: providerConfig?.models,
-        normalizeModelId: (configuredModelId) =>
-          normalizeModelId(params.provider, configuredModelId),
-      }).get(modelId)
+    ? findConfiguredProviderModel(providerConfig, params.provider, modelId, (configuredModelId) =>
+        canonicalizeProviderModelId(params.provider, configuredModelId),
+      )
     : undefined;
   const agentId = resolveAgentRuntimePolicyAgentId(params);
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
@@ -305,15 +302,4 @@ function isSupportedHarness(entry: {
   support: AgentHarnessSupport & { supported: true };
 } {
   return entry.support.supported;
-}
-
-function normalizeModelId(provider: string, modelId: string): string {
-  const trimmed = modelId.trim();
-  const slashIndex = trimmed.indexOf("/");
-  const unqualified =
-    slashIndex > 0 &&
-    normalizeProviderId(trimmed.slice(0, slashIndex)) === normalizeProviderId(provider)
-      ? trimmed.slice(slashIndex + 1).trim()
-      : trimmed;
-  return canonicalizeProviderModelId(provider, unqualified);
 }

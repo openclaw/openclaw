@@ -23,7 +23,8 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 const CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES = 64;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
-const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = KIB;
+// Immediate Home and diagnostic frames approved in #147574, including shared header styles.
+const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
 // The opaque Mermaid sandbox loads one self-contained classic script only when
 // a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
 const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
@@ -49,11 +50,10 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 350 KiB maintainer-approved by Vyctor 2026-08-11 for #121686;
-  // #121734 left main 6 B below the prior 319 KiB hard ceiling.
-  startupJsGzipBytes: 350 * KIB,
+  // 355 KiB approved in #149291 for the measured existing bundle; growth allowances stay fixed.
+  startupJsGzipBytes: 355 * KIB,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
-  // The fixed 50 KiB ceiling bounds accumulation of sub-KiB changes.
+  // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
   largestJsGzipBytes: 215 * KIB,
   // Composer multiline surface (stack #124301) legitimately grew boot CSS;

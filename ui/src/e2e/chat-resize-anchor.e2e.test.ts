@@ -34,6 +34,7 @@ type AnchorSample = {
   topDelta: number;
   scrollTop: number;
   visibleKeys: string[];
+  contentVisible: boolean;
 };
 
 async function sampleAnchor(page: Page, anchorKey: string | null): Promise<AnchorSample> {
@@ -41,13 +42,20 @@ async function sampleAnchor(page: Page, anchorKey: string | null): Promise<Ancho
     const inner = document.querySelector<HTMLElement>(".chat-thread-inner--virtual");
     const scroller = inner?.parentElement;
     if (!inner || !scroller) {
-      return { key: null, topDelta: Number.NaN, scrollTop: Number.NaN, visibleKeys: [] };
+      return {
+        key: null,
+        topDelta: Number.NaN,
+        scrollTop: Number.NaN,
+        visibleKeys: [],
+        contentVisible: false,
+      };
     }
     const scrollerRect = scroller.getBoundingClientRect();
     const rows = [...inner.querySelectorAll<HTMLElement>(".chat-virtual-row")]
       .map((row) => ({
         key: row.dataset.virtualRowKey ?? "",
         rect: row.getBoundingClientRect(),
+        contentRect: row.querySelector(".chat-group-messages")?.getBoundingClientRect(),
       }))
       .filter(({ rect }) => rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom)
       .toSorted((left, right) => left.rect.top - right.rect.top);
@@ -57,6 +65,10 @@ async function sampleAnchor(page: Page, anchorKey: string | null): Promise<Ancho
       topDelta: anchor ? anchor.rect.top - scrollerRect.top : Number.NaN,
       scrollTop: scroller.scrollTop,
       visibleKeys: rows.map((row) => row.key),
+      contentVisible:
+        anchor?.contentRect !== undefined &&
+        anchor.contentRect.bottom > scrollerRect.top &&
+        anchor.contentRect.top < scrollerRect.bottom,
     };
   }, anchorKey);
 }
@@ -114,19 +126,34 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
         timeout: 15_000,
       });
 
-    // Scroll to the middle of the transcript and let the virtualizer settle.
-    await page.evaluate(() => {
-      const scroller = document.querySelector<HTMLElement>(
-        ".chat-thread-inner--virtual",
-      )?.parentElement;
-      if (scroller) {
-        scroller.scrollTop = Math.floor((scroller.scrollHeight - scroller.clientHeight) / 2);
-      }
-    });
+    const scroller = page.locator(".chat-thread");
+    await expect
+      .poll(() =>
+        scroller.evaluate(
+          (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+      )
+      .toBeLessThanOrEqual(2);
+
+    // Native reader input interrupts initial end anchoring; assigning scrollTop
+    // alone can race that owner and leave this case pinned to the latest message.
+    const readingDelta = await scroller.evaluate((element) =>
+      Math.floor((element.scrollHeight - element.clientHeight) / 2),
+    );
+    await scroller.hover();
+    await page.mouse.wheel(0, -readingDelta);
     await settleFrames(page, 30);
+    const readingPosition = await scroller.evaluate((element) => ({
+      top: element.scrollTop,
+      endDistance: element.scrollHeight - element.clientHeight - element.scrollTop,
+      height: element.clientHeight,
+    }));
+    expect(readingPosition.top).toBeGreaterThan(readingPosition.height);
+    expect(readingPosition.endDistance).toBeGreaterThan(readingPosition.height);
 
     const before = await sampleAnchor(page, null);
     expect(before.key).not.toBeNull();
+    expect(before.contentVisible, "reader anchor contains visible message content").toBe(true);
 
     const widths = [1000, 820, 1280];
     const observations: { width: number; sample: AnchorSample }[] = [];

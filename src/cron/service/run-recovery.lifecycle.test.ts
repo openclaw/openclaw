@@ -225,8 +225,15 @@ describe.each([
             await start(next);
             if (mode === "manual-delayed-force") {
               await vi.advanceTimersByTimeAsync(MIN_REFIRE_GAP_MS);
-              await vi.waitFor(async () =>
-                expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBeUndefined(),
+              await vi.waitFor(
+                async () => {
+                  expect(runCommandJob).toHaveBeenCalledTimes(2);
+                  expect(
+                    (await loadCronStore(storePath)).jobs[0]?.state.runningAtMs,
+                  ).toBeUndefined();
+                  expect(next.activeTimerTicks).toBe(0);
+                },
+                { interval: 0 },
               );
             }
             // A force run reserved before the slot borrows it; once due, its

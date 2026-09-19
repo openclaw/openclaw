@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Explicit AI onboarding",
@@ -53,7 +54,8 @@ suite.define(() => {
           recordVideo: { dir: suite.artifactDir, size: { width: 1080, height: 850 } },
         },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
+          const installGateway = query ? installMockGateway : installSetupGateway;
+          const gateway = await installGateway(page, {
             featureMethods: [
               "openclaw.setup.detect",
               "openclaw.setup.activate.start",
@@ -70,14 +72,18 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(suite.server.baseUrl + "settings/model-setup" + query);
+          if (query) {
+            await page.goto(suite.server.baseUrl + "settings/model-setup" + query);
+          } else {
+            await openModelSetup(page, suite.server.baseUrl);
+          }
           await page.getByRole("heading", { name: "Found on this Gateway" }).waitFor();
           const choices = page.locator("[data-candidate-kind]");
           expect(await choices.first().textContent()).toContain("Anthropic");
           expect(await page.getByLabel("Show existing native conversations").isChecked()).toBe(
             false,
           );
-          expect(await page.locator("[data-selected]").count()).toBe(0);
+          expect(await page.locator("openclaw-model-setup-page [data-selected]").count()).toBe(0);
           await page.getByRole("button", { name: "Check again", exact: true }).click();
           await gateway.waitForRequest("openclaw.setup.detect", { after: 1 });
           await page.getByRole("heading", { name: "Found on this Gateway" }).waitFor();
@@ -196,7 +202,7 @@ suite.define(() => {
       },
       async ({ page, context }) => {
         const modelRef = "meta/fixture-model";
-        const gateway = await installMockGateway(page, {
+        const gateway = await installSetupGateway(page, {
           featureMethods: [
             "openclaw.setup.detect",
             "openclaw.setup.auth.start",
@@ -219,7 +225,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(suite.server.baseUrl + "settings/model-setup");
+        await openModelSetup(page, suite.server.baseUrl);
         await page.locator('[data-auth-choice="meta-api-key"] button').click();
         const start = await gateway.waitForRequest("openclaw.setup.auth.start");
         expect(start.params).toMatchObject({
@@ -300,7 +306,7 @@ suite.define(() => {
           recordVideo: { dir: suite.artifactDir, size: { width: 1080, height: 850 } },
         },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
+          const gateway = await installSetupGateway(page, {
             featureMethods: [
               "openclaw.setup.detect",
               "openclaw.setup.auth.start",
@@ -334,7 +340,7 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(suite.server.baseUrl + "settings/model-setup");
+          await openModelSetup(page, suite.server.baseUrl);
           await page.locator('[data-auth-choice="custom-api-key"] button').click();
           expect((await gateway.waitForRequest("openclaw.setup.auth.start")).params).toMatchObject({
             authChoice: "custom-api-key",
@@ -342,12 +348,20 @@ suite.define(() => {
           });
           const dialog = page.locator("openclaw-modal-dialog");
           if (outcome === "remote") {
-            await dialog
-              .getByText(
-                "Run openclaw onboard on the Gateway host to configure this custom endpoint.",
-                { exact: false },
-              )
-              .waitFor();
+            const alert = dialog.getByRole("alert");
+            await alert.waitFor();
+            expect((await alert.textContent())?.trim()).toBe(
+              "Could not finish. Open Details to see what to do next.",
+            );
+            const details = dialog.locator("details");
+            expect(await details.getAttribute("open")).toBeNull();
+            const diagnostic = details.getByText(
+              "Run openclaw onboard on the Gateway host to configure this custom endpoint.",
+              { exact: true },
+            );
+            expect(await diagnostic.isVisible()).toBe(false);
+            await details.getByText("Details", { exact: true }).click();
+            await diagnostic.waitFor();
             expect(await gateway.getRequests("wizard.next")).toHaveLength(0);
             expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
             await page.screenshot({
@@ -386,11 +400,20 @@ suite.define(() => {
             if (outcome === "success") {
               await page.locator(".model-setup-success").waitFor();
             } else {
-              await dialog
-                .getByText("The selected endpoint could not be reached. Check its address.", {
-                  exact: false,
-                })
-                .waitFor();
+              const alert = dialog.getByRole("alert");
+              await alert.waitFor();
+              expect((await alert.textContent())?.trim()).toBe(
+                "Could not finish. Open Details to see what to do next.",
+              );
+              const details = dialog.locator("details");
+              expect(await details.getAttribute("open")).toBeNull();
+              const diagnostic = details.getByText(
+                "The selected endpoint could not be reached. Check its address.",
+                { exact: true },
+              );
+              expect(await diagnostic.isVisible()).toBe(false);
+              await details.getByText("Details", { exact: true }).click();
+              await diagnostic.waitFor();
             }
           }
           expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);

@@ -10,6 +10,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
@@ -48,7 +49,8 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 const testStateDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   });
@@ -143,7 +145,8 @@ function utf32Buffer(value: string, endian: "le" | "be", includeBom = true): Buf
 }
 
 describe("Synology Chat hosted outbound media", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(testStateDir, { recursive: true, force: true });
     fs.mkdirSync(testStateDir, { recursive: true });

@@ -71,8 +71,9 @@ export function describeSessionLinkRule(base: string): string {
 /** Describes the sessions_list tool for model-facing instructions. */
 export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
   return [
-    "List visible sessions and sidebar groups; filter kind/label/agentId/search/activity/archive.",
-    "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
+    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
+    "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
+    "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
     "Use before history/send target selection.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
@@ -102,6 +103,7 @@ export function describeSessionsSendTool(): string {
     "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
     "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
     SESSIONS_SEND_RESULT_GUIDANCE,
+    "mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work; mode:followup starts or queues a later turn without steering. mode:resume continues your paused native child task; returns runId/taskRunId, with completion from the task owner, not inline. Resume rejects watch:true and positive timeoutSeconds. Omit mode for existing automatic routing.",
     'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");
@@ -144,7 +146,8 @@ export function describeSessionsSpawnTool(options?: {
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
     "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task; omit `visible` or set it false, and report results through the parent.",
-    '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
+    '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
+    "`placement` selects a configured cloud profile with optional `os`/`machineClass`; requires `visible=true` and `worktree=true`. Creates first, dispatches, then starts the task; cloud failures retain the child for inspection, never fall back locally.",
     visibilityLine,
     ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
     "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",

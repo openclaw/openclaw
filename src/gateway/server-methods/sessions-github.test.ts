@@ -168,23 +168,13 @@ describe("sessions.github.publish", () => {
   });
 
   it.each([
-    {
-      sessionKey: "agent:research:main",
-      expectedAgent: "research",
-      ownership: "legacy",
-      agentId: undefined,
-    },
-    { sessionKey: "global", expectedAgent: "ops", ownership: "legacy", agentId: undefined },
-    {
-      sessionKey: "agent:research:main",
-      expectedAgent: "research",
-      ownership: "explicit",
-      agentId: undefined,
-    },
-    { sessionKey: "global", expectedAgent: "research", ownership: "explicit", agentId: "research" },
+    ["agent:research:main", "research", "legacy", undefined],
+    ["global", "ops", "legacy", undefined],
+    ["agent:research:main", "research", "explicit", undefined],
+    ["global", "research", "explicit", "research"],
   ])(
-    "publishes $sessionKey from the actual $expectedAgent store with $ownership ownership",
-    async ({ sessionKey, expectedAgent, ownership, agentId: requestedAgentId }) => {
+    "publishes %s from the actual %s store with %s ownership",
+    async (sessionKey, expectedAgent, ownership, requestedAgentId) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         await state.writeConfig({
           session: { scope: "global" },

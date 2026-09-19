@@ -2,13 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export const GATEWAY_UPDATE_EXECUTOR_CONTRACT = "root-spawner-v1";
 
-const owners = new AsyncLocalStorage<() => void>();
+const owners = new AsyncLocalStorage<{ assertCurrent: () => void; originalRoot?: string }>();
 
 /** The target CLI installs this only after binding its original update grant.
  * It remains in inherited async work after closure, where assertions must fail. */
 export async function withGatewayServiceUpdateAuthority<T>(
   assertOwner: () => void,
   operation: () => Promise<T>,
+  originalRoot?: string,
 ): Promise<T> {
   let active = true;
   const assertCurrent = () => {
@@ -19,7 +20,7 @@ export async function withGatewayServiceUpdateAuthority<T>(
   };
   assertCurrent();
   try {
-    return await owners.run(assertCurrent, async () => {
+    return await owners.run({ assertCurrent, originalRoot }, async () => {
       const result = await operation();
       assertCurrent();
       return result;
@@ -31,7 +32,14 @@ export async function withGatewayServiceUpdateAuthority<T>(
 
 /** Ordinary user service commands have no update owner and retain their behavior. */
 export function assertGatewayServiceUpdateCurrent(): void {
-  owners.getStore()?.();
+  owners.getStore()?.assertCurrent();
+}
+
+/** Original-root evidence is usable only while the delegated owner remains live. */
+export function readGatewayServiceUpdateOriginalRoot(): string | undefined {
+  const owner = owners.getStore();
+  owner?.assertCurrent();
+  return owner?.originalRoot;
 }
 
 export function isUpdateOwnedGatewayServiceCommand(): boolean {

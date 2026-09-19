@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
-import { ArchivedTranscriptReader } from "./session-utils.fs.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 
 function activity(id: string, afterEntryId: string | null, startOrder: number) {
   return createNestedToolActivity({

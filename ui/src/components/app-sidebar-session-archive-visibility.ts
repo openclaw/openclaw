@@ -18,6 +18,7 @@ export function projectSidebarArchiveVisibility(input: {
     const visibility = input.archiveVisibility(row.key);
     return (
       input.deletionState(row.key, input.selectedAgentId) ||
+      visibility === "pending" ||
       (input.statusFilter === "active" && visibility === "archived") ||
       (input.statusFilter === "archived" && row.archived !== true)
     );

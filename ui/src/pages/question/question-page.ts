@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -33,7 +32,7 @@ type QuestionPageRequestError = "connection" | "unavailable" | null;
 
 export class QuestionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
-  context!: ApplicationContext<RouteId>;
+  context!: ApplicationContext;
 
   @property({ attribute: "question-id" }) questionId = "";
   @state() private loading = true;
@@ -136,7 +135,6 @@ export class QuestionPage extends OpenClawLightDomElement {
       }
       const record = result.question;
       if (
-        record.id !== id ||
         (record.status !== "pending" &&
           record.status !== "answered" &&
           record.status !== "cancelled" &&

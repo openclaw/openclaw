@@ -10,8 +10,9 @@ import type {
   GatewayServiceEnv,
   GatewayServiceUnitInspection,
   SystemdServiceReadBinding,
+  SystemdServiceReadTarget,
 } from "./service-types.js";
-import { execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
+import { execBusctlSystem, execBusctlUser, systemdInspectionError } from "./systemd-exec.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import { readSystemdUserTransport } from "./systemd-user-transport.js";
 
@@ -27,14 +28,16 @@ const isInt32 = (value: unknown): value is number =>
 const optionalCounter = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
-/** Update admission already selects the user manager; missing/changed objects remain unknown. */
+/** The selected manager must retain the same loaded unit throughout inspection. */
 export async function readLoadedSystemdServiceRuntime(
   env: GatewayServiceEnv,
   timeoutMs?: number,
   inspection?: GatewayServiceUnitInspection,
   binding?: SystemdServiceReadBinding,
+  target?: SystemdServiceReadTarget,
 ): Promise<GatewayServiceRuntime> {
-  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  const unitName = target?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  const scope = target?.scope ?? "user";
   const budget =
     timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000;
   const deadline = performance.now() + budget;
@@ -52,7 +55,7 @@ export async function readLoadedSystemdServiceRuntime(
       throw unavailable();
     }
     if (binding) {
-      if (binding.unit !== unitName) {
+      if (scope === "system" || binding.unit !== unitName) {
         throw unavailable();
       }
       remainingQueries--;
@@ -66,15 +69,15 @@ export async function readLoadedSystemdServiceRuntime(
       }
       return values;
     }
-    const result = await execBusctlUser(
-      env,
-      ["--auto-start=no", "--json=short", ...args],
-      Math.max(1, Math.floor(remaining / remainingQueries--)),
-      assertCurrent,
-    );
+    const queryArgs = ["--auto-start=no", "--json=short", ...args];
+    const callTimeout = Math.max(1, Math.floor(remaining / remainingQueries--));
+    const result =
+      scope === "system"
+        ? await execBusctlSystem(queryArgs, callTimeout)
+        : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
     assertCurrent?.();
     if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
-      throw systemdInspectionError(result, unavailable().message);
+      throw systemdInspectionError(result, unavailable().message, scope);
     }
     const values = result.stdout
       .trim()
@@ -125,7 +128,10 @@ export async function readLoadedSystemdServiceRuntime(
       throw unavailable();
     }
     const managerUid = credentials[0];
-    if (inspection && managerUid !== inspection.managerUid) {
+    if (
+      (scope === "system" && managerUid !== 0) ||
+      (inspection && managerUid !== inspection.managerUid)
+    ) {
       throw unavailable();
     }
     const [unit] = await query(
@@ -255,7 +261,8 @@ export async function readLoadedSystemdServiceRuntime(
         exitCode
       ],
       systemd: {
-        transport: await readSystemdUserTransport(env),
+        scope,
+        ...(scope === "user" ? { transport: await readSystemdUserTransport(env) } : {}),
         unit: id,
         managerUid,
         result,

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type {
   OpenClawAgentDatabase,
@@ -19,7 +20,10 @@ export function withOpenClawAgentDatabaseWrite<T>(
   operation: (database: OpenClawAgentDatabase) => T,
   expectedDatabase?: DatabaseSync,
 ): Promise<T> {
-  const options = { ...inputOptions, env: { ...(inputOptions.env ?? process.env) } };
+  const options = {
+    ...inputOptions,
+    env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),
+  };
   // Relative paths and legacy-root discovery must not retarget a queued operation.
   options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
   options.path = resolveOpenClawAgentSqlitePath(options);

@@ -17,7 +17,10 @@ import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { bindCronManagementGrant } from "../cron-creator-authority-context.js";
+import {
+  bindCronManagementGrant,
+  bindCronRequesterGrant,
+} from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
@@ -191,7 +194,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
-Authenticated Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns have a restricted inventory; use a fresh admin Control UI turn or the Automations page for cross-session management.
+SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page; do not bypass caller scope. Genuinely new, requested automations can still be created.
 
 ADD: ${addFields}. Required: schedule+payload.
 
@@ -222,6 +225,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const gatewayCall = deps?.callGatewayTool ?? callGatewayTool;
   const managementAuthority = bindCronManagementGrant(opts?.runId);
+  const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const tool: AnyAgentTool = {
@@ -229,7 +233,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: managementAuthority?.managementOnly
-      ? 'Manage any existing automation on this Gateway as the authenticated Control UI administrator. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
+      ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
       : buildCronToolDescription({ triggersEnabled }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
@@ -248,16 +252,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
       ) => {
         const identity = getGatewayToolCallerIdentity();
         const grant = managementAuthority?.mint(request[0], operationSignal);
-        if (grant && !identity) {
+        const requesterGrant =
+          !grant &&
+          !identity?.cronCreatorAuthorityGrant &&
+          (request[0] === "cron.add" || request[0] === "cron.update")
+            ? (requesterAuthority ?? identity?.mintCronRequesterGrant)?.(operationSignal)
+            : undefined;
+        if ((grant || requesterGrant) && !identity) {
           throw new Error(
-            "Automation management requires the active Control UI administrator turn.",
+            "Automation management requires the active configured channel owner or Control UI administrator turn.",
           );
         }
-        return grant && identity
+        return (grant || requesterGrant) && identity
           ? await withGatewayToolCallerIdentity(
               {
                 ...identity,
-                cronManagementGrant: grant,
+                ...(grant ? { cronManagementGrant: grant } : {}),
+                ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
               },
               () => gatewayCall<T>(...request),
             )
@@ -385,7 +396,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 ...(!managementAuthority
                   ? {
                       scopeHint:
-                        "Restricted automation inventory. For Gateway-wide management, use a fresh authenticated Control UI administrator turn or the Automations page.",
+                        "Restricted automation inventory. For Gateway-wide management, use a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page.",
                     }
                   : {}),
               });

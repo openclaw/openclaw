@@ -223,6 +223,7 @@ also requires Chrome's **Allow access to file URLs** setting.
 An agent-created tab may start at `about:blank` while a CDP client initializes
 it before navigating. The extension allows that specific initial tab, keeps it
 in the OpenClaw group, and applies the same pause and access-mode controls.
+Normal navigation keeps the tab available in either access mode.
 Existing blank tabs, manually grouped blanks, and other `about:` pages remain
 unavailable. Navigating away, replacing the tab, or restarting or reconnecting
 the extension ends the initial blank admission. Returning to `about:blank`
@@ -396,6 +397,12 @@ pending network requests are canceled. These paths do not change the access
 mode or paused tabs. Take a fresh snapshot after the target reattaches before
 using element refs. If a client no longer exposes the target, reconnect that
 client.
+
+If Chrome closes a native target while its tab remains accessible, the relay
+restores automatic attachments for clients that still subscribe to that tab.
+It rechecks current access and gives clients a fresh session; it never replays
+the failed command. Explicit client detach and Chrome's debugger Cancel action
+remain effective. Take a fresh snapshot before continuing after recovery.
 
 If native detach fails, the error is reported and cleanup debt stays with that
 exact attachment. Other tabs remain usable, but the affected tab cannot acquire

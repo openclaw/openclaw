@@ -3,9 +3,17 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { OpenClawStateExternalOwnershipError } from "../../state/openclaw-state-ownership.js";
-import { deleteTestEnvValue, setTestEnvValue, withEnvAsync } from "../../test-utils/env.js";
+import {
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnv,
+  withEnvAsync,
+} from "../../test-utils/env.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
-import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
 import { ackDelivery, retireUnsentDelivery } from "./delivery-queue-ack.js";
 import {
   createDeliveryQueueMediaRetention,
@@ -36,17 +44,16 @@ describe("captured delivery queue state", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
 
   function claimState(): DeliveryQueueStateContext {
-    const context: DeliveryQueueStateContext = {
-      stateDir: tmpDir(),
-      supervisorMode: "external",
-    };
+    const stateDir = tmpDir();
     claimOpenClawStateOwnership("queue-fixture", {
       env: {
-        OPENCLAW_STATE_DIR: context.stateDir,
+        OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_SUPERVISOR_MODE: "external",
       },
     });
-    return context;
+    return withEnv({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
+      captureDeliveryQueueStateContext(stateDir),
+    );
   }
 
   it("keeps preparation, retry evidence, and ACK on the captured state after ambient changes", async () => {
@@ -62,8 +69,8 @@ describe("captured delivery queue state", () => {
             id,
             run: async (owner) => {
               await Promise.resolve();
-              owner.beforeFirstModifier();
-              owner.markPrepared();
+              await owner.beforeFirstModifier();
+              await owner.markPrepared();
               const queued = await enqueuePreparedDeliveryOnce(
                 {
                   channel: "matrix",
@@ -73,7 +80,7 @@ describe("captured delivery queue state", () => {
                   completionRetention: "permanent",
                 },
                 id,
-                owner.current(),
+                await owner.current(),
                 undefined,
                 undefined,
                 context,
@@ -135,7 +142,9 @@ describe("captured delivery queue state", () => {
         undefined,
         external,
       );
-      const captured: DeliveryQueueStateContext = { stateDir: external.stateDir };
+      const captured = withEnv({ OPENCLAW_SUPERVISOR_MODE: undefined }, () =>
+        captureDeliveryQueueStateContext(external.stateDir),
+      );
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         const result =
           operation === "read"
@@ -171,7 +180,17 @@ describe("captured delivery queue state", () => {
           const custom = vi.fn(send);
           const internal = vi.fn(
             async (params: Parameters<DeliverFn>[0], captured: DeliveryQueueStateContext) => {
-              expect(captured).toEqual(context);
+              expect(captured.stateDir).toBe(context.stateDir);
+              expect(captured.supervisorMode).toBe(context.supervisorMode);
+              expect(captured.workerContext.admission.databasePath).toBe(
+                context.workerContext.admission.databasePath,
+              );
+              expect(captured.workerContext.environment.OPENCLAW_STATE_DIR).toBe(
+                context.workerContext.environment.OPENCLAW_STATE_DIR,
+              );
+              expect(captured.workerContext.environment.OPENCLAW_SUPERVISOR_MODE).toBe(
+                context.workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
+              );
               return send(params);
             },
           );

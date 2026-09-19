@@ -39,6 +39,20 @@ suite.define(() => {
               result: { content: [{ type: "text", text: "Workspace ready." }] },
             },
           };
+          const itemEvent = {
+            ...toolEvent,
+            seq: 2,
+            stream: "item",
+            data: {
+              itemId: "tool:workspace-check",
+              toolCallId: "workspace-check",
+              kind: "tool",
+              name: "read",
+              title: "Check workspace",
+              phase: "end",
+              status: "completed",
+            },
+          };
           const message = {
             role: "assistant",
             content: [{ type: "text", text }],
@@ -70,7 +84,7 @@ suite.define(() => {
             runId,
             startedAt: 1_000,
             text: steer ? `${text} Checking the follow-up.` : text,
-            ...(tool ? { events: [toolEvent] } : {}),
+            ...(tool ? { events: [toolEvent, itemEvent] } : {}),
           };
           const gateway = await installMockGateway(page, {
             historyMessages: [],
@@ -88,6 +102,7 @@ suite.define(() => {
           });
           if (tool) {
             await gateway.emitGatewayEvent("agent", toolEvent);
+            await gateway.emitGatewayEvent("agent", itemEvent);
           }
           const persist = () =>
             gateway.emitGatewayEvent("session.message", {
@@ -174,7 +189,7 @@ suite.define(() => {
         { itemId: "commentary-item-two", text: "Checking the result." },
       ];
       const events = items.map(({ itemId, text }, index) => ({
-        data: { kind: "preamble", itemId, phase: "update", progressText: text },
+        data: { kind: "preamble", itemId, phase: "end", progressText: text },
         runId,
         seq: index + 1,
         sessionKey: "agent:main:main",
@@ -227,6 +242,75 @@ suite.define(() => {
         await page.screenshot({
           fullPage: true,
           path: path.join(suite.artifactDir, "commentary-reconciliation.png"),
+        });
+      }
+    });
+  });
+
+  it("keeps persisted commentary once when its replay items were evicted", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const runId = "evicted-commentary-run";
+      const commentary = ["Checking the workspace.", "The focused tests are green."];
+      const historyMessages = [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Inspect the workspace." }],
+          __openclaw: { id: "user", seq: 1, idempotencyKey: `${runId}:user` },
+        },
+        ...commentary.map((text, index) => ({
+          role: "assistant",
+          content: [{ type: "text", text }],
+          __openclaw: { id: `commentary-${index}`, runId, seq: index + 2 },
+          openclawStreamFallback: {
+            itemId: `preamble-${index}`,
+            replacementText: text,
+            source: "segment",
+          },
+        })),
+      ];
+      const sessionInfo = {
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        key: "agent:main:main",
+      };
+      await installMockGateway(page, {
+        historyMessages,
+        inFlightRun: {
+          runId,
+          startedAt: 1_000,
+          text: `${commentary.join("\n\n")}\n\nStill working.`,
+          events: [
+            {
+              runId,
+              seq: 51,
+              stream: "tool",
+              ts: 2_000,
+              sessionKey: "agent:main:main",
+              data: {
+                phase: "result",
+                toolCallId: "focused-tests",
+                name: "exec",
+                result: { content: [{ type: "text", text: "Tests passed." }] },
+              },
+            },
+          ],
+        },
+        sessionInfo,
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      const assistantTexts = async () =>
+        (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map((value) =>
+          value.trim(),
+        );
+      await expect.poll(assistantTexts).toEqual([...commentary, "Still working."]);
+      expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
+
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(suite.artifactDir, "evicted-commentary-after.png"),
         });
       }
     });

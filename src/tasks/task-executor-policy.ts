@@ -5,7 +5,12 @@ import {
   type TaskEventRecord,
   type TaskRecord,
 } from "./task-registry.types.js";
-import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
+import {
+  formatTaskStatusDetail,
+  formatTaskStatusTitleText,
+  sanitizeTaskStatusText,
+  TASK_STATUS_DETAIL_MAX_CHARS,
+} from "./task-status.js";
 
 function resolveTaskDisplayTitle(task: TaskRecord): string {
   return formatTaskStatusTitleText(
@@ -29,10 +34,12 @@ export function formatTaskTerminalMessage(
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
   if (task.status === "succeeded") {
+    const isBlocked = task.terminalOutcome === "blocked";
     const summary = sanitizeTaskStatusText(task.terminalSummary, {
-      errorContext: task.terminalOutcome === "blocked",
+      errorContext: isBlocked,
+      maxChars: isBlocked ? TASK_STATUS_DETAIL_MAX_CHARS : undefined,
     });
-    if (task.terminalOutcome === "blocked") {
+    if (isBlocked) {
       return summary
         ? `Background task blocked: ${title}${runLabel}. ${summary}`
         : `Background task blocked: ${title}${runLabel}.`;
@@ -58,9 +65,7 @@ export function formatTaskTerminalMessage(
     }
     return `Background task cancelled: ${title}${runLabel}.`;
   }
-  const detail =
-    sanitizeTaskStatusText(task.error, { errorContext: true }) ||
-    sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
+  const detail = formatTaskStatusDetail(task);
   if (task.status === "lost") {
     return `Background task lost: ${title}${runLabel}. ${detail || "Backing session disappeared."}`;
   }
@@ -85,8 +90,10 @@ export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | nul
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
   const summary =
-    sanitizeTaskStatusText(task.terminalSummary, { errorContext: true }) ||
-    "Task is blocked and needs follow-up.";
+    sanitizeTaskStatusText(task.terminalSummary, {
+      errorContext: true,
+      maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
+    }) || "Task is blocked and needs follow-up.";
   return `Task needs follow-up: ${title}${runLabel}. ${summary}`;
 }
 

@@ -1,19 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionDeliveryState } from "../../../config/sessions/types.js";
-import type { CallGatewayOptions } from "../../../gateway/call.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import {
-  getAgentEventLifecycleGeneration,
-  type AgentEventPayload,
-} from "../../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { deliverAgentCommandResult } from "../../command/delivery.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
+import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -26,31 +26,16 @@ import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
+import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
+import type {
+  GatewayRequest,
+  LifecycleEvent,
+  SessionStoreEntry,
+} from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
-
-type LifecycleData = {
-  phase?: string;
-  endedAt?: number;
-  terminalReply?: AgentRunTerminalReplySnapshot;
-};
-type LifecycleEvent = Pick<AgentEventPayload, "runId"> &
-  Partial<Omit<AgentEventPayload, "runId" | "data">> & { data?: LifecycleData };
-type SessionStoreEntry = {
-  sessionId: string;
-  updatedAt: number;
-  delivery?: SessionDeliveryState;
-};
-type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
-  params?: {
-    sessionKey?: string;
-    inputProvenance?: { sourceSessionKey?: string };
-    idempotencyKey?: string;
-    message?: string;
-  };
-};
 
 type GatewayDeliveryStatus = NonNullable<
   Awaited<ReturnType<typeof deliverAgentCommandResult>>["deliveryStatus"]
@@ -68,7 +53,10 @@ let agentCallGates = new Map<string, Promise<void>>();
 let releaseAgentCallGate: (() => void) | undefined;
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
+let sessionStorePath: string;
 let rejectNextRequesterWake = false;
+let rejectNextRequesterWakePersistence = false;
+let armRequesterWakePersistenceFailure = false;
 let emptyGatedAgentReply = false;
 
 const sendMessageMock = vi.fn<typeof import("../../../infra/outbound/message.js").sendMessage>(
@@ -118,7 +106,7 @@ const loadConfigMock = vi.fn(() => ({
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveSessionStorePathCore: () => "/tmp/test-store",
+  resolveSessionStorePathCore: () => sessionStorePath,
   resolveMainSessionKey: () => MAIN_REQUESTER_SESSION_KEY,
   updateSessionStore: vi.fn(),
 }));
@@ -126,6 +114,28 @@ vi.mock("../../../config/sessions.js", () => ({
 vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  // Timing writes must share the synthetic session fixture used by reads.
+  // Subagent and task settlement below still use their real SQLite stores.
+  patchSessionEntryCore: async (
+    ...[scope, update, options = {}]: Parameters<
+      typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore
+    >
+  ) => {
+    const entry = sessionStore[scope.sessionKey];
+    if (!entry) {
+      return null;
+    }
+    const patch = await update(entry, { existingEntry: { ...entry } });
+    if (patch === null || options.shouldCommit?.() === false) {
+      return entry;
+    }
+    options.assertCommitAllowed?.();
+    const updated = options.replaceEntry
+      ? (patch as import("../../../config/sessions/types.js").SessionEntry)
+      : { ...entry, ...patch };
+    sessionStore[scope.sessionKey] = updated;
+    return updated;
+  },
   listSessionEntriesReadOnly: () =>
     Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
 }));
@@ -149,11 +159,13 @@ const loadSubagentRegistryRuntimeForTest = async () =>
 
 describe("requester settle wake product flow", () => {
   let previousFastTestEnv: string | undefined;
+  let testState: OpenClawTestState;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
+    sessionStorePath = testState.statePath("agents", "main", "sessions", "sessions.json");
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    vi.useFakeTimers();
     loadConfigMock.mockReset().mockReturnValue({
       agents: {
         defaults: { subagents: { archiveAfterMinutes: 0 } },
@@ -165,6 +177,8 @@ describe("requester settle wake product flow", () => {
     agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
     rejectNextRequesterWake = false;
+    rejectNextRequesterWakePersistence = false;
+    armRequesterWakePersistenceFailure = false;
     emptyGatedAgentReply = false;
     sendMessageMock.mockClear();
     sessionStore = {
@@ -179,6 +193,19 @@ describe("requester settle wake product flow", () => {
         },
       },
     };
+    await replaceSessionEntry(
+      { storePath: sessionStorePath, sessionKey: MAIN_REQUESTER_SESSION_KEY },
+      sessionStore[MAIN_REQUESTER_SESSION_KEY]!,
+    );
+    vi.useFakeTimers();
+    const settle = completionStore.settleRequesterCompletionBatch;
+    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation((params) => {
+      if (rejectNextRequesterWakePersistence) {
+        rejectNextRequesterWakePersistence = false;
+        throw new Error("database is locked");
+      }
+      settle(params);
+    });
     registry.testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
@@ -188,12 +215,11 @@ describe("requester settle wake product flow", () => {
         lifecycleHandler = handler;
         return () => {};
       }) as unknown as typeof import("../../../infra/agent-events.js").onAgentEvent,
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-      restoreSubagentRunsFromDisk: () => 0,
       maybeWakeRequesterAfterAllChildrenSettled: async (params) => {
         if (rejectNextRequesterWake) {
           rejectNextRequesterWake = false;
+          rejectNextRequesterWakePersistence = armRequesterWakePersistenceFailure;
+          armRequesterWakePersistenceFailure = false;
           throw new Error("requester wake rejected before attempt admission");
         }
         return await maybeWakeRequesterAfterAllChildrenSettled(params);
@@ -222,7 +248,7 @@ describe("requester settle wake product flow", () => {
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
-      resolveSessionStorePathCore: () => "/tmp/test-store",
+      resolveSessionStorePathCore: () => sessionStorePath,
     });
   });
 
@@ -238,11 +264,13 @@ describe("requester settle wake product flow", () => {
     registry.testing.setDepsForTest();
     registry.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
+    vi.restoreAllMocks();
     if (previousFastTestEnv === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
     } else {
       process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
     }
+    await testState.cleanup();
   });
 
   const flushAsync = async () => {
@@ -287,7 +315,17 @@ describe("requester settle wake product flow", () => {
       await vi.advanceTimersByTimeAsync(1);
       await flushAsync();
     }
-    throw new Error(`run ${runId} did not finish delivered cleanup`);
+    const run = registry.getSubagentRunByRunId(runId);
+    throw new Error(
+      "run " +
+        runId +
+        " did not finish delivered cleanup: " +
+        JSON.stringify({
+          delivery: run?.delivery,
+          wake: run?.requesterSettleWake,
+          cleanup: run?.cleanupCompletedAt,
+        }),
+    );
   };
 
   const spawnVisibleChild = async (params: {
@@ -329,7 +367,10 @@ describe("requester settle wake product flow", () => {
     modelRouteChange?: string,
   ) => {
     chatHistoryBySessionKey.set(childSessionKey, [{ role: "assistant", content: text }]);
-    lifecycleHandler?.({
+    if (!lifecycleHandler) {
+      throw new Error("Fixture lifecycle listener was not registered before completion");
+    }
+    lifecycleHandler({
       stream: "lifecycle",
       runId,
       sessionKey: childSessionKey,
@@ -483,18 +524,31 @@ describe("requester settle wake product flow", () => {
   );
 
   it.each([
-    { name: "delivers the visible requester final", rejectRequesterWake: false, emptyReply: false },
+    {
+      name: "delivers the visible requester final",
+      rejectRequesterWake: false,
+      rejectPersistence: false,
+      emptyReply: false,
+    },
     {
       name: "settles the rejected delivered-row wake",
       rejectRequesterWake: true,
+      rejectPersistence: false,
+      emptyReply: false,
+    },
+    {
+      name: "backs off when rejected-wake settlement persistence fails",
+      rejectRequesterWake: true,
+      rejectPersistence: true,
       emptyReply: false,
     },
     {
       name: "retires a stale empty announce after requester delivery",
       rejectRequesterWake: false,
+      rejectPersistence: false,
       emptyReply: true,
     },
-  ])("$name", async ({ rejectRequesterWake, emptyReply }) => {
+  ])("$name", async ({ rejectRequesterWake, rejectPersistence, emptyReply }) => {
     emptyGatedAgentReply = emptyReply;
     const requesterTurnRunId = "run-requester-yield";
     const alpha = {
@@ -551,6 +605,7 @@ describe("requester settle wake product flow", () => {
     ).resolves.toMatchObject({ details: { status: "yielded" } });
 
     rejectNextRequesterWake = rejectRequesterWake;
+    armRequesterWakePersistenceFailure = rejectPersistence;
     const { withLocalSessionPlacementTurnSettlement } =
       await import("../../session-placement-admission.js");
     await withLocalSessionPlacementTurnSettlement(
@@ -570,8 +625,21 @@ describe("requester settle wake product flow", () => {
       }),
     );
     await waitForAgentCallCount(rejectRequesterWake ? 2 : 3);
-    await waitForDeliveredCleanup(alpha.runId);
+    await waitForDeliveredCleanup(alpha.runId, {
+      allowPendingRequesterSettleWake: rejectPersistence,
+    });
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
+    if (rejectPersistence) {
+      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 0,
+      });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(getRequesterWakeCalls()).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForDeliveredCleanup(alpha.runId);
+      expect(getRequesterWakeCalls()).toHaveLength(0);
+    }
     if (!rejectRequesterWake) {
       const wakeMessage = getRequesterWakeCalls()[0]?.params?.message;
       expect(wakeMessage).toContain(modelRouteChange);
@@ -660,8 +728,8 @@ describe("requester settle wake product flow", () => {
           );
           const harnessAttempt = vi.spyOn(harnessSelection, "runAgentHarnessAttempt");
           try {
-            // Harness execution is synthetic; backend settlement and terminal
-            // projection are real. Placement cannot repair this path afterward.
+            // Harness execution is synthetic; terminal projection and logical
+            // requester settlement are real. Placement cannot repair this path afterward.
             harnessAttempt.mockResolvedValue(
               makeEmbeddedRunnerAttempt({
                 agentHarnessId: "codex",
@@ -708,6 +776,15 @@ describe("requester settle wake product flow", () => {
               thinkLevel: "off",
             });
             expect(harnessAttempt).toHaveBeenCalledTimes(1);
+            const terminal = await resolveEmbeddedRunTerminal(
+              makeTerminalInput({ attempt, runParams, agentHarnessId: "codex" }),
+            );
+            expect(terminal.action).toBe("complete");
+            if (terminal.action !== "complete") {
+              throw new Error("yielded native requester did not complete its turn");
+            }
+            const { settleRequesterRun } = await import("../../requester-run-settlement.js");
+            settleRequesterRun(runParams, terminal.result, admission.assertSourceCurrent);
             for (const child of accepted) {
               expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
                 requesterTurnRunId: undefined,
@@ -717,13 +794,6 @@ describe("requester settle wake product flow", () => {
                   batchRunIds: accepted.map((spawn) => spawn.runId).toSorted(),
                 },
               });
-            }
-            const terminal = await resolveEmbeddedRunTerminal(
-              makeTerminalInput({ attempt, runParams, agentHarnessId: "codex" }),
-            );
-            expect(terminal.action).toBe("complete");
-            if (terminal.action !== "complete") {
-              throw new Error("yielded native requester did not complete its turn");
             }
             expect(terminal.result.meta.yielded).toBe(true);
             expect(terminal.result.requesterContinuationSettled).toBe(true);

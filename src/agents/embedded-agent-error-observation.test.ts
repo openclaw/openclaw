@@ -39,7 +39,6 @@ describe("buildApiErrorObservationFields", () => {
     );
 
     expect(observed.rawErrorPreview).not.toContain(OBSERVATION_BEARER_TOKEN);
-    expect(observed.rawErrorPreview).toContain(OBSERVATION_BEARER_TOKEN.slice(0, 6));
     expect(observed.rawErrorHash).toMatch(/^sha256:/);
   });
 

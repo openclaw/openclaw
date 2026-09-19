@@ -50,6 +50,9 @@ import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
+export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
+export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
+
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
@@ -140,6 +143,8 @@ export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "disableToolSearch"
+  | "sessionReadScopeKey"
   | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"

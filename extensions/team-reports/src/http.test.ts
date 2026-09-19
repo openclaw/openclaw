@@ -4,15 +4,39 @@ import { createServer, request, type IncomingHttpHeaders, type Server } from "no
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { githubCounts } from "./reports.fixtures.js";
+import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { Period, Person, ReportDocument, SummaryDocument } from "./types.js";
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
+const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
+vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+  return {
+    ...actual,
+    openSqliteWorkerStore: async (...args: Parameters<typeof actual.openSqliteWorkerStore>) => {
+      const worker = await actual.openSqliteWorkerStore(...args);
+      if (worker) {
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation(async (command, options) => {
+          const result = await execute(command, options);
+          if (workerReads.enabled) {
+            workerReads.calls += 1;
+            workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
+          }
+          return result;
+        });
+      }
+      return worker;
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
 }));
@@ -119,7 +143,7 @@ beforeAll(async () => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-http-"));
   store = await createTeamReportsStore({
     stateDir: directory,
-    workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+    workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
   });
   const avatarReport = report("day", "2026-08-19");
   avatarReport.members = avatarPeople.map((person) => ({
@@ -142,6 +166,21 @@ beforeAll(async () => {
     report("week", "2026-W34"),
     report("month", "2026-08"),
   ]) {
+    if (document.period.key === "2026-08-21") {
+      document.members[0]!.github.items[0]!.body = "unrendered activity ".repeat(4096);
+      document.members.push({
+        login: "report-only",
+        display: "Report Only Person",
+        aliases: ["report-only-alias"],
+        access: [],
+        areas: [],
+        github: { ...counts, items: [] },
+        discord: { total: 0, channels: {}, excerpts: [] },
+      });
+      document.memberCount = 2;
+      document.activeMembers = 2;
+      document.totals.github = githubCounts(2);
+    }
     await store.upsertPeriod({
       report: document,
       summary,
@@ -451,13 +490,27 @@ describe("Team Reports HTTP responses", () => {
     expect(index.status).toBe(200);
     expect(index.body).toContain('aria-label="Activity dateline"');
     expect(index.body).toContain('href="/reports/week/2026-W34/"');
-    const people = await fetchPath("/reports/people/");
-    expect(people.body).toContain("Member Activity Timelines");
-    expect(people.body).toMatch(/class="oc-badge oc-badge-neutral">Archived<\/span>/);
-    const person = await fetchPath("/reports/people/alice-alias/");
-    expect(person.status).toBe(200);
-    expect(person.body).toContain("Archived on 2026-08-22");
-    expect(person.body).toContain('href="/reports/day/2026-08-20/?person=alice"');
+    workerReads.calls = 0;
+    workerReads.bytes = 0;
+    workerReads.enabled = true;
+    try {
+      const people = await fetchPath("/reports/people/");
+      expect(people.status).toBe(200);
+      expect(people.body).toContain("Member Activity Timelines");
+      expect(people.body).toMatch(/class="oc-badge oc-badge-neutral">Archived<\/span>/);
+      expect(people.body).toContain("Report Only Person");
+      expect(people.body).toContain('href="/reports/people/report-only/"');
+      const person = await fetchPath("/reports/people/alice-alias/");
+      expect(person.status).toBe(200);
+      expect(person.body).toContain("Archived on 2026-08-22");
+      expect(person.body).toContain('href="/reports/day/2026-08-20/?person=alice"');
+    } finally {
+      workerReads.enabled = false;
+    }
+    expect(workerReads.calls).toBeGreaterThan(0);
+    expect(workerReads.bytes).toBeGreaterThan(0);
+    expect.soft(workerReads.calls).toBeLessThanOrEqual(4);
+    expect.soft(workerReads.bytes).toBeLessThan(16 * 1024);
     const machineIndex = await fetchPath("/reports/index.json");
     expect(JSON.parse(machineIndex.body)).toMatchObject({
       latest: { day: "2026-08-21", week: "2026-W34", month: "2026-08" },
@@ -469,7 +522,7 @@ describe("Team Reports HTTP responses", () => {
   it("reads current overview organizations and prefers the displayed report's organizations", async () => {
     const emptyStore = await createTeamReportsStore({
       stateDir: path.join(directory, "empty"),
-      workerModuleUrl: new URL("./store.worker.ts", import.meta.url),
+      workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
     });
     try {
       for (const name of ["first-organization", "new <organization>"]) {

@@ -125,7 +125,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return normalizeReplyMediaPaths;
   };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
-    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+    if (isInternalWebchatTurn || !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();

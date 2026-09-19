@@ -26,6 +26,7 @@ export type PickerParams<Option extends PickerOption> = {
   title?: string;
   placement?: "top" | "bottom";
   searchable?: boolean;
+  showOptionTooltips?: boolean;
   showSelectedDescription?: boolean;
   onOpen?: () => void;
   onChange: (value: string) => void;
@@ -328,7 +329,7 @@ export class SelectPicker<
                     role="option"
                     id=${`${this.listboxId}-${index}`}
                     data-value=${option.value}
-                    title=${option.value}
+                    title=${this.params.showOptionTooltips === false ? nothing : option.value}
                     aria-selected=${String(option.value === this.params.value)}
                     aria-disabled=${String(Boolean(option.disabled))}
                     ?data-active=${option.value === this.activeValue}

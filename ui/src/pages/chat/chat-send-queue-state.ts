@@ -111,7 +111,7 @@ export function publishPendingSendMessage(host: ChatHost, pending: ChatQueueItem
     recordChatSendTiming(host, pending, pending.sendState, submittedAtMs);
   }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
-  scheduleChatScroll(host, true, false, { source: "manual" });
+  scheduleChatScroll(host, true, true, { source: "manual" });
 }
 
 export function reconnectSafeQueuedSendState(
@@ -310,10 +310,7 @@ export async function prepareQueuedChatPayload(
     !connectionIsCurrent() ||
     !ownerIsCurrent() ||
     !current ||
-    current.sendRunId !== original.sendRunId ||
-    current.attachmentPayload?.key !== original.attachmentPayload?.key ||
-    current.sendAttempts !== original.sendAttempts ||
-    current.sendState !== original.sendState ||
+    !sameQueuedDeliveryVersion(current, original) ||
     isQueuedMessageBeingEdited(host, id)
   ) {
     if (payload.status === "ready" && !original.attachmentPayload) {

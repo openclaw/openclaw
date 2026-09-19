@@ -31,7 +31,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateRun: UpdateRunRecord | null = null;
   @property({ attribute: false }) updateRunAcknowledged = false;
   @property({ attribute: false }) connected = true;
-  @property({ attribute: false }) onCheckStatus: (() => Promise<void>) | undefined = undefined;
+  @property({ attribute: false }) onCheckStatus: (() => Promise<boolean>) | undefined = undefined;
   @property({ attribute: false }) onAcknowledge: (() => void) | undefined = undefined;
   @property({ attribute: false }) statusBanner: ApplicationStatusBanner | null = null;
   @property({ attribute: false }) watchUpdateProgress:

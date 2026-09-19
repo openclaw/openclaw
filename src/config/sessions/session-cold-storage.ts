@@ -10,6 +10,7 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
   withOpenClawAgentDatabaseReadOnly,
@@ -148,6 +149,18 @@ async function runColdMutation(
           throw new Error(
             "Cold transcript worker cleanup is incomplete; restart OpenClaw before another maintenance operation",
           );
+        }
+        if (plan.kind === "cold-restore" && completed.result.restored && claim.isCurrent()) {
+          const session = executeSqliteQueryTakeFirstSync(
+            database.db,
+            getNodeSqliteKysely<DB>(database.db)
+              .selectFrom("session_windows")
+              .select("session_key")
+              .where("session_id", "=", plan.sessionId),
+          );
+          if (session) {
+            sessionChanges.emit({ storePath: database.path, sessionKey: session.session_key });
+          }
         }
         return completed.result;
       } finally {
@@ -357,7 +370,9 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
 
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
+  assertCurrent?: () => void,
 ): Promise<void> {
+  assertCurrent?.();
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const options = toDatabaseOptions(resolved);
   const storePath = resolveOpenClawAgentSqlitePath(options);
@@ -370,6 +385,7 @@ export async function restoreSessionColdTranscript(
     return;
   }
   await operations.enqueue(storePath, async () => {
+    assertCurrent?.();
     const opened = withOpenClawAgentDatabaseReadOnly(
       (database) => readSessionColdTranscript(database.db, resolved.sessionId),
       options,
@@ -377,12 +393,15 @@ export async function restoreSessionColdTranscript(
     if (!opened.found || !opened.value) {
       return;
     }
-    await runColdMutation({
-      kind: "cold-restore",
-      databaseOptions: workerDatabaseOptions(options),
-      sessionId: resolved.sessionId,
-      archive: opened.value,
-    });
+    await runColdMutation(
+      {
+        kind: "cold-restore",
+        databaseOptions: workerDatabaseOptions(options),
+        sessionId: resolved.sessionId,
+        archive: opened.value,
+      },
+      assertCurrent,
+    );
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.
     const now = Date.now();
     for (const [id, until] of restoredUntil) {

@@ -25,6 +25,7 @@ vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
 const channelId = "123456789012345678";
 const messageId = "223456789012345678";
 const guildId = "323456789012345678";
+const threadId = "623456789012345678";
 const token = "synthetic-message-body-token";
 const attachment = { id: "423456789012345678", filename: "example.txt", size: 4 };
 const cfg: OpenClawConfig = {
@@ -39,6 +40,8 @@ let rest: RequestClient;
 let requests: { method: string; path: string; body: Record<string, unknown> }[];
 let current: { content: string; attachments: (typeof attachment)[] };
 let unexpectedUrls: string[];
+let parentChannelType: number;
+let threadMessageIds: string[];
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -59,12 +62,35 @@ beforeAll(async () => {
       if (method === "PATCH") {
         current = { ...current, ...body };
       }
-      const result =
+      let result: Record<string, unknown> =
         method === "GET"
           ? path.startsWith("/v10/guilds/")
             ? { id: guildId, name: "synthetic-guild" }
-            : { id: channelId, type: 0, guild_id: guildId, name: "synthetic-channel" }
+            : {
+                id: channelId,
+                type: parentChannelType,
+                guild_id: guildId,
+                name: "synthetic-channel",
+              }
           : { id: messageId, channel_id: channelId, ...current, ...body };
+      if (method === "POST" && path.endsWith("/threads")) {
+        result = {
+          id: threadId,
+          type: 11,
+          name: body.name,
+          message_count: 0,
+          total_message_sent: 0,
+          last_message_id: null,
+        };
+        if (body.message) {
+          threadMessageIds.push(messageId);
+          result.message = { id: messageId, channel_id: threadId };
+        }
+      } else if (method === "POST" && path === `/v10/channels/${threadId}/messages`) {
+        const id = String(BigInt(messageId) + BigInt(threadMessageIds.length));
+        threadMessageIds.push(id);
+        result = { id, channel_id: threadId, ...body };
+      }
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(result));
     })().catch((error: unknown) => {
@@ -118,6 +144,8 @@ beforeAll(async () => {
 beforeEach(() => {
   requests = [];
   unexpectedUrls = [];
+  parentChannelType = 0;
+  threadMessageIds = [];
   current = { content: "Initial caption", attachments: [attachment] };
 });
 
@@ -174,6 +202,52 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
           conversationReadOrigin: "direct-operator",
         });
 
+  const createThread = (content?: string) =>
+    entry === "runtime"
+      ? handleDiscordAction({ action: "threadCreate", channelId, name: "example", content }, cfg)
+      : handleDiscordMessageAction({
+          action: "thread-create",
+          params: { channelId, threadName: "example", message: content },
+          cfg,
+        });
+
+  it.each([
+    [0, "hello", 1],
+    [0, "a".repeat(2001), 2],
+    [15, "hello", 1],
+    [15, "a".repeat(2001), 2],
+    [16, undefined, 1],
+  ] as const)(
+    "reports confirmed initial delivery for parent type %i (case %#)",
+    async (type, content, chunkCount) => {
+      parentChannelType = type;
+      const result = await createThread(content);
+      expect(threadMessageIds).toHaveLength(chunkCount);
+      expect(result.details).toMatchObject({
+        ok: true,
+        threadSnapshot: "creation",
+        thread: { id: threadId, message_count: 0, total_message_sent: 0, last_message_id: null },
+        initialMessageDelivery: {
+          status: "delivered",
+          starterMessageDelivered: type !== 0,
+          deliveredChunkCount: chunkCount,
+          totalChunkCount: chunkCount,
+          deliveredMessageIds: threadMessageIds,
+        },
+      });
+      const text = result.content.find((block) => block.type === "text");
+      expect(text?.type === "text" ? JSON.parse(text.text) : undefined).toEqual(result.details);
+      expect(requests.filter((request) => request.method === "GET")).toHaveLength(1);
+    },
+  );
+
+  it("does not report initial delivery for an empty standalone thread", async () => {
+    const result = await createThread();
+    expect(threadMessageIds).toEqual([]);
+    expect(result.details).not.toHaveProperty("initialMessageDelivery");
+    expect(writes()).toHaveLength(1);
+  });
+
   it.each(["Changed caption", "    console.log(1);\n", ""])(
     "edits exact content %j and retains attachments",
     async (content) => {
@@ -212,6 +286,11 @@ describe.each(["runtime", "adapter"] as const)("Discord %s message bodies", (ent
         body: { content },
       },
     ]);
+  });
+
+  it("rejects malformed message IDs before a message mutation", async () => {
+    await expect(edit("Changed caption", cfg, "..")).rejects.toThrow("Invalid Discord message ID");
+    expect(writes()).toEqual([]);
   });
 
   it.each([undefined, null, 42])(

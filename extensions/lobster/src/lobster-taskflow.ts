@@ -15,7 +15,7 @@ export type JsonLike =
 type RuntimeTasks = NonNullable<OpenClawPluginApi["runtime"]>["tasks"];
 export type BoundTaskFlow = Pick<
   ReturnType<RuntimeTasks["async"]["managedFlows"]["bindSession"]>,
-  "tryCreateManaged" | "resume" | "setWaiting" | "finish" | "fail"
+  "get" | "tryCreateManaged" | "resume" | "setWaiting" | "finish" | "fail"
 > &
   Pick<ReturnType<RuntimeTasks["managedFlows"]["bindSession"]>, "cancel">;
 
@@ -51,7 +51,7 @@ type ResumeManagedLobsterFlowParams = {
   runnerParams: LobsterRunnerParams & {
     action: "resume";
     approve: boolean;
-  } & ({ token: string } | { approvalId: string });
+  };
   flowId: string;
   expectedRevision: number;
   currentStep?: string;
@@ -194,6 +194,50 @@ export async function runManagedLobsterFlow(
 export async function resumeManagedLobsterFlow(
   params: ResumeManagedLobsterFlowParams,
 ): Promise<ManagedLobsterFlowResult> {
+  const saved = await params.taskFlow.get(params.flowId);
+  if (
+    !saved ||
+    saved.syncMode !== "managed" ||
+    saved.endedAt !== undefined ||
+    saved.cancelRequestedAt !== undefined ||
+    (saved.status !== "waiting" && saved.status !== "blocked")
+  ) {
+    return { ok: false, error: new Error("TaskFlow has no resumable Lobster checkpoint.") };
+  }
+  const wait = saved.waitJson;
+  if (
+    !wait ||
+    typeof wait !== "object" ||
+    Array.isArray(wait) ||
+    wait.kind !== "lobster_approval"
+  ) {
+    return { ok: false, error: new Error("TaskFlow is not waiting for Lobster approval.") };
+  }
+  const token = typeof wait.resumeToken === "string" ? wait.resumeToken : undefined;
+  const approvalId = typeof wait.approvalId === "string" ? wait.approvalId : undefined;
+  if (
+    (!token && !approvalId) ||
+    (params.runnerParams.token !== undefined && params.runnerParams.token.trim() !== token) ||
+    (params.runnerParams.approvalId !== undefined &&
+      params.runnerParams.approvalId.trim() !== approvalId)
+  ) {
+    return {
+      ok: false,
+      error: new Error("Lobster checkpoint does not match the selected TaskFlow."),
+    };
+  }
+  const runnerParams = {
+    ...params.runnerParams,
+    ...(params.runnerParams.token || params.runnerParams.approvalId
+      ? {}
+      : token
+        ? { token }
+        : { approvalId }),
+  };
+  // Revision admission binds the saved checkpoint to the state we resume.
+  if (saved.revision !== params.expectedRevision) {
+    return { ok: false, error: new Error("TaskFlow resume failed: revision_conflict") };
+  }
   const resumed = await params.taskFlow.resume({
     flowId: params.flowId,
     expectedRevision: params.expectedRevision,
@@ -208,5 +252,5 @@ export async function resumeManagedLobsterFlow(
       error: new Error(`TaskFlow resume failed: ${resumed.code}`),
     };
   }
-  return await executeManagedLobsterFlow(params, resumed.flow);
+  return await executeManagedLobsterFlow({ ...params, runnerParams }, resumed.flow);
 }

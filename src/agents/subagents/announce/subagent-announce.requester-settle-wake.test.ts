@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
@@ -11,6 +12,7 @@ import {
   sessionStore,
   setSessionStore,
   registryRuntimeMock,
+  findTranscriptEventMock,
   listedRequesterRuns,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -63,7 +65,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     });
     expect(deliveredCallArg().requireVisibleReply).toBeUndefined();
     expect(String(deliveredCallArg().triggerMessage)).toContain("private marker");
-    expect(String(deliveredCallArg().triggerMessage)).toContain("no external response is required");
+    expect(String(deliveredCallArg().triggerMessage)).toContain(
+      "send it through an available, permitted messaging tool",
+    );
+    expect(String(deliveredCallArg().triggerMessage)).toContain(
+      "when no further work or user-facing update is owed, or after sending that update",
+    );
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
@@ -90,41 +97,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         reason: "completion_handoff_unavailable",
         disposition: "intentional_non_delivery",
       }),
-    );
-  });
-
-  it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
-      makeSettledChild({
-        runId: "run-b",
-        completion: { required: true, resultText: "network findings" },
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        completion: { required: true, resultText: "social findings" },
-      }),
-    ]);
-
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
-
-    expect(woke).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledTimes(1);
-    const call = deliveredCallArg();
-    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
-    expect(call.requesterIsSubagent).toBe(false);
-    expect(call.expectsCompletionMessage).toBe(false);
-    expect(call.requireDirectDelivery).toBe(true);
-    expect(call.requireVisibleReply).toBeUndefined();
-    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
-    const message = String(call.triggerMessage);
-    expect(message).toContain("settled");
-    expect(message).toContain("social findings");
-    expect(message).toContain("network findings");
-    expect(message).toContain("NO_REPLY");
-    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
-      REQUESTER,
-      "run-b",
-      "main",
     );
   });
 
@@ -187,40 +159,89 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     // A overlaps B and B overlaps C, but A never overlaps C. When C settles
     // last, A's results must still ride the wake and the idempotency key must
     // cover the full component (any last-settler computes the same batch).
+    const resultPrefix = "<result>".repeat(700);
     const childA = makeSettledChild({
       runId: "run-a",
       createdAt: 1_000,
       startedAt: 1_000,
       endedAt: 2_000,
-      completion: { required: true, resultText: "alpha findings" },
+      outcome: { status: "ok" },
     });
     const childB = makeSettledChild({
       runId: "run-b",
       createdAt: 1_500,
       startedAt: 1_500,
       endedAt: 3_000,
-      completion: { required: true, resultText: "bravo findings" },
+      outcome: { status: "ok" },
     });
     const childC = makeSettledChild({
       runId: "run-c",
       createdAt: 2_500,
       startedAt: 2_500,
       endedAt: 4_000,
-      completion: { required: true, resultText: "charlie findings" },
+      outcome: { status: "ok" },
     });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([childA, childB, childC]);
+    const children = [childA, childB, childC];
+    const transcripts = new Map<string, unknown[]>();
+    const findings = ["alpha findings", "bravo findings", "charlie findings"];
+    for (const [index, child] of children.entries()) {
+      const text = `${resultPrefix}${findings[index]}`;
+      const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: text });
+      expect(terminalReply.disposition).toBe("visible");
+      if (terminalReply.disposition !== "visible") {
+        throw new Error("expected visible terminal evidence");
+      }
+      child.completion = { required: true, terminalReply, resultText: terminalReply.text };
+      expect(terminalReply.text).toHaveLength(4_096);
+      const sessionId = `session-${child.runId}`;
+      sessionStore[child.childSessionKey] = { sessionId };
+      const assistant = (runId: string, messageText: string, stopReason = "stop") => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          stopReason,
+          content: [{ type: "text", text: messageText }],
+          __openclaw: { runId },
+        },
+      });
+      transcripts.set(sessionId, [
+        assistant("previous-run", "stale previous result"),
+        assistant(child.runId, "earlier commentary"),
+        assistant(child.runId, text),
+        assistant("replacement-run", "unrelated later result"),
+        assistant(child.runId, "unfinished follow-up", "toolUse"),
+      ]);
+    }
+    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
+      const event = transcripts.get(sessionId)?.findLast(match);
+      return event === undefined ? undefined : { event };
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(
       wakeParams({ settledEntry: childC }),
     );
 
     expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = String(call.triggerMessage);
-    expect(message).toContain("alpha findings");
-    expect(message).toContain("bravo findings");
-    expect(message).toContain("charlie findings");
+    for (const result of findings) {
+      expect(message).toContain(`${"&lt;result&gt;".repeat(700)}${result}`);
+    }
+    expect(message).not.toContain("stale previous result");
+    expect(message).not.toContain("earlier commentary");
+    expect(message).not.toContain("unrelated later result");
+    expect(message).not.toContain("unfinished follow-up");
+    expect(message.indexOf("alpha findings")).toBeLessThan(message.indexOf("bravo findings"));
+    expect(message.indexOf("bravo findings")).toBeLessThan(message.indexOf("charlie findings"));
+    expect(call.steerMessage).toBe(message);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-a", "run-b", "run-c"],
+      undefined,
+      { delivered: true, path: "direct" },
+    );
   });
 
   it("keeps capacity-queued siblings in the same spawned wave", async () => {
@@ -543,6 +564,27 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           }),
         ),
       ]);
+
+      if (terminalReply.disposition === "visible") {
+        for (const child of listedRequesterRuns()) {
+          sessionStore[child.childSessionKey] = { sessionId: `session-${child.runId}` };
+        }
+        findTranscriptEventMock.mockImplementation(async (scope, match) => {
+          const child = listedRequesterRuns().find(
+            (entry) => `session-${entry.runId}` === scope.sessionId,
+          );
+          const event = {
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: terminalReply.text }],
+              __openclaw: { runId: child?.runId },
+            },
+          };
+          return match(event) ? { event } : undefined;
+        });
+      }
 
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin }))).toBe(
         true,

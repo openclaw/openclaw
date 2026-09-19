@@ -20,13 +20,16 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
+  retainWork(): () => void;
+  reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
+    kind?: "work" | "custody",
   ): PluginInstanceConsumer;
   runInRegistry<T>(registry: PluginRegistry, run: () => T): T;
   createRegistryView(registry: PluginRegistry, invoke: <T>(run: () => T) => T): <T>(value: T) => T;
-  drain(): Promise<PluginInstanceDisposalResult>;
+  drain(options?: { includeConsumers?: boolean }): Promise<PluginInstanceDisposalResult>;
   resume(): void;
 }
 

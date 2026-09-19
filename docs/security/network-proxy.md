@@ -102,6 +102,10 @@ without activating it.
 
 Gateway control-plane bypass is limited to `localhost` and literal loopback IP URLs — use `ws://127.0.0.1:18789`, `ws://[::1]:18789`, or `ws://localhost:18789`. Other hostnames route like ordinary traffic.
 
+Update canary `/startupz` and `/readyz` probes use temporary exceptions for their exact loopback URLs under `gateway-only`. The updater releases each exception after polling. The `proxy` and `block` modes still apply. If a running canary never answers successfully within the validation budget, the update records the observed HTTP or transport failure as a warning, including the next troubleshooting step, and continues best effort.
+
+Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These environment bypass lists do not override managed proxy policy.
+
 ### Containers
 
 For `openclaw --container ...` commands, OpenClaw forwards `OPENCLAW_PROXY_URL` into the container-targeted child CLI when it is set. The URL must be reachable from inside the container — `127.0.0.1` there refers to the container itself, not the host. OpenClaw rejects loopback proxy URLs for container-targeted commands unless you set `OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL=1` to explicitly override that check.

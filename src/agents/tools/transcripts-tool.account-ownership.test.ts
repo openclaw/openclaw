@@ -1,9 +1,14 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
-import { activeSessions } from "../../transcripts/capture.js";
+import * as transcriptCapture from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
@@ -67,9 +72,10 @@ function discordAccountOwnership(
 }
 
 describe("transcripts tool account ownership", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await clearTranscriptCapturesForTest();
     vi.useRealTimers();
-    activeSessions.clear();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -882,53 +888,69 @@ describe("transcripts tool account ownership", () => {
       accountId: "account-b",
     });
 
-    service.start();
-    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
-    const autoStarted = await storeFor(stateDir).readSession("account-bound-auto-start");
-    if (!autoStarted) {
-      throw new Error("expected the configured capture to start");
-    }
-    await expect(
-      otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
-    ).resolves.toMatchObject({ details: { active: [] } });
-    await ownerTool.execute(
-      "owner-stop",
-      { action: "stop", sessionId: "account-bound-auto-start" },
-      undefined,
-      vi.fn(),
-    );
-    expect(stop).toHaveBeenCalledWith(
-      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
-    );
+    const startTranscripts = transcriptCapture.startTranscripts;
+    const started = createDeferred<Awaited<ReturnType<typeof startTranscripts>>>();
+    // Provider entry precedes active publication; observe the real startup completion.
+    const observeStart = vi
+      .spyOn(transcriptCapture, "startTranscripts")
+      .mockImplementationOnce((params) => {
+        const pending = startTranscripts(params);
+        void pending.then(started.resolve, started.reject);
+        return pending;
+      });
+    try {
+      service.start();
+      await expect(started.promise).resolves.toMatchObject({ status: "active" });
+      expect(start).toHaveBeenCalledOnce();
+      const autoStarted = await storeFor(stateDir).readSession("account-bound-auto-start");
+      if (!autoStarted) {
+        throw new Error("expected the configured capture to start");
+      }
+      await expect(
+        otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
+      ).resolves.toMatchObject({ details: { active: [] } });
+      await ownerTool.execute(
+        "owner-stop",
+        { action: "stop", sessionId: "account-bound-auto-start" },
+        undefined,
+        vi.fn(),
+      );
+      expect(stop).toHaveBeenCalledWith(
+        expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+      );
 
-    stop.mockClear();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const nextDay = new Date(Date.parse(autoStarted.startedAt) + 86_400_000);
-    vi.setSystemTime(nextDay);
-    await otherAccountTool.execute(
-      "replacement-start",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        sessionId: "account-bound-auto-start",
-      },
-      undefined,
-      vi.fn(),
-    );
-    const selector = `${nextDay.toISOString().slice(0, 10)}/account-bound-auto-start`;
-    await service.stop();
-    expect(stop).not.toHaveBeenCalled();
-    const replacement = await storeFor(stateDir).readSession(selector);
-    expect(replacement).toMatchObject({ source: { accountId: "account-b" } });
-    expect(replacement?.stoppedAt).toBeUndefined();
-    await otherAccountTool.execute(
-      "replacement-stop",
-      { action: "stop", sessionId: "account-bound-auto-start" },
-      undefined,
-      vi.fn(),
-    );
-    expect(stop).toHaveBeenCalledWith(
-      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
-    );
+      stop.mockClear();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const nextDay = new Date(Date.parse(autoStarted.startedAt) + 86_400_000);
+      vi.setSystemTime(nextDay);
+      await otherAccountTool.execute(
+        "replacement-start",
+        {
+          action: "start",
+          providerId: "discord-voice",
+          sessionId: "account-bound-auto-start",
+        },
+        undefined,
+        vi.fn(),
+      );
+      const selector = `${nextDay.toISOString().slice(0, 10)}/account-bound-auto-start`;
+      await service.stop();
+      expect(stop).not.toHaveBeenCalled();
+      const replacement = await storeFor(stateDir).readSession(selector);
+      expect(replacement).toMatchObject({ source: { accountId: "account-b" } });
+      expect(replacement?.stoppedAt).toBeUndefined();
+      await otherAccountTool.execute(
+        "replacement-stop",
+        { action: "stop", sessionId: "account-bound-auto-start" },
+        undefined,
+        vi.fn(),
+      );
+      expect(stop).toHaveBeenCalledWith(
+        expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
+      );
+    } finally {
+      observeStart.mockRestore();
+      await service.stop();
+    }
   });
 });

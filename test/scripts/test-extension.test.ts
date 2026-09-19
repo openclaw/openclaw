@@ -34,6 +34,10 @@ import {
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
 import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
+  prepareVitestRuntime,
+  resolveVitestPretestBuildMode,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
@@ -42,7 +46,13 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
+
+vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
+  prepareVitestRuntime: vi.fn().mockResolvedValue(0),
+}));
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -108,8 +118,12 @@ function listExtensionTestFiles(extensionId: string): string[] {
 }
 
 function expectedMatrixTestProcessCount() {
-  const testFileCount = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]).length;
-  return Math.max(1, Math.ceil(testFileCount / MATRIX_TEST_PROCESS_FILE_LIMIT));
+  const files = listExtensionTestFilesForRoots([bundledPluginRoot("matrix")]);
+  const workers = files.filter((file) => databaseWorkerExtensionTestFiles.includes(file));
+  return (
+    Math.ceil(workers.length / MATRIX_TEST_PROCESS_FILE_LIMIT) +
+    Math.ceil((files.length - workers.length) / MATRIX_TEST_PROCESS_FILE_LIMIT)
+  );
 }
 
 function expectPositiveIntegerMetric(value: number) {
@@ -183,25 +197,28 @@ describe("scripts/test-extension.mts", () => {
   it("splits the iMessage batch between persistence and channel owners without double counting", () => {
     const batch = resolveExtensionBatchPlan({ extensionIds: ["imessage"] });
     const files = listExtensionTestFilesForRoots(["extensions/imessage"]);
+    const workerFiles = databaseWorkerExtensionTestFiles.filter((file) =>
+      file.startsWith("extensions/imessage/"),
+    );
     expect(batch.extensionIds).toEqual(["imessage"]);
     expect(batch.testFileCount).toBe(files.length);
     expect(batch.planGroups).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.extension-database-workers.config.ts",
-        roots: ["extensions/imessage/src/approval-reactions.persistence.test.ts"],
+        roots: workerFiles,
         extensionIds: ["imessage"],
-        testFileCount: 1,
+        testFileCount: workerFiles.length,
       }),
       expect.objectContaining({
         config: "test/vitest/vitest.extension-imessage.config.ts",
         roots: ["extensions/imessage"],
         extensionIds: ["imessage"],
-        testFileCount: files.length - 1,
+        testFileCount: files.length - workerFiles.length,
       }),
     ]);
-    expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual([
-      "extensions/imessage/src/approval-reactions.persistence.test.ts",
-    ]);
+    expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual(
+      workerFiles.toSorted(),
+    );
     const shards = createExtensionTestShards({ extensionIds: ["imessage"], shardCount: 2 });
     expect(shards).toHaveLength(1);
     expect(shards[0]?.planGroups).toEqual(batch.planGroups);
@@ -222,7 +239,9 @@ describe("scripts/test-extension.mts", () => {
     },
   ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
     const roots = [bundledPluginRoot(root)];
-    const expectedFiles = listExtensionTestFilesForRoots(roots);
+    const expectedFiles = listExtensionTestFilesForRoots(roots).filter(
+      (file) => !databaseWorkerExtensionTestFiles.includes(file),
+    );
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
     expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
@@ -304,12 +323,16 @@ describe("scripts/test-extension.mts", () => {
     ).toEqual([[root]]);
   });
 
-  it("resolves memory extensions onto the memory vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
+  it.each([
+    ["memory-core", "test/vitest/vitest.extension-database-workers.config.ts"],
+    ["memory-lancedb", "test/vitest/vitest.extension-memory.config.ts"],
+    ["memory-wiki", "test/vitest/vitest.extension-memory.config.ts"],
+  ])("resolves %s onto its memory storage owner", (extensionId, config) => {
+    const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
 
-    expect(plan.extensionId).toBe("memory-core");
-    expect(plan.config).toBe("test/vitest/vitest.extension-memory.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
+    expect(plan.extensionId).toBe(extensionId);
+    expect(plan.config).toBe(config);
+    expect(plan.roots).toContain(bundledPluginRoot(extensionId));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -413,6 +436,22 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.testFileCount).toBe(0);
   });
 
+  it("keeps native hook relay consumers on the broker in changed extension plans", () => {
+    const plan = resolveExtensionBatchPlan({ extensionIds: ["codex"] });
+    const groups = plan.planGroups.map((group) => ({
+      config: group.config,
+      files: createExtensionTestProcessTargetChunks(group.config, group.roots).flat(),
+    }));
+    for (const file of [
+      "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",
+      "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
+    ]) {
+      expect(
+        groups.filter((group) => group.files.includes(file)).map((group) => group.config),
+      ).toEqual(["test/vitest/vitest.extension-database-workers.config.ts"]);
+    }
+  });
+
   it("batches extensions into config-specific vitest invocations", () => {
     const batch = resolveExtensionBatchPlan({
       cwd: process.cwd(),
@@ -462,6 +501,19 @@ describe("scripts/test-extension.mts", () => {
       "zalo",
       "zalouser",
     ]);
+    const allFiles = listExtensionTestFilesForRoots(batch.extensionIds.map(bundledPluginRoot));
+    const groupedFiles = batch.planGroups.flatMap((group) => {
+      const files = listExtensionTestFilesForRoots(group.roots).filter(
+        (file) =>
+          group.config === "test/vitest/vitest.extension-database-workers.config.ts" ||
+          !databaseWorkerExtensionTestFiles.includes(file),
+      );
+      expect(group.testFileCount).toBe(files.length);
+      return files;
+    });
+    expect(batch.testFileCount).toBe(allFiles.length);
+    expect(groupedFiles.toSorted()).toEqual(allFiles.toSorted());
+    expect(new Set(groupedFiles).size).toBe(allFiles.length);
     const stablePlanGroups = batch.planGroups.map(({ estimatedCost, testFileCount, ...group }) => {
       expectPositiveIntegerMetric(estimatedCost);
       expectPositiveIntegerMetric(testFileCount);
@@ -478,6 +530,37 @@ describe("scripts/test-extension.mts", () => {
         config: "test/vitest/vitest.extension-browser.config.ts",
         extensionIds: ["browser"],
         roots: [bundledPluginRoot("browser")],
+      },
+      {
+        config: "test/vitest/vitest.extension-database-workers.config.ts",
+        extensionIds: [
+          "acpx",
+          "browser",
+          "feishu",
+          "matrix",
+          "mattermost",
+          "memory-core",
+          "msteams",
+          "qa-lab",
+          "telegram",
+          "voice-call",
+          "zalo",
+          "zalouser",
+        ],
+        roots: [
+          ...["matrix", "telegram", "mattermost", "voice-call", "zalo", "zalouser"].flatMap(
+            (extensionId) =>
+              databaseWorkerExtensionTestFiles.filter((file) =>
+                file.startsWith(`extensions/${extensionId}/`),
+              ),
+          ),
+          bundledPluginRoot("memory-core"),
+          ...["msteams", "feishu", "acpx", "browser", "qa-lab"].flatMap((extensionId) =>
+            databaseWorkerExtensionTestFiles.filter((file) =>
+              file.startsWith(`extensions/${extensionId}/`),
+            ),
+          ),
+        ],
       },
       {
         config: "test/vitest/vitest.extension-diffs.config.ts",
@@ -513,11 +596,6 @@ describe("scripts/test-extension.mts", () => {
         config: "test/vitest/vitest.extension-media.config.ts",
         extensionIds: ["vydra"],
         roots: [bundledPluginRoot("vydra")],
-      },
-      {
-        config: "test/vitest/vitest.extension-memory.config.ts",
-        extensionIds: ["memory-core"],
-        roots: [bundledPluginRoot("memory-core")],
       },
       {
         config: "test/vitest/vitest.extension-misc.config.ts",
@@ -1052,9 +1130,15 @@ await new Promise(()=>{});export default {};`,
 
     expect(result).toBe(0);
     const calls = runGroup.mock.calls.map(([params]) => params);
-    expect(calls).toHaveLength(Math.ceil(expectedFiles.length / 12));
+    const workerCount = expectedFiles.filter((file) =>
+      databaseWorkerExtensionTestFiles.includes(`extensions/${file}`),
+    ).length;
+    expect(calls).toHaveLength(
+      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 12),
+    );
     expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
-    expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
+    expect(calls.flatMap((call) => call.targets).toSorted()).toEqual(expectedFiles.toSorted());
+    expect(new Set(calls.flatMap((call) => call.targets)).size).toBe(expectedFiles.length);
     for (const call of calls) {
       expect(parseCLI(["vitest", "run", ...call.args]).options).toMatchObject({
         retry: 1,
@@ -1078,7 +1162,8 @@ await new Promise(()=>{});export default {};`,
     expect(runGroup).toHaveBeenCalledTimes(expectedMatrixTestProcessCount());
     const calls = runGroup.mock.calls.map(([params]) => params as RunGroupParams);
     expect(calls.every((call) => call.targets.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
-    expect(calls.flatMap((call) => call.targets)).toEqual(expectedFiles);
+    expect(calls.flatMap((call) => call.targets).toSorted()).toEqual(expectedFiles.toSorted());
+    expect(new Set(calls.flatMap((call) => call.targets)).size).toBe(expectedFiles.length);
   });
 
   it("runs every Matrix process chunk after an earlier chunk fails", async () => {
@@ -1114,7 +1199,86 @@ await new Promise(()=>{});export default {};`,
 
     expect(result).toBe(0);
     expect(runGroup).toHaveBeenCalledOnce();
-    expect(requireFirstMockArg<RunGroupParams>(runGroup).targets).toEqual(["matrix"]);
+    const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
+    expect(invocation.targets).toEqual(["matrix"]);
+    expect(invocation.config).toBe("test/vitest/vitest.database-worker-watch.config.ts");
+    expect(invocation.homeMode).toBe("live-aware");
+    expect(invocation.env?.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER).toBe(
+      "test/vitest/vitest.extension-matrix.config.ts",
+    );
+    expect(JSON.parse(invocation.env!.OPENCLAW_VITEST_DATABASE_WORKER_WATCH_TESTS!)).toEqual(
+      databaseWorkerExtensionTestFiles.filter((file) => file.startsWith("extensions/matrix/")),
+    );
+  });
+
+  it.each([
+    {
+      include: "extensions/telegram/src/sticker-cache.selection.test.ts",
+      exclude: false,
+      mode: "runtime",
+    },
+    {
+      include: "extensions/telegram/src/sticker-cache.selection.test.ts",
+      exclude: true,
+      mode: undefined,
+    },
+    {
+      include: "extensions/telegram/src/update-offset-store.test.ts",
+      exclude: false,
+      mode: undefined,
+    },
+  ])(
+    "prepares the selected Telegram leaves before the aggregate ($include, exclude=$exclude)",
+    async ({ include, exclude, mode }) => {
+      const includeFile = path.join(tempDirs.make("openclaw-extension-selection-"), "include.json");
+      writeFileSync(includeFile, JSON.stringify([include]));
+      vi.mocked(prepareVitestRuntime).mockClear();
+      const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+      const args = ["--watch", ...(exclude ? ["--exclude", include] : [])];
+      const result = await runExtensionBatchPlan(
+        resolveExtensionBatchPlan({ extensionIds: ["telegram"] }),
+        { env, runGroup, vitestArgs: args },
+      );
+      expect(result).toBe(0);
+      expect(runGroup).toHaveBeenCalledOnce();
+      expect(prepareVitestRuntime).toHaveBeenCalledOnce();
+      const [selections] = vi.mocked(prepareVitestRuntime).mock.calls[0]!;
+      expect(resolveVitestPretestBuildMode(selections)).toBe(mode);
+      const invocation = requireFirstMockArg<RunGroupParams>(runGroup);
+      expect(invocation.env?.OPENCLAW_VITEST_INCLUDE_FILE).toBe(includeFile);
+      expect(invocation.homeMode).toBe("live-aware");
+      expect(invocation.args).toEqual(relativizeExtensionVitestArgs(args));
+      if (exclude) {
+        expect(invocation.targets).not.toContain("telegram/src/sticker-cache.selection.test.ts");
+      }
+    },
+  );
+
+  it("keeps split Matrix exact-exclude targets with their worker or ordinary owner", async () => {
+    const excluded = databaseWorkerExtensionTestFiles.find((file) =>
+      file.startsWith("extensions/matrix/"),
+    )!;
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    await runExtensionBatchPlan(resolveExtensionBatchPlan({ extensionIds: ["matrix"] }), {
+      runGroup,
+      vitestArgs: ["--exclude", excluded],
+    });
+    const calls = runGroup.mock.calls.map(([invocation]) => invocation);
+    const actualFiles = calls.flatMap(({ config, targets }) =>
+      targets.map((target) => {
+        const file = `extensions/${target}`;
+        expect(file).not.toBe(excluded);
+        expect(databaseWorkerExtensionTestFiles.includes(file)).toBe(
+          config === "test/vitest/vitest.extension-database-workers.config.ts",
+        );
+        return file;
+      }),
+    );
+    expect(actualFiles.toSorted()).toEqual(
+      listExtensionTestFiles("matrix").filter((file) => file !== excluded),
+    );
+    expect(new Set(actualFiles).size).toBe(actualFiles.length);
   });
 
   it("fails extension batch groups when exact excludes remove every test", async () => {

@@ -214,6 +214,9 @@ export function composeMemoryCorpusMetadata(
     ),
     ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
     ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
+    ...(ordered.some((attempt) => "deadline" in attempt && attempt.deadline)
+      ? { timedOut: true, timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS }
+      : {}),
   };
 }
 

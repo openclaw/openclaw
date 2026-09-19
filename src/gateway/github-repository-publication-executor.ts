@@ -11,6 +11,7 @@ import {
   type GitHubPublicationIdentityOwner,
 } from "./github-publication-execution-identity.js";
 import {
+  GitHubPublicationBranchChangedError,
   GitHubPublicationKnownFailure,
   GitHubPublicationWorkspaceChangedError,
   resolveGitHubPublicationFailure,
@@ -252,11 +253,7 @@ export async function executeRepositoryGitHubPublication(params: {
     };
     let remoteHead = await observeHead();
     if (remoteHead !== row.previous_head_commit && (!headCommit || remoteHead !== headCommit)) {
-      throw new GitHubPublicationKnownFailure("GitHub publication branch changed.", {
-        code: "push_rejected",
-        nextAction:
-          "Review the changed branch and request a new publication; existing work is never force-pushed.",
-      });
+      throw new GitHubPublicationBranchChangedError();
     }
     // Initial PR changes use GitHub's merge-base. Later checkpoints compare with
     // the preceding pushed tree, so restoring the PR base remains a real revert.

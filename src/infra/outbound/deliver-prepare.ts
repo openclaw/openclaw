@@ -2,6 +2,7 @@ import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 // Finalizes outbound modifying policy before durable queue custody is created.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler, resolveChannelOutboundDirectiveOptions } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
@@ -119,7 +120,7 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
  */
 export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
-  options?: { onBeforeFirstModifier?: () => void },
+  options?: { onBeforeFirstModifier?: () => Promise<void>; hookRunner?: HookRunner },
 ): Promise<PreparedOutboundBatch> {
   const directiveOptions = await resolveChannelOutboundDirectiveOptions({
     cfg: params.cfg,
@@ -143,7 +144,7 @@ export async function prepareOutboundPayloadBatch(
     }
   }
 
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = options?.hookRunner ?? getGlobalHookRunner();
   const hasReplyPayloadSendingHooks =
     params.replyPayloadSendingHook !== undefined &&
     (hookRunner?.hasHooks("reply_payload_sending") ?? false);
@@ -156,15 +157,19 @@ export async function prepareOutboundPayloadBatch(
   for (const { index: sourceIndex, payload } of normalized) {
     throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
     if (hasModifyingHooks && !modifierBoundaryEntered) {
-      options?.onBeforeFirstModifier?.();
+      await options?.onBeforeFirstModifier?.();
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
       modifierBoundaryEntered = true;
     }
     let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;
     try {
-      replyHookResult = await applyReplyPayloadSendingHook({
-        hook: params.replyPayloadSendingHook,
-        payload,
-      });
+      replyHookResult = await applyReplyPayloadSendingHook(
+        {
+          hook: params.replyPayloadSendingHook,
+          payload,
+        },
+        hookRunner,
+      );
     } catch (error) {
       throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
     }

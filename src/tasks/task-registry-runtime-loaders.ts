@@ -1,4 +1,3 @@
-import { createRequire } from "node:module";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 
@@ -14,11 +13,6 @@ export const TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY = Symbol.for(
 export const TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY = Symbol.for(
   "openclaw.taskRegistry.controlRuntimeOverride",
 );
-const require = createRequire(import.meta.url);
-const TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES = [
-  "./task-registry-control.runtime.js",
-  "./task-registry-control.runtime.ts",
-] as const;
 export type TaskRegistryGlobalWithRuntimeOverrides = typeof globalThis & {
   [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
   [TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY]?: TaskRegistryControlRuntime | null;
@@ -28,18 +22,7 @@ export const deliveryRuntimeLoader = createLazyPromiseLoader(
   { cacheRejections: true },
 );
 export const controlRuntimeLoader = createLazyPromiseLoader(
-  () =>
-    Promise.resolve().then(() => {
-      for (const candidate of TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES) {
-        try {
-          // SAFETY: Both candidates are source/build forms of the owned control-runtime module.
-          return require(candidate) as TaskRegistryControlRuntime;
-        } catch {
-          // Try runtime/source candidates in order.
-        }
-      }
-      throw new Error("Failed to load task registry control runtime.");
-    }),
+  () => import("./task-registry-control.runtime.js"),
   { cacheRejections: true },
 );
 

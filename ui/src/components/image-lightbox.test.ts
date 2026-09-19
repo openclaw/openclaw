@@ -90,6 +90,13 @@ describe("openclaw-image-lightbox", () => {
     );
     expect(fetchImage).toHaveBeenCalledTimes(1);
     expect(root?.querySelector<HTMLButtonElement>(".close")?.hasAttribute("autofocus")).toBe(true);
+
+    modal.imageTitle = "Renamed image";
+    await modal.updateComplete;
+    expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Renamed image");
+    expect(root?.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Image preview: Renamed image",
+    );
   });
 
   it("renders video in the shared overlay without image zoom controls", async () => {
@@ -131,6 +138,25 @@ describe("openclaw-image-lightbox", () => {
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, composed: true }),
     );
     expect(modal.shadowRoot?.activeElement).toBe(video);
+
+    modal.imageTitle = "Renamed video";
+    await modal.updateComplete;
+    expect(video?.getAttribute("aria-label")).toBe("Renamed video");
+    expect(modal.shadowRoot?.querySelector("openclaw-modal-dialog")?.label).toBe(
+      "Video preview: Renamed video",
+    );
+  });
+
+  it("does not preload a gallery from an update queued before detachment", async () => {
+    const { modal } = await renderLightbox();
+    const neighbor = vi.fn(async () => null);
+    modal.gallery = { index: 0, items: [async () => null, neighbor] };
+    modal.remove();
+
+    await modal.updateComplete;
+    await Promise.resolve();
+
+    expect(neighbor).not.toHaveBeenCalled();
   });
 
   it("accepts parameters on safe raster MIME types", async () => {
@@ -238,7 +264,7 @@ describe("openclaw-image-lightbox", () => {
     const root = modal.shadowRoot;
     const image = root?.querySelector<HTMLImageElement>(".image");
     const zoomIn = root?.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]');
-    expect(zoomIn?.disabled).toBe(true);
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
     const unavailableShortcut = new KeyboardEvent("keydown", {
       key: "+",
       bubbles: true,
@@ -249,11 +275,11 @@ describe("openclaw-image-lightbox", () => {
 
     image?.dispatchEvent(new Event("error"));
     await modal.updateComplete;
-    expect(zoomIn?.disabled).toBe(true);
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("true");
 
     image?.dispatchEvent(new Event("load"));
     await modal.updateComplete;
-    expect(zoomIn?.disabled).toBe(false);
+    expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
     const availableShortcut = new KeyboardEvent("keydown", {
       key: "+",
       bubbles: true,

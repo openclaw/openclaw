@@ -95,7 +95,7 @@ suite.define(() => {
           if (blocked) {
             await expect.poll(() => option.getAttribute("data-chat-model-setup")).toBe("true");
             await option.click();
-            await expect.poll(() => page.url()).toContain("model-setup");
+            await page.waitForURL("**/settings/model-providers?connect=1");
           } else {
             expect(await option.isDisabled()).toBe(true);
             expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(

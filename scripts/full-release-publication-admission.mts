@@ -171,8 +171,22 @@ function retainSource(root: string, sha: string, store: string, tooling: boolean
   if (objects.size > 8192) {
     throw new Error("publication source object count exceeds limit");
   }
-  for (const oid of objects) {
-    const size = Number(localGit(root, ["cat-file", "-s", oid]).toString());
+  const objectIds = [...objects];
+  const objectInput = objectIds.join("\n") + "\n";
+  const sizes = localGit(
+    root,
+    ["cat-file", "--batch-check=%(objectname) %(objectsize)"],
+    objectInput,
+  )
+    .toString()
+    .split("\n");
+  // A batch can exit successfully with missing objects. Bind every response before packing.
+  for (const [index, oid] of objectIds.entries()) {
+    const match = /^([a-f0-9]{40}) (0|[1-9][0-9]*)$/u.exec(sizes[index] ?? "");
+    if (!match || match[1] !== oid) {
+      throw new Error("invalid publication source object-size response");
+    }
+    const size = Number(match[2]);
     if (
       !Number.isSafeInteger(size) ||
       size > 16 * 1024 * 1024 ||
@@ -181,10 +195,13 @@ function retainSource(root: string, sha: string, store: string, tooling: boolean
       throw new Error("publication source metadata exceeds byte limit");
     }
   }
+  if (sizes.length !== objectIds.length + 1 || sizes.at(-1) !== "") {
+    throw new Error("invalid publication source object-size response");
+  }
   const pack = localGit(
     root,
     ["pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object"],
-    [...objects].join("\n") + "\n",
+    objectInput,
   );
   localGit(store, ["index-pack", "--stdin"], pack);
   return selected.filter((entry) => entry.type === "blob");

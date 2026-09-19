@@ -1,8 +1,12 @@
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import {
+  type ClientOptions,
+  WebSocket,
+  WebSocketServer,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 
@@ -28,12 +32,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) => {
     resolvePinnedHostnameWithPolicy: transport.resolve,
   };
 });
-vi.mock("ws", async (original) => {
-  const actual = await original<typeof import("ws")>();
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
+  const actual = await original<typeof import("openclaw/plugin-sdk/websocket-runtime")>();
   return {
     ...actual,
-    default: class extends actual.default {
-      constructor(url: string | URL, options?: import("ws").ClientOptions) {
+    WebSocket: class extends actual.WebSocket {
+      constructor(url: string | URL, options?: ClientOptions) {
         const value = String(url);
         if (value.startsWith("wss:")) {
           transport.dials.push(value);

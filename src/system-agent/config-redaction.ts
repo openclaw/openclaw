@@ -151,6 +151,11 @@ function resolveSystemAgentConfigRedactionMetadata(
   return snapshot ? resolveMetadataConfigRedaction(snapshot, config) : baseConfigRedactionMetadata;
 }
 
+/** The same active schema owns both setting help and sensitive-value classification. */
+export function resolveSystemAgentConfigSchema(): ConfigSchemaResponse {
+  return resolveSystemAgentConfigRedactionMetadata().schema;
+}
+
 function splitConfigHintPath(path: string): string[] {
   // Schema hint paths use `[]` as an array wildcard; config writes spell the
   // same segment as `[*]`.

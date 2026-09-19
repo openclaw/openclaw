@@ -211,6 +211,14 @@ public struct OpenClawChatView: View {
         #endif
     }
 
+    private var collapsesCompletedWork: Bool {
+        #if os(iOS)
+        true
+        #else
+        self.isDesktopLayout
+        #endif
+    }
+
     /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
         viewModel: OpenClawChatViewModel,
@@ -271,7 +279,10 @@ public struct OpenClawChatView: View {
             self.content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { self.viewModel.load() }
+        .onAppear {
+            self.viewModel.refreshSourceContext()
+            self.viewModel.load()
+        }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
@@ -591,8 +602,8 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.pendingToolCalls.isEmpty {
-            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
+        if self.displayOptions.contains(.toolActivity), !self.viewModel.toolActivities.isEmpty {
+            ChatPendingToolsBubble(toolCalls: self.viewModel.toolActivities)
                 .equatable()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -618,6 +629,12 @@ public struct OpenClawChatView: View {
     {
         let bubble = ChatMessageBubble(
             message: msg,
+            sourcePreviews: self.viewModel.sourcePreviews(for: msg),
+            sourceContextRevision: self.viewModel.sourcePreviewState.revision,
+            sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,
+            loadSourceFavicon: { [weak viewModel] host in
+                await viewModel?.transport.loadSourceFavicon(host: host)
+            },
             style: self.style,
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
@@ -809,15 +826,13 @@ public struct OpenClawChatView: View {
             base = self.viewModel.messages
         }
         var rows = ChatTranscriptRow.build(from: self.mergeToolResults(in: base))
-        #if os(macOS)
-        if self.isDesktopLayout {
+        if self.collapsesCompletedWork {
             rows = ChatTranscriptRow.collapseCompletedWork(
                 rows,
                 runWorking: self.viewModel.hasBlockingRunActivity || self.viewModel.streamingAssistantText != nil,
                 activeRunIDs: Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs),
                 searchActive: self.isSearchPresented)
         }
-        #endif
         return rows.compactMap { row in
             switch row {
             case let .message(message):
@@ -1247,7 +1262,10 @@ extension OpenClawChatView {
                 phase: last.phase,
                 turnBoundary: last.turnBoundary,
                 steerTargetRunID: last.steerTargetRunID,
-                streamFallback: last.streamFallback)
+                streamFallback: last.streamFallback,
+                activity: message.activity.map { terminal in
+                    (last.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
+                } ?? last.activity)
             result[result.count - 1] = merged
         }
 

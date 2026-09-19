@@ -120,6 +120,7 @@ function mergeShippedPluginInstallRecords(
 /** Preview the same install-record merge that the importer repeats under its lease. */
 export function readShippedPluginInstallConfigImportRecords(
   snapshot: ConfigFileSnapshot,
+  options: { env?: NodeJS.ProcessEnv } = {},
 ): Record<string, PluginInstallRecord> | undefined {
   const source = inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig);
   if (source.status === "missing") {
@@ -129,8 +130,8 @@ export function readShippedPluginInstallConfigImportRecords(
     throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   return mergeShippedPluginInstallRecords(
-    loadInstalledPluginIndexInstallRecordsSync(),
-    readPersistedInstalledPluginIndexInstallRecords(),
+    loadInstalledPluginIndexInstallRecordsSync(options),
+    readPersistedInstalledPluginIndexInstallRecords(options),
     source.records,
   );
 }

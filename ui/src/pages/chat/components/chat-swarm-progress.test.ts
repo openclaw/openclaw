@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunReadRecord } from "../../../../../src/agents/subagents/registry/subagent-registry.types.js";
+import type { SubagentRunReadRecord } from "../../../../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import { buildSessionSwarmSummary } from "../../../../../src/gateway/session-swarm-summary.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -94,6 +94,13 @@ describe("chat Swarm progress", () => {
           title: "Enxame",
           groupTitle: "Tarefas paralelas",
           progress: "{complete} de {total}",
+          failedOrStopped: "Falhou ou foi interrompida",
+        },
+      },
+      tasksPage: {
+        status: {
+          running: "Em execução",
+          completed: "Concluído",
         },
       },
     });
@@ -102,14 +109,20 @@ describe("chat Swarm progress", () => {
     const container = renderProgress([
       session({ key: "running", status: "running" }),
       session({ key: "done", status: "done" }),
+      session({ key: "stopped", status: "killed" }),
     ]);
 
     expect(
       container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("1 de 2");
+    ).toContain("2 de 3");
     expect(container.querySelector(".chat-swarm__header strong")?.textContent).toBe(
       "Tarefas paralelas",
     );
+    expect(
+      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Em execução", "Concluído", "Falhou ou foi interrompida"]);
   });
 
   it("groups live collector children and maps their task states", () => {
@@ -138,6 +151,11 @@ describe("chat Swarm progress", () => {
       "chat-swarm__task-icon chat-swarm__task-icon--done",
       "chat-swarm__task-icon chat-swarm__task-icon--failed",
     ]);
+    expect(
+      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Queued", "Running", "Completed", "Failed or stopped"]);
   });
 
   it.each([
@@ -279,26 +297,92 @@ describe("chat Swarm progress", () => {
     expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
   });
 
-  it("keeps completed and failed child outcomes visible after the group finishes", () => {
-    const running = session({ key: "running", status: "running" });
+  it.each([
+    { name: "failed", statuses: ["failed"], completed: 1 },
+    { name: "stopped", statuses: Array.from({ length: 9 }, () => "killed" as const), completed: 0 },
+    { name: "mixed", statuses: ["failed", "killed", "timeout"], completed: 1 },
+  ] as const)(
+    "labels $name outcomes as a combined count through completion",
+    ({ statuses, completed }) => {
+      const terminal = [
+        ...Array.from({ length: completed }, (_, index) =>
+          session({ key: `completed-${index}`, status: "done", hasActiveRun: true }),
+        ),
+        ...statuses.map((status, index) =>
+          session({ key: `unsuccessful-${index}`, status, hasActiveRun: true }),
+        ),
+      ];
+      const container = renderProgress([
+        session({ key: "running", status: "running" }),
+        ...terminal,
+      ]);
+      const activeCounts = `1 running · 0 queued · ${statuses.length} failed or stopped`;
+
+      expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(activeCounts);
+      expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(
+        activeCounts,
+      );
+      expect(container.querySelectorAll(".chat-swarm__task-icon--running")).toHaveLength(1);
+      expect(container.querySelectorAll(".chat-swarm__task-icon--done")).toHaveLength(completed);
+      expect(container.querySelectorAll(".chat-swarm__task-icon--failed")).toHaveLength(
+        statuses.length,
+      );
+
+      render(
+        renderChatSwarmProgress({
+          sessionKey: parentSessionKey,
+          sessions: withSummary(terminal),
+        }),
+        container,
+      );
+      const finishedCounts = `${completed} completed · ${statuses.length} failed or stopped`;
+      expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
+      expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(finishedCounts);
+      expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(
+        finishedCounts,
+      );
+      expect(container.textContent).toContain("Check the conversation for the final response");
+    },
+  );
+
+  it("says the parent is processing while child runs are finished but the parent is still active", () => {
     const completed = session({ key: "completed", status: "done", hasActiveRun: true });
-    const failed = session({ key: "failed", status: "failed", hasActiveRun: true });
-    const container = renderProgress([running, completed, failed]);
-
-    expect(container.querySelectorAll(".chat-swarm__task-icon--running")).toHaveLength(1);
-    expect(container.querySelectorAll(".chat-swarm__task-icon--done")).toHaveLength(1);
-    expect(container.querySelectorAll(".chat-swarm__task-icon--failed")).toHaveLength(1);
-
+    const parentActive: (typeof completed)[] = [];
+    for (const row of withSummary([completed])) {
+      parentActive.push(
+        row.key === parentSessionKey
+          ? { ...row, status: "running" as const, hasActiveRun: true }
+          : row,
+      );
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
     render(
-      renderChatSwarmProgress({
-        sessionKey: parentSessionKey,
-        sessions: withSummary([completed, failed]),
-      }),
+      renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: parentActive }),
       container,
     );
-    expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
-    expect(container.textContent).toContain("1 completed · 1 failed");
+    expect(container.textContent).toContain("The parent is processing their results");
+    expect(container.textContent).not.toContain("Check the conversation for the final response");
+  });
+
+  it("directs to the final response when child runs are finished and the parent is not active", () => {
+    const completed = session({ key: "completed", status: "done", hasActiveRun: false });
+    const parentDone: (typeof completed)[] = [];
+    for (const row of withSummary([completed])) {
+      parentDone.push(
+        row.key === parentSessionKey
+          ? { ...row, status: "done" as const, hasActiveRun: false }
+          : row,
+      );
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: parentDone }),
+      container,
+    );
     expect(container.textContent).toContain("Check the conversation for the final response");
+    expect(container.textContent).not.toContain("The parent is processing their results");
   });
 
   it("keeps tasks from every phase in the compact detail", () => {

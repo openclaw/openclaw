@@ -4,6 +4,7 @@ import path, { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
@@ -28,6 +29,7 @@ it.each([
     [
       "-c",
       `set -eu
+source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$1"
 UPDATE_RESTART_MODE="$2"
 COMMAND_TIMEOUT=1
@@ -92,6 +94,9 @@ it.each([
   { scenario: "sqlite-volume", mode: "auto-auth" },
 ])("preserves all $scenario migration rows after $mode baseline setup", ({ scenario, mode }) => {
   const root = tempDirs.make("openclaw-survivor-baseline-order-");
+  const paths = readUpgradeSurvivorPaths(root, {
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+  });
   const authoredPath = path.join(root, "authored.json");
   const resultPath = path.join(root, "result.json");
   const probePath = path.join(root, "probe.mjs");
@@ -123,7 +128,7 @@ it.each([
           token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
         },
       },
-      plugins: { enabled: true },
+      plugins: { enabled: true, allow: [], entries: {} },
       channels: { discord: { enabled: true } },
     }),
   );
@@ -197,7 +202,7 @@ phase() {
   shift
   case "$name" in
     install-baseline) baseline_version=2026.8.1 ;;
-    initialize-state|seed-state|seed-migration-state|seed-volume-state|prepare-update-restart-probe) "$@" ;;
+    initialize-state|missing-load-path-seed|seed-state|seed-migration-state|seed-volume-state|prepare-update-restart-probe) "$@" ;;
     update-candidate)
       node --import "$TSX_IMPORT" "$PROBE_SCRIPT" update
       exit "$?"
@@ -207,7 +212,10 @@ phase() {
 }
 ${phases}
 `;
-  const result = spawnSync("bash", ["-c", script], {
+  // The Darwin Bash guard must be able to replay this injected runner.
+  const scriptPath = path.join(root, "runner.sh");
+  writeFileSync(scriptPath, script);
+  const result = spawnSync("bash", [scriptPath], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -223,9 +231,7 @@ ${phases}
       OPENCLAW_TEST_STATE_FUNCTION_B64: "Og==",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
       OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-      OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+      ...paths.env,
       OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "12",
       OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "3",
       OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "6",

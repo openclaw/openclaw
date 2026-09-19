@@ -1,11 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
+import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
   updateComplete: Promise<boolean>;
+  requestUpdate: () => void;
 };
 
 function routeData(agentId: string, catalogId = ""): NewSessionRouteData {
@@ -49,11 +51,92 @@ function message(page: NewSessionElement): string {
 
 afterEach(() => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   sessionStorage.clear();
   window.history.replaceState({}, "", "/");
 });
 
 describe("new session draft route ownership", () => {
+  it.each(["show in composer", "finish dictation", "change route", "disconnect"] as const)(
+    "opens pasted text in the shared side panel and clears it on %s",
+    async (transition) => {
+      let dictating = false;
+      if (transition === "finish dictation") {
+        vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
+          () => dictating,
+        );
+      }
+      const page = await mount(routeData("research"));
+      const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockImplementation(async () => new Response(original));
+      vi.stubGlobal("fetch", fetchMock);
+      const paste = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(paste, "clipboardData", {
+        value: { items: [], getData: () => original },
+      });
+      page.querySelector("textarea")?.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(true);
+      await settle(page);
+      await expect
+        .poll(() => page.querySelector("openclaw-chat-pasted-text [role=button]"))
+        .not.toBeNull();
+      if (transition === "finish dictation") {
+        dictating = true;
+        page.requestUpdate();
+        await settle(page);
+        expect(page.querySelector<HTMLTextAreaElement>("textarea")?.readOnly).toBe(true);
+      }
+      page.querySelector<HTMLElement>("openclaw-chat-pasted-text [role=button]")?.click();
+      await expect.poll(() => page.querySelector("openclaw-chat-detail-panel")).not.toBeNull();
+      await expect
+        .poll(() => {
+          const source = page
+            .querySelector<HTMLAnchorElement>("openclaw-chat-detail-panel a[download]")
+            ?.getAttribute("href");
+          return Boolean(source && fetchMock.mock.calls.some(([url]) => url === source));
+        })
+        .toBe(true);
+      await expect
+        .poll(() => page.querySelector("openclaw-chat-detail-panel pre")?.textContent)
+        .toBe(original);
+
+      if (transition === "finish dictation") {
+        const actionButtons = () => [
+          ...page.querySelectorAll<HTMLButtonElement>(
+            "openclaw-chat-detail-panel .chat-attachment-text-action, openclaw-chat-detail-panel button[aria-label^='Remove']",
+          ),
+        ];
+        expect(actionButtons()).toHaveLength(2);
+        expect(actionButtons().every((button) => button.disabled)).toBe(true);
+        dictating = false;
+        page.requestUpdate();
+        await expect.poll(() => actionButtons().every((button) => !button.disabled)).toBe(true);
+      }
+      if (transition === "show in composer" || transition === "finish dictation") {
+        await enterMessage(page, "Typed while preview is open");
+        const show = [
+          ...page.querySelectorAll<HTMLButtonElement>("openclaw-chat-detail-panel button"),
+        ].find((button) => button.textContent?.trim() === t("chat.attachments.showInTextField"));
+        expect(show).toBeDefined();
+        show?.click();
+        await settle(page);
+        expect(message(page)).toBe(`Typed while preview is open\n\n${original}`);
+        expect(page.querySelector("openclaw-chat-pasted-text")).toBeNull();
+      } else if (transition === "change route") {
+        window.history.replaceState({}, "", "/new?agent=main");
+        page.data = routeData("main");
+        await settle(page);
+      } else {
+        page.remove();
+        await settle(page);
+      }
+      expect(page.querySelector("openclaw-chat-detail-panel")).toBeNull();
+    },
+  );
+
   it("routes every focus-surface and key-class pair by the shared contract", async () => {
     const page = await mount(routeData("research"));
     const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");

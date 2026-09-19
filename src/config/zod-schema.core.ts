@@ -248,6 +248,8 @@ const ModelCompatSchema = z
     supportsStore: z.boolean().optional(),
     /** Whether provider accepts prompt-cache/session affinity keys. */
     supportsPromptCacheKey: z.boolean().optional(),
+    /** Opts this model into stored HTTP continuation on a verified compatible endpoint. */
+    supportsResponsesContinuation: z.boolean().optional(),
     /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
     supportsDeveloperRole: z.boolean().optional(),
     /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */

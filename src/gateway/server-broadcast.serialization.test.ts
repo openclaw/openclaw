@@ -79,6 +79,31 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it("keeps recipient session permissions separate at the same sequence and profile", () => {
+    const first = makeClient("first");
+    const second = makeClient("second");
+    for (const peer of [first, second]) {
+      peer.client.preparedRecipientProfileId = "same-profile";
+    }
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([first.client, second.client]),
+      prepareSessionEventProjection: () => (client) => ({
+        sessionKey: "agent:main:chat",
+        session: {
+          key: "agent:main:chat",
+          sharingRole: client === first.client ? "owner" : "viewer",
+        },
+      }),
+    });
+    broadcast("sessions.changed", { sessionKey: "agent:main:chat" });
+    expect(JSON.parse(first.socket.send.mock.calls[0]![0]).payload.session.sharingRole).toBe(
+      "owner",
+    );
+    expect(JSON.parse(second.socket.send.mock.calls[0]![0]).payload.session.sharingRole).toBe(
+      "viewer",
+    );
+  });
+
   it("keeps reentrant targeted frames separate from an in-progress fanout at the same sequence", () => {
     const first = makeClient("first");
     const second = makeClient("second");

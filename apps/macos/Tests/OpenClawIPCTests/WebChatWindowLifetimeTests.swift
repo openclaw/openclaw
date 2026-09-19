@@ -6,7 +6,7 @@ import Testing
 
 @MainActor
 struct WebChatWindowLifetimeTests {
-    @Test(arguments: ["ordinary", "transcript"], ["manager", "native window"])
+    @Test(arguments: ["ordinary", "transcript"], ["manager", "native window", "hide"])
     func `a pending primary open cannot outlive its owner`(admission: String, closeOwner: String) async throws {
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }
@@ -26,13 +26,15 @@ struct WebChatWindowLifetimeTests {
                 // pending admission cannot run until its owner is gone.
                 var rejected = false
                 if admission == "ordinary" {
-                    // Explicit-session presentation does not populate the preferred main-session cache.
-                    manager.show()
+                    // Supplying an agent keeps the existing window from satisfying this default-session lookup.
+                    manager.show(agentID: "main")
                 } else {
                     manager.show(sessionKey: "cron:shared-job", ifCurrentRouteFrom: lease) { rejected = true }
                 }
                 if closeOwner == "manager" {
                     manager.close()
+                } else if closeOwner == "hide" {
+                    manager.hideWindows()
                 } else {
                     window.close()
                 }
@@ -47,11 +49,79 @@ struct WebChatWindowLifetimeTests {
         await fixture.gateway.shutdown()
     }
 
-    @Test func `selecting a profile session preserves the primary active session`() async {
-        await TestIsolation.withIsolatedState {
-            let manager = WebChatManager.shared
-            defer { manager.resetPrimaryConnections() }
-            manager.recordActiveSessionKey("primary-session")
+    @Test(arguments: [false, true])
+    func `concurrent cold primary opens honor the new window choice`(newWindow: Bool) async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let fixture = CronSourceFixture()
+        do {
+            try await withIsolatedWebChatManager(
+                primaryConnection: fixture.gateway,
+                env: ["OPENCLAW_CONFIG_PATH": configPath])
+            { manager in
+                try JSONSerialization.data(withJSONObject: CronSourceFixture.configuration(revision: 1))
+                    .write(to: URL(fileURLWithPath: configPath))
+                let first = manager.openGatewayWindow(for: .primary, newWindow: newWindow)
+                let second = manager.openGatewayWindow(for: .primary, newWindow: newWindow)
+                await first.value
+                await second.value
+                #expect(manager.openWindowCount(for: .primary) == (newWindow ? 2 : 1))
+                #expect(manager.frontmostGatewayTarget == .primary)
+                #expect(manager.hasVisibleWindows)
+            }
+        } catch {
+            await fixture.gateway.shutdown()
+            throw error
+        }
+        await fixture.gateway.shutdown()
+    }
+
+    @Test(arguments: ["show", "new window"])
+    func `a retired socket cannot finish a primary main session open`(entrypoint: String) async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let fixture = CronSourceFixture(holding: "config.get")
+        do {
+            try await withIsolatedWebChatManager(
+                primaryConnection: fixture.gateway,
+                env: ["OPENCLAW_CONFIG_PATH": configPath])
+            { manager in
+                try JSONSerialization.data(withJSONObject: CronSourceFixture.configuration(revision: 1))
+                    .write(to: URL(fileURLWithPath: configPath))
+                let lease = try await fixture.gateway.acquireServerLease()
+                let pending: Task<Void, Never>?
+                if entrypoint == "show" {
+                    manager.show()
+                    pending = nil
+                } else {
+                    pending = manager.openGatewayWindow(for: .primary, newWindow: true)
+                }
+                try #require(await self.eventually { fixture.requests.value.contains { $0.method == "config.get" } })
+                let request = try #require(fixture.requests.value.first { $0.method == "config.get" })
+                // Retire only the socket: the manager generation, configured route,
+                // and device-auth Gateway ID still match the delayed admission.
+                await fixture.gateway._test_handleDisconnect(socketGeneration: lease.socketGeneration)
+                #expect(fixture.gateway.serverLeaseMatchesCurrentRoute(lease))
+                #expect(!fixture.gateway.serverLeaseMatchesCurrentState(lease))
+                try request.socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": request.id, "ok": true,
+                    "payload": ["config": ["session": ["scope": "global"]]],
+                ])))
+                await pending?.value
+                #expect(await !self.eventually { manager.hasVisibleWindows })
+                #expect(manager.openWindowCount(for: .primary) == 0)
+                #expect(manager.activeSessionKey == nil)
+            }
+        } catch {
+            await fixture.gateway.shutdown()
+            throw error
+        }
+        await fixture.gateway.shutdown()
+    }
+
+    @Test func `selecting a profile session preserves the primary active session`() async throws {
+        try await withIsolatedWebChatManager { manager in
+            manager.show(sessionKey: "primary-session")
             let connection = GatewayConnection(
                 endpointProvider: { throw CancellationError() },
                 supportsSharedEndpointRecovery: false)
@@ -64,23 +134,47 @@ struct WebChatWindowLifetimeTests {
         }
     }
 
-    @Test func `admitting a replacement primary Gateway retires only its native window`() async throws {
+    @Test func `replacing the primary Gateway retires its windows and preserves profiles`() async throws {
         try await withIsolatedWebChatProfile { manager, profile in
-            try await manager.show(profile: profile)
-            var primaryVisibility: [Bool] = []
-            manager.onChatWindowVisibilityChanged = { primaryVisibility.append($0) }
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
             manager.show(sessionKey: "primary-proof")
+            manager.show(sessionKey: "second-primary")
             let originalGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(root: OpenClawConfigFile.loadDict())
 
             manager.preparePrimaryGateway(gatewayID: originalGatewayID)
-            #expect(primaryVisibility == [true])
-            #expect(manager.activeSessionKey == "primary-proof")
+            #expect(manager.openWindowCount(for: .primary) == 2)
+            #expect(manager.activeSessionKey == "second-primary")
 
             manager.preparePrimaryGateway(gatewayID: "replacement-primary")
-            #expect(primaryVisibility == [true, false])
+            #expect(manager.openWindowCount(for: .primary) == 0)
             #expect(manager.activeSessionKey == nil)
-            #expect(manager._testProfileWindowCount(profileID: profile.id) == 1)
+            #expect(manager.hasVisibleWindows)
+            #expect(manager.openWindowCount(for: .profile(profile.id)) == 1)
             manager.closeGatewayWindows(profileID: profile.id)
+        }
+    }
+
+    @Test func `hiding clears voice ownership and reopening restores the retained primary route`() async throws {
+        try await withIsolatedWebChatProfile { manager, profile in
+            manager.show(sessionKey: "first-primary")
+            manager.show(sessionKey: "second-primary")
+            #expect(manager.activeSessionKey == "second-primary")
+            manager.show(sessionKey: "first-primary")
+            #expect(manager.activeSessionKey == "first-primary")
+            #expect(manager.openWindowCount(for: .primary) == 2)
+            await manager.openGatewayWindow(for: .profile(profile.id)).value
+            #expect(manager.frontmostGatewayTarget == .profile(profile.id))
+            #expect(manager.activeSessionKey == "first-primary")
+
+            manager.hideWindows()
+            #expect(!manager.hasVisibleWindows)
+            #expect(manager.activeSessionKey == nil)
+            manager.recordActiveSessionKey("hidden-update")
+            #expect(manager.activeSessionKey == nil)
+            await manager.openGatewayWindow(for: .primary).value
+            #expect(manager.activeSessionKey == "first-primary")
+            #expect(manager.frontmostGatewayTarget == .primary)
+            #expect(manager.openWindowCount(for: .primary) == 2)
         }
     }
 
@@ -90,7 +184,7 @@ struct WebChatWindowLifetimeTests {
             var connection: GatewayConnection? = await MacGatewayConnectionFleet.shared
                 .connection(profileID: profile.id)
             weak var retiredConnection = connection
-            try await manager.show(profile: profile)
+            await manager.openGatewayWindow(for: .profile(profile.id), newWindow: true).value
             if closeAll {
                 manager.close()
             } else {

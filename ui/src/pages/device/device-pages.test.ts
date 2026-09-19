@@ -94,7 +94,32 @@ afterEach(() => {
 });
 
 describe("native device settings pages", () => {
-  it("shows native desktop state and reconciles unattended hosting with the native owner", async () => {
+  it("switches the advertised Mac experience and follows the native owner's saved value", async () => {
+    const native = createCapability();
+    const page = await mount("openclaw-device-page", native.capability);
+    const title = "Native experience (Experimental)";
+    const experience = row(page, title);
+    expect(experience.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
+    expect(experience.textContent).toContain("When off, use the Web experience");
+    toggle(page, title, true);
+    expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
+      "app.nativeExperienceEnabled",
+      true,
+    );
+    const saved = createNativeDeviceSettingsSnapshot();
+    saved.app.nativeExperienceEnabled = true;
+    native.publish(saved);
+    await page.updateComplete;
+    expect(experience.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
+    toggle(page, title, false);
+    expect(native.capability.set).toHaveBeenLastCalledWith("app.nativeExperienceEnabled", false);
+    delete saved.app.nativeExperienceEnabled;
+    native.publish(saved);
+    await page.updateComplete;
+    expect(page.textContent).not.toContain(title);
+  });
+
+  it("shows native desktop state and reconciles Keep computer awake with the native owner", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     const native = createCapability({
       ...snapshot,
@@ -102,12 +127,12 @@ describe("native device settings pages", () => {
       desktopAvailability: { state: "locked" },
     });
     const page = await mount("openclaw-device-page", native.capability);
-    const hosting = row(page, "Unattended desktop hosting");
+    const hosting = row(page, "Keep computer awake");
     expect(hosting.textContent).toContain("between jobs");
     expect(hosting.textContent).toContain("Manual lock and logout");
     expect(row(page, "Desktop availability").textContent).toContain("Locked");
     expect(native.capability.set).not.toHaveBeenCalled();
-    toggle(page, "Unattended desktop hosting", true);
+    toggle(page, "Keep computer awake", true);
     expect(native.capability.set).toHaveBeenCalledWith(
       "capabilities.unattendedDesktopEnabled",
       true,
@@ -125,7 +150,7 @@ describe("native device settings pages", () => {
     native.publish({ ...snapshot, capabilities, desktopAvailability: { state: "unlocked" } });
     await page.updateComplete;
     expect(row(page, "Desktop availability").textContent).toContain("Unlocked");
-    expect(page.textContent).not.toContain("Unattended desktop hosting");
+    expect(page.textContent).not.toContain("Keep computer awake");
   });
 
   it("requests setup only on click and reports Chrome approval separately from installation", async () => {

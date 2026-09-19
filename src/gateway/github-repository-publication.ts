@@ -20,6 +20,7 @@ import {
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
+  createSharedGitHubPublicationReadMethods,
   type GitHubPublicationClaimRequest,
 } from "./github-publication-coordinator-methods.js";
 import {
@@ -44,6 +45,7 @@ import {
   readRepositoryGitHubPublicationBranch,
   markRepositoryGitHubPublicationReported,
   readRepositoryGitHubPublication,
+  readSharedRepositoryGitHubPublication,
   requireRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
   terminalRepositoryGitHubPublication,
@@ -613,6 +615,7 @@ export function createRepositoryGitHubPublicationCoordinator(
       isExecuting: (requestId) => active.has(requestId),
       execute: (row, assertCurrent, prepared) => execute(row, assertCurrent, undefined, prepared),
     }),
+    ...createSharedGitHubPublicationReadMethods(readSharedRepositoryGitHubPublication),
     personalStatus(action: PersonalGitHubAction, session: SessionIdentity, requestId: string) {
       const row = readRepositoryGitHubPublication(requestId);
       return row ? personalStatus(row, action, session) : undefined;

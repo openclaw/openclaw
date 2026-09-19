@@ -1,3 +1,4 @@
+import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +13,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginInspectReport } from "../plugins/status.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   withPluginDiagnosticsReportForInspectionMock,
   buildAllPluginInspectReportsMock,
@@ -119,6 +121,55 @@ describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
+  });
+
+  it.each([
+    { directory: "p-home", expectedRoot: "$OPENCLAW_HOME" },
+    { directory: "p-home-other", expectedRoot: path.resolve(path.sep, "tmp", "p-home-other") },
+  ])("preserves source paths across list and inspect for $directory", async (testCase) => {
+    const homeDir = path.resolve(path.sep, "tmp", "p-home");
+    const source = path.resolve(path.sep, "tmp", testCase.directory, "p", "index.js");
+    const plugin = createPluginRecord({ id: "source-probe", source, origin: "config" });
+    const report = { plugins: [plugin], diagnostics: [] };
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    buildPluginInspectReportMock.mockReturnValue(createInspectReport({ plugin }));
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
+      ...report,
+      workspaceDir: "/workspace",
+      registrySource: "persisted",
+      registryDiagnostics: [],
+    });
+    const commands = [
+      ["list", "--verbose"],
+      ["inspect", plugin.id],
+      ["info", plugin.id],
+    ];
+    const sources: Array<{ command: string; source?: string }> = [];
+
+    await withEnvAsync({ OPENCLAW_HOME: homeDir }, async () => {
+      for (const args of commands) {
+        pluginsCliRuntimeLogs.length = 0;
+        await runPluginsCommand(["plugins", ...args]);
+        const text = stripVTControlCharacters(pluginsCliRuntimeLogs.join("\n"));
+        sources.push({ command: args.join(" "), source: /^\s*source: (.+)$/im.exec(text)?.[1] });
+      }
+      for (const args of [
+        ["list", "--json"],
+        ["inspect", plugin.id, "--json"],
+      ]) {
+        pluginsCliRuntimeLogs.length = 0;
+        await runPluginsCommand(["plugins", ...args]);
+        const output = JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null");
+        expect((args[0] === "list" ? output.plugins[0] : output.plugin).source).toBe(source);
+      }
+    });
+
+    expect(sources).toEqual(
+      commands.map((args) => ({
+        command: args.join(" "),
+        source: path.join(testCase.expectedRoot, "p", "index.js"),
+      })),
+    );
   });
 
   it.each([false, true])(

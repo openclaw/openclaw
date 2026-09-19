@@ -2,10 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import {
-  countPluginStateLiveEntries,
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
-  resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
@@ -339,7 +337,6 @@ export async function runLegacyMigrationPlans(
           });
           operation = `reading ${plan.label} plugin state before migration`;
           const storeEntries = await store.entries();
-          const pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
           const existingEntriesByKey = new Map(storeEntries.map((entry) => [entry.key, entry]));
           const expectedKeys = new Set(existingEntriesByKey.keys());
           const namespaceRemainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
@@ -368,22 +365,14 @@ export async function runLegacyMigrationPlans(
             newEntries.push({ ...entry, targetKey });
           }
           const missingEntryCount = newEntries.length;
-          const pluginRemainingCapacity = Math.max(
-            0,
-            resolveMaxPluginStateEntriesPerPlugin() - pluginEntryCount,
-          );
           // Capacity limits must never turn the import into a permanent no-op: import the
           // newest entries that fit and defer the rest to a later startup (the legacy source
           // stays in place until every entry is covered).
-          const importBudget = Math.min(namespaceRemainingCapacity, pluginRemainingCapacity);
-          if (missingEntryCount > importBudget) {
+          if (missingEntryCount > namespaceRemainingCapacity) {
             newEntries = newEntries
               .toSorted(compareImportEntriesNewestFirst)
-              .slice(0, importBudget);
-            const constraint =
-              namespaceRemainingCapacity <= pluginRemainingCapacity
-                ? `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`
-                : `plugin state has room for ${pluginRemainingCapacity}`;
+              .slice(0, namespaceRemainingCapacity);
+            const constraint = `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`;
             recordIncomplete(
               newEntries.length > 0
                 ? `Partially migrating ${plan.label} because ${constraint} of ${missingEntryCount} missing entries; importing the newest ${newEntries.length} and deferring the rest in the legacy source`

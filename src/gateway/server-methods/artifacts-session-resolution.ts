@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type ArtifactsListParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,12 +27,7 @@ import {
 } from "../session-store-key.js";
 import type { GatewayClient } from "./types.js";
 
-export type ArtifactQuery = {
-  sessionKey?: string;
-  runId?: string;
-  taskId?: string;
-  agentId?: string;
-};
+export type ArtifactQuery = ArtifactsListParams;
 
 type ResolvedArtifactSession = {
   sessionKey: string;

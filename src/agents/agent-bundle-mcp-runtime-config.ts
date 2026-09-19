@@ -10,6 +10,7 @@ import {
   partitionMcpServersByConnectionScope,
   redactMcpServersForFingerprint,
 } from "./mcp-connection-resolver.js";
+import { createMcpServerToolDenyMatcher } from "./tool-policy-match.js";
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
 
@@ -55,20 +56,26 @@ function createCatalogFingerprint(params: {
 
 function filterMcpServers<T>(
   mcpServers: Record<string, T>,
-  options?: {
+  options: {
     includeServerNames?: ReadonlySet<string>;
     excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer: ReadonlyMap<string, string>;
+    toolDenylist?: string[];
   },
 ): Record<string, T> {
-  if (!options?.includeServerNames && !options?.excludeServerNames) {
+  if (!options.includeServerNames && !options.excludeServerNames && !options.toolDenylist?.length) {
     return mcpServers;
   }
   const filtered: Record<string, T> = {};
+  const isDenied = createMcpServerToolDenyMatcher(options.toolDenylist);
   for (const [serverName, rawServer] of Object.entries(mcpServers)) {
     if (options.includeServerNames && !options.includeServerNames.has(serverName)) {
       continue;
     }
     if (options.excludeServerNames?.has(serverName)) {
+      continue;
+    }
+    if (isDenied(options.safeServerNamesByServer.get(serverName) ?? serverName)) {
       continue;
     }
     filtered[serverName] = rawServer;
@@ -89,9 +96,11 @@ export function loadSessionMcpConfig(params: {
   /** Full-set safe-name assignments; folded into fingerprint for all partitions. */
   safeServerNamesByServer?: ReadonlyMap<string, string>;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  toolDenylist?: string[];
 }): {
   loaded: LoadedMcpConfig;
   fingerprint: string;
+  safeServerNamesByServer: ReadonlyMap<string, string>;
 } {
   const loaded =
     params.loaded ??
@@ -106,12 +115,16 @@ export function loadSessionMcpConfig(params: {
       logWarn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
     }
   }
-  const safeServerNames = digestSafeServerNameAssignments(params.safeServerNamesByServer);
+  const safeServerNamesByServer =
+    params.safeServerNamesByServer ?? assignSafeServerNames(Object.keys(loaded.mcpServers));
+  const safeServerNames = digestSafeServerNameAssignments(safeServerNamesByServer);
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const mcpToolsDeny = digestMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
   const mcpServers = filterMcpServers(loaded.mcpServers, {
     includeServerNames: params.includeServerNames,
     excludeServerNames: params.excludeServerNames,
+    safeServerNamesByServer,
+    toolDenylist: params.toolDenylist,
   });
   const prepareDataDirsByServer = Object.fromEntries(
     Object.entries(loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
@@ -122,6 +135,7 @@ export function loadSessionMcpConfig(params: {
     ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
     : mcpServers;
   const result = {
+    safeServerNamesByServer,
     loaded: {
       ...loaded,
       mcpServers,
@@ -149,14 +163,17 @@ export function resolveSessionMcpConfigSummary(params: {
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+  toolDenylist?: string[];
 }): { fingerprint: string; serverNames: string[] } {
-  const loaded = loadEmbeddedAgentMcpConfig(params);
+  const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+    ...params,
+    logDiagnostics: false,
+  });
   const declaredServerNames = Object.keys(loaded.mcpServers);
   const serverNames = declaredServerNames.toSorted((a, b) => a.localeCompare(b));
   // Mirror getOrCreate: the bare-keyed runtime folds full-set safe names into
   // its fingerprint and excludes requester-scoped servers from its partition.
   // Compare apples-to-apples or tools.effective reports stale-config forever.
-  const safeServerNamesByServer = assignSafeServerNames(declaredServerNames);
   const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(loaded.mcpServers);
   const { fingerprint } = loadSessionMcpConfig({
     ...params,

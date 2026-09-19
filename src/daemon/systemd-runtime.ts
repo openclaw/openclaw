@@ -155,22 +155,29 @@ export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env));
   if (opts?.requireLoaded) {
     return await readLoadedSystemdServiceRuntime(
       env,
       opts.timeoutMs,
       opts.loadForInspection,
       opts.systemdReadBinding,
+      installed ?? undefined,
     );
   }
   const timeoutMs = opts?.timeoutMs;
-  const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
-  let commandInspectionFailure: GatewayServiceRuntime | undefined;
+  let commandInspectionFailure =
+    opts?.commandInspection?.kind === "unavailable"
+      ? createServiceRuntimeInspectionFailure(
+          sanitizeServiceInspectionError(opts.commandInspection.error),
+        )
+      : undefined;
   if (installed?.scope !== "system") {
     try {
       await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
       return {
+        ...commandInspectionFailure,
         status: "unknown",
         detail: formatErrorMessage(err),
         ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
@@ -225,7 +232,18 @@ export async function readSystemdServiceRuntime(
     };
   }
   const parsed = parseSystemdShow(res.stdout || "");
+  const loadState = normalizeLowercaseStringOrEmpty(parsed.loadState);
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
+  if (loadState !== "loaded") {
+    return {
+      status: "unknown",
+      missingUnit: false,
+      detail:
+        loadState === "not-found"
+          ? `Unit ${unitName} is not visible in the ${installed?.scope ?? "user"} systemd manager.`
+          : `Unit ${unitName} has an unverified systemd load state.`,
+    };
+  }
   // Restart and shutdown transitions can still own or respawn the process.
   // Only terminal native states establish that offline maintenance is safe.
   const status =
@@ -237,16 +255,13 @@ export async function readSystemdServiceRuntime(
   return {
     ...commandInspectionFailure,
     status,
-    ...(normalizeLowercaseStringOrEmpty(parsed.loadState) === "not-found" &&
-    activeState === "inactive"
-      ? { missingUnit: false }
-      : {}),
     state: parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,
     lastExitStatus: parsed.execMainStatus,
     lastExitReason: parsed.execMainCode,
     systemd: {
+      scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
       unit: parsed.unit ?? unitName,
       killMode: parsed.killMode,

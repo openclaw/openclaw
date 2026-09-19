@@ -52,9 +52,9 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Found on this Gateway");
     expect(text(container)).toContain("Codex CLI");
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
-    expect(text(container)).toContain("Found, but needs attention");
+    expect(text(container)).toContain("Other detected software");
     expect(text(container)).toContain("This local runtime must be configured outside OpenClaw");
-    expect(text(container)).toContain("Connect an AI provider");
+    expect(text(container)).toContain("Set up and verify a model");
     expect(text(container)).toContain("Run a model locally");
     expect(text(container)).toContain("LM Studio");
     expect(text(container)).toContain("Connect with an API key or token");
@@ -358,17 +358,13 @@ describe("renderModelSetup", () => {
     expect(onSuccessClose).toHaveBeenCalledOnce();
   });
 
-  it("only rechecks unavailable runtimes without a supported setup route", () => {
-    const onDetect = vi.fn();
-    const container = mount(props({ onDetect }));
-    const buttons = container.querySelectorAll<HTMLButtonElement>(
-      '[data-unavailable-candidate="pi-cli"] button',
-    );
-
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Check again"]);
-    buttons[0]?.click();
-
-    expect(onDetect).toHaveBeenCalledOnce();
+  it("explains software without a setup route instead of offering an ineffective retry", () => {
+    const container = mount(props());
+    const unavailable = container.querySelector('[data-unavailable-candidate="pi-cli"]')!;
+    expect(unavailable.closest("details")).not.toBeNull();
+    expect(unavailable.closest("details")?.open).toBe(false);
+    expect(unavailable.querySelector("button")).toBeNull();
+    expect(text(unavailable)).toContain("configured outside OpenClaw");
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -844,7 +840,7 @@ describe("renderModelSetup", () => {
       deviceCode: { code: "ABCD-EFGH" },
     });
 
-    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__device-code button");
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__sign-in button");
     copy?.click();
 
     const feedback = copied ? "Copied!" : "Copy failed";
@@ -893,7 +889,7 @@ describe("renderModelSetup", () => {
       },
       "personal",
     );
-    expect(select.querySelectorAll('input[type="radio"]')).toHaveLength(2);
+    expect(select.querySelectorAll(".wizard-step__actions button")).toHaveLength(2);
     expect(text(select)).toContain("Your account");
 
     const confirm = wizardStep({ id: "confirm", type: "confirm", message: "Continue?" });
@@ -965,13 +961,15 @@ describe("renderModelSetup", () => {
     expect(link?.href).toBe(destination);
     expect(link?.target).toBe("_blank");
     expect(link?.rel).toBe("noreferrer");
-    expect(link?.textContent?.trim()).toBe("Open sign-in page");
+    expect(link?.textContent?.trim()).toBe("Open sign-in");
     expect(wizard.querySelector('[role="status"]')?.textContent).toContain("Waiting for sign-in");
     expect(
       [...wizard.querySelectorAll("button")].map((button) => button.textContent?.trim()),
-    ).toEqual(["Cancel"]);
+    ).toEqual(["Copy link", "Cancel"]);
     expect(onWizardAnswer).not.toHaveBeenCalled();
-    wizard.querySelector<HTMLButtonElement>("button")?.click();
+    [...wizard.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Cancel")
+      ?.click();
     expect(onWizardCancel).toHaveBeenCalledOnce();
     expect(onWizardAnswer).not.toHaveBeenCalled();
   });

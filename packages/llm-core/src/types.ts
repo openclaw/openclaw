@@ -527,6 +527,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
   reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
@@ -565,12 +567,16 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */
+  supportsStrictMode?: boolean;
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
   /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
   supportsReasoningEffort?: boolean;
   /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
   supportedReasoningEfforts?: string[];
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -579,6 +585,15 @@ export interface OpenAIResponsesCompat {
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /**
+   * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
+   * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
+   * connection is eligible by default; a custom endpoint carries no trust signal of
+   * its own, so this is the only path to eligibility there — set it once you've
+   * verified the backend correctly resolves `previous_response_id` and persists
+   * `store: true` turns. Default: false.
+   */
+  supportsResponsesContinuation?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -691,7 +706,11 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
+    : TApi extends
+          | "openai-responses"
+          | "azure-openai-responses"
+          | "openai-chatgpt-responses"
+          | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

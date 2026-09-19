@@ -14,7 +14,6 @@ import type {
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
@@ -31,12 +30,20 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
+type SidebarAttentionRequest = {
+  kind: "question" | "approval";
+  id: string;
+  preview: string;
+  count: number;
+  createdAtMs: number;
+};
+
 export type SidebarSessionAttention =
   | { kind: "none" }
-  | { kind: "question" }
-  | { kind: "approval" }
+  | { kind: "question"; requests: readonly SidebarAttentionRequest[] }
+  | { kind: "approval"; requests: readonly SidebarAttentionRequest[] }
   | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
-  | { kind: "error"; reason: string };
+  | { kind: "error"; reason: string; childLabel?: string };
 
 /** Client-owned attention that can name a session before its row is loaded. */
 export type SidebarKnownSessionAttention = {
@@ -46,7 +53,7 @@ export type SidebarKnownSessionAttention = {
 
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
-export function sidebarSessionAttentionPriority(attention: SidebarSessionAttention): number {
+function sidebarSessionAttentionPriority(attention: SidebarSessionAttention): number {
   switch (attention.kind) {
     case "question":
     case "approval":
@@ -60,6 +67,34 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
     default:
       return attention satisfies never;
   }
+}
+
+/** Preserve request identity while combining a session or collapsed group's attention. */
+export function summarizeSidebarSessionAttention(
+  values: readonly SidebarSessionAttention[],
+): SidebarSessionAttention {
+  const pending = values
+    .flatMap((attention) =>
+      attention.kind === "question" || attention.kind === "approval" ? attention.requests : [],
+    )
+    .toSorted(
+      (a, b) =>
+        a.createdAtMs - b.createdAtMs || a.id.localeCompare(b.id) || a.kind.localeCompare(b.kind),
+    );
+  const first = pending[0];
+  if (first) {
+    return {
+      kind: first.kind,
+      requests: [
+        ...new Map(pending.map((request) => [`${request.kind}:${request.id}`, request])).values(),
+      ],
+    };
+  }
+  return (
+    values.toSorted(
+      (a, b) => sidebarSessionAttentionPriority(b) - sidebarSessionAttentionPriority(a),
+    )[0] ?? SIDEBAR_SESSION_NO_ATTENTION
+  );
 }
 
 export type SidebarRecentSession = {
@@ -106,6 +141,7 @@ export type SidebarRecentSession = {
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
   worktreeId?: string;
+  workspaceKind?: "worktree" | "checkout";
   execNode?: string;
   placementState?: SessionPlacementState;
   placementProviderId?: string;
@@ -119,14 +155,26 @@ export type SidebarRecentSession = {
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
+  hiddenFromInvolvingMe?: boolean;
   lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
-  /** Own attention remains distinct from the collapsed-tree projection. */
+  /** Own state remains distinct from the collapsed-tree projection. */
   ownAttention?: SidebarSessionAttention;
+  ownWorkspaceConflictCount?: number;
   childAttention?: readonly SidebarSessionAttention[];
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Hidden run state remains visible when persistent children are expanded. */
+  subagentSummary?: Pick<
+    SidebarRecentSession,
+    | "childAttention"
+    | "unreadChildCount"
+    | "queuedChildCount"
+    | "runningChildCount"
+    | "failedChildCount"
+    | "workspaceConflictCount"
+  >;
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -142,6 +190,8 @@ export type SidebarRecentSession = {
   runtimeMs?: number;
   runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
+  /** Detail queries retain their original parents when hidden runs are skipped. */
+  childLoadParentKeys?: readonly string[];
   children: readonly SidebarRecentSession[];
   isChild: boolean;
   loadingChildren: boolean;
@@ -242,8 +292,8 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
-  context: ApplicationContext<RouteId>;
-  gateway: ApplicationContext<RouteId>["gateway"];
+  context: ApplicationContext;
+  gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;

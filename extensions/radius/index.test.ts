@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
@@ -24,8 +25,106 @@ vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal)
   buildGuardedModelFetch: () => streamFetch,
 }));
 
-afterEach(() => vi.resetAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.resetAllMocks();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([true, false])(
+  "returns Radius credentials with credentialOnly=%s and discovers models only for setup",
+  async (credentialOnly) => {
+    const provider = await registerSingleProviderPlugin(radiusPlugin);
+    const method = provider.auth.find((auth) => auth.id === "oauth");
+    if (!method) {
+      throw new Error("Radius OAuth method is not registered");
+    }
+    fetchGuard.mockImplementation(async ({ url }: { url: string }) => {
+      const payload = url.endsWith("/oauth/device")
+        ? {
+            device_code: "device-test",
+            user_code: "ABCD-EFGH",
+            verification_uri: "https://radius.earendil.com/device",
+            expires_in: 120,
+            interval: 1,
+          }
+        : url.endsWith("/oauth/token")
+          ? { access_token: "access-test", refresh_token: "refresh-test", expires_in: 3600 }
+          : {
+              models: [
+                {
+                  id: "balanced",
+                  name: "Balanced",
+                  reasoning: true,
+                  input: ["text"],
+                  contextWindow: 64_000,
+                  maxTokens: 4096,
+                  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+              baseUrl: "https://radius.pi.dev/v1",
+            };
+      return { response: Response.json(payload), release: async () => {} };
+    });
+    let codeShown!: () => void;
+    const deviceCode = new Promise<void>((resolve) => {
+      codeShown = resolve;
+    });
+    const unexpectedPrompt = async () => {
+      throw new Error("Radius sign-in must not ask for text or selection");
+    };
+    const ctx: ProviderAuthContext = {
+      config: { agents: { defaults: { model: { primary: "other/existing" } } } },
+      credentialOnly,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: {
+        intro: async () => {},
+        outro: async () => {},
+        note: async () => {},
+        deviceCode: async () => codeShown(),
+        select: unexpectedPrompt,
+        multiselect: unexpectedPrompt,
+        text: unexpectedPrompt,
+        confirm: unexpectedPrompt,
+        progress: () => ({ update: () => {}, stop: () => {} }),
+      },
+      isRemote: true,
+      openUrl: vi.fn(async () => {}),
+      oauth: {
+        createVpsAwareHandlers: () => {
+          throw new Error("Radius sign-in must use its device grant");
+        },
+      },
+    };
+    vi.useFakeTimers();
+    const pending = method.run(ctx);
+    await deviceCode;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await pending;
+    expect(result.profiles).toEqual([
+      {
+        profileId: "radius:default",
+        credential: {
+          type: "oauth",
+          provider: "radius",
+          access: "access-test",
+          refresh: "refresh-test",
+          expires: Date.now() + 3_540_000,
+        },
+      },
+    ]);
+    expect(result.defaultModel).toBe(credentialOnly ? undefined : "radius/balanced");
+    expect(result.configPatch).toEqual(
+      credentialOnly ? undefined : { agents: { defaults: { models: { "radius/balanced": {} } } } },
+    );
+    expect(fetchGuard.mock.calls.map(([request]) => request.url)).toEqual([
+      "https://radius.pi.dev/v1/oauth/device",
+      "https://radius.pi.dev/v1/oauth/token",
+      ...(credentialOnly ? [] : ["https://radius.pi.dev/v1/config"]),
+    ]);
+    expect(ctx.config.agents?.defaults?.model).toEqual({ primary: "other/existing" });
+  },
+);
 
 it("routes a discovered organization model through the registered native transport", async () => {
   const metadata = {

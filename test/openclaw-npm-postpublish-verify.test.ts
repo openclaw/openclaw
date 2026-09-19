@@ -18,7 +18,6 @@ import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -41,6 +40,7 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,

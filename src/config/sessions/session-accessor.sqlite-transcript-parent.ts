@@ -12,6 +12,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
+import { resolveSessionTranscriptQuestionAnswer } from "./session-transcript-read-fence.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
@@ -65,7 +66,9 @@ export function canRebasePreparedAssistantInTransaction(
     return false;
   }
   const admitted = admittedUserId
-    ? readTranscriptIdentityInTransaction(database, sessionId, admittedUserId)
+    ? admittedUserId === preparedParentId
+      ? preparedParent
+      : readTranscriptIdentityInTransaction(database, sessionId, admittedUserId)
     : undefined;
   if (admittedUserId && !admitted) {
     return false;
@@ -117,10 +120,27 @@ export function canRebasePreparedAssistantInTransaction(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
+        .leftJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .leftJoin("transcript_rewrite_watermarks as rewrite", (join) =>
+          join.onRef("rewrite.session_id", "=", "identity.session_id"),
+        )
         .select([
           "identity.event_id",
+          "identity.seq",
+          "identity.parent_id",
+          "active.message_position",
+          "rewrite.generation",
           /* kysely-allow-raw: validate the canonical message role without hydrating content. */
           sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
+          /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
+          sql<number | null>`json_type(event.event_json, '$.message.excludeFromContext') = 'true'
+            AND json_type(event.event_json, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
+            "context_free_command",
+          ),
         ])
         .where("identity.session_id", "=", sessionId)
         .where("identity.seq", ">=", newerMessageMetadata[0]!.seq)
@@ -130,7 +150,28 @@ export function canRebasePreparedAssistantInTransaction(
         .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES),
     ),
   );
-  return newerRoles.every((row) => row.message_role !== "user" || row.event_id === admittedUserId);
+  return newerRoles.every((row) => {
+    if (
+      row.message_role !== "user" ||
+      row.event_id === admittedUserId ||
+      row.context_free_command === 1
+    ) {
+      return true;
+    }
+    const answer = resolveSessionTranscriptQuestionAnswer(
+      database,
+      sessionId,
+      row.event_id,
+      admittedUserId,
+    );
+    return (
+      answer !== undefined &&
+      answer.rawSeq === row.seq &&
+      answer.effectiveParentId === row.parent_id &&
+      answer.activeMessagePosition === row.message_position &&
+      answer.generation === row.generation
+    );
+  });
 }
 
 export function resolveTranscriptEventAppendParent(
@@ -253,11 +294,47 @@ function readActiveTranscriptAppendParentId(
       .orderBy("ti.seq", "desc")
       .limit(1),
   );
-  if (!latest) {
-    return null;
-  }
   const resolveFromNavigation = () =>
     resolveVisibleTranscriptAppendParentId(readTranscriptNavigationEvents(database, sessionId));
+  if (!latest) {
+    // Exact imports captured the append cursor while rebuilding their projection,
+    // even though they did not transfer identity or idempotency ownership.
+    const current = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_transcript_index_state as state")
+        .innerJoin(
+          "transcript_rewrite_watermarks as rewrite",
+          "rewrite.session_id",
+          "state.session_id",
+        )
+        .select("state.leaf_event_id")
+        .where("state.session_id", "=", sessionId)
+        .where("state.needs_rebuild", "=", 0)
+        .where(
+          "state.indexed_seq",
+          "=",
+          db
+            .selectFrom("transcript_events")
+            .select("seq")
+            .where("session_id", "=", sessionId)
+            .orderBy("seq", "desc")
+            .limit(1),
+        )
+        .where((eb) =>
+          eb.not(
+            eb.exists(
+              eb
+                .selectFrom("session_transcript_active_events")
+                .select("session_id")
+                .where("session_id", "=", sessionId)
+                .where("context_eligible", "is", null),
+            ),
+          ),
+        ),
+    );
+    return current ? current.leaf_event_id : resolveFromNavigation();
+  }
   try {
     const event = JSON.parse(latest.event_json) as unknown;
     const treeEntry = parseSessionTranscriptTreeEntry(event);

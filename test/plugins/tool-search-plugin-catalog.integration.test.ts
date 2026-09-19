@@ -32,6 +32,9 @@ describe("public plugin registrations in Tool Search", () => {
         id: pluginId,
         config,
         registerTool(tool, options) {
+          if (typeof tool !== "function" && "contextVersion" in tool) {
+            throw new Error("These catalog fixtures expect legacy or static tool registrations");
+          }
           const resolved = typeof tool === "function" ? tool({ config }) : tool;
           for (const entry of resolved ? (Array.isArray(resolved) ? resolved : [resolved]) : []) {
             setPluginToolMeta(entry, { pluginId, optional: options?.optional === true });

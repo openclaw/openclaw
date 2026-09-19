@@ -187,6 +187,7 @@ export async function persistInternalSourceReply(params: {
         ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
         content: retainAssistantModelContent(content),
         displayContent: content,
+        mediaUrls: media.map((item) => item.url),
         idempotencyKey: params.idempotencyKey,
         runId: params.runId,
         ...(params.sourceReplyFinal !== undefined

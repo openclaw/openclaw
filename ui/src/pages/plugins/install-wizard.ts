@@ -153,6 +153,8 @@ function renderConfiguration(props: PluginInstallWizardProps): TemplateResult {
     <p class="plugin-install-wizard__status">${t("pluginsPage.installWizard.configureBody")}</p>
     <div class="plugin-install-wizard__config">
       ${renderNode({
+        rawAvailable: false,
+        maskSensitive: true,
         schema: props.configSchema,
         value: props.configValue,
         path: ["plugins", "entries", pluginId, "config"],

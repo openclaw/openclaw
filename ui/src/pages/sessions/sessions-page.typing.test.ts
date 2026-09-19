@@ -123,6 +123,7 @@ describe("Sessions page typing ownership", () => {
       );
       const query = { search: "retired", includeDerivedTitles: false };
       let unsubscribe = sessions.subscribeList(query, vi.fn());
+      const updatedObserved = createDeferred();
       const loading = sessions.refreshList(query);
       try {
         if (timing !== "unsubscribed") {
@@ -146,19 +147,36 @@ describe("Sessions page typing ownership", () => {
           document.dispatchEvent(new Event("visibilitychange"));
         }
         if (resubscribe) {
-          unsubscribe = sessions.subscribeList(query, vi.fn());
+          unsubscribe = sessions.subscribeList(query, (next) => {
+            if (next.result?.sessions[0]?.key === "agent:main:updated") {
+              updatedObserved.resolve();
+            }
+          });
           expect(filteredCalls).toBe(1);
         }
         active.resolve(result("agent:main:retired"));
         await loading;
         if (hidden) {
+          await vi.advanceTimersByTimeAsync(1_000);
           expect(filteredCalls).toBe(1);
           visibility.mockReturnValue("visible");
           document.dispatchEvent(new Event("visibilitychange"));
           await vi.advanceTimersByTimeAsync(0);
+        } else if (!resubscribe || timing === "queued") {
+          await vi.advanceTimersByTimeAsync(999);
+          expect(filteredCalls).toBe(1);
+          if (resubscribe) {
+            expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe(
+              "agent:main:retired",
+            );
+          }
+          await vi.advanceTimersByTimeAsync(1);
+        } else {
+          await vi.advanceTimersByTimeAsync(0);
         }
         expect(filteredCalls).toBe(resubscribe ? 2 : 1);
         if (resubscribe) {
+          await updatedObserved.promise;
           expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:updated");
         }
       } finally {

@@ -181,6 +181,7 @@
   "speech-provider",
   "sqlite-runtime",
   "sqlite-runtime-testing",
+  "sqlite-worker-runtime",
   "ssrf-dispatcher",
   "ssrf-runtime-internal",
   "string-normalization-runtime",
@@ -209,6 +210,5 @@
   "video-generation-runtime",
   "web-content-extractor",
   "webhook-targets",
-  "websocket-runtime",
   "windows-spawn"
 ]

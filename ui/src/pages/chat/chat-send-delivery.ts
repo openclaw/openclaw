@@ -23,22 +23,24 @@ import {
 } from "./chat-outbox-drain.ts";
 import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import {
+  admitQueuedMessageForSession,
   excludeComposerAttachments,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
   updateQueuedMessage,
 } from "./chat-queue.ts";
-import { createResetSlashCommandSender } from "./chat-reset-delivery.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
+import { cancelChatDelivery, restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   captureChatConnectionOwner,
+  createPendingSendMessage,
   deliveryStateWriter,
   finishChatDeliveryAdmission,
   finishScopedChatSending,
   reconnectSafeQueuedSendState,
   prepareQueuedChatPayload,
+  publishPendingSendMessage,
   resolveQueuedChatLeaf,
   setChatError,
   updateQueuedSendItem,
@@ -79,14 +81,15 @@ async function settleDeliverySettings(
   storageMode: QueuedChatStorageMode,
   queueSessionKey: string,
   options: QueuedChatSendOptions | undefined,
-  consumed: Set<Promise<boolean>>,
-): Promise<ChatQueueItem | QueuedChatSendResult> {
+  deliver: (item: ChatQueueItem) => QueuedChatSendResult | Promise<QueuedChatSendResult>,
+): Promise<QueuedChatSendResult> {
   const route = options?.routingSessionKey ?? queueSessionKey;
   const setState = deliveryStateWriter(host, storageMode, item.id);
   const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
-  let current = readQueuedMessageById(host, item.id);
+  const consumed = new Set<Promise<boolean>>();
   let pendingSettings =
     options?.pendingSettings ?? getPendingChatPickerPatch(host, route, item.agentId);
+  let current = pendingSettings ? readQueuedMessageById(host, item.id) : item;
 
   while (pendingSettings && !consumed.has(pendingSettings)) {
     if (current?.sendState !== "waiting-model") {
@@ -114,27 +117,19 @@ async function settleDeliverySettings(
     }
     pendingSettings = getPendingChatPickerPatch(host, route, current.agentId);
   }
-  return current ?? "failed";
-}
-
-function publishSettledDeliverySettings(
-  host: ChatHost,
-  item: ChatQueueItem,
-  storageMode: QueuedChatStorageMode,
-): ChatQueueItem | QueuedChatSendResult {
-  // Keep one non-drainable durable barrier across the complete picker tail.
-  // Publishing earlier can let reconnect race a newer or cancelled selection.
-  const current = deliveryStateWriter(
-    host,
-    storageMode,
-    item.id,
-  )(reconnectSafeQueuedSendState(host));
+  if (consumed.size) {
+    // Publish only after the complete picker tail, then continue synchronously:
+    // returning to an awaiting caller would admit another picker in that gap.
+    current = setState(reconnectSafeQueuedSendState(host));
+  }
   if (!current) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
     return "failed";
   }
-  host.requestUpdate?.();
-  return current;
+  if (consumed.size) {
+    host.requestUpdate?.();
+  }
+  return deliver(current);
 }
 
 async function sendQueuedChatMessage(
@@ -168,46 +163,43 @@ async function sendQueuedChatMessage(
     }
     queued = prepared;
   }
-  const queueSessionKey = queued.sessionKey ?? queuedSessionKey;
-  const consumedSettings = new Set<Promise<boolean>>();
-  const route = options?.routingSessionKey ?? queueSessionKey;
-  const initialSettings =
-    options?.pendingSettings ?? getPendingChatPickerPatch(host, route, queued.agentId);
-  let prepared: ChatQueueItem | QueuedChatSendResult = queued;
-  if (initialSettings) {
-    prepared = await settleDeliverySettings(
-      host,
-      queued,
-      storageMode,
-      queueSessionKey,
-      { ...options, pendingSettings: initialSettings },
-      consumedSettings,
-    );
-  }
-  while (typeof prepared !== "string") {
-    const latestSettings = getPendingChatPickerPatch(host, route, prepared.agentId);
-    if (!latestSettings || consumedSettings.has(latestSettings)) {
-      break;
-    }
-    prepared = await settleDeliverySettings(
-      host,
-      prepared,
-      storageMode,
-      queueSessionKey,
-      { ...options, pendingSettings: latestSettings },
-      consumedSettings,
-    );
-  }
-  if (typeof prepared === "string") {
-    return prepared;
-  }
-  if (consumedSettings.size) {
-    prepared = publishSettledDeliverySettings(host, prepared, storageMode);
-    if (typeof prepared === "string") {
-      return prepared;
-    }
-  }
-  prepared = finishChatDeliveryAdmission(host, prepared, storageMode, queueSessionKey, options);
+  return settleDeliverySettings(
+    host,
+    queued,
+    storageMode,
+    queued.sessionKey ?? queuedSessionKey,
+    options,
+    (prepared) =>
+      sendPreparedChatMessage(
+        host,
+        queued,
+        prepared,
+        options,
+        queuedSessionKey,
+        expectedLeafEntryId,
+        approvedReset,
+      ),
+  );
+}
+
+async function sendPreparedChatMessage(
+  host: ChatHost,
+  queued: ChatQueueItem,
+  settledItem: ChatQueueItem,
+  options: QueuedChatSendOptions | undefined,
+  queuedSessionKey: string,
+  expectedLeafEntryId: string | null | undefined,
+  approvedReset: boolean,
+): Promise<QueuedChatSendResult> {
+  const id = queued.id;
+  const storageMode = options?.storageMode ?? "durable";
+  let prepared = finishChatDeliveryAdmission(
+    host,
+    settledItem,
+    storageMode,
+    queued.sessionKey ?? queuedSessionKey,
+    options,
+  );
   if (typeof prepared !== "string" && queued.attachmentPayload) {
     prepared = { ...prepared, attachments: queued.attachments };
   }
@@ -614,79 +606,56 @@ export async function deliverChatQueueItem(
       // Admission succeeded; removal or another drain can retire the row while we yield.
       return "pending";
     }
-    let drainResult: QueuedChatSendResult | undefined;
-    let admittedItem = item;
-    const initialSettings = item.localCommandName
-      ? undefined
-      : (sendOptions.pendingSettings ??
-        getPendingChatPickerPatch(host, routingSessionKey, item.agentId));
-    if (initialSettings) {
-      const consumedSettings = new Set<Promise<boolean>>();
-      let admitted = await settleDeliverySettings(
-        host,
-        item,
-        storageMode,
-        sessionKey,
-        { ...sendOptions, pendingSettings: initialSettings },
-        consumedSettings,
-      );
-      while (typeof admitted !== "string") {
-        const latestSettings = getPendingChatPickerPatch(host, routingSessionKey, admitted.agentId);
-        if (!latestSettings || consumedSettings.has(latestSettings)) {
-          break;
-        }
-        admitted = await settleDeliverySettings(
+    const drain = async (admittedItem: ChatQueueItem): Promise<QueuedChatSendResult> => {
+      const routeVisible = visibleSessionMatches(host, routingSessionKey, admittedItem.agentId);
+      if (
+        routeVisible &&
+        !admittedItem.queueMode &&
+        !sendOptions.allowActiveRunSend &&
+        (isChatBusy(host) || hasDirectSessionRun(host))
+      ) {
+        const parked = finishChatDeliveryAdmission(
           host,
-          admitted,
+          admittedItem,
           storageMode,
           sessionKey,
-          { ...sendOptions, pendingSettings: latestSettings },
-          consumedSettings,
+          sendOptions,
         );
-      }
-      if (typeof admitted !== "string") {
-        admitted = publishSettledDeliverySettings(host, admitted, storageMode);
-      }
-      if (typeof admitted === "string") {
-        drainResult = admitted;
-      } else {
-        admittedItem = admitted;
-      }
-    }
-    const routeVisible = visibleSessionMatches(host, routingSessionKey, admittedItem.agentId);
-    if (
-      drainResult === undefined &&
-      routeVisible &&
-      !admittedItem.queueMode &&
-      !sendOptions.allowActiveRunSend &&
-      (isChatBusy(host) || hasDirectSessionRun(host))
-    ) {
-      const parked = finishChatDeliveryAdmission(
-        host,
-        admittedItem,
-        storageMode,
-        sessionKey,
-        sendOptions,
-      );
-      if (typeof parked === "string") {
-        drainResult = parked;
-        if (parked === "pending" && outbox.queue[0]?.id !== item.id) {
-          // Reconcile older restored rows without delaying this turn's active-run policy.
-          void scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies);
+        if (typeof parked === "string") {
+          if (parked === "pending" && outbox.queue[0]?.id !== item.id) {
+            // Reconcile older restored rows without delaying this turn's active-run policy.
+            void scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies);
+          }
+          return parked;
         }
       }
-    }
-    if (drainResult === undefined && host.connected && host.client) {
+      if (!host.connected || !host.client) {
+        return "pending";
+      }
       // FIFO may have already spent a reconnect or settings-event drain while
       // this row was waiting-model, so foreground admission owns the wakeup.
-      drainResult = routeVisible
+      const drained = routeVisible
         ? await scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies, item.id, {
             ...sendOptions,
             pendingSettings: undefined,
           })
         : await scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies);
-    }
-    result = drainResult ?? "pending";
+      return drained ?? "pending";
+    };
+    const initialSettings = item.localCommandName
+      ? undefined
+      : (sendOptions.pendingSettings ??
+        getPendingChatPickerPatch(host, routingSessionKey, item.agentId));
+    result = initialSettings
+      ? await settleDeliverySettings(
+          host,
+          item,
+          storageMode,
+          sessionKey,
+          { ...sendOptions, pendingSettings: initialSettings },
+          drain,
+        )
+      : await drain(item);
   }
   if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
     resetChatInputHistoryNavigation(host);
@@ -702,7 +671,7 @@ export async function deliverChatQueueItem(
     deliveryConnectionIsCurrent() &&
     visibleSessionMatches(host, routingSessionKey, deliveryAgentId)
   ) {
-    scheduleChatScroll(host, true);
+    scheduleChatScroll(host, true, true);
   }
   if (
     result === "sent" &&
@@ -716,6 +685,32 @@ export async function deliverChatQueueItem(
 
 export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
   sendQueuedChatMessage,
-  sendResetSlashCommand: createResetSlashCommandSender(deliverChatQueueItem),
+  async sendResetSlashCommand(host, message, options) {
+    const pending = createPendingSendMessage(
+      host,
+      message,
+      undefined,
+      true,
+      undefined,
+      reconnectSafeQueuedSendState(host),
+    );
+    const item = pending?.item;
+    if (item) {
+      publishPendingSendMessage(host, item);
+    }
+    if (!pending || !admitQueuedMessageForSession(host, pending.admission, pending.item)) {
+      if (item) {
+        cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
+      }
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      return;
+    }
+    await deliverChatQueueItem(host, pending.item, {
+      previousDraft: options.previousDraft,
+      restoreDraft: options.restoreDraft,
+      routingSessionKey: host.sessionKey,
+      target: options.target,
+    });
+  },
   setChatError,
 };

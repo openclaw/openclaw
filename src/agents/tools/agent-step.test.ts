@@ -10,16 +10,10 @@ vi.mock("../../sessions/session-participant-recording.js", () => ({
   recordSessionParticipantBestEffort: recordParticipant,
 }));
 
-const runWaitMocks = vi.hoisted(() => ({
-  waitForAgentRunReply: vi.fn(),
-}));
+const agentWaitMock = vi.hoisted(() => vi.fn());
 
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
-}));
-
-vi.mock("../run-wait.js", () => ({
-  waitForAgentRunReply: runWaitMocks.waitForAgentRunReply,
 }));
 
 vi.mock("../agent-bundle-mcp-tools.js", () => ({
@@ -29,6 +23,7 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
 describe("runAgentStep", () => {
   afterEach(() => {
     testing.setDepsForTest();
+    agentWaitMock.mockReset();
     vi.clearAllMocks();
   });
 
@@ -37,12 +32,15 @@ describe("runAgentStep", () => {
     // returns through the message tool path instead of the channel.
     const gatewayCalls: CallGatewayOptions[] = [];
     const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+      if (opts.method === "agent.wait") {
+        return await agentWaitMock(opts);
+      }
       gatewayCalls.push(opts);
       return { runId: "run-nested" } as T;
     };
-    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
+    agentWaitMock.mockResolvedValue({
       status: "ok",
-      replyText: "done",
+      terminalReply: { disposition: "visible", text: "done" },
     });
 
     await expect(
@@ -88,11 +86,16 @@ describe("runAgentStep", () => {
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
-  it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
-    const callGateway = async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T;
-    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
-      status: "timeout",
-    });
+  it("waits for the nested reply through queued and nonterminal timeout observations", async () => {
+    const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> =>
+      opts.method === "agent.wait" ? await agentWaitMock(opts) : ({ runId: "run-pending" } as T);
+    agentWaitMock
+      .mockResolvedValueOnce({ status: "pending", timeoutPhase: "queue" })
+      .mockResolvedValueOnce({ status: "timeout" })
+      .mockResolvedValueOnce({
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "late reply" },
+      });
 
     await expect(
       runAgentStep({
@@ -102,7 +105,7 @@ describe("runAgentStep", () => {
         timeoutMs: 10_000,
         callGateway,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("late reply");
 
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
@@ -115,11 +118,6 @@ describe("runAgentStep", () => {
     testing.setDepsForTest({
       agentCommandFromIngress,
     });
-    runWaitMocks.waitForAgentRunReply.mockResolvedValue({
-      status: "ok",
-      replyText: "done",
-    });
-
     await runAgentStep({
       sessionKey: "agent:main:subagent:child",
       message: "internal announce step",

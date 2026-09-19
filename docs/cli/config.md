@@ -102,7 +102,17 @@ combined with a legacy `default: true` marker.
 For root-file writes, changing `session.store` clears a copied
 `agents.defaults.sessionStore.agentId` because that owner belongs to the previous
 store. To assign the destination store's owner, set that owner path explicitly in
-the same batch.
+the same batch. Unrelated writes preserve the owner, including when `session.store`
+is unset and per-agent default stores apply. A committed write that clears the
+owner prints a warning naming the key and the store change.
+
+If an older version already removed the owner, Doctor checks the retained config
+backups and offers to restore the most recent owner with the same authored
+`session.store` value. Restoration
+requires interactive confirmation because the removal might have been intentional;
+unattended Doctor runs show the recovery command instead. If no usable backup
+remains, the legacy-session finding names `agents.defaults.sessionStore.agentId`
+so you can assign the owner explicitly.
 
 ### `config get`
 
@@ -302,6 +312,8 @@ Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as t
 
 Supplying either batch option selects batch mode. Empty or whitespace-only values are rejected; omit both options to use positional `<path> <value>` mode.
 
+`--batch-file` and `config patch --file` use the exact file path you provide, including leading or trailing spaces. Quote paths that contain spaces in your shell.
+
 Batch assignments apply in order, then validation checks the final config. A SecretRef replaced by a later assignment is not resolved or counted in dry-run output, even with `--allow-exec`. Providers that remain in a changed provider collection still receive command-path trust checks.
 
 JSON path/value mode also works for SecretRefs and providers directly:
@@ -338,7 +350,7 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
   </Accordion>
   <Accordion title="Exec provider (--provider-source exec)">
     - `--provider-command <path>` (required)
-    - `--provider-arg <arg>` (repeatable)
+    - `--provider-arg <arg>` (repeatable); each occurrence preserves one literal argument, including an empty string or surrounding whitespace. Quote these values in your shell.
     - `--provider-no-output-timeout-ms <ms>`
     - `--provider-max-output-bytes <bytes>`
     - `--provider-json-only`

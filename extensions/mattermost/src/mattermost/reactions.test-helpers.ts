@@ -1,17 +1,7 @@
-// Mattermost helper module supports reactions helpers behavior.
+import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { MattermostFetch } from "./client.js";
-
-export function requestUrl(url: string | URL | Request): string {
-  if (typeof url === "string") {
-    return url;
-  }
-  if (url instanceof URL) {
-    return url.toString();
-  }
-  return url.url;
-}
 
 let testConfigSequence = 0;
 

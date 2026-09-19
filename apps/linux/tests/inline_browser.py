@@ -276,7 +276,7 @@ class GatewayFixture(ThreadingHTTPServer):
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"Native inline fixture timed out waiting for {name}")
 
-    def open_connection_settings(self, app):
+    def open_native_menu(self, app, label):
         from gi.repository import Gio, GLib
 
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -334,7 +334,12 @@ class GatewayFixture(ThreadingHTTPServer):
             try:
                 xml = call(service, path, "org.freedesktop.DBus.Introspectable", "Introspect")[0]
             except GLib.Error as error:
-                if Gio.DBusError.get_remote_error(error) == "org.freedesktop.DBus.Error.UnknownMethod":
+                # Client-only connections, including Secret Service clients, may
+                # not export an object tree. They are not native menu owners.
+                if Gio.DBusError.get_remote_error(error) in (
+                    "org.freedesktop.DBus.Error.UnknownMethod",
+                    "org.freedesktop.DBus.Error.UnknownObject",
+                ) or (path == "/" and error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.TIMED_OUT)):
                     continue
                 raise
             if len(xml.encode()) > 65536:
@@ -351,11 +356,11 @@ class GatewayFixture(ThreadingHTTPServer):
                     count += 1
                     if count > 200:
                         raise RuntimeError("Native menu exceeded 200 entries")
-                    if properties.get("label", "").replace("_", "") == "Connection Settings":
+                    if properties.get("label", "").replace("_", "") == label:
                         if not properties.get("enabled", True) or not properties.get("visible", True):
-                            raise RuntimeError("Connection Settings menu item is unavailable")
+                            raise RuntimeError(f"{label} menu item is unavailable")
                         if owner(service) != app.pid:
-                            raise RuntimeError("Connection Settings menu owner changed")
+                            raise RuntimeError(f"{label} menu owner changed")
                         call(
                             service, path, "com.canonical.dbusmenu", "Event",
                             GLib.Variant("(isvu)", (item_id, "clicked", GLib.Variant("i", 0), 0)),
@@ -364,7 +369,7 @@ class GatewayFixture(ThreadingHTTPServer):
                     items.extend(children)
             pending.extend((service, path.rstrip("/") + "/" + child.attrib["name"])
                            for child in node.findall("node"))
-        raise RuntimeError("Task app did not export the Connection Settings menu")
+        raise RuntimeError(f"Task app did not export the {label} menu")
 
     def exercise(self, app, binary, wait, Atspi):
         self.wait_for("click-ready", app)
@@ -398,7 +403,7 @@ class GatewayFixture(ThreadingHTTPServer):
         )
         self.wait_for("explicit-reconnect-ready", app)
         wait("Ready for explicit Gateway reconnect", "heading")
-        self.open_connection_settings(app)
+        self.open_native_menu(app, "Connection Settings")
         wait("Connection Settings", "heading")
         entry = wait("Gateway URL", ("entry", "text"))
         text = entry.get_text_iface()

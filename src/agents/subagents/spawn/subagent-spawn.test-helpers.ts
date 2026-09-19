@@ -23,6 +23,46 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
   resetSubagentRegistryForTests: MockFn;
 };
 
+/** Orchestration fixtures assume a supported model; support policy has its own owner tests. */
+export async function supportedSpawnModelChoice(
+  params: Parameters<typeof import("../../model-runtime-choice.js").prepareModelChoice>[0],
+): ReturnType<typeof import("../../model-runtime-choice.js").prepareModelChoice> {
+  const { resolveModelRefFromString, buildModelAliasIndex, resolveDefaultModelForAgent } =
+    await import("../../model-selection.js");
+  const defaults = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const selection = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider: defaults.provider,
+  };
+  const selected = params.resolvedRef
+    ? { ref: params.resolvedRef }
+    : resolveModelRefFromString({
+        ...selection,
+        raw: params.raw,
+        aliasIndex: buildModelAliasIndex(selection),
+      });
+  if (!selected) {
+    throw new Error(`Invalid test model ${params.raw}`);
+  }
+  return {
+    kind: "resolved",
+    ref: selected.ref,
+    model: {
+      id: selected.ref.model,
+      name: selected.ref.model,
+      provider: selected.ref.provider,
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid/v1",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 4096,
+      maxTokens: 1024,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+  };
+}
+
 /** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
@@ -50,6 +90,23 @@ export function createSubagentSpawnTestConfig(
     },
     ...overrides,
   };
+}
+
+export function createConfigOverride(overrides?: Record<string, unknown>) {
+  return createSubagentSpawnTestConfig(os.tmpdir(), {
+    agents: {
+      defaults: {
+        workspace: os.tmpdir(),
+      },
+      list: [
+        {
+          id: "main",
+          workspace: "/tmp/workspace-main",
+        },
+      ],
+    },
+    ...overrides,
+  });
 }
 
 /** Mock gateway calls for the common accepted-spawn flow. */
@@ -133,8 +190,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
-  loadPreparedModelCatalogMock?: MockFn;
-  resolveProviderRefOwnershipMock?: MockFn;
+  prepareModelChoiceMock?: typeof supportedSpawnModelChoice;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionEntryFromParentMock?: MockFn;
@@ -149,7 +205,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   hookRunner?: HookRunner;
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
-  resolveSubagentSpawnModelSelection?: () => string | undefined;
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
   countActiveRunsForSession?: (sessionKey: string) => number;
   listSwarmRunsForGroup?: (groupId: string) => unknown[];
@@ -265,13 +320,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
-    readPreparedModelCatalog: (...args: unknown[]) =>
-      params.loadPreparedModelCatalogMock?.(...args) ?? [],
-    resolveProviderRefOwnership: (...args: unknown[]) =>
-      params.resolveProviderRefOwnershipMock?.(...args) ?? {
-        status: "owned",
-        pluginIds: ["test-provider"],
-      },
+    prepareModelChoice: params.prepareModelChoiceMock ?? supportedSpawnModelChoice,
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
@@ -376,12 +425,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
     resolveAgentWorkspaceDir:
       params.resolveAgentWorkspaceDir ?? (() => params.workspaceDir ?? os.tmpdir()),
-    resolveSubagentSpawnModelSelection:
-      params.resolveSubagentSpawnModelSelection ??
-      ((spawnParams: { modelOverride?: unknown }) =>
-        typeof spawnParams.modelOverride === "string" && spawnParams.modelOverride.trim()
-          ? spawnParams.modelOverride.trim()
-          : "openai/gpt-4"),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
     ...createDefaultSessionHelperMocks(),
@@ -394,7 +437,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
-    getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),

@@ -957,12 +957,23 @@ public protocol OpenClawChatTransport: Sendable {
         kind: OpenClawChatMediaKind,
         playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
+    func loadSourceContext() async -> OpenClawChatSourceContext?
+    func loadSourceFavicon(host: String) async -> Data?
+
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
     func compactSession(sessionKey: String) async throws
 }
 
 extension OpenClawChatTransport {
+    public func loadSourceContext() async -> OpenClawChatSourceContext? {
+        nil
+    }
+
+    public func loadSourceFavicon(host _: String) async -> Data? {
+        nil
+    }
+
     public func scoped(toAgentID _: String) -> (any OpenClawChatTransport)? {
         nil
     }

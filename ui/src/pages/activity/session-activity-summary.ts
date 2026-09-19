@@ -10,20 +10,21 @@ export function renderSessionActivitySummary(
   const summary = row.activitySummary;
   const state =
     summary?.state === "current" && !summary.text ? "missing" : (summary?.state ?? "missing");
-  const feedback =
-    state === "updating"
-      ? t("activityFeed.recapUpdating")
-      : state === "stale"
-        ? t("activityFeed.recapStale")
-        : state === "unavailable"
-          ? t("activityFeed.recapUnavailable")
-          : state === "missing"
-            ? t("activityFeed.recapMissing")
-            : "";
+  const updating = state === "updating";
+  const feedback = updating
+    ? ""
+    : state === "stale"
+      ? t(summary?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
+      : state === "unavailable"
+        ? t(summary?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")
+        : state === "missing"
+          ? t("activityFeed.recapMissing")
+          : "";
   return html`<div
     class="activity-feed__recap"
     data-activity-recap=${row.key}
     data-state=${state}
+    aria-busy=${String(updating)}
     aria-label=${t("activityFeed.recap")}
     title=${
       summary?.updatedAt
@@ -33,7 +34,21 @@ export function renderSessionActivitySummary(
         : nothing
     }
   >
-    ${summary?.text ? html`<p class="activity-feed__recap-text">${summary.text}</p>` : nothing}
+    ${
+      summary?.text
+        ? html`<p class="activity-feed__recap-text">${summary.text}</p>`
+        : updating
+          ? html`<div class="activity-feed__recap-skeleton" aria-hidden="true">
+              <div class="skeleton skeleton-line skeleton-line--long"></div>
+              <div class="skeleton skeleton-line skeleton-line--medium"></div>
+            </div>`
+          : nothing
+    }
+    ${
+      updating
+        ? html`<span class="sr-only" role="status">${t("activityFeed.recapUpdating")}</span>`
+        : nothing
+    }
     ${
       feedback
         ? html`<div class="activity-feed__recap-feedback">

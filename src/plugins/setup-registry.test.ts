@@ -27,15 +27,16 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 });
 
 // Registry tests script exports at module binding; real setup ownership stays active.
-vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-module-loader-cache.js")>();
+vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-instance-module-loader.js")>();
+  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
   return {
     ...actual,
     bindPluginInstanceModuleLoader: (
       params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
     ) =>
       params.instance.bindModuleLoader(
-        actual.getCachedPluginModuleLoader({
+        getCachedPluginModuleLoader({
           modulePath: params.source,
           importerUrl: import.meta.url,
           tryNative: false,

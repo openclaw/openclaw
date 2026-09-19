@@ -14,6 +14,7 @@ import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } f
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -281,7 +282,11 @@ export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   // Task Scheduler `/XML` expects UTF-16 LE with a BOM on every locale.
   const bom = Buffer.from([0xff, 0xfe]);
   const body = Buffer.from(xml, "utf16le");
-  await fs.writeFile(xmlPath, Buffer.concat([bom, body]));
+  await publishServiceFile({
+    filePath: xmlPath,
+    contents: Buffer.concat([bom, body]),
+    mode: 0o600,
+  });
   return xmlPath;
 }
 

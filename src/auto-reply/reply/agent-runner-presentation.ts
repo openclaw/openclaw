@@ -35,7 +35,6 @@ type AgentTurnPresentation = {
 export function createAgentTurnPresentation(params: {
   turn: AgentTurnParams;
   replyMediaContext: ReplyMediaContext;
-  directlySentBlockKeys: Set<string>;
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
 }): AgentTurnPresentation {
@@ -146,7 +145,6 @@ export function createAgentTurnPresentation(params: {
         commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
         blockStreamingEnabled: params.turn.blockStreamingEnabled,
         blockReplyPipeline,
-        directlySentBlockKeys: params.directlySentBlockKeys,
         directBlockDeliveries: params.directBlockDeliveries,
       })
     : undefined;

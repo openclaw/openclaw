@@ -12,5 +12,16 @@
     "../../src/tui/**/*.test.tsx",
     "../../src/wizard/**/*.test.ts",
     "../../src/wizard/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/commands/doctor*.test.ts",
+    "../../src/commands/doctor*.test.tsx",
+    "../../src/commands/doctor/**/*.test.ts",
+    "../../src/commands/doctor/**/*.test.tsx",
+    "../../src/commands/oauth-tls-preflight.doctor*.test.ts",
+    "../../src/commands/oauth-tls-preflight.doctor*.test.tsx"
   ]
 }

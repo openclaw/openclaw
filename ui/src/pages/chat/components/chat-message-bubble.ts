@@ -1,20 +1,18 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons } from "../../../components/icons.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import type {
-  MessageContentItem,
-  NormalizedMessage,
-  ToolCard,
-} from "../../../lib/chat/chat-types.ts";
+import type { MessageContentItem, ToolCard } from "../../../lib/chat/chat-types.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import "../../../components/person-reference.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -29,9 +27,8 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
-import "../../../styles/chat/reply-preview.css";
-import "./chat-clawhub-card.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import "./chat-clawhub-card.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -45,6 +42,8 @@ import type {
   ChatMessageRenderPreparation,
   MessageActionDetails,
 } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import {
   projectMessageMedia,
   schedulePairingQrExpiryRefresh,
@@ -56,6 +55,9 @@ import {
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
+import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
+import { renderReplyPreview, type ReplyPreview } from "./chat-reply-preview-render.ts";
+import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderToolApprovalReviews,
@@ -73,6 +75,8 @@ import {
   renderToolOutcome,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
+
+registerChatMessageMetadataEnglish();
 
 function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
@@ -115,75 +119,6 @@ function renderInlineToolCards(
   `;
 }
 
-type ReplyPreview = {
-  sourceMessageId?: string;
-  senderLabel?: string | null;
-  text: string;
-};
-
-function renderReplyPreview(
-  replyTarget: NormalizedMessage["replyTarget"],
-  preview: ReplyPreview | undefined,
-  onOpenReply: ((replyToId: string) => void) | undefined,
-  onResolveReply: ((replyToId: string) => void) | undefined,
-  navigationLoading: boolean,
-) {
-  if (!replyTarget) {
-    return nothing;
-  }
-  const replyToId = replyTarget.kind === "id" ? replyTarget.id : null;
-  const name = preview?.senderLabel?.trim()
-    ? preview.senderLabel
-    : replyTarget.kind === "current"
-      ? t("chat.messages.currentMessage")
-      : t("chat.messages.message");
-  const content = preview?.text.trim() ?? "";
-  const resolveMissingPreview = (element?: Element) => {
-    if (element && replyToId && !preview) {
-      onResolveReply?.(replyToId);
-    }
-  };
-  const body = html`
-    <span class="chat-reply-preview__icon"
-      >${
-        navigationLoading
-          ? html`<span class="session-run-spinner" aria-hidden="true"></span>`
-          : icons.messageSquare
-      }</span
-    >
-    <span class="chat-reply-preview__label"> ${t("chat.messages.replyingTo", { name })} </span>
-    ${
-      content
-        ? html`<span class="chat-reply-preview__text"
-            >${truncateUtf16Safe(content, 120)}${content.length > 120 ? "..." : ""}</span
-          >`
-        : nothing
-    }
-  `;
-  if (replyToId && onOpenReply) {
-    return html`
-      <button
-        ${ref(resolveMissingPreview)}
-        type="button"
-        class="chat-reply-preview chat-reply-preview--message"
-        ?disabled=${navigationLoading}
-        aria-busy=${navigationLoading ? "true" : "false"}
-        @click=${() => onOpenReply(replyToId)}
-      >
-        ${body}
-      </button>
-    `;
-  }
-  return html`
-    <div
-      ${ref(resolveMissingPreview)}
-      class="chat-reply-preview chat-reply-preview--message chat-reply-preview--unavailable"
-    >
-      ${body}
-    </div>
-  `;
-}
-
 function renderPairingQrExpiryNotices(count: number) {
   if (count === 0) {
     return nothing;
@@ -216,10 +151,11 @@ function renderPairingQrExpiryNotices(count: number) {
 }
 
 export function renderGroupedMessage(
-  { message, normalizedMessage, displayMarkdown }: ChatMessageRenderPreparation,
+  preparation: ChatMessageRenderPreparation,
   messageKey: string,
   opts: {
     isStreaming: boolean;
+    isForwarded?: boolean;
     sessionKey?: string;
     presented?: boolean;
     transcriptVisible?: boolean;
@@ -255,11 +191,12 @@ export function renderGroupedMessage(
     fetchLinkFavicon?: LinkFaviconFetcher;
     pluginToolIcons?: PluginToolIcons;
     githubRepo?: MarkdownRenderOptions["githubRepo"];
+    githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
-    entryAnimated?: boolean;
+    entryRef?: (element?: Element) => void;
     resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
     onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -267,6 +204,11 @@ export function renderGroupedMessage(
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
+  const disclosure = opts.assistantMessageDisclosure;
+  const { message, normalizedMessage, displayMarkdown, humanMentions } =
+    disclosure?.expanded && disclosure.message
+      ? prepareChatMessageRender(disclosure.message)
+      : preparation;
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const sourceRole = normalizeRoleForGrouping(role);
@@ -286,6 +228,9 @@ export function renderGroupedMessage(
     attachments: visibleAttachments,
     expiredPairingQrCount,
     nextPairingQrExpiresAt,
+    orderedContent,
+    supplementalImages,
+    supplementalAttachments,
   } = projectMessageMedia(message, normalizedMessage.content);
   schedulePairingQrExpiryRefresh(messageKey, nextPairingQrExpiresAt, opts.onRequestUpdate);
   const hasImages = images.length > 0;
@@ -298,8 +243,14 @@ export function renderGroupedMessage(
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
   const hasUserFiles =
     normalizedRole === "user" &&
-    cardAttachments.some((item) => item.attachment.kind === "document");
+    cardAttachments.some(
+      (item) =>
+        item.attachment.kind === "document" &&
+        !isSentCommentAttachment(item) &&
+        !isSentPastedTextAttachment(item),
+    );
   const imageRenderOptions = {
+    galleryImages: images,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,
@@ -333,6 +284,10 @@ export function renderGroupedMessage(
     codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
     githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
+    humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
+    ...(role === "assistant" && opts.githubRepositories
+      ? { githubRepositories: opts.githubRepositories }
+      : {}),
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
     tableInteractions: "enabled",
@@ -342,13 +297,33 @@ export function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
+  const onlyPreviewChips =
+    normalizedRole === "user" &&
+    !markdown &&
+    !normalizedMessage.replyTarget &&
+    !hasImages &&
+    !hasToolCards &&
+    omittedMedia.length === 0 &&
+    expiredPairingQrCount === 0 &&
+    visibleAttachments.length > 0 &&
+    visibleAttachments.every(
+      (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
+    );
+  const transparentShell =
+    hasImages ||
+    videoPreviews.length > 0 ||
+    hasUserFiles ||
+    (normalizedRole === "user" &&
+      cardAttachments.some(
+        (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
+      ));
   const bubbleClasses = [
     "chat-bubble",
-    hasImages || videoPreviews.length > 0 || hasUserFiles ? "chat-bubble--with-images" : "",
+    transparentShell ? "chat-bubble--with-images" : "",
+    onlyPreviewChips ? "chat-bubble--preview-chips-only" : "",
     hasUserFiles ? "chat-bubble--with-files" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
-    opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -381,6 +356,12 @@ export function renderGroupedMessage(
     !hasImages &&
     singleToolCard?.outputText?.trim() === markdown?.trim();
   const bodyMarkdown = standaloneToolPayload ? null : markdown;
+  const renderInOrder =
+    normalizedRole === "assistant" &&
+    Boolean(markdown) &&
+    !asyncQuestions &&
+    (!disclosure?.expanded || Boolean(disclosure.message)) &&
+    orderedContent.some((item) => item.type !== "text");
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
   const expandsSingleToolCard =
@@ -494,6 +475,36 @@ export function renderGroupedMessage(
               duplicateSuffix,
             )
           : nothing;
+  const renderOrderedContent = () => {
+    const prepared = prepareMarkdownMedia(orderedContent, (item) => {
+      if (item.type === "image") {
+        return renderMessageImages([item.image], imageRenderOptions);
+      }
+      return renderAssistantAttachments(
+        [item],
+        imageRenderOptions,
+        onOpenSidebar,
+        opts.onAssistantAttachmentLoaded,
+      );
+    });
+    const text = resolveMessageDisplayMarkdown(message, {
+      ...normalizedMessage,
+      content: [{ type: "text", text: prepared.markdown }],
+    });
+    return renderMessageMarkdown(
+      text,
+      messageKey,
+      {
+        ...opts,
+        role: normalizedRole,
+        assistantMessageDisclosure: disclosure ? { ...disclosure, markdown: text } : undefined,
+      },
+      markdownRenderOptions,
+      markdown ? duplicateSuffix : undefined,
+      { ...prepared.media, text: bodyMarkdown ?? "" },
+    );
+  };
+  const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
@@ -509,7 +520,7 @@ export function renderGroupedMessage(
     }
     ${renderPairingQrExpiryNotices(expiredPairingQrCount)}
     ${renderMessageImages(
-      images,
+      renderInOrder ? supplementalImages : images,
       imageRenderOptions,
       videoPreviews.map(
         (item) => html`
@@ -521,7 +532,7 @@ export function renderGroupedMessage(
     )}
     ${renderOmittedMedia(omittedMedia)}
     ${renderAssistantAttachments(
-      cardAttachments,
+      renderInOrder ? supplementalAttachments : cardAttachments,
       imageRenderOptions,
       onOpenSidebar,
       opts.onAssistantAttachmentLoaded,
@@ -542,8 +553,10 @@ export function renderGroupedMessage(
     ${isStandaloneToolMessage ? nothing : assistantViewContent}
     ${
       opts.avatar
-        ? html`<div class="chat-message-avatar-anchor">${renderText()}${opts.avatar}</div>`
-        : renderText()
+        ? html`<div class="chat-message-avatar-anchor">
+            ${renderMessageContent()}${opts.avatar}
+          </div>`
+        : renderMessageContent()
     }
     ${
       hasToolCards
@@ -565,6 +578,7 @@ export function renderGroupedMessage(
   return html`
     <div
       class="${bubbleClasses}"
+      ${opts.entryRef ? ref(opts.entryRef) : nothing}
       data-message-id=${messageKey}
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}

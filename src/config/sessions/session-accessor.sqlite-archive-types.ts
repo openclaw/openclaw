@@ -1,5 +1,6 @@
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import type { TranscriptEvent } from "./session-accessor.types.js";
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -59,9 +60,21 @@ export type TranscriptArchivePublishWorkerMessage = {
   results: TranscriptArchivePublishResult[];
 };
 
+export type TranscriptArchiveReadPlan = {
+  agentId: string;
+  databasePath: string;
+  logicalAgentId: string;
+  sessionId?: string;
+  sessionKey: string;
+  runId: string;
+};
+
+export type TranscriptArchiveReadResult = { event?: TranscriptEvent };
+
 export type SqliteArchiveOperation =
   | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
-  | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] };
+  | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] }
+  | { operation: "read-final"; plans: readonly TranscriptArchiveReadPlan[] };
 
 export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
   type: "archive-operation";
@@ -74,4 +87,11 @@ export type SqliteArchiveSessionResponse = {
 } & (
   | { type: "done"; results: TranscriptArchiveWorkerResult[] }
   | { type: "published"; results: TranscriptArchivePublishResult[] }
+  | { type: "final-read"; results: TranscriptArchiveReadResult[] }
 );
+export type SessionTranscriptMaintenanceSizingInput = {
+  agentId: string;
+  path: string;
+  env: NodeJS.ProcessEnv;
+  sessionIds: readonly string[];
+};

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -30,9 +29,9 @@ import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+  decodeWorkspaceManifest,
+  serializeWorkspaceManifest,
+} from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import { captureRemoteWorkspaceManifest } from "./workspace-sync-helpers.js";
@@ -358,7 +357,8 @@ export function createNodeWorkerWorkspaceActions(params: {
         const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
           manifest: accepted.manifest,
           manifestRef: accepted.manifestRef,
-          rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
+          rawManifest: (await serializeWorkspaceManifest(accepted.manifest, params.ownerSignal))
+            .raw,
           root: await fsp.realpath(request.localPath),
         });
         try {
@@ -435,19 +435,28 @@ export function createNodeWorkerWorkspaceActions(params: {
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
       const checkpoint = source.checkpoint;
-      const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-      if (digest(checkpoint.baseManifestRaw) !== baseManifestRef) {
+      const decodedBase = await decodeWorkspaceManifest(
+        checkpoint.baseManifestRaw,
+        undefined,
+        params.ownerSignal,
+      );
+      if (decodedBase.manifestRef !== baseManifestRef) {
         throw new Error("Repository checkpoint baseline differs from its cloned commit");
       }
-      manifestRef = digest(checkpoint.currentManifestRaw);
-      const manifest = parseWorkerWorkspaceManifest(checkpoint.currentManifestRaw, manifestRef);
-      const base = parseWorkerWorkspaceManifest(checkpoint.baseManifestRaw, baseManifestRef);
+      const decoded = await decodeWorkspaceManifest(
+        checkpoint.currentManifestRaw,
+        undefined,
+        params.ownerSignal,
+      );
+      manifestRef = decoded.manifestRef;
+      const manifest = decoded.manifest;
+      const base = decodedBase.manifest;
       const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
         manifest,
         manifestRef,
         rawManifest: checkpoint.currentManifestRaw,
         root: checkpoint.stagingRoot,
-        blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base)),
+        blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
       });
       try {
         await transfer(

@@ -3,90 +3,226 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
+import {
+  createUpdatesViewDom,
+  createUpdatesViewProps as createProps,
+  type UpdatesViewOverrides,
+} from "./updates.test-support.ts";
 import { renderUpdates } from "./updates.ts";
 
-type UpdatesViewProps = Parameters<typeof renderUpdates>[0];
-
 let container: HTMLDivElement;
-
-function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProps {
-  return {
-    configObject: { update: { channel: "stable", auto: { enabled: false } } },
-    gatewayVersion: "2026.8.1",
-    controlUiCommit: "0123456789abcdef0123456789abcdef01234567",
-    controlUiCommitAt: "1970-01-01T00:00:00.000Z",
-    controlUiBuiltAt: "1970-01-01T00:00:00.000Z",
-    schedule: {
-      channel: "stable",
-      autoEnabled: false,
-      install: { kind: "package" },
-      target: { kind: "package", version: "2026.8.2" },
-    },
-    heldUpdateCampaignId: null,
-    updateAvailable: {
-      currentVersion: "2026.8.1",
-      latestVersion: "2026.8.2",
-      channel: "stable",
-    },
-    statusBanner: null,
-    run: null,
-    connected: true,
-    configBusy: false,
-    canAdmin: true,
-    canUpdate: true,
-    canCheckStatus: true,
-    canHoldUpdate: true,
-    canReport: true,
-    updateBusy: false,
-    reportableUpdateFailureId: null,
-    updateFailureReportBusy: false,
-    updateFailureReportNotice: null,
-    nowMs: 1_000,
-    onChannelChange: vi.fn(),
-    onUpdateChecksChange: vi.fn(),
-    onAutomaticUpdatesChange: vi.fn(),
-    onUpdateNow: vi.fn(),
-    onHoldUpdate: vi.fn(async () => true),
-    onCheckStatus: vi.fn(async () => undefined),
-    onReportFailure: vi.fn(async () => undefined),
-    ...overrides,
-  };
-}
-
-function row(title: string): HTMLElement {
-  const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
-    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
-  );
-  if (!match) {
-    throw new Error(`Missing settings row: ${title}`);
-  }
-  return match;
-}
-
-function automaticUpdatesControl(): {
-  row: HTMLElement;
-  toggle: HTMLElement & { checked: boolean };
-} {
-  const automaticRow = row("Automatic updates");
-  const toggle = automaticRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  if (!toggle) {
-    throw new Error("Missing automatic updates control");
-  }
-  return { row: automaticRow, toggle };
-}
+let row: ReturnType<typeof createUpdatesViewDom>["row"];
+let automaticUpdatesControl: ReturnType<typeof createUpdatesViewDom>["automaticUpdatesControl"];
 
 beforeEach(async () => {
   await i18n.setLocale("en");
-  container = document.createElement("div");
+  ({ container, row, automaticUpdatesControl } = createUpdatesViewDom());
 });
 
 describe("renderUpdates", () => {
+  it.each([
+    {
+      name: "checking",
+      props: { update: { updateStatusRefreshing: true } },
+      status: "Checking for updates…",
+      tone: "muted",
+      label: "Update now",
+      disabled: true,
+      title: "Checking for updates…",
+    },
+    {
+      name: "updating while a check is pending",
+      props: { updateBusy: true, update: { updateStatusRefreshing: true } },
+      status: "Update available v2026.8.2",
+      tone: "accent",
+      label: "Updating…",
+      disabled: true,
+      title: "",
+    },
+    {
+      name: "failed check with a known update",
+      props: {
+        update: {
+          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+        },
+      },
+      status: "Could not check for updates: timeout",
+      tone: "warn",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "failed check with a previously confirmed checkout update",
+      props: {
+        configObject: { update: { channel: "dev", checkOnStart: false } },
+        update: {
+          updateSchedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
+          },
+          updateAvailable: null,
+          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+        },
+      },
+      status: "Could not check for updates: timeout",
+      tone: "warn",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "failed check with a previously confirmed diverged checkout update",
+      props: {
+        configObject: { update: { channel: "dev", checkOnStart: false } },
+        update: {
+          updateSchedule: {
+            channel: "dev",
+            autoEnabled: false,
+            install: {
+              kind: "git",
+              git: { status: "diverged", commitsAhead: 1, commitsBehind: 3 },
+            },
+          },
+          updateAvailable: null,
+          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+        },
+      },
+      status: "Could not check for updates: timeout",
+      tone: "warn",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "failed check without a known update",
+      props: {
+        update: {
+          updateSchedule: null,
+          updateAvailable: null,
+          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+        },
+      },
+      status: "Could not check for updates: timeout",
+      tone: "warn",
+      label: "Update now",
+      disabled: true,
+      title: "Check for updates successfully before starting an update.",
+    },
+    {
+      name: "up to date",
+      props: {
+        update: {
+          updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
+          updateAvailable: null,
+        },
+      },
+      status: "Up to date",
+      tone: "ok",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "update available",
+      props: {},
+      status: "Update available v2026.8.2",
+      tone: "accent",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "real update failure",
+      props: {
+        update: { updateStatusBanner: { tone: "danger", text: "Update error: build failed" } },
+      },
+      status: "Update error: build failed",
+      tone: "danger",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
+      name: "restart pending",
+      props: {
+        updateBusy: true,
+        update: {
+          updateStatusBanner: {
+            tone: "info",
+            text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+          },
+        },
+      },
+      status:
+        "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+      tone: "accent",
+      label: "Updating…",
+      disabled: true,
+      title: "",
+    },
+  ] satisfies Array<{
+    name: string;
+    props: UpdatesViewOverrides;
+    status: string;
+    tone: string;
+    label: string;
+    disabled: boolean;
+    title: string;
+  }>)("distinguishes $name", ({ props, status, tone, label, disabled, title }) => {
+    const onCheckStatus = vi.fn(async () => true);
+    render(renderUpdates(createProps({ ...props, onCheckStatus })), container);
+    const statusRow = row("Status");
+    expect(statusRow.querySelector(".settings-status")?.textContent?.trim()).toBe(status);
+    expect(statusRow.querySelector(".settings-status")?.className).toBe(
+      tone === "muted" ? "settings-status" : `settings-status settings-status--${tone}`,
+    );
+    const button = row("Update now").querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent?.trim()).toBe(label);
+    expect(button.disabled).toBe(disabled);
+    expect(button.title).toBe(title);
+    if (props.update?.updateStatusCheckBanner) {
+      expect(container.textContent).not.toContain("Latest update attempt");
+      const check = statusRow.querySelector<HTMLButtonElement>("button")!;
+      expect(check.textContent?.trim()).toBe("Check for updates");
+      expect(check.disabled).toBe(false);
+      check.click();
+      expect(onCheckStatus).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps a previous update failure visible during a check (pending: %s)",
+    (statusChecking) => {
+      render(
+        renderUpdates(
+          createProps({
+            update: {
+              updateStatusRefreshing: statusChecking,
+              updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
+              updateStatusCheckBanner: statusChecking
+                ? null
+                : { tone: "warn", text: "Could not check for updates: timeout" },
+            },
+          }),
+        ),
+        container,
+      );
+      expect(row("Status").textContent).toContain(
+        statusChecking ? "Checking for updates…" : "Could not check for updates: timeout",
+      );
+      expect(row("Failure details").textContent).toContain("Update error: build failed");
+    },
+  );
+
   it.each(["ios", "waiting"])(
     "keeps Gateway updates without an advertised device updater: %s",
     (host) => {
@@ -205,8 +341,10 @@ describe("renderUpdates", () => {
           configObject: {
             update: { channel: "extended-stable", auto: { enabled: true } },
           },
-          schedule: { channel: "extended-stable", autoEnabled: true },
-          updateAvailable: null,
+          update: {
+            updateSchedule: { channel: "extended-stable", autoEnabled: true },
+            updateAvailable: null,
+          },
         }),
       ),
       container,
@@ -227,8 +365,14 @@ describe("renderUpdates", () => {
       renderUpdates(
         createProps({
           configObject: { update: { auto: { enabled: true } } },
-          schedule: { channel: "extended-stable", autoEnabled: true, install: { kind: "package" } },
-          updateAvailable: null,
+          update: {
+            updateSchedule: {
+              channel: "extended-stable",
+              autoEnabled: true,
+              install: { kind: "package" },
+            },
+            updateAvailable: null,
+          },
         }),
       ),
       container,
@@ -255,8 +399,14 @@ describe("renderUpdates", () => {
       renderUpdates(
         createProps({
           configObject: { update: { channel: "beta", auto: { enabled: false } } },
-          schedule: { channel: "extended-stable", autoEnabled: true, install: { kind: "package" } },
-          updateAvailable: null,
+          update: {
+            updateSchedule: {
+              channel: "extended-stable",
+              autoEnabled: true,
+              install: { kind: "package" },
+            },
+            updateAvailable: null,
+          },
         }),
       ),
       container,
@@ -280,7 +430,7 @@ describe("renderUpdates", () => {
           configObject: {
             update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
           },
-          schedule: { channel: "stable", autoEnabled: false },
+          update: { updateSchedule: { channel: "stable", autoEnabled: false } },
           onUpdateChecksChange,
         }),
       ),
@@ -346,10 +496,12 @@ describe("renderUpdates", () => {
       renderUpdates(
         createProps({
           configObject: { update: { channel, auto: { enabled: false } } },
-          schedule: {
-            channel,
-            autoEnabled: false,
-            install: { kind: installKind },
+          update: {
+            updateSchedule: {
+              channel,
+              autoEnabled: false,
+              install: { kind: installKind },
+            },
           },
         }),
       ),
@@ -368,25 +520,27 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          schedule: {
-            channel: "dev",
-            autoEnabled: true,
-            install: { kind: "git" },
-            target: {
-              kind: "git",
-              upstreamRef: "origin/main",
-              upstreamSha: "a".repeat(40),
-              commitsBehind: 3,
+          update: {
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: true,
+              install: { kind: "git" },
+              target: {
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "a".repeat(40),
+                commitsBehind: 3,
+              },
+              campaign: {
+                id: "campaign-1",
+                state: "waiting-for-idle",
+                announcedAtMs: 1_000,
+                forceAtMs: 762_000,
+                updatedAtMs: 1_000,
+              },
             },
-            campaign: {
-              id: "campaign-1",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              forceAtMs: 762_000,
-              updatedAtMs: 1_000,
-            },
+            updateAvailable: null,
           },
-          updateAvailable: null,
           onHoldUpdate,
         }),
       ),
@@ -406,26 +560,28 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          schedule: {
-            channel: "dev",
-            autoEnabled: true,
-            install: { kind: "git" },
-            target: {
-              kind: "git",
-              upstreamRef: "origin/main",
-              upstreamSha: "a".repeat(40),
-              commitsBehind: 3,
+          update: {
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: true,
+              install: { kind: "git" },
+              target: {
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "a".repeat(40),
+                commitsBehind: 3,
+              },
+              campaign: {
+                id: "campaign-1",
+                state: "waiting-for-idle",
+                announcedAtMs: 1_000,
+                holdUntilMs: 61_000,
+                forceAtMs: 961_000,
+                updatedAtMs: 1_000,
+              },
             },
-            campaign: {
-              id: "campaign-1",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              holdUntilMs: 61_000,
-              forceAtMs: 961_000,
-              updatedAtMs: 1_000,
-            },
+            updateAvailable: null,
           },
-          updateAvailable: null,
         }),
       ),
       container,
@@ -437,20 +593,22 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          heldUpdateCampaignId: "campaign-1",
-          schedule: {
-            channel: "dev",
-            autoEnabled: true,
-            campaign: {
-              id: "campaign-1",
-              state: "waiting-for-idle",
-              announcedAtMs: 1_000,
-              holdUntilMs: 500,
-              forceAtMs: 961_000,
-              updatedAtMs: 1_000,
+          update: {
+            heldUpdateCampaignId: "campaign-1",
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: true,
+              campaign: {
+                id: "campaign-1",
+                state: "waiting-for-idle",
+                announcedAtMs: 1_000,
+                holdUntilMs: 500,
+                forceAtMs: 961_000,
+                updatedAtMs: 1_000,
+              },
             },
+            updateAvailable: null,
           },
-          updateAvailable: null,
         }),
       ),
       container,
@@ -462,29 +620,31 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          schedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: { status: "behind", commitsBehind: 2 } },
-            target: {
-              kind: "git",
+          update: {
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: false,
+              install: { kind: "git", git: { status: "behind", commitsBehind: 2 } },
+              target: {
+                kind: "git",
+                upstreamRef: "origin/main",
+                upstreamSha: "b".repeat(40),
+                commitsBehind: 2,
+              },
+            },
+            updateAvailable: {
+              currentVersion: "2026.8.1",
+              latestVersion: "2026.8.1",
+              channel: "dev",
+              currentSha: "a".repeat(40),
               upstreamRef: "origin/main",
               upstreamSha: "b".repeat(40),
               commitsBehind: 2,
+              commits: [
+                { sha: "b123456", subject: "Add held update campaigns" },
+                { sha: "a987654", subject: "Show dev commit details" },
+              ],
             },
-          },
-          updateAvailable: {
-            currentVersion: "2026.8.1",
-            latestVersion: "2026.8.1",
-            channel: "dev",
-            currentSha: "a".repeat(40),
-            upstreamRef: "origin/main",
-            upstreamSha: "b".repeat(40),
-            commitsBehind: 2,
-            commits: [
-              { sha: "b123456", subject: "Add held update campaigns" },
-              { sha: "a987654", subject: "Show dev commit details" },
-            ],
           },
         }),
       ),
@@ -510,20 +670,22 @@ describe("renderUpdates", () => {
         createProps({
           configObject: { update: { channel: "dev" } },
           nowMs: Date.parse("2026-08-08T14:00:00Z"),
-          schedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: {
-              kind: "git",
-              git: {
-                status: "current",
-                currentSha: "a".repeat(40),
-                commitAtMs,
-                installedAtMs,
+          update: {
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: false,
+              install: {
+                kind: "git",
+                git: {
+                  status: "current",
+                  currentSha: "a".repeat(40),
+                  commitAtMs,
+                  installedAtMs,
+                },
               },
             },
+            updateAvailable: null,
           },
-          updateAvailable: null,
         }),
       ),
       container,
@@ -542,12 +704,14 @@ describe("renderUpdates", () => {
       renderUpdates(
         createProps({
           configObject: { update: { channel: "dev" } },
-          schedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: { status: "current" } },
+          update: {
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: false,
+              install: { kind: "git", git: { status: "current" } },
+            },
+            updateAvailable: null,
           },
-          updateAvailable: null,
         }),
       ),
       container,
@@ -583,12 +747,14 @@ describe("renderUpdates", () => {
       renderUpdates(
         createProps({
           configObject: { update: { channel: "dev" } },
-          schedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git },
+          update: {
+            updateSchedule: {
+              channel: "dev",
+              autoEnabled: false,
+              install: { kind: "git", git },
+            },
+            updateAvailable: null,
           },
-          updateAvailable: null,
         }),
       ),
       container,
@@ -602,9 +768,11 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          statusBanner: {
-            tone: "danger",
-            text: "Update error: build-failed. Fix the build error and retry.",
+          update: {
+            updateStatusBanner: {
+              tone: "danger",
+              text: "Update error: build-failed. Fix the build error and retry.",
+            },
           },
         }),
       ),
@@ -615,30 +783,50 @@ describe("renderUpdates", () => {
       "Update error: build-failed. Fix the build error and retry.",
     );
     expect(row("Status").querySelector(".settings-status--danger")).not.toBeNull();
+    expect(row("Recovery").textContent).toContain("Retry update");
+    expect(row("CLI fallback").textContent).toContain("openclaw triage");
   });
 
-  it.each(["succeeded", "failed", "skipped"] as const)(
-    "renders the durable %s report and only offers recovery for unsuccessful runs",
-    async (status) => {
+  it.each([
+    { status: "succeeded", reason: null, recovery: false, reconciled: false },
+    { status: "failed", reason: "build-failed", recovery: true, reconciled: false },
+    { status: "skipped", reason: "dirty", recovery: true, reconciled: false },
+    {
+      status: "skipped",
+      reason: "external-supervisor-update-required",
+      recovery: false,
+      reconciled: false,
+    },
+    { status: "skipped", reason: "container-image-install", recovery: false, reconciled: false },
+    { status: "skipped", reason: "already-current", recovery: false, reconciled: false },
+    { status: "failed", reason: "abandoned", recovery: false, reconciled: true },
+  ] as const)(
+    "renders the durable $status/$reason report with reconciled=$reconciled and only offers current recovery",
+    async ({ status, reason, recovery, reconciled }) => {
       const onUpdateNow = vi.fn();
-      const onCheckStatus = vi.fn(async () => undefined);
+      const onCheckStatus = vi.fn(async () => true);
       render(
         renderUpdates(
           createProps({
-            run: createUpdateRunFixture({
-              phase: "finished",
-              status,
-              finishedAtMs: 10,
-              reason: status === "failed" ? "build-failed" : null,
-              after: { version: "2026.9.2" },
-              steps: [
-                {
-                  step: "build",
-                  status: status === "failed" ? "failed" : "completed",
-                  detail: "Build output",
-                },
-              ],
-            }),
+            update: {
+              updateRun: createUpdateRunFixture({
+                phase: "finished",
+                status,
+                finishedAtMs: 10,
+                reason,
+                after: { version: "2026.9.2" },
+                steps: [
+                  {
+                    step: "build",
+                    status: status === "failed" ? "failed" : "completed",
+                    detail: "Build output",
+                  },
+                  ...(reconciled
+                    ? [{ step: "reconcile:acknowledged", status: "completed" as const }]
+                    : []),
+                ],
+              }),
+            },
             onUpdateNow,
             onCheckStatus,
           }),
@@ -652,21 +840,67 @@ describe("renderUpdates", () => {
         )!;
         await view.updateComplete;
         expect(view.querySelector(".update-run-view__report")?.textContent).toContain(
-          status === "succeeded" ? "OpenClaw updated to 2026.9.2" : `OpenClaw update ${status}`,
+          reconciled
+            ? "OpenClaw abandoned update reconciled."
+            : status === "succeeded"
+              ? "OpenClaw updated to 2026.9.2"
+              : `OpenClaw update ${status}`,
         );
-        if (status !== "succeeded") {
-          const recovery = row("Recovery");
-          recovery.querySelector<HTMLButtonElement>("button")?.click();
-          recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+        if (recovery) {
+          const actions = row("Recovery");
+          actions.querySelector<HTMLButtonElement>("button")?.click();
+          actions.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
           expect(onCheckStatus).toHaveBeenCalledOnce();
           expect(onUpdateNow).toHaveBeenCalledOnce();
           expect(row("CLI fallback").querySelector("code")?.textContent).toBe("openclaw triage");
         } else {
           expect(container.textContent).not.toContain("Retry update");
+          expect(container.textContent).not.toContain("openclaw triage");
+        }
+        if (reconciled) {
+          expect(view.querySelector(".update-run-view__report--failed")).toBeNull();
+          expect(view.querySelector('[data-step="build"]')?.getAttribute("data-status")).toBe(
+            "failed",
+          );
+          expect(view.querySelector(".update-run-view__details")?.textContent).toContain(
+            "Build output",
+          );
         }
       } finally {
         container.remove();
       }
+    },
+  );
+
+  it.each([
+    { reason: "external-supervisor-update-required", recovery: false },
+    { reason: "already-current", recovery: false },
+    { reason: "dirty", recovery: true },
+  ])(
+    "keeps the retained $reason sentinel outcome without false recovery",
+    ({ reason, recovery }) => {
+      const projected = projectUpdateSentinel({
+        kind: "update",
+        status: "skipped",
+        ts: 10,
+        stats: { reason },
+      })!;
+      render(
+        renderUpdates(
+          createProps({
+            update: {
+              updateStatusBanner: projected.banner,
+              recordedUpdateAttempt: projected.attempt,
+            },
+          }),
+        ),
+        container,
+      );
+
+      expect(row("Status").textContent).toContain(reason);
+      expect(container.textContent?.includes("Retry update")).toBe(recovery);
+      expect(container.textContent?.includes("CLI fallback")).toBe(recovery);
+      expect(container.textContent?.includes("openclaw triage")).toBe(recovery);
     },
   );
 
@@ -680,8 +914,7 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          run,
-          reportableUpdateFailureId: run.runId,
+          update: { updateRun: run, reportableUpdateFailureId: run.runId },
           onReportFailure,
         }),
       ),
@@ -707,14 +940,16 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          run,
-          reportableUpdateFailureId: run.runId,
-          updateFailureReportNotice: {
-            attemptId: run.runId,
-            result: {
-              status: "fallback",
-              fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
-              message: "gh is not authenticated",
+          update: {
+            updateRun: run,
+            reportableUpdateFailureId: run.runId,
+            updateFailureReportNotice: {
+              attemptId: run.runId,
+              result: {
+                status: "fallback",
+                fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=update",
+                message: "gh is not authenticated",
+              },
             },
           },
         }),
@@ -737,13 +972,15 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          run,
-          reportableUpdateFailureId: run.runId,
-          updateFailureReportNotice: {
-            attemptId: run.runId,
-            result: {
-              status: "pending",
-              message: "GitHub issue submission may have completed.",
+          update: {
+            updateRun: run,
+            reportableUpdateFailureId: run.runId,
+            updateFailureReportNotice: {
+              attemptId: run.runId,
+              result: {
+                status: "pending",
+                message: "GitHub issue submission may have completed.",
+              },
             },
           },
         }),
@@ -765,13 +1002,15 @@ describe("renderUpdates", () => {
     render(
       renderUpdates(
         createProps({
-          run,
-          reportableUpdateFailureId: run.runId,
-          updateFailureReportNotice: {
-            attemptId: run.runId,
-            result: {
-              status: "retryable",
-              message: "No issue submission was started; retry this action later.",
+          update: {
+            updateRun: run,
+            reportableUpdateFailureId: run.runId,
+            updateFailureReportNotice: {
+              attemptId: run.runId,
+              result: {
+                status: "retryable",
+                message: "No issue submission was started; retry this action later.",
+              },
             },
           },
         }),

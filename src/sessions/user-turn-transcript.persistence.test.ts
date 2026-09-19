@@ -621,11 +621,19 @@ describe("persistUserTurnTranscript", () => {
             hookCalls += 1;
             const message = (event as { message: Record<string, unknown> }).message;
             const meta = message["__openclaw"] as {
-              transport?: { conversationRef?: string; messageId?: string };
+              transport?: {
+                conversationRef?: string;
+                messageId?: string;
+                clients?: Array<{ displayName?: string }>;
+              };
             };
             if (meta.transport) {
               meta.transport.conversationRef = "conv_tampered";
               meta.transport.messageId = "tampered-message";
+              const source = meta.transport.clients?.[0];
+              if (source) {
+                source.displayName = "Forged app";
+              }
             }
             return {
               message: castAgentMessage({
@@ -656,6 +664,7 @@ describe("persistUserTurnTranscript", () => {
           conversationRef: "conv_0123456789abcdef0123456789abcdef",
           messageId: "inbound-1",
           replyToId: "outbound-1",
+          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
         },
       },
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -675,6 +684,7 @@ describe("persistUserTurnTranscript", () => {
           conversationRef: "conv_0123456789abcdef0123456789abcdef",
           messageId: "inbound-1",
           replyToId: "outbound-1",
+          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
         },
       },
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -696,6 +706,7 @@ describe("persistUserTurnTranscript", () => {
             conversationRef: "conv_0123456789abcdef0123456789abcdef",
             messageId: "inbound-1",
             replyToId: "outbound-1",
+            clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
           },
         },
       }),

@@ -105,6 +105,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
                 }
                 return
             }
+            let previousNativeExperienceEnabled = AppStateStore.shared.nativeExperienceEnabled
             await owner.applyDeviceSettingsRequest(request)
             let snapshot: DeviceSettingsSnapshot? = if case .set = request {
                 await owner.readDeviceSettingsSnapshot(sourceID: sourceID)
@@ -119,6 +120,14 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
                 let reply: Any = try snapshot.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
                     ?? NSNull()
                 replyHandler(reply, nil)
+                if case let .set(.nativeExperienceEnabled, .boolean(enabled)) = request,
+                   enabled != previousNativeExperienceEnabled,
+                   enabled == AppStateStore.shared.nativeExperienceEnabled
+                {
+                    // Switching experiences hides this document and cancels its queue.
+                    // Acknowledge the saved preference before retiring its reply source.
+                    AppNavigationActions.experienceDidChange(nativeEnabled: enabled)
+                }
             } catch {
                 replyHandler(nil, "Device settings could not be read. Try again.")
             }

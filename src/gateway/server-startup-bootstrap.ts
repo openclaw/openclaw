@@ -11,7 +11,6 @@ import {
 import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
 import {
   getRuntimeConfigSourceSnapshot,
-  readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
   setAppliedRuntimeConfigSnapshot,
 } from "../config/io.js";
@@ -22,6 +21,7 @@ import {
 } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -35,6 +35,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
@@ -52,7 +53,7 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
-import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
+import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import {
   mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayReloadPluginActivationCandidate,
@@ -70,13 +71,6 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type WorkerEnvironmentStartupLoader = () => Promise<
   typeof import("./server-worker-environment-startup.js")
 >;
-
-function publishGatewayPluginRuntimeConfigAtStartup(params: {
-  runtimeConfig: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-}): void {
-  setAppliedRuntimeConfigSnapshot(params.runtimeConfig, params.sourceConfig);
-}
 
 export async function prepareGatewayServerBootstrap(input: {
   port: number;
@@ -137,54 +131,52 @@ export async function prepareGatewayServerBootstrap(input: {
       signal,
     });
   };
-  await startupTrace.measure("state.ownership", () =>
-    opts.startupOperation ? opts.startupOperation(inspectStateOwnership) : inspectStateOwnership(),
-  );
-  const {
-    OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    OpenClawDatabaseSchemaPreflightError,
-    preflightOpenClawDatabaseSchemas,
-  } = await startupTrace.measure(
-    "state.runtime-imports",
-    () => import("../state/openclaw-database-preflight.js"),
-  );
-  const inspectDatabaseSchemas = (signal?: AbortSignal) =>
-    preflightOpenClawDatabaseSchemas({
-      signal,
-      env: process.env,
-    });
-  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
-    opts.startupOperation
-      ? opts.startupOperation(inspectDatabaseSchemas)
-      : inspectDatabaseSchemas(),
-  );
-  if (databaseSchemas.incompatible.length > 0) {
-    for (const database of databaseSchemas.incompatible) {
-      log.error("database schema preflight rejected newer schema", {
+  // Reuse child imports while each check still acquires a fresh source snapshot.
+  // Join the worker before starting any network or plugin runtime.
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await startupTrace.measure("state.ownership", () =>
+      opts.startupOperation
+        ? opts.startupOperation(inspectStateOwnership)
+        : inspectStateOwnership(),
+    );
+    const {
+      OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      OpenClawDatabaseSchemaPreflightError,
+      preflightOpenClawDatabaseSchemas,
+    } = await startupTrace.measure(
+      "state.runtime-imports",
+      () => import("../state/openclaw-database-preflight.js"),
+    );
+    const inspectDatabaseSchemas = (signal?: AbortSignal) =>
+      preflightOpenClawDatabaseSchemas({
+        signal,
+        env: process.env,
+        reuseStartupSchemaPreparation: true,
+        onAgentInspection: (stats) =>
+          startupTrace.detail("state.schema-preflight", Object.entries(stats)),
+      });
+    const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+      opts.startupOperation
+        ? opts.startupOperation(inspectDatabaseSchemas)
+        : inspectDatabaseSchemas(),
+    );
+    if (databaseSchemas.incompatible.length > 0) {
+      throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
+    }
+    for (const database of databaseSchemas.indeterminate) {
+      log.warn("database schema preflight could not inspect database; continuing to real open", {
         kind: database.kind,
         path: database.path,
-        ...(database.agentId ? { agentId: database.agentId } : {}),
-        foundVersion: database.foundVersion,
-        supportedVersion: database.supportedVersion,
-        writerAppVersion: database.writerAppVersion ?? "unknown",
+        reason: database.reason,
         docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
       });
     }
-    throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
-  }
-  for (const database of databaseSchemas.indeterminate) {
-    log.warn("database schema preflight could not inspect database; continuing to real open", {
-      kind: database.kind,
-      path: database.path,
-      reason: database.reason,
-      docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    });
-  }
-  const { bootstrapGatewayNetworkRuntime } = await startupTrace.measure(
+  });
+  const { ensureGlobalUndiciEnvProxyDispatcher } = await startupTrace.measure(
     "runtime.network-imports",
-    () => import("./server-network-runtime.js"),
+    () => import("../infra/net/undici-global-dispatcher.js"),
   );
-  await startupTrace.measure("runtime.network-bootstrap", () => bootstrapGatewayNetworkRuntime());
+  await startupTrace.measure("runtime.network-bootstrap", ensureGlobalUndiciEnvProxyDispatcher);
 
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
@@ -269,8 +261,6 @@ export async function prepareGatewayServerBootstrap(input: {
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
   });
-  let startupInternalWriteHash: string | null = null;
-  let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = captureConfigOverrideApplier()(startupConfigSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
@@ -424,7 +414,7 @@ export async function prepareGatewayServerBootstrap(input: {
     const previousSourceConfig =
       params.previousSourceConfig ??
       getRuntimeConfigSourceSnapshot() ??
-      startupLastGoodSnapshot.sourceConfig;
+      configSnapshot.sourceConfig;
     assertGatewayConfigEnvSelectionUnchanged(previousSourceConfig, params.sourceConfig);
     const runtimeEnv = prepareConfigRuntimeEnv({
       previousConfig: previousSourceConfig,
@@ -465,20 +455,11 @@ export async function prepareGatewayServerBootstrap(input: {
       reapplyCompareOverlays,
     };
   };
-  // Keep the old startup-write suppression path intact for compatibility with
-  // callers that may still report a write, but startup itself no longer mutates config.
-  if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
-    const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
-      readConfigFileSnapshot(),
-    );
-    startupInternalWriteHash = startupSnapshot.hash ?? null;
-    startupLastGoodSnapshot = startupSnapshot;
-  }
-  setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  setAppliedRuntimeConfigSnapshot(cfgAtStart, configSnapshot.sourceConfig);
   applyLoggingConfig(cfgAtStart.logging);
-  initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
+  initializePublishedConfigRuntimeEnv(configSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
-      startupLastGoodSnapshot.sourceConfig,
+      configSnapshot.sourceConfig,
       envBeforeStartupConfigLoad,
       process.env,
     ),
@@ -504,6 +485,7 @@ export async function prepareGatewayServerBootstrap(input: {
       log,
     }),
   );
+  publishSystemEventStoreConfig(cfgAtStart);
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,
@@ -530,10 +512,7 @@ export async function prepareGatewayServerBootstrap(input: {
   // prepared owners are created so request-time exact-owner lookups cannot see the pre-activation
   // snapshot and reject the Gateway's own model catalog.
   copyConfigResolutionFacts(cfgAtStart, gatewayPluginConfigAtStart);
-  publishGatewayPluginRuntimeConfigAtStartup({
-    runtimeConfig: gatewayPluginConfigAtStart,
-    sourceConfig: startupLastGoodSnapshot.sourceConfig,
-  });
+  setAppliedRuntimeConfigSnapshot(gatewayPluginConfigAtStart, configSnapshot.sourceConfig);
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
   const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
@@ -584,8 +563,6 @@ export async function prepareGatewayServerBootstrap(input: {
     activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,
-    startupInternalWriteHash,
-    startupLastGoodSnapshot,
     workerEnvironmentStartup,
     pluginGatewayContext,
     resolvePluginGatewayContext,
@@ -603,7 +580,3 @@ export async function prepareGatewayServerBootstrap(input: {
     activateRuntimeSecrets,
   };
 }
-
-export const testing = {
-  publishGatewayPluginRuntimeConfigAtStartup,
-};

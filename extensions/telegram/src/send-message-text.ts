@@ -188,7 +188,7 @@ export function createTelegramTextSender(config: {
       if (sender.parts.length === start + 1) {
         await beforeFirstAccepted?.();
       }
-      recordSentMessage(chatId, messageId, cfg, {
+      await recordSentMessage(chatId, messageId, cfg, {
         accountId: account.accountId,
         agentId: ownerAgentId,
       });

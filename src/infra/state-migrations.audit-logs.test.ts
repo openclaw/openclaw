@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
@@ -13,7 +13,7 @@ import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
-  failChmodCall,
+  failArchiveHardening,
   failSecondScrubWrite,
   systemAuditEvent,
   withAuditMigrationFixture,
@@ -21,8 +21,6 @@ import {
 } from "./state-migrations.audit.test-support.js";
 
 describe("legacy core audit log migration", () => {
-  afterEach(resetPluginStateStoreForTests);
-
   it("imports config and system audit JSONL only through explicit doctor repair", async () => {
     await withAuditMigrationFixture(async (audit) => {
       const { source: configPath } = audit.config;
@@ -485,8 +483,7 @@ describe("legacy core audit log migration", () => {
     await withAuditMigrationFixture(async (audit) => {
       const { raw, sanitized, source } = audit.config;
       await audit.writeJsonLines(source, [configAuditRecord("must-redact")]);
-      // fs-safe applies the write mode before the migration's explicit hardening checks.
-      const chmodSpy = await failChmodCall(audit, "chmod-probe", 4, "simulated chmod failure");
+      const chmodSpy = failArchiveHardening(audit, raw, "simulated chmod failure");
 
       let failed: Awaited<ReturnType<typeof audit.migrate>>;
       try {

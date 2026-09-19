@@ -7,7 +7,13 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  bindCronManagementGrant,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   applyLegacyCronStoreRepair,
@@ -15,7 +21,6 @@ import {
 } from "../../commands/doctor/cron/legacy-repair.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
@@ -42,7 +47,8 @@ import {
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import { createCronTestContext, createCronJob } from "./cron.validation.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 const cronLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-gateway-validation-" });
@@ -150,6 +156,11 @@ function setCronValidationTestRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
+        pluginId: "discord",
+        plugin: createPrefixOnlyChannelPlugin("discord", ["discord"]),
+        source: "test:discord",
+      },
+      {
         pluginId: "telegram",
         plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
         source: "test:telegram",
@@ -183,134 +194,7 @@ function setCronValidationTestRegistry(): void {
 }
 
 function createCronContext(currentJobs?: CronJob | CronJob[]) {
-  const jobs = currentJobs ? (Array.isArray(currentJobs) ? currentJobs : [currentJobs]) : [];
-  const committedAdds: Partial<CronJob>[] = [];
-  const committedRuntimeAuthorities: Array<CronRuntimeAuthority | undefined> = [];
-  const committedRuntimeAuthorityCaptures: boolean[] = [];
-  const committedUpdates: Array<{ id: string; patch: Partial<CronJob> }> = [];
-  const update = vi.fn(async (id: string, patch: Partial<CronJob>) => {
-    committedUpdates.push({ id, patch });
-    return createCronJob({
-      ...jobs.find((job) => job.id === id),
-      ...patch,
-      id,
-    });
-  });
-  return {
-    committedAdds,
-    committedRuntimeAuthorities,
-    committedRuntimeAuthorityCaptures,
-    committedUpdates,
-    cron: {
-      add: vi.fn(
-        async (
-          input: Partial<CronJob>,
-          opts?: {
-            commitGuard?: () => void;
-            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
-          },
-        ) => {
-          opts?.commitGuard?.();
-          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
-          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
-          committedAdds.push(input);
-          return createCronJob({ ...input, id: "cron-1" });
-        },
-      ),
-      update,
-      updateWithPrecondition: vi.fn(
-        async (
-          id: string,
-          patch: Partial<CronJob>,
-          precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
-          opts?: {
-            commitGuard?: () => void;
-            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
-          },
-        ) => {
-          const job = jobs.find((candidate) => candidate.id === id);
-          if (!job) {
-            throw new Error(`unknown automation id: ${id}`);
-          }
-          await precondition(job, Date.now());
-          opts?.commitGuard?.();
-          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
-          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
-          return await update(id, patch);
-        },
-      ),
-      remove: vi.fn(async (_id: string, opts?: { commitGuard?: () => void }) => {
-        opts?.commitGuard?.();
-        return { ok: true, removed: true };
-      }),
-      enqueueRun: vi.fn(
-        async (_id: string, _mode?: string, opts?: { commitGuard?: () => void }) => {
-          opts?.commitGuard?.();
-          return { ok: true, enqueued: true, runId: "run-1" };
-        },
-      ),
-      getDefaultAgentId: vi.fn(() => "main"),
-      getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
-      prepareWake: vi.fn(async () => undefined),
-      wake: vi.fn(() => ({ ok: true }) as const),
-      readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
-      readScratch: vi.fn(async () => ({ content: null, revision: 0 })),
-      writeScratch: vi.fn(
-        async (_id: string, params: { content: string | null; commitGuard?: () => void }) => {
-          params.commitGuard?.();
-          return {
-            ok: true as const,
-            scratch: { content: params.content, revision: 1 },
-            currentRevision: 1,
-          };
-        },
-      ),
-      list: vi.fn(async () => jobs),
-      listPage: vi.fn(
-        async (
-          opts?: {
-            agentId?: string;
-            limit?: number;
-            offset?: number;
-            trigger?: "all" | "conditional" | "unconditional";
-          },
-          matchesJob?: (job: CronJob) => boolean,
-        ) => {
-          const requestedAgentId = opts?.agentId?.trim().toLowerCase();
-          const agentJobs = requestedAgentId
-            ? jobs.filter(
-                (job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId,
-              )
-            : jobs;
-          const filteredJobs = matchesJob ? agentJobs.filter(matchesJob) : agentJobs;
-          const total = filteredJobs.length;
-          const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-          const defaultLimit = total === 0 ? 50 : total;
-          const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-          const pageJobs = filteredJobs.slice(offset, offset + limit);
-          const nextOffset = offset + pageJobs.length;
-          return {
-            jobs: pageJobs,
-            snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
-            total,
-            offset,
-            limit,
-            hasMore: nextOffset < total,
-            nextOffset: nextOffset < total ? nextOffset : null,
-          };
-        },
-      ),
-    },
-    logGateway: {
-      info: vi.fn(),
-      warn: vi.fn(),
-    },
-    cronStorePath: "cron-validation-test.json",
-    getRuntimeConfig: () => getRuntimeConfig(),
-    validateAgentRuntimeApprovalAuthority: undefined as
-      | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
-      | undefined,
-  };
+  return createCronTestContext(currentJobs, getRuntimeConfig);
 }
 
 type CronMethod = keyof typeof cronHandlers;
@@ -323,6 +207,8 @@ async function invokeCron(
     context?: ReturnType<typeof createCronContext>;
     client?: GatewayClient;
     respond?: ReturnType<typeof vi.fn>;
+    sessionMutationCommitGuard?: () => void;
+    hasCurrentClientAuthority?: () => boolean;
   } = {},
 ) {
   const context = options.context ?? createCronContext(options.currentJob);
@@ -336,6 +222,8 @@ async function invokeCron(
     respond: respond as never,
     context: context as never,
     client: options.client ?? null,
+    sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+    hasCurrentClientAuthority: options.hasCurrentClientAuthority,
     isWebchatConnect: () => false,
   });
   return { context, respond };
@@ -390,23 +278,6 @@ async function invokeCronRemove(
 
 async function invokeWake(params: Record<string, unknown>, client?: GatewayClient) {
   return await invokeCron("wake", params, { client });
-}
-
-function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
-  return {
-    id: "cron-1",
-    name: "cron job",
-    enabled: true,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
-    delivery: { mode: "none" },
-    state: {},
-    ...overrides,
-  };
 }
 
 function callerClient(
@@ -644,29 +515,45 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 }
 
 describe("cron method validation", () => {
-  it.each([
-    ["cron.list", false],
-    ["cron.get", false],
-    ["cron.update", false],
-    ["cron.run", false],
-    ["cron.remove", false],
-    ["cron.remove", true],
-  ] as const)(
-    "Control UI admin grant manages a different channel's automation through %s (close after commit: %s)",
-    async (method, closeAfterCommit) => {
+  it.each(
+    (
+      [
+        ["cron.list", false],
+        ["cron.get", false],
+        ["cron.update", false],
+        ["cron.run", false],
+        ["cron.remove", false],
+        ["cron.remove", true],
+      ] as const
+    ).flatMap(([method, closeAfterCommit]) =>
+      (["control-ui-admin", "channel-owner"] as const).flatMap((source) =>
+        ([false, true] as const).map(
+          (trusted) => [method, closeAfterCommit, source, trusted] as const,
+        ),
+      ),
+    ),
+  )(
+    "%s manages a foreign automation (close after commit: %s, source: %s, trusted: %s)",
+    async (method, closeAfterCommit, source, trusted) => {
       const client = callerClient("main");
       const identity = client.internal!.agentRuntimeIdentity!;
       const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
       identity.delegatedAuthority = { kind: "local", ...authority };
+      setRuntimeConfig({ commands: { ownerAllowFrom: ["discord:owner-1"] } });
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
-        { kind: "local" },
-        true,
+        source === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: "local" },
+        source === "channel-owner"
+          ? {
+              source,
+              isCurrent: () =>
+                isConfiguredCommandOwner(getRuntimeConfig(), {
+                  channel: "discord",
+                  senderId: "owner-1",
+                }),
+            }
+          : { source },
       );
-      identity.cronManagementGrant = mintCronCreatorAuthorityGrant(scope, undefined, undefined, {
-        method,
-        authority,
-      });
       const job = createCronJob({
         agentId: "telegram-agent",
         owner: {
@@ -681,8 +568,11 @@ describe("cron method validation", () => {
           ownerAccountId: "telegram",
         },
       });
+      if (trusted) {
+        job.scheduledToolPolicy = { version: 1, mode: "trusted" };
+      }
       const context = createCronContext(job);
-      if (method === "cron.update") {
+      if (method === "cron.update" && !trusted) {
         job.payload = { kind: "agentTurn", message: "operator-created task without a cap" };
         delete job.scheduledToolPolicy;
       }
@@ -694,15 +584,20 @@ describe("cron method validation", () => {
         });
       }
       try {
-        const { respond } = await invokeCron(
-          method,
-          {
-            ...(method === "cron.list" ? { compact: true } : { id: job.id }),
-            ...(method === "cron.update"
-              ? { patch: { payload: { kind: "agentTurn", message: "updated by admin" } } }
-              : {}),
-          },
-          { client, context },
+        const { respond } = await runWithCronCreatorAuthorityCapability(scope, () =>
+          withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
+            identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint(method);
+            return await invokeCron(
+              method,
+              {
+                ...(method === "cron.list" ? { compact: true } : { id: job.id }),
+                ...(method === "cron.update"
+                  ? { patch: { payload: { kind: "agentTurn", message: "updated by admin" } } }
+                  : {}),
+              },
+              { client, context },
+            );
+          }),
         );
         expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
         if (method === "cron.list") {
@@ -822,6 +717,63 @@ describe("cron method validation", () => {
     });
   });
 
+  describe.each(["get", "update", "remove", "run", "runs"] as const)(
+    "cron.%s caller scope",
+    (method) => {
+      it.each(["foreign agent", "operator command"] as const)(
+        "hides a %s job without dispatch or disclosure",
+        async (hiddenBy) => {
+          const foreign = hiddenBy === "foreign agent";
+          const jobId = method === "get" ? "cron-42" : "cron-1";
+          const context = createCronContext(
+            createCronJob({
+              id: jobId,
+              agentId: foreign && method !== "get" ? "worker" : "ops",
+              ...(!foreign
+                ? {
+                    enabled: method !== "run",
+                    payload: {
+                      kind: "command",
+                      argv: ["deploy"],
+                      env: { MARKER_ENV: "fixture-marker" },
+                    },
+                  }
+                : {}),
+            }),
+          );
+          const params = {
+            ...(foreign && (method === "get" || method === "remove" || method === "run")
+              ? { jobId }
+              : { id: jobId }),
+            ...(method === "update" ? { patch: { enabled: false } } : {}),
+            ...(method === "run" && !foreign ? { mode: "force" } : {}),
+          };
+          const { respond } = await invokeCron(`cron.${method}`, params, {
+            context,
+            client: callerClient(foreign && method === "get" ? "worker" : "ops"),
+          });
+
+          expect(context.cron.update).not.toHaveBeenCalled();
+          expect(context.cron.remove).not.toHaveBeenCalled();
+          expect(context.cron.enqueueRun).not.toHaveBeenCalled();
+          if (method === "runs") {
+            expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith(jobId);
+            expect(context.cron.list).not.toHaveBeenCalled();
+          }
+          expectResponseError(respond, {
+            code: "INVALID_REQUEST",
+            messageIncludes:
+              method === "get" ? `cron job not found: ${jobId}` : `Automation not found: ${jobId}`,
+            ...(method === "get" && foreign
+              ? { details: { code: "CRON_JOB_NOT_FOUND", jobId } }
+              : {}),
+          });
+          expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+        },
+      );
+    },
+  );
+
   it("allows caller-scoped cron.remove for the same agent", async () => {
     const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
 
@@ -835,48 +787,6 @@ describe("cron method validation", () => {
       commitGuard: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
-  });
-
-  it("hides caller-scoped cron.remove for a foreign agent", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
-
-    const { respond } = await invokeCron(
-      "cron.remove",
-      { jobId: "cron-1" },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.remove).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-  });
-
-  it("hides operator command cron jobs from caller-scoped cron.remove", async () => {
-    const context = createCronContext(
-      createCronJob({
-        id: "cron-1",
-        agentId: "ops",
-        payload: {
-          kind: "command",
-          argv: ["deploy"],
-          env: { MARKER_ENV: "fixture-marker" },
-        },
-      }),
-    );
-
-    const { respond } = await invokeCron(
-      "cron.remove",
-      { id: "cron-1" },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.remove).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
   });
 
   it("trims whitespace around cron.get job ids before lookup", async () => {
@@ -923,20 +833,6 @@ describe("cron method validation", () => {
     expectCronReadSuccess(respond, job);
   });
 
-  it("hides caller-scoped cron.get for a foreign agent", async () => {
-    const job = createCronJob({ id: "cron-42", agentId: "ops" });
-
-    const { respond } = await invokeCronGet({ jobId: "cron-42" }, job, {
-      client: callerClient("worker"),
-    });
-
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "cron job not found: cron-42",
-      details: { code: "CRON_JOB_NOT_FOUND", jobId: "cron-42" },
-    });
-  });
-
   it("hides caller-scoped cron.get when stored sessionTarget points at a foreign agent", async () => {
     const job = createCronJob({
       id: "cron-42",
@@ -952,28 +848,6 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: cron-42",
     });
-  });
-
-  it("hides same-agent command cron payloads from caller-scoped cron.get", async () => {
-    const job = createCronJob({
-      id: "cron-42",
-      agentId: "ops",
-      payload: {
-        kind: "command",
-        argv: ["deploy"],
-        env: { MARKER_ENV: "fixture-marker" },
-      },
-    });
-
-    const { respond } = await invokeCronGet({ id: "cron-42" }, job, {
-      client: callerClient("ops"),
-    });
-
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "cron job not found: cron-42",
-    });
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
   });
 
   it("hides same-agent on-exit cron jobs from caller-scoped cron.get", async () => {
@@ -1977,6 +1851,54 @@ describe("cron method validation", () => {
       messageIncludes: "agent runtime authority is no longer active",
     });
     expect(context.committedAdds).toHaveLength(0);
+  });
+
+  it.each([
+    ["cron.add", agentTurnCronParams(), "add"],
+    ["cron.update", { id: "cron-1", patch: { description: "changed" } }, "updateWithPrecondition"],
+    ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
+    ["cron.remove", { id: "cron-1" }, "remove"],
+    ["cron.run", { id: "cron-1", mode: "force" }, "enqueueRun"],
+  ] as const)(
+    "carries the original caller fence to the %s commit owner",
+    async (method, params, owner) => {
+      const context = createCronContext(createCronJob({ agentId: "ops" }));
+      const client = callerClient("ops");
+      client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
+      client.internal!.agentRuntimeIdentity!.turnSourceLocal = true;
+      const sessionMutationCommitGuard = vi.fn(() => {
+        throw new TypeError("original caller was revoked");
+      });
+
+      const result = await invokeCron(method, params, {
+        context,
+        client,
+        sessionMutationCommitGuard,
+      });
+
+      expect(context.cron[owner]).toHaveBeenCalledOnce();
+      expect(sessionMutationCommitGuard).toHaveBeenCalledOnce();
+      expectResponseError(result.respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "original caller was revoked",
+      });
+      expect(context.committedAdds).toHaveLength(0);
+      expect(context.committedUpdates).toHaveLength(0);
+    },
+  );
+
+  it("checks a direct Cron caller again at the add commit boundary", async () => {
+    const context = createCronContext();
+    const result = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      hasCurrentClientAuthority: () => false,
+    });
+    expect(context.cron.add).toHaveBeenCalledOnce();
+    expect(context.committedAdds).toHaveLength(0);
+    expectResponseError(result.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "Gateway caller authority is no longer active",
+    });
   });
 
   it.each([
@@ -3135,23 +3057,6 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "must not be blank" });
   });
 
-  it("hides caller-scoped cron.update for a foreign agent", async () => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: { enabled: false },
-      },
-      createCronJob({ agentId: "worker" }),
-      { client: callerClient("ops") },
-    );
-
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-  });
-
   it.each(["ops", "worker", null])(
     "rejects caller-scoped cron.update agentId %j",
     async (agentId) => {
@@ -3595,49 +3500,17 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("rejects blank announce delivery fields before normalization", async () => {
-    const { context, respond } = await invokeCronAdd(
-      agentTurnCronParams({
-        name: "blank delivery target",
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "   ",
-        },
-      }),
-    );
-
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "delivery.to must be a non-empty string",
-    });
-  });
-
-  it("rejects blank failure destination fields before normalization", async () => {
-    const { context, respond } = await invokeCronAdd(
-      agentTurnCronParams({
-        name: "blank failure target",
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "telegram:123",
-          failureDestination: {
-            mode: "announce",
-            channel: "   ",
-          },
-        },
-      }),
-    );
-
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "delivery.failureDestination.channel must be a non-empty string",
-    });
-  });
-
   it.each([
+    ["delivery.to", { mode: "announce", channel: "telegram", to: "   " }],
+    [
+      "delivery.failureDestination.channel",
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:123",
+        failureDestination: { mode: "announce", channel: "   " },
+      },
+    ],
     ["delivery.channel", { mode: "announce", channel: 123, to: "telegram:123" }],
     ["delivery.to", { mode: "announce", channel: "telegram", to: {} }],
     [
@@ -3652,9 +3525,9 @@ describe("cron method validation", () => {
       "delivery.completionDestination.to",
       { mode: "announce", completionDestination: { mode: "webhook", to: 456 } },
     ],
-  ])("rejects non-string cron.add %s before normalization", async (field, delivery) => {
+  ])("rejects invalid cron.add %s (%j) before normalization", async (field, delivery) => {
     const { context, respond } = await invokeCronAdd(
-      agentTurnCronParams({ name: "non-string delivery target", delivery }),
+      agentTurnCronParams({ name: "invalid delivery target", delivery }),
     );
 
     expect(context.cron.add).not.toHaveBeenCalled();
@@ -4135,52 +4008,32 @@ describe("cron method validation", () => {
     expect(clearDelivery.completionDestination).toBeNull();
   });
 
-  it("rejects blank delivery target patches before normalization", async () => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          delivery: {
-            to: "\t",
-          },
-        },
-      },
-      createCronJob({
-        delivery: { mode: "announce", channel: "telegram", to: "telegram:123" },
-      }),
-    );
+  it.each([
+    {
+      field: "delivery.to",
+      patch: { to: "\t" },
+      current: { mode: "announce", channel: "telegram", to: "telegram:123" },
+    },
+    {
+      field: "delivery.completionDestination.to",
+      patch: { completionDestination: { mode: "webhook", to: " " } },
+      current: { mode: "announce" },
+    },
+  ] as const)(
+    "rejects blank $field patches before normalization",
+    async ({ field, patch, current }) => {
+      const { context, respond } = await invokeCronUpdateDelivery(
+        patch,
+        createCronJob({ delivery: current }),
+      );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "delivery.to must be a non-empty string",
-    });
-  });
-
-  it("rejects blank completion destination patches before normalization", async () => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          delivery: {
-            completionDestination: {
-              mode: "webhook",
-              to: " ",
-            },
-          },
-        },
-      },
-      createCronJob({
-        delivery: { mode: "announce" },
-      }),
-    );
-
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "delivery.completionDestination.to must be a non-empty string",
-    });
-  });
+      expect(context.cron.update).not.toHaveBeenCalled();
+      expectResponseError(respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: `${field} must be a non-empty string`,
+      });
+    },
+  );
 
   it.each([
     ["delivery.channel", { channel: false }],
@@ -4198,63 +4051,27 @@ describe("cron method validation", () => {
     });
   });
 
-  it("accepts nullable delivery target clears on update", async () => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: {
-          delivery: {
-            channel: null,
-            to: null,
-            threadId: null,
-            accountId: null,
-            failureDestination: null,
-          },
-        },
-      },
-      createCronJob({
-        delivery: telegramDeliveryWithSlackFailure({
-          threadId: "99",
-          accountId: "bot-a",
-        }),
-      }),
-    );
-
-    expectCronUpdateDeliveryPatch(context, {
-      channel: null,
-      to: null,
-      threadId: null,
-      accountId: null,
-      failureDestination: null,
-    });
-    expectCronSuccess(respond);
-  });
-
-  it("accepts nullable failure destination field clears on update", async () => {
-    setRuntimeConfig(telegramSlackConfig());
-
+  it.each([
+    {
+      label: "delivery target",
+      config: {},
+      current: telegramDeliveryWithSlackFailure({ threadId: "99", accountId: "bot-a" }),
+      patch: { channel: null, to: null, threadId: null, accountId: null, failureDestination: null },
+    },
+    {
+      label: "failure destination field",
+      config: telegramSlackConfig(),
+      current: telegramDeliveryWithSlackFailure(),
+      patch: { failureDestination: { channel: null, to: null, accountId: null, mode: null } },
+    },
+  ])("accepts nullable $label clears on update", async ({ config, current, patch }) => {
+    setRuntimeConfig(config);
     const { context, respond } = await invokeCronUpdateDelivery(
-      {
-        failureDestination: {
-          channel: null,
-          to: null,
-          accountId: null,
-          mode: null,
-        },
-      },
-      createCronJob({
-        delivery: telegramDeliveryWithSlackFailure(),
-      }),
+      structuredClone(patch),
+      createCronJob({ delivery: current }),
     );
 
-    expectCronUpdateDeliveryPatch(context, {
-      failureDestination: {
-        channel: null,
-        to: null,
-        accountId: null,
-        mode: null,
-      },
-    });
+    expectCronUpdateDeliveryPatch(context, patch);
     expectCronSuccess(respond);
   });
 
@@ -4283,46 +4100,18 @@ describe("cron method validation", () => {
   });
 
   it("loads the cron job before validating update delivery patches", async () => {
-    getRuntimeConfig.mockReturnValue({
-      session: {
-        mainKey: "main",
-      },
-      channels: {
-        telegram: {
-          botToken: "telegram-token",
-        },
-        slack: {
-          botToken: "xoxb-slack-token",
-          appToken: "xapp-slack-token",
-        },
-      },
-      plugins: {
-        entries: {
-          telegram: { enabled: true },
-          slack: { enabled: true },
-        },
-      },
-    } as OpenClawConfig);
+    setRuntimeConfig(telegramSlackConfig({ includeMainSession: true }));
 
     const context = createCronContext(createCronJob());
     context.cron.getJob.mockReturnValue(undefined);
-    const respond = vi.fn();
-    await expectDefined(
-      cronHandlers["cron.update"],
-      'cronHandlers["cron.update"] test invariant',
-    )({
-      req: {} as never,
-      params: {
+    const { respond } = await invokeCron(
+      "cron.update",
+      {
         id: "cron-1",
-        patch: {
-          delivery: { mode: "announce", channel: "whatsapp" },
-        },
-      } as never,
-      respond: respond as never,
-      context: context as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+        patch: { delivery: { mode: "announce", channel: "whatsapp" } },
+      },
+      { context },
+    );
 
     expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
     expect(context.cron.getJob).not.toHaveBeenCalled();
@@ -4486,32 +4275,6 @@ describe("cron method validation", () => {
     });
   });
 
-  it("hides operator command cron jobs from caller-scoped cron.update", async () => {
-    const context = createCronContext(
-      createCronJob({
-        id: "cron-1",
-        agentId: "ops",
-        payload: {
-          kind: "command",
-          argv: ["deploy"],
-          env: { MARKER_ENV: "fixture-marker" },
-        },
-      }),
-    );
-
-    const { respond } = await invokeCron(
-      "cron.update",
-      { id: "cron-1", patch: { enabled: false } },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-  });
-
   it("returns INVALID_REQUEST when cron.run cannot find the job", async () => {
     const context = createCronContext();
     context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown automation id: missing"));
@@ -4581,49 +4344,6 @@ describe("cron method validation", () => {
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "Gateway process changed after preflight",
-    });
-  });
-
-  it("hides caller-scoped cron.run for a foreign agent", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
-
-    const { respond } = await invokeCron(
-      "cron.run",
-      { jobId: "cron-1" },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-  });
-
-  it("does not enqueue same-agent command cron jobs from caller-scoped cron.run", async () => {
-    const context = createCronContext(
-      createCronJob({
-        id: "cron-1",
-        agentId: "ops",
-        enabled: false,
-        payload: {
-          kind: "command",
-          argv: ["deploy"],
-          env: { MARKER_ENV: "fixture-marker" },
-        },
-      }),
-    );
-
-    const { respond } = await invokeCron(
-      "cron.run",
-      { id: "cron-1", mode: "force" },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.enqueueRun).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
     });
   });
 
@@ -4780,69 +4500,19 @@ describe("cron method validation", () => {
     });
   });
 
-  it("hides caller-scoped cron.runs for a foreign job", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "worker" }));
-
-    const { respond } = await invokeCron(
-      "cron.runs",
-      { id: "cron-1" },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
-    expect(context.cron.list).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-  });
-
-  it("hides operator command cron history from caller-scoped cron.runs", async () => {
-    const context = createCronContext(
-      createCronJob({
-        id: "cron-1",
-        agentId: "ops",
-        payload: {
-          kind: "command",
-          argv: ["deploy"],
-          env: { MARKER_ENV: "fixture-marker" },
-        },
-      }),
-    );
-
-    const { respond } = await invokeCron(
-      "cron.runs",
-      { id: "cron-1" },
-      { context, client: callerClient("ops") },
-    );
-
-    expect(context.cron.readJob).toHaveBeenCalledExactlyOnceWith("cron-1");
-    expect(context.cron.list).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Automation not found: cron-1",
-    });
-  });
-
   it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {
     const context = createCronContext();
     context.cron.add.mockRejectedValueOnce(new Error("DB write failed"));
     const respond = vi.fn();
     await expect(
-      expectDefined(
-        cronHandlers["cron.add"],
-        'cronHandlers["cron.add"] test invariant',
-      )({
-        req: {} as never,
-        params: agentTurnCronParams({
+      invokeCron(
+        "cron.add",
+        agentTurnCronParams({
           name: "db-fail",
           payload: { kind: "agentTurn", message: "ping" },
-        }) as never,
-        respond: respond as never,
-        context: context as never,
-        client: null,
-        isWebchatConnect: () => false,
-      }),
+        }),
+        { context, respond },
+      ),
     ).rejects.toThrow("DB write failed");
     expect(respond).not.toHaveBeenCalled();
   });

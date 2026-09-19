@@ -294,7 +294,7 @@ export function bindPodmanSandboxEngine(
 }
 
 function mountTargetCoversPodmanInit(target: string): boolean {
-  const normalizedTarget = path.posix.normalize(target.trim());
+  const normalizedTarget = path.posix.normalize(target);
   return (
     normalizedTarget === "/" ||
     normalizedTarget === PODMAN_INIT_PATH ||
@@ -319,7 +319,7 @@ function assertPodmanMachineBindSourcesSupported(params: {
     sources.add(mount.hostPath);
   }
   for (const bind of params.cfg.binds ?? []) {
-    const source = splitSandboxBindSpec(bind)?.host.trim();
+    const source = splitSandboxBindSpec(bind)?.host;
     if (source) {
       sources.add(source);
     }
@@ -354,15 +354,15 @@ export function resolvePodmanSandboxCreatePolicy(params: {
           ...params.cfg,
           // The shared default includes bare /run, but Podman mounts its init there.
           // Read-only roots get Podman's native /run tmpfs below; writable roots use /run directly.
-          tmpfs: params.cfg.tmpfs.filter((entry) => entry.trim() !== "/run"),
+          tmpfs: params.cfg.tmpfs.filter((entry) => entry !== "/run"),
         }
       : params.cfg;
   const hasInitMountConflict =
     // workdir is also the managed workspace bind target, not only the process cwd.
     mountTargetCoversPodmanInit(params.cfg.workdir) ||
-    cfg.tmpfs.some((entry) => mountTargetCoversPodmanInit(entry.split(":", 1)[0]?.trim() || "")) ||
+    cfg.tmpfs.some((entry) => mountTargetCoversPodmanInit(entry.split(":", 1)[0] || "")) ||
     params.cfg.binds?.some((bind) => {
-      const target = splitSandboxBindSpec(bind)?.container.trim();
+      const target = splitSandboxBindSpec(bind)?.container;
       return target ? mountTargetCoversPodmanInit(target) : false;
     }) === true;
   if (hasInitMountConflict) {

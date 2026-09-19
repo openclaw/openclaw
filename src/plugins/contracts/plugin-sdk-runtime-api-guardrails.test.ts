@@ -472,14 +472,14 @@ describe("runtime api guardrails", () => {
     ]);
   });
 
-  it("keeps Matrix's narrow runtime-setter entrypoint pinned to a single export", () => {
+  it("keeps Matrix's runtime-setter entrypoint limited to registration helpers", () => {
     const setterFile = contractPluginPath({
       rootDir: ROOT_DIR,
       pluginId: "matrix",
       relativePath: "runtime-setter-api.ts",
     });
     expect(readExportStatements(setterFile)).toEqual([
-      'export { setMatrixRuntime } from "./src/runtime.js";',
+      'export { setMatrixRuntime, setMatrixRuntimeLifecycle } from "./src/runtime.js";',
     ]);
   });
 

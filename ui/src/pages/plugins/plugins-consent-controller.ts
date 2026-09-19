@@ -74,8 +74,19 @@ type PluginsConsentControllerHost = {
   requestUpdate: () => void;
 };
 
-export function committedMutationMessage(
-  action: "installed" | "enabled" | "disabled" | "removed" | "reloaded",
+export function pluginMutationWarnings(
+  result: Pick<PluginMutationResult, "warnings">,
+  refreshError: string | null,
+): PluginRowMessage | null {
+  const warnings = [
+    ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
+    refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+  ].filter(Boolean);
+  return warnings.length ? { kind: "warning", text: warnings.join("\n") } : null;
+}
+
+function committedMutationMessage(
+  action: "installed" | "enabled" | "disabled" | "reloaded",
   name: string,
   result: Pick<PluginMutationResult, "warnings" | "runtime">,
   refreshError: string | null,
@@ -87,8 +98,7 @@ export function committedMutationMessage(
         name,
         ...(result.runtime ? { generation: String(result.runtime.generation) } : {}),
       }),
-      ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
-      refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+      pluginMutationWarnings(result, refreshError)?.text,
     ]
       .filter(Boolean)
       .join("\n"),

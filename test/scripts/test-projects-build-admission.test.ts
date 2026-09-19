@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestCliEntry,
@@ -288,7 +289,7 @@ syncFixtureBuiltinExports();\n`,
       [
         "run",
         "--config",
-        "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-database-workers.config.ts",
         "gateway-cron-process-identity.windows.test.ts",
       ],
       "runtime",
@@ -1071,6 +1072,10 @@ describe("test-projects build admission", () => {
 });
 
 describe("plugin batch build admission", () => {
+  const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
+  const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+  const combinedConfig = "test/vitest/vitest.database-worker-watch.config.ts";
+
   it.each(["1", "2"])(
     "holds all groups and chunks behind one build (parallel=%s)",
     async (parallel) => {
@@ -1136,46 +1141,96 @@ describe("plugin batch build admission", () => {
   });
 
   it.each([
-    { name: "full QA", ids: ["qa-lab"], build: true },
-    { name: "shared config, channel only", ids: ["qa-channel"], build: false },
-    { name: "unrelated plugin", ids: ["firecrawl"], build: false },
-    { name: "ordinary QA file", args: [ordinaryQa], build: false },
-    { name: "lifecycle file", args: [lifecycle], build: true },
-    { name: "absolute lifecycle", args: [path.resolve(lifecycle)], build: true },
-    { name: "exact exclusion", args: ["--exclude", lifecycle], build: false },
-    { name: "equals exclusion", args: [`--exclude=${lifecycle}`], build: false },
+    { name: "full QA", ids: ["qa-lab"], build: true, configs: [databaseConfig, qaConfig] },
+    { name: "shared config, channel only", ids: ["qa-channel"], build: false, configs: [qaConfig] },
+    {
+      name: "unrelated plugin",
+      ids: ["firecrawl"],
+      build: false,
+      configs: ["test/vitest/vitest.extension-misc.config.ts"],
+    },
+    { name: "ordinary QA file", args: [ordinaryQa], build: false, configs: [combinedConfig] },
+    { name: "lifecycle file", args: [lifecycle], build: true, configs: [combinedConfig] },
+    {
+      name: "absolute lifecycle",
+      args: [path.resolve(lifecycle)],
+      build: true,
+      configs: [combinedConfig],
+    },
+    {
+      name: "exact exclusion",
+      args: ["--exclude", lifecycle],
+      build: false,
+      configs: [databaseConfig, qaConfig],
+    },
+    {
+      name: "equals exclusion",
+      args: [`--exclude=${lifecycle}`],
+      build: false,
+      configs: [databaseConfig, qaConfig],
+    },
     {
       name: "scoped exclusion",
       args: ["--exclude", lifecycle.replace("extensions/", "")],
       build: false,
+      configs: [databaseConfig, qaConfig],
     },
-    { name: "absolute exclusion", args: ["--exclude", path.resolve(lifecycle)], build: false },
+    {
+      name: "absolute exclusion",
+      args: ["--exclude", path.resolve(lifecycle)],
+      build: false,
+      configs: [databaseConfig, qaConfig],
+    },
     {
       name: "glob exclusion",
       args: ["--exclude", "extensions/qa-lab/**/suite-process-*.test.ts"],
       build: false,
+      configs: [combinedConfig],
     },
-    { name: "all QA excluded", args: ["--exclude=extensions/qa-lab/**"], build: false },
-    { name: "empty include", include: [], build: false },
-    { name: "unrelated include", include: [ordinaryQa], build: false },
-    { name: "lifecycle include", include: [lifecycle], build: true },
-    { name: "absolute lifecycle include", include: [path.resolve(lifecycle)], build: true },
+    {
+      name: "all QA excluded",
+      args: ["--exclude=extensions/qa-lab/**"],
+      build: false,
+      configs: [combinedConfig],
+    },
+    { name: "empty include", include: [], build: false, configs: [databaseConfig, qaConfig] },
+    {
+      name: "unrelated include",
+      include: [ordinaryQa],
+      build: false,
+      configs: [databaseConfig, qaConfig],
+    },
+    {
+      name: "lifecycle include",
+      include: [lifecycle],
+      build: true,
+      configs: [databaseConfig, qaConfig],
+    },
+    {
+      name: "absolute lifecycle include",
+      include: [path.resolve(lifecycle)],
+      build: true,
+      configs: [databaseConfig, qaConfig],
+    },
     {
       name: "scoped lifecycle include",
       include: [lifecycle.replace("extensions/", "")],
       build: true,
+      configs: [databaseConfig, qaConfig],
     },
     {
       name: "runtime include outside config directory",
       include: ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       args: ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"],
       build: false,
+      configs: [combinedConfig],
     },
     {
       name: "include outside emitted roots",
       ids: ["qa-channel"],
       include: [lifecycle],
       build: false,
+      configs: [qaConfig],
     },
     {
       name: "cross-root CLI with include",
@@ -1183,22 +1238,25 @@ describe("plugin batch build admission", () => {
       args: [lifecycle],
       include: [lifecycle],
       build: true,
+      configs: [qaConfig],
     },
     {
       name: "include outside explicit target",
       args: [ordinaryQa],
       include: [lifecycle],
       build: true,
+      configs: [combinedConfig],
     },
     {
       name: "existing exact-exclude expansion",
       args: [ordinaryQa, "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
       build: true,
+      configs: [combinedConfig],
     },
-    { name: "no groups", ids: [], build: false },
+    { name: "no groups", ids: [], build: false, configs: [] },
   ])(
     "prepares the actual invocation selection: $name",
-    async ({ ids = ["qa-lab"], args = [], include, build }) => {
+    async ({ ids = ["qa-lab"], args = [], include, build, configs }) => {
       const { resolveExtensionBatchPlan } =
         await import("../../scripts/lib/extension-test-plan.mts");
       const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch.mts");
@@ -1206,7 +1264,9 @@ describe("plugin batch build admission", () => {
         ? { OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("include.json", include) }
         : {};
       commands.prepare.mockResolvedValue(0);
-      const reader = vi.fn().mockResolvedValue(0);
+      const reader = vi
+        .fn<(params: VitestBatchRunParams) => Promise<number>>()
+        .mockResolvedValue(0);
       await expect(
         runExtensionBatchPlan(resolveExtensionBatchPlan({ extensionIds: ids }), {
           runGroup: reader,
@@ -1215,7 +1275,7 @@ describe("plugin batch build admission", () => {
         }),
       ).resolves.toBe(0);
       expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
-      expect(reader).toHaveBeenCalledTimes(ids.length ? 1 : 0);
+      expect(reader.mock.calls.map(([invocation]) => invocation.config)).toEqual(configs);
     },
   );
 });

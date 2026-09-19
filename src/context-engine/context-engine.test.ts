@@ -208,6 +208,20 @@ function registerPromptTrackingEngine(engineId: string) {
   return calls;
 }
 
+function createPassthroughEngineMethods(): Pick<ContextEngine, "ingest" | "assemble" | "compact"> {
+  return {
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  };
+}
+
 function requireFactoryContext(
   context: ContextEngineFactoryContext | undefined,
 ): ContextEngineFactoryContext {
@@ -598,21 +612,6 @@ describe("Engine contract tests", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Registry tests", () => {
-  it("registerTestContextEngine() stores retrievable factories", () => {
-    const factory = () => new MockContextEngine();
-    registerTestContextEngine("reg-test-2", factory);
-
-    expect(getContextEngineRegistration("reg-test-2")?.factory).toBe(factory);
-  });
-
-  it("tracks all registered ids", () => {
-    registerTestContextEngine("reg-test-a", () => new MockContextEngine());
-    registerTestContextEngine("reg-test-b", () => new MockContextEngine());
-
-    expect(getContextEngineRegistration("reg-test-a")).toBeDefined();
-    expect(getContextEngineRegistration("reg-test-b")).toBeDefined();
-  });
-
   it("registering the same id with the same owner refreshes the factory", () => {
     const factory1 = () => new MockContextEngine();
     const factory2 = () => new MockContextEngine();
@@ -688,15 +687,7 @@ describe("Default engine selection", () => {
     registerTestContextEngine("test-engine", () => {
       const engine: ContextEngine = {
         info: { id: "test-engine", name: "Custom Test Engine", version: "0.0.0" },
-        async ingest() {
-          return { ingested: true };
-        },
-        async assemble({ messages }) {
-          return { messages, estimatedTokens: 0 };
-        },
-        async compact() {
-          return { ok: true, compacted: false };
-        },
+        ...createPassthroughEngineMethods(),
       };
       return engine;
     });
@@ -930,15 +921,7 @@ describe("Default engine selection", () => {
           turnAdvancementIdempotency: "atomic-idempotent-v1",
         },
       },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       async commitTurn() {
         return { status: "committed" };
       },
@@ -1018,15 +1001,7 @@ describe("Default engine selection", () => {
     const engineId = uniqueEngineId("logical-turn-legacy-alias");
     registerTestContextEngine(engineId, () => ({
       info: { id: "legacy", name: "Legacy Alias" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
     }));
     const warn = vi.fn();
     const lease = await createContextEngineLogicalTurnLease({
@@ -1112,15 +1087,7 @@ describe("Default engine selection", () => {
           turnAdvancementIdempotency: "atomic-idempotent-v1",
         },
       },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       async commitTurn() {
         return { status: "committed" };
       },
@@ -1193,15 +1160,7 @@ describe("Default engine selection", () => {
           turnAdvancementIdempotency: "atomic-idempotent-v1",
         },
       },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       async commitTurn() {
         return { status: "committed" };
       },
@@ -1250,15 +1209,7 @@ describe("Factory context passing", () => {
       receivedCtx = ctx;
       return {
         info: { id: engineId, name: "Ctx Engine" },
-        async ingest() {
-          return { ingested: true };
-        },
-        async assemble({ messages }: { messages: AgentMessage[] }) {
-          return { messages, estimatedTokens: 0 };
-        },
-        async compact() {
-          return { ok: true, compacted: false };
-        },
+        ...createPassthroughEngineMethods(),
       };
     };
     registerTestContextEngine(engineId, factory);
@@ -1283,15 +1234,7 @@ describe("Factory context passing", () => {
       called = true;
       return {
         info: { id: engineId, name: "No-Arg Engine" },
-        async ingest() {
-          return { ingested: true };
-        },
-        async assemble({ messages }: { messages: AgentMessage[] }) {
-          return { messages, estimatedTokens: 0 };
-        },
-        async compact() {
-          return { ok: true, compacted: false };
-        },
+        ...createPassthroughEngineMethods(),
       };
     };
     registerTestContextEngine(engineId, factory);
@@ -1315,15 +1258,7 @@ describe("Factory context passing", () => {
         receivedCtx = ctx;
         return {
           info: { id: "legacy", name: "NoConfig Engine", version: "1" },
-          async ingest() {
-            return { ingested: true };
-          },
-          async assemble({ messages }: { messages: AgentMessage[] }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
+          ...createPassthroughEngineMethods(),
         };
       },
       "core",
@@ -1381,15 +1316,7 @@ describe("Read-only plugin discovery registrations", () => {
         runtimeFactoryCalls += 1;
         return {
           info: { id: "lossless-claw", name: "Lossless Claw" },
-          async ingest() {
-            return { ingested: true };
-          },
-          async assemble({ messages }: { messages: AgentMessage[] }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
+          ...createPassthroughEngineMethods(),
         } satisfies ContextEngine;
       },
       owner,
@@ -1760,15 +1687,7 @@ describe("Invalid engine fallback", () => {
 
     registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Late Registered Engine" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }: { messages: AgentMessage[] }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
     }));
 
     const registeredEngine = await resolveContextEngine(configWithSlot(engineId));
@@ -1864,15 +1783,7 @@ describe("Invalid engine fallback", () => {
     }));
     registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Pre-Abort Engine" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }: { messages: AgentMessage[] }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       maintain,
     }));
     const controller = new AbortController();
@@ -1901,15 +1812,7 @@ describe("Invalid engine fallback", () => {
     let observedSignal: AbortSignal | undefined;
     registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Standard Abort Engine" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }: { messages: AgentMessage[] }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       async maintain({ abortSignal }) {
         observedSignal = abortSignal;
         await new Promise<void>((_resolve, reject) => {
@@ -1940,15 +1843,7 @@ describe("Invalid engine fallback", () => {
     abortError.name = "AbortError";
     registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Unrelated Standard Abort Engine" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }: { messages: AgentMessage[] }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       async maintain() {
         throw abortError;
       },
@@ -1978,15 +1873,7 @@ describe("Invalid engine fallback", () => {
     const engineId = uniqueEngineId("prepare-subagent-fail");
     registerTestContextEngine(engineId, () => ({
       info: { id: engineId, name: "Spawn Aware Engine" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }: { messages: AgentMessage[] }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
       async prepareSubagentSpawn() {
         throw new Error("child context projection failed");
       },
@@ -2014,10 +1901,6 @@ describe("Invalid engine fallback", () => {
   });
 
   it("throws when the default engine itself is not registered", async () => {
-    // Access the process-global registry via the well-known symbol and clear it
-    // so even the default engine is missing. The symbol key must match the
-    // private CONTEXT_ENGINE_REGISTRY_STATE constant in registry.ts — guard
-    // against a silent key mismatch so a rename surfaces loudly.
     const registryState = requireRegistryState();
     const snapshot = new Map(registryState.engines);
     registryState.engines.clear();
@@ -2071,15 +1954,7 @@ describe("Invalid engine fallback", () => {
       () =>
         ({
           info: { id: internalInfoId, name: "Lossless Context Manager", version: "0.5.2" },
-          async ingest() {
-            return { ingested: true };
-          },
-          async assemble({ messages }: { messages: AgentMessage[] }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
+          ...createPassthroughEngineMethods(),
         }) as unknown as ContextEngine,
     );
 
@@ -2149,14 +2024,6 @@ describe("assemble() prompt forwarding", () => {
         params: {},
         expectedPrompt: null,
       },
-      {
-        name: "conditional spread undefined",
-        params: (() => {
-          const callerPrompt: string | undefined = undefined;
-          return callerPrompt !== undefined ? { prompt: callerPrompt } : {};
-        })(),
-        expectedPrompt: null,
-      },
     ] as const;
 
     for (const testCase of cases) {
@@ -2173,7 +2040,6 @@ describe("assemble() prompt forwarding", () => {
       expect(calls, testCase.name).toHaveLength(1);
       if (testCase.expectedPrompt === null) {
         expect(calls[0], testCase.name).not.toHaveProperty("prompt");
-        expect(Object.keys(calls[0] as object), testCase.name).not.toContain("prompt");
       } else {
         expect(calls[0], testCase.name).toHaveProperty("prompt", testCase.expectedPrompt);
       }
@@ -2225,15 +2091,7 @@ describe("Bundle chunk isolation (#40096)", () => {
     const engineId = `cross-chunk-${ts}`;
     const factory = () => ({
       info: { id: engineId, name: "Cross-chunk Engine", version: "0.0.1" },
-      async ingest() {
-        return { ingested: true };
-      },
-      async assemble({ messages }: { messages: AgentMessage[] }) {
-        return { messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
+      ...createPassthroughEngineMethods(),
     });
     chunks[0].registerContextEngineForOwner(engineId, factory, `test:${engineId}`);
 

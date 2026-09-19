@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import type { Profiler } from "node:inspector";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,11 +10,33 @@ import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
   readGatewayCpuUsage,
+  readGatewayHeapProfile,
 } from "../../scripts/lib/gateway-bench-profile.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+
+const nodeExecutable = requireNodeTool("node");
+
+type WorkerProfileManifest = {
+  workers: Array<{
+    completed?: boolean;
+    error?: string;
+    inspectorWorkerId: string;
+    profilePath: string;
+    threadId: number;
+  }>;
+  samples: Array<{
+    workers: Array<{
+      threadId: number;
+      cpu?: NodeJS.CpuUsage;
+      heap?: { total_heap_size: number; used_heap_size: number };
+      error?: string;
+    }>;
+  }>;
+};
 
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
   const child = spawn(
-    process.execPath,
+    nodeExecutable,
     [fileURLToPath(new URL("./fixtures/gateway-bench-cpu-usage.mjs", import.meta.url))],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -62,7 +85,7 @@ it("measures fixed CPU work including a retired Worker without starting the insp
 
 it.each(["exit", "disconnect"])("rejects a CPU sample when the child %ss", async (action) => {
   const child = spawn(
-    process.execPath,
+    nodeExecutable,
     ["-e", `process.on("message", () => process.${action}()); process.send({ ready: true });`],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -86,7 +109,7 @@ it.each([false, true])(
   async (unknownIdentity) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-startup-"));
     const child = spawn(
-      process.execPath,
+      nodeExecutable,
       [
         fileURLToPath(new URL("./fixtures/gateway-bench-profile-startup.mjs", import.meta.url)),
         directory,
@@ -218,7 +241,7 @@ it.each([
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
     const child = spawn(
-      process.execPath,
+      nodeExecutable,
       [
         "-e",
         workload,
@@ -239,24 +262,62 @@ it.each([
       const [completed] = await complete;
       expect(completed.complete).toBe(true);
       await controlGatewayProfile(child, kind, "stop", profilePath, { includeWorkers: true });
-      const manifest = JSON.parse(await readFile(`${profilePath}.workers.json`, "utf8"));
+      const manifest: WorkerProfileManifest = JSON.parse(
+        await readFile(`${profilePath}.workers.json`, "utf8"),
+      );
+      expect(manifest).toMatchObject({
+        kind,
+        sampleClock: "performance.now",
+        cpuCounters: "cumulative-microseconds",
+      });
       expect(manifest.workers).toHaveLength(preexisting ? 2 : 1);
-      let profiledThreadId: number | undefined;
+      const threadIds = manifest.workers.map((recording) => recording.threadId);
+      const inspectorWorkerIds = manifest.workers.map((recording) => recording.inspectorWorkerId);
+      const profilePaths = manifest.workers.map((recording) => recording.profilePath);
+      for (const values of [threadIds, inspectorWorkerIds, profilePaths]) {
+        expect(new Set<string | number>(values).size).toBe(manifest.workers.length);
+      }
+      const profiledThreadIds: number[] = [];
       for (const recording of manifest.workers) {
         expect(recording).toMatchObject({
           completed: true,
           inspectorWorkerId: expect.any(String),
           threadId: expect.any(Number),
         });
-        const profile = await readFile(recording.profilePath, "utf8");
-        if (profile.includes("allocateForProfile")) {
-          profiledThreadId = recording.threadId;
+        expect(recording.error).toBeUndefined();
+        if (kind === "cpu") {
+          const profile: Profiler.Profile = JSON.parse(
+            await readFile(recording.profilePath, "utf8"),
+          );
+          if (profile.nodes.some((node) => node.callFrame.functionName === "allocateForProfile")) {
+            expect(profile.samples?.length ?? 0).toBeGreaterThan(0);
+            expect(profile.endTime).toBeGreaterThan(profile.startTime);
+            profiledThreadIds.push(recording.threadId);
+          }
+        } else {
+          const profile = readGatewayHeapProfile(recording.profilePath);
+          if (
+            profile.topAllocationSites.some((site) =>
+              site.stack.some((frame) => frame.startsWith("allocateForProfile (")),
+            )
+          ) {
+            expect(profile.sampledAllocatedBytes).toBeGreaterThan(0);
+            profiledThreadIds.push(recording.threadId);
+          }
         }
       }
-      expect(profiledThreadId).toBe(completed.threadId);
+      expect(profiledThreadIds).toEqual([completed.threadId]);
       expect(
-        manifest.samples.some((sample: { workers: Array<{ threadId: number }> }) =>
-          sample.workers.some((worker) => worker.threadId === completed.threadId),
+        manifest.samples.some((sample) =>
+          sample.workers.some(
+            (worker) =>
+              worker.threadId === completed.threadId &&
+              worker.error === undefined &&
+              Number.isFinite(worker.cpu?.user) &&
+              Number.isFinite(worker.cpu?.system) &&
+              Number.isFinite(worker.heap?.total_heap_size) &&
+              Number.isFinite(worker.heap?.used_heap_size),
+          ),
         ),
       ).toBe(true);
       expect(await readFile(profilePath, "utf8")).not.toBe("");
@@ -267,7 +328,18 @@ it.each([
       child.send({ retire: true });
       await retired;
       await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
-      const incomplete = JSON.parse(await readFile(`${retiredPath}.workers.json`, "utf8"));
+      const incomplete: WorkerProfileManifest = JSON.parse(
+        await readFile(`${retiredPath}.workers.json`, "utf8"),
+      );
+      expect(
+        incomplete.workers
+          .map(({ threadId, inspectorWorkerId }) => ({ threadId, inspectorWorkerId }))
+          .toSorted((left, right) => left.threadId - right.threadId),
+      ).toEqual(
+        manifest.workers
+          .map(({ threadId, inspectorWorkerId }) => ({ threadId, inspectorWorkerId }))
+          .toSorted((left, right) => left.threadId - right.threadId),
+      );
       for (const recording of incomplete.workers) {
         expect(recording.completed).not.toBe(true);
         expect(recording.error).toBeTruthy();

@@ -18,7 +18,10 @@ import {
   getExistingFollowupQueue,
   getFollowupQueue,
 } from "../auto-reply/reply/queue/state.js";
-import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionCompactionCheckpoint,
+} from "../config/sessions.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -28,6 +31,7 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
@@ -53,6 +57,7 @@ import {
   testState,
 } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import { holdCompaction } from "./test/server-sessions-checkpoint.test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -67,42 +72,6 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 
 type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
-
-type HeldCompactionResult = {
-  ok: true;
-  compacted: true;
-  result: {
-    summary: string;
-    firstKeptEntryId: string;
-    tokensBefore: number;
-    tokensAfter: number;
-    sessionId?: string;
-  };
-};
-
-function holdCompaction(result: HeldCompactionResult) {
-  const entered = createDeferred();
-  const terminal = createDeferred<HeldCompactionResult>();
-  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(() => {
-    entered.resolve();
-    return terminal.promise;
-  });
-  return {
-    release: () => terminal.resolve(result),
-    waitForEntry: async (compactResult: Promise<unknown>) => {
-      // Admission can outlast waitFor's default; only backend entry makes the held result ready.
-      await Promise.race([
-        entered.promise,
-        compactResult.then((response) => {
-          throw new Error(
-            `Compaction RPC completed before backend entry: ${JSON.stringify(response)}`,
-          );
-        }),
-      ]);
-      expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
-    },
-  };
-}
 
 function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
   const header = JSON.stringify({
@@ -1092,6 +1061,45 @@ test("sessions.compact accounts against the host-accepted successor before retur
   }
 });
 
+test("sessions.compact keeps prior usage stale when the compactor returns a negative estimate", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-invalid-compaction-usage";
+  const sessionKey = "agent:main:main";
+  await seedSessionEntry({
+    entry: sessionStoreEntry(sessionId, {
+      compactionCount: 2,
+      totalTokens: 54_321,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    }),
+    sessionKey,
+    storePath,
+  });
+  await seedTranscriptRows({ sessionId, sessionKey, storePath, totalLines: 3 });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: true,
+    compactionKind: "context-engine",
+    result: { summary: "summary", firstKeptEntryId: "entry-1", tokensAfter: -1 },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+    expectMainCompactionResult(compacted, true);
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry).toMatchObject({
+      compactionCount: 3,
+      totalTokens: 54_321,
+      totalTokensFresh: false,
+    });
+    expect(entry?.totalTokensVersion).toBeUndefined();
+  } finally {
+    ws.close();
+  }
+});
+
 test("sessions.compact records terminal Codex native compaction", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedSessionEntry({
@@ -1101,6 +1109,7 @@ test("sessions.compact records terminal Codex native compaction", async () => {
       compactionCount: 2,
       totalTokens: 54_321,
       totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       cliSessionIds: { "codex-cli": "thread-1" },
       cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
     }),
@@ -1161,15 +1170,16 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   });
 
   // Terminal Codex native compaction persists via the accessor: the count
-  // advances and stale token accounting is cleared for recomputation.
+  // advances and the previous context snapshot becomes stale for recomputation.
   const codexEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(codexEntry?.compactionCount).toBe(3);
   expect(codexEntry?.cliSessionIds).toEqual({ "codex-cli": "thread-1" });
   expect(codexEntry?.cliSessionBindings).toEqual({
     "codex-cli": { sessionId: "thread-1" },
   });
-  expect(codexEntry?.totalTokens).toBeUndefined();
-  expect(codexEntry?.totalTokensFresh).toBeUndefined();
+  expect(codexEntry?.totalTokens).toBe(54_321);
+  expect(codexEntry?.totalTokensFresh).toBe(false);
+  expect(codexEntry?.totalTokensVersion).toBeUndefined();
 
   ws.close();
 });
@@ -2056,25 +2066,32 @@ test("sessions.compact maxLines refuses an active run without trimming rows", as
   });
 
   const { ws } = await openClient();
-  // Simulate an embedded agent run actively appending to this session transcript.
-  embeddedRunMock.activeIds.add("sess-main");
+  const runId = "manual-trim-active-run";
+  registerAgentRunContext(runId, {
+    agentId: "main",
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    projectSessionActive: true,
+  });
+  try {
+    const compacted = await rpcReq(ws, "sessions.compact", { key: "main", maxLines: 50 });
 
-  const compacted = await rpcReq(ws, "sessions.compact", { key: "main", maxLines: 50 });
-
-  expect(compacted.ok).toBe(false);
-  expect(compacted.error?.message).toContain("has an active run");
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-  expect(embeddedRunMock.waitCalls).toEqual([]);
-  await expect(
-    loadTranscriptRows({
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).resolves.toHaveLength(500);
-  expect((await fs.readdir(dir)).some((name) => name.includes(".bak"))).toBe(false);
-
-  ws.close();
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error?.message).toContain("has an active run");
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expect(embeddedRunMock.waitCalls).toEqual([]);
+    await expect(
+      loadTranscriptRows({
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      }),
+    ).resolves.toHaveLength(500);
+    expect((await fs.readdir(dir)).some((name) => name.includes(".bak"))).toBe(false);
+  } finally {
+    clearAgentRunContext(runId);
+    ws.close();
+  }
 });
 
 test("sessions.compact maxLines does not interrupt an active run when row trimming is a no-op", async () => {

@@ -17,6 +17,8 @@ import {
 } from "./defaults.js";
 import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
 
+export class LmstudioConfigResolutionError extends Error {}
+
 type LmstudioAuthHeadersParams = {
   apiKey?: string;
   json?: boolean;
@@ -88,7 +90,7 @@ export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
     return undefined;
   }
 
-  const path = params.path ?? `models.providers.${params.providerId}.apiKey`;
+  const path = params.path ?? `models.providers[${JSON.stringify(params.providerId)}].apiKey`;
   const env = params.env ?? process.env;
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
   const resolved = await resolveConfiguredSecretInputString({
@@ -102,7 +104,7 @@ export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
     if (params.allowUnresolved) {
       return undefined;
     }
-    throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
+    throw new LmstudioConfigResolutionError(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
   const trimmed = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
@@ -149,11 +151,13 @@ export async function resolveLmstudioProviderHeaders(params: {
       config: params.config,
       env: params.env ?? process.env,
       value: headerValue,
-      path: `${pathPrefix}.${headerName}`,
+      path: `${pathPrefix}[${JSON.stringify(headerName)}]`,
       unresolvedReasonStyle: "detailed",
     });
     if (resolvedHeader.unresolvedRefReason) {
-      throw new Error(`${pathPrefix}.${headerName}: ${resolvedHeader.unresolvedRefReason}`);
+      throw new LmstudioConfigResolutionError(
+        `${pathPrefix}.${headerName}: ${resolvedHeader.unresolvedRefReason}`,
+      );
     }
     const resolvedValue = resolvedHeader.value;
     if (!resolvedValue) {

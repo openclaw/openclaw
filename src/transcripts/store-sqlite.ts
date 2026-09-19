@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
@@ -75,6 +76,21 @@ export function readTranscriptSummaryInputRevision(
   );
   // Export bookkeeping is not summary input and must not invalidate a reader.
   return row ? transcriptSummaryInputRevisionFromRow(row) : undefined;
+}
+
+export function readStoredTranscriptSummaryRevision(
+  database: DatabaseSync,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): string | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_summaries")
+      .select(["generated_at", "summary_json", "markdown", "utterance_count"])
+      .where("session_id", "=", session.sessionId)
+      .where("session_started_at", "=", session.startedAt),
+  );
+  return row ? sha256Hex(JSON.stringify(row)) : undefined;
 }
 
 export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {

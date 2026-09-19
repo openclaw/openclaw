@@ -8,6 +8,7 @@ import {
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -166,7 +167,12 @@ describe("pending input additive schema", () => {
     (existing) => {
       const database = new DatabaseSync(":memory:");
       try {
-        database.exec(OPENCLAW_AGENT_SCHEMA_SQL.replace("  consumed_event_id TEXT,\n", ""));
+        database.exec(
+          withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL).replace(
+            "  consumed_event_id TEXT,\n",
+            "",
+          ),
+        );
         database.exec("PRAGMA user_version = 19");
         if (!existing) {
           database.exec("DROP TABLE session_pending_inputs");

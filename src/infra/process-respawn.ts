@@ -1,6 +1,10 @@
 // Respawns the gateway process when no supervisor handles restart.
 import { spawn, type ChildProcess } from "node:child_process";
 import { scheduleDetachedLaunchdRestartHandoff } from "../daemon/launchd-restart-handoff.js";
+import {
+  isWindowsTaskSupervisorChildArgument,
+  readWindowsTaskSupervisorRestartExitCode,
+} from "../daemon/windows-task-supervisor-contract.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
@@ -10,15 +14,13 @@ import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
 type GatewayRespawnResult = {
   mode: "supervised" | "disabled" | "failed";
   detail?: string;
+  exitCode?: number;
   handoffSpawned?: Promise<boolean>;
 };
 
-type GatewayUpdateRespawnResult = {
-  mode: "spawned" | "disabled" | "failed";
-  pid?: number;
-  detail?: string;
-  child?: ChildProcess;
-};
+type GatewayUpdateRespawnResult =
+  | { mode: "spawned"; pid?: number; child: ChildProcess }
+  | { mode: "disabled" | "failed"; detail?: string };
 type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
 };
@@ -60,6 +62,19 @@ export function restartGatewayProcessWithFreshPid(
         : { mode: "failed", detail: handoff.error };
     }
     if (supervisor === "schtasks") {
+      if (process.argv.some(isWindowsTaskSupervisorChildArgument)) {
+        const exitCode = readWindowsTaskSupervisorRestartExitCode(process.argv);
+        if (exitCode === undefined) {
+          return {
+            mode: "failed",
+            detail: "Windows task supervisor restart marker is missing or invalid",
+          };
+        }
+        return {
+          mode: "supervised",
+          exitCode,
+        };
+      }
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
         return {

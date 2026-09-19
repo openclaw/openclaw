@@ -1,5 +1,5 @@
 // Full-entry coverage for retrying an already-capped mid-turn transcript.
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
@@ -197,6 +197,115 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("recovers a successor transcript from its own frozen tool projection", async () => {
+    const { SessionManager } = await import("../sessions/session-manager.js");
+    const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
+      await import("./session-prompt-state.js");
+    const actualTruncation = await vi.importActual<typeof import("./tool-result-truncation.js")>(
+      "./tool-result-truncation.js",
+    );
+    const { truncateOversizedToolResultsInSessionManager } =
+      await import("./tool-result-truncation.js");
+    vi.mocked(truncateOversizedToolResultsInSessionManager).mockImplementation(
+      actualTruncation.truncateOversizedToolResultsInSessionManager,
+    );
+    const successorId = "tool-projection-successor";
+    const toolResult = makeTextToolResult(
+      "call-exec",
+      "exec",
+      "tool evidence ".repeat(8_000),
+      false,
+      2,
+    );
+    const prepareAttemptProjection = (
+      attempt: Parameters<typeof mockedRunEmbeddedAttempt>[0],
+      maxChars: number,
+    ) => {
+      const target = attempt.sessionTarget;
+      if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+        throw new Error("expected the current attempt's complete admitted transcript target");
+      }
+      const manager = SessionManager.open(
+        {
+          ...target,
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.storePath,
+        },
+        attempt.workspaceDir,
+      );
+      manager.appendMessage({ role: "user", content: "Use the tool evidence", timestamp: 0 });
+      manager.appendMessage(settledExecAssistant);
+      manager.appendMessage(toolResult);
+      const messages = manager.buildSessionContext().messages;
+      const projection = getEmbeddedSessionPromptState(attempt.sessionId).toolResults;
+      const projected = actualTruncation
+        .truncateOversizedToolResultsInMessages(messages, 200_000, maxChars, undefined, projection)
+        .messages.find((message) => message.role === "toolResult");
+      if (projected?.role !== "toolResult") {
+        throw new Error("expected a frozen tool result for the current attempt");
+      }
+      expect(
+        projected.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""),
+      ).toHaveLength(maxChars);
+      const [key] = projection.replacements.keys();
+      expect(key).toBeDefined();
+      expect(key && projection.frozen.has(key)).toBe(true);
+      // A larger cap must replay the same frozen bytes from this complete branch.
+      expect(
+        actualTruncation
+          .truncateOversizedToolResultsInMessages(messages, 200_000, 112_000, undefined, projection)
+          .messages.find((message) => message.role === "toolResult"),
+      ).toMatchObject({ content: projected.content });
+      return { manager, messages, content: projected.content };
+    };
+    let successor: ReturnType<typeof prepareAttemptProjection> | undefined;
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attempt) => {
+        expect(attempt.sessionId).toBe(session.runParams.sessionId);
+        prepareAttemptProjection(attempt, 8_000);
+        return makeReplayUnsafeMidTurnOverflow();
+      })
+      .mockImplementationOnce(async (attempt) => {
+        expect(attempt.sessionId).toBe(successorId);
+        successor = prepareAttemptProjection(attempt, 1_000);
+        return makeAttemptResult({
+          ...makeReplayUnsafeMidTurnOverflow(),
+          sessionIdUsed: successorId,
+          messagesSnapshot: successor.messages,
+          preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" },
+        });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ sessionIdUsed: successorId }));
+    mockedCompactDirect
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({ summary: "Adopt successor", sessionId: successorId }),
+      )
+      .mockResolvedValueOnce(makeCompactionSuccess({ summary: "Recover successor context" }));
+    try {
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        runId: "run-successor-tool-projection",
+      });
+
+      expect(result.meta.error).toBeUndefined();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+      if (!successor) {
+        throw new Error("expected the successor attempt to populate its projection");
+      }
+      // Recovery writes through a separate manager; read its committed branch.
+      successor.manager.reloadPersistedTranscript();
+      expect(
+        successor.manager
+          .buildSessionContext()
+          .messages.find((message) => message.role === "toolResult"),
+      ).toMatchObject({ content: successor.content });
+    } finally {
+      clearEmbeddedSessionPromptStates([session.runParams.sessionId, successorId]);
+    }
+  });
+
   it("compacts while a code-mode exec still waits on nested tool work", async () => {
     // exec returned status "waiting" (result persisted) but its nested call keeps
     // a lifecycle item active; the run stays resumable through `wait`.
@@ -290,7 +399,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     }
   });
 
-  it("preserves overflow recovery guidance when compaction fails after settled tools", async () => {
+  it("preserves compaction failure guidance after settled tools", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow());
     mockedCompactDirect.mockResolvedValueOnce({
       ok: false,
@@ -305,7 +414,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    expect(result.payloads?.[0]?.text).toContain("Try /reset (or /new)");
+    expect(result.payloads?.[0]?.text).toContain("Try again or run /compact");
     expect(result.payloads?.[0]?.text).toContain("Completed tool actions were not replayed");
+    expect(result.meta.error).toMatchObject({
+      kind: "compaction_failure",
+      message: expect.stringContaining("compaction unavailable"),
+    });
   });
 });

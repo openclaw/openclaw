@@ -13,11 +13,12 @@ import {
   completionFlags,
   visibleCompletionCommands,
   type ShellCompletionCommandTree,
-  type ShellCompletionContext,
 } from "./completion-command-tree.js";
 import {
   buildFishOptionCompletionLine,
   buildFishSubcommandCompletionLine,
+  fishCommandPathCondition,
+  generateFishPathHelper,
 } from "./completion-fish.js";
 import {
   COMPLETION_SHELLS,
@@ -57,86 +58,6 @@ function createCompletionScriptGenerator(program: Command): (shell: CompletionSh
 
 function preferredCompletionFlag(option: Option): string {
   return option.long ?? option.short ?? option.flags;
-}
-
-function fishWords(values: readonly string[]): string {
-  return values.join(" ");
-}
-
-function generateFishPathHelper(rootCmd: string, contexts: ShellCompletionContext[]): string {
-  const knownCommandPaths = contexts
-    .flatMap((context) => context.pathVariants)
-    .map((pathSegments) => `'${pathSegments.join(" ").replaceAll("'", "'\\''")}'`)
-    .join(" ");
-  const rejectDescendantCommands = knownCommandPaths
-    ? `
-  if test (count $command_tokens) -gt (count $expected)
-    set -l next_index (math (count $expected) + 1)
-    set -l candidate_path (string join " " $expected $command_tokens[$next_index])
-    switch "$candidate_path"
-      case ${knownCommandPaths}
-        return 1
-    end
-  end`
-    : "";
-  // Fish needs a helper to ignore option values while matching nested command paths.
-  return `
-function __${rootCmd}_command_path_matches
-  set -l expected
-  set -l value_options
-  set -l reading_value_options 0
-  for arg in $argv
-    if test "$arg" = "--"
-      set reading_value_options 1
-      continue
-    end
-    if test $reading_value_options -eq 1
-      set -a value_options $arg
-    else
-      set -a expected $arg
-    end
-  end
-  set -l tokens (commandline -opc)
-  set -e tokens[1]
-  set -l command_tokens
-  set -l skip_next 0
-  for token in $tokens
-    if test $skip_next -eq 1
-      set skip_next 0
-      continue
-    end
-    set -l flag (string split -m1 "=" -- $token)[1]
-    if contains -- $flag $value_options
-      if not string match -q -- "*=*" $token
-        set skip_next 1
-      end
-      continue
-    end
-    if string match -q -- "-*" $token
-      continue
-    end
-    set -a command_tokens $token
-  end
-  if test (count $expected) -gt 0
-    for i in (seq (count $expected))
-      if test "$command_tokens[$i]" != "$expected[$i]"
-        return 1
-      end
-    end
-  end
-${rejectDescendantCommands}
-  return 0
-end
-`;
-}
-
-function fishCommandPathCondition(
-  rootCmd: string,
-  parents: readonly string[],
-  valueOptions: readonly string[],
-): string {
-  const commandPath = parents.length > 0 ? ` ${parents.join(" ")}` : "";
-  return `__${rootCmd}_command_path_matches${commandPath} -- ${fishWords(valueOptions)}`.trimEnd();
 }
 
 async function writeCompletionCache(params: {
@@ -494,7 +415,8 @@ ${optionChoiceCases}
 Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     
-    $commandElements = $commandAst.CommandElements
+    # Limit context to the cursor; command-path parsing below skips option operands.
+    $commandElements = @($commandAst.CommandElements.Where({ $_.Extent.StartOffset -lt $cursorPosition }))
     $commandPath = ""
     $valueOptions = ${formatPowerShellArray(rootValueOptions)}
     $previousElementIndex = if ($wordToComplete -eq '') { $commandElements.Count - 1 } else { $commandElements.Count - 2 }
@@ -508,7 +430,6 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
         $choiceCompletionPrefix = "$choiceFlag="
     }
 
-    # Skip option values so global and nested flags cannot hide the command path.
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
         $element = $commandElements[$i].Extent.Text
         if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
@@ -567,14 +488,14 @@ ${choiceCompletion}
 function generateFishCompletion(tree: ShellCompletionCommandTree): string {
   const { root, descendants } = tree;
   const rootCmd = root.command.name();
-  const segments: string[] = [generateFishPathHelper(rootCmd, descendants)];
+  const segments: string[] = [generateFishPathHelper(rootCmd, tree)];
 
   for (const context of [root, ...descendants]) {
     const cmd = context.command;
     // One condition per alias-expanded parent path so completion keeps working
     // after the user typed an alias segment.
     const conditions = context.pathVariants.map((parents) =>
-      fishCommandPathCondition(rootCmd, parents, context.valueOptions),
+      fishCommandPathCondition(rootCmd, parents),
     );
     for (const condition of conditions) {
       // Subcommands (canonical names and aliases)

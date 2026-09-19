@@ -420,6 +420,7 @@ describe("OpenClaw native shell", () => {
 
   it.each(
     [
+      { path: "/settings/appearance", routeId: "appearance" },
       { path: "/settings/channels", routeId: "channels" },
       { path: "/custodian", routeId: "custodian", search: "?onboarding=1" },
       {

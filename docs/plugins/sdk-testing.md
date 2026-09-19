@@ -246,6 +246,13 @@ describe("my-channel plugin", () => {
 
 ### Unit testing a provider plugin
 
+For bundled catalog tests that resolve provider endpoint capabilities, call
+`useProviderCatalogMetadata(new URL(".", import.meta.url))` from
+`openclaw/plugin-sdk/plugin-test-runtime` at file or suite scope. It prepares
+the plugin's manifest metadata once, installs and clears that snapshot around
+each test, and rejects Jiti loading during assertions. This keeps cold runtime
+discovery out of catalog test deadlines without changing provider behavior.
+
 ```typescript
 import { describe, it, expect } from "vitest";
 

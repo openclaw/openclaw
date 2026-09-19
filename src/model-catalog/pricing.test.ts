@@ -12,10 +12,20 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
+import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import * as manifestNormalization from "../plugins/manifest-model-id-normalization.js";
 import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
+import type { PersistedInstalledPluginIndexCacheEntry } from "../plugins/plugin-cache-management.js";
+import {
+  createPluginCache,
+  preparePluginCacheFact,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import {
   estimateAggregateUsageCost,
@@ -23,6 +33,7 @@ import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
+import { prepareModelPricingContext } from "./pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -117,6 +128,7 @@ function configFor(baseUrl: string): OpenClawConfig {
 
 describe("hosted model pricing", () => {
   it("keeps normalized indexes scoped to their policy while observing configured price changes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
     const model = {
       id: "alias",
       name: "Alias",
@@ -145,9 +157,11 @@ describe("hosted model pricing", () => {
         ],
       });
     const metadataSpy = vi
-      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
-      .mockReturnValueOnce(snapshotFor("first"))
-      .mockReturnValueOnce(snapshotFor("second"));
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockResolvedValueOnce(snapshotFor("first"))
+      .mockResolvedValueOnce(snapshotFor("second"));
+    await prepareModelPricingContext(firstConfig);
+    await prepareModelPricingContext(secondConfig);
     enumeratePolicies.mockClear();
     const agentDir = tempDirs.make("openclaw-policy-pricing-");
     const lookup = () =>
@@ -178,6 +192,72 @@ describe("hosted model pricing", () => {
     expect(lookup()).toEqual([17, undefined, undefined, 17]);
     expect(metadataSpy).toHaveBeenCalledTimes(2);
     expect(enumeratePolicies).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "retirement",
+    "fact invalidation",
+    "fact invalidation with read failure",
+    "current read failure",
+  ])("preserves pricing publication semantics after %s", async (change) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
+    const config = configFor("https://api.openai.com/v1");
+    const cache = createPluginCache();
+    const reading = createDeferredCore();
+    const key = resolveInstalledPluginIndexStorePath({ env: process.env });
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync")
+      .mockImplementationOnce(async () => {
+        await preparePluginCacheFact(cache, cache.persistedInstalledIndex, key, async () => {
+          await reading.promise;
+          return {
+            state: { status: "missing" },
+          } satisfies PersistedInstalledPluginIndexCacheEntry;
+        });
+        return createPluginMetadataSnapshotFixture();
+      })
+      .mockResolvedValue(createPluginMetadataSnapshotFixture());
+    const preparing = withPluginCache(cache, () => prepareModelPricingContext(config));
+    const settled =
+      change === "current read failure"
+        ? expect(preparing).resolves.toBeUndefined()
+        : expect(preparing).rejects.toThrow();
+    const retirement = change === "retirement" ? retirePluginCache(cache) : undefined;
+    if (change.startsWith("fact invalidation")) {
+      withPluginCache(cache, clearLoadInstalledPluginIndexInstallRecordsCache);
+    }
+    if (change === "fact invalidation") {
+      reading.resolve();
+    } else {
+      reading.reject(new Error("optional metadata unavailable"));
+    }
+    await settled;
+    await retirement;
+    if (change === "current read failure") {
+      expect(readStoredCatalog).not.toHaveBeenCalled();
+      expect(
+        resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" }),
+      ).toBeUndefined();
+      return;
+    }
+    await withPluginCache(createPluginCache(), () => prepareModelPricingContext(config));
+    expect(
+      resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" })?.input,
+    ).toBe(2.5);
+  });
+
+  it("does not capture hosted startup pricing for a disabled config", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockResolvedValue(
+      createPluginMetadataSnapshotFixture(),
+    );
+    await prepareModelPricingContext({ models: { catalogRefresh: { enabled: false } } });
+    expect(readStoredCatalog).not.toHaveBeenCalled();
+    const config = configFor("https://api.openai.com/v1");
+    await prepareModelPricingContext(config);
+    expect(
+      resolveModelCostConfig({ config, provider: "openai", model: "gpt-external" })?.input,
+    ).toBe(2.5);
+    expect(readStoredCatalog).toHaveBeenCalledOnce();
   });
 
   it.each(["config", "models.json"] as const)(

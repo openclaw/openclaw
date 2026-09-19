@@ -72,7 +72,7 @@ describe("package dist inventory", () => {
       await fs.writeFile(filePath, "small");
       let replaced = false;
       __setFsSafeTestHooksForTest({
-        afterOpenedPathIdentityCheck: async (openedPath) => {
+        beforeRootReadFinalFence: async (openedPath) => {
           if (!replaced && path.basename(openedPath) === "growing.js") {
             replaced = true;
             await fs.writeFile(filePath, grown);

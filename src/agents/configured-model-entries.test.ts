@@ -2,6 +2,35 @@ import { describe, expect, it } from "vitest";
 import { resolveConfiguredModelEntries } from "./configured-model-entries.js";
 
 describe("resolveConfiguredModelEntries", () => {
+  it.each([undefined, [], ["openclaw"]])(
+    "inherits picker choices and lets an agent replace them with %j",
+    (pickerRuntimes) => {
+      const { byKey } = resolveConfiguredModelEntries({
+        agentId: "ops",
+        allowPluginNormalization: false,
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.6-sol",
+              models: { "openai/gpt-5.6-sol": { pickerRuntimes: ["codex", "codex"] } },
+            },
+            entries: {
+              ops: {
+                models: {
+                  "openai/gpt-5.6-sol": {
+                    alias: "Work",
+                    ...(pickerRuntimes === undefined ? {} : { pickerRuntimes }),
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      expect(byKey.get("openai/gpt-5.6-sol")?.pickerRuntimes).toEqual(pickerRuntimes ?? ["codex"]);
+    },
+  );
+
   it("parses configured models without loading provider-runtime normalization", () => {
     const { entries } = resolveConfiguredModelEntries({
       allowPluginNormalization: false,

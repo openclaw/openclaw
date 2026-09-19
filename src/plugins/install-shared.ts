@@ -428,6 +428,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,

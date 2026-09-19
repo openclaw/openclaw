@@ -25,7 +25,7 @@ import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
 } from "../../config/sessions/session-transcript-read-fence.js";
-import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-worker-runtime.js";
+import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
@@ -245,10 +245,11 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       through?: TranscriptEntryAnchor;
+      limits?: SessionManagerBoundedContextLimits;
     } = {},
   ): SessionManager {
     const context = withSessionContextAdmission(target, options.admission, () =>
-      readSessionTranscriptModelContext(target, options.through),
+      readSessionTranscriptModelContext(target, options.through, options.limits),
     );
     return SessionManager.fromSelectedEntries(context.events, options.cwd);
   }
@@ -261,18 +262,26 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
       through?: TranscriptEntryAnchor;
+      limits?: SessionManagerBoundedContextLimits;
     } = {},
   ): Promise<SessionManager> {
     const readTarget = { ...target };
     const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
     const admission = receipt ? { ...receipt } : undefined;
     const through = options.through ? { ...options.through } : undefined;
+    const limits = options.limits ? { ...options.limits } : undefined;
     options.signal?.throwIfAborted();
     const context = await withSessionContextAdmission(readTarget, admission, () =>
       // Incognito belongs to this process; capture its snapshot before the first await.
       isIncognitoSessionKey(readTarget.sessionKey)
-        ? readSessionTranscriptModelContext(readTarget, through)
-        : readSessionTranscriptModelContextAsync(readTarget, admission, options.signal, through),
+        ? readSessionTranscriptModelContext(readTarget, through, limits)
+        : readSessionTranscriptModelContextAsync(
+            readTarget,
+            admission,
+            options.signal,
+            through,
+            limits,
+          ),
     );
     options.signal?.throwIfAborted();
     // Even process-local reads yield here. Admitted history may exclude later

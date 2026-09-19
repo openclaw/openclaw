@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
@@ -18,7 +19,7 @@ export async function runNodeScript(
     signal?: AbortSignal;
     maxBuffer?: number;
     requireProcessTreeExit?: boolean;
-    onReady?: Parameters<typeof runManagedCommand>[0]["onReady"];
+    onReady?: (child: ChildProcess, readOutput: () => { stdout: string; stderr: string }) => void;
     /** Override only for a test that must exercise its current Node-compatible runtime. */
     executable?: string;
   } = {},
@@ -57,7 +58,7 @@ export async function runNodeScript(
             }
           });
         }
-        onReady?.(child);
+        onReady?.(child, () => ({ stdout: stdout.text(), stderr: stderr.text() }));
       },
     });
   } catch (cause) {

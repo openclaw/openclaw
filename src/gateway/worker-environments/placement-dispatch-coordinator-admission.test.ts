@@ -11,9 +11,105 @@ import {
   PROVISIONING_PLACEMENT,
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
+import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
+type DispatchService = WorkerPlacementDispatchService;
+
 describe("worker placement maintenance admission", () => {
+  it.each(["success", "failure", "cancellation"] as const)(
+    "counts pending device dispatches through cleanup until %s settles",
+    async (outcome) => {
+      const dispatchStarted = createDeferredCore();
+      const finishDispatch = createDeferredCore();
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const controller = new AbortController();
+      const terminalError = new Error(`dispatch ${outcome}`);
+      const request = { ...REQUEST, deviceId: "node-one" };
+      const dispatch = vi.fn<DispatchService["dispatch"]>(
+        async (current, _report, _authorize, signal) => {
+          const active = {
+            ...ACTIVE_PLACEMENT,
+            sessionId: current.sessionId,
+            sessionKey: current.sessionKey,
+          };
+          if (current.sessionId !== request.sessionId) {
+            await finishCleanup.promise;
+            return active;
+          }
+          dispatchStarted.resolve();
+          try {
+            await finishDispatch.promise;
+            signal?.throwIfAborted();
+            if (outcome === "failure") {
+              throw terminalError;
+            }
+            return active;
+          } finally {
+            cleanupStarted.resolve();
+            await finishCleanup.promise;
+          }
+        },
+      );
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({ dispatch }),
+        (_request, run, _authorize, signal) => run(signal),
+      );
+      const first = coordinated.dispatch(request, undefined, undefined, controller.signal);
+      await dispatchStarted.promise;
+      const joined = coordinated.dispatch(request);
+      const sibling = coordinated.dispatch({ ...request, sessionId: "sibling" });
+      const remote = coordinated.dispatch({
+        ...request,
+        sessionId: "remote",
+        executionMode: "remote-exec",
+      });
+      const otherDevice = coordinated.dispatch({
+        ...request,
+        sessionId: "other-device",
+        deviceId: "node-two",
+      });
+      const settled = Promise.allSettled([first, joined, sibling, remote, otherDevice]);
+
+      try {
+        expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(2);
+        expect(coordinated.getPendingDeviceDispatchCount("node-one", request.sessionId)).toBe(1);
+        expect(coordinated.getPendingDeviceDispatchCount("node-two")).toBe(1);
+        expect(coordinated.getPendingDeviceDispatchCount("unknown-node")).toBe(0);
+        if (outcome === "cancellation") {
+          controller.abort(terminalError);
+        }
+        finishDispatch.resolve();
+        await cleanupStarted.promise;
+        expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(2);
+      } finally {
+        finishDispatch.resolve();
+        finishCleanup.resolve();
+        await settled;
+      }
+
+      const results = await settled;
+      expect(results.slice(0, 2)).toEqual(
+        outcome === "success"
+          ? [
+              { status: "fulfilled", value: ACTIVE_PLACEMENT },
+              { status: "fulfilled", value: ACTIVE_PLACEMENT },
+            ]
+          : [
+              { status: "rejected", reason: terminalError },
+              { status: "rejected", reason: terminalError },
+            ],
+      );
+      expect(results.slice(2).every((result) => result.status === "fulfilled")).toBe(true);
+      expect(
+        dispatch.mock.calls.filter(([current]) => current.sessionId === request.sessionId),
+      ).toHaveLength(1);
+      expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(0);
+      expect(coordinated.getPendingDeviceDispatchCount("node-two")).toBe(0);
+    },
+  );
+
   it.each(["ready", "provider-pending", "abort", "stop", "move", "replacement"] as const)(
     "retains restarted input between provider passes until %s",
     async (outcome) => {

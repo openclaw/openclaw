@@ -17,6 +17,9 @@ export const TOOL_IMAGE_CHARS = IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKE
 
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
+// Reuse scans across guard passes; the block owns the lifetime and text is its revision.
+const toolResultTextEstimates = new WeakMap<object, { text: string; chars: number }>();
+
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
   return (
     Boolean(block) &&
@@ -82,9 +85,17 @@ function estimateToolResultContentChars(content: unknown[]): number {
   let chars = 0;
   for (const block of content) {
     if (isTextBlock(block)) {
-      chars += estimateToolResultTextChars(block.text, {
+      const text = block.text;
+      const cached = toolResultTextEstimates.get(block);
+      if (cached?.text === text) {
+        chars += cached.chars;
+        continue;
+      }
+      const textChars = estimateToolResultTextChars(text, {
         minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
       });
+      toolResultTextEstimates.set(block, { text, chars: textChars });
+      chars += textChars;
     } else if (isImageBlock(block)) {
       chars += TOOL_IMAGE_CHARS;
     } else {
@@ -105,7 +116,7 @@ export function getToolResultText(msg: AgentMessage): string {
   return chunks.join("\n");
 }
 
-function estimateMessageChars(msg: AgentMessage): number {
+export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknown[]): number {
   if (
     !msg ||
     typeof msg !== "object" ||
@@ -115,7 +126,7 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (msg.role === "user") {
-    const content = msg.content;
+    const content = contentOverride ?? msg.content;
     if (typeof content === "string") {
       return content.length;
     }
@@ -127,7 +138,7 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (msg.role === "assistant") {
     let chars = 0;
-    const content = (msg as { content?: unknown }).content;
+    const content = contentOverride ?? (msg as { content?: unknown }).content;
     if (Array.isArray(content)) {
       for (const block of content) {
         if (!block || typeof block !== "object") {
@@ -159,7 +170,7 @@ function estimateMessageChars(msg: AgentMessage): number {
 
   if (isToolResultMessage(msg)) {
     // `details` is stripped before provider conversion; estimate only visible content.
-    const content = getToolResultContent(msg);
+    const content = contentOverride ?? getToolResultContent(msg);
     return estimateToolResultContentChars(content);
   }
 
@@ -182,7 +193,7 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (role === "custom") {
-    const content = Reflect.get(msg, "content");
+    const content = contentOverride ?? Reflect.get(msg, "content");
     if (typeof content === "string") {
       return content.length;
     }

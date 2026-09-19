@@ -3,14 +3,13 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
+import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   estimateAggregateUsageCost,
   type ModelCostConfig,
@@ -58,6 +57,25 @@ export function deriveSessionTitle(
   // Derived titles are human content only; UI/TUI/ACP own key-based fallbacks,
   // which an id prefix here would mask.
   return undefined;
+}
+
+export function prepareSessionTitleRead(
+  entry: SessionEntry | undefined,
+  displayName: string | undefined,
+  opts: { includeDerivedTitles?: boolean; includeLastMessage?: boolean },
+) {
+  if (!entry?.sessionId || !(opts.includeDerivedTitles || opts.includeLastMessage)) {
+    return undefined;
+  }
+  // Metadata wins over transcript text in both scalar and tool rows. Carry
+  // that result forward so title-only reads do not hydrate discarded payloads.
+  const derivedTitle = opts.includeDerivedTitles
+    ? deriveSessionTitle(entry, undefined, displayName)
+    : undefined;
+  return {
+    derivedTitle,
+    needsTranscript: opts.includeLastMessage || !derivedTitle,
+  };
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
@@ -195,14 +213,12 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
       isFinitePositiveTimestamp(endedAt) && now - endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS
     );
   }
-  if (entry.status === "running" || isFinitePositiveTimestamp(entry.startedAt)) {
-    return true;
-  }
-  // Store-only child links lack a live subagent registry entry. Keep recent
-  // unknown-state rows visible briefly so reloads do not hide fresh children.
+  // Store-only child links lack a live registry entry; retain recent unknown-state rows.
   return (
-    isFinitePositiveTimestamp(entry.updatedAt) &&
-    now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS
+    entry.status === "running" ||
+    isFinitePositiveTimestamp(entry.startedAt) ||
+    (isFinitePositiveTimestamp(entry.updatedAt) &&
+      now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS)
   );
 }
 
@@ -230,36 +246,26 @@ export function resolveSessionChildOwners(params: {
       normalizeOptionalString(latest.requesterSessionKey)
     : normalizeOptionalString(entry.spawnedBy);
   const parent = normalizeOptionalString(entry.parentSessionKey);
-  const owners: string[] = [];
-  if (controller && controller !== key) {
-    owners.push(controller);
-  }
-  if (parent && parent !== key && parent !== controller) {
-    owners.push(parent);
-  }
-  return owners;
+  return [...new Set([controller, parent])].filter(
+    (owner): owner is string => owner !== undefined && owner !== key,
+  );
 }
+
+export type SessionChildLink = { key: string; entry: SessionEntry };
 
 /** Index only canonical children; retained run results cannot create session links. */
-export function buildStoreChildSessionIndex(params: {
-  store: Record<string, SessionEntry>;
-  keys: readonly string[];
-  now: number;
-  subagentRuns?: SessionListRowContext["subagentRuns"];
-  excludedChildKeys?: ReadonlySet<string>;
-}): Map<string, string[]> {
-  return runSynchronousWork(buildStoreChildSessionIndexWork(params));
-}
-
-export function* buildStoreChildSessionIndexWork(
-  params: Parameters<typeof buildStoreChildSessionIndex>[0],
+export function* buildStoreChildSessionLinksWork(
+  params: {
+    store: Record<string, SessionEntry>;
+    keys: readonly string[];
+    subagentRunsByChildSessionKey: SessionListRowContext["subagentRunsByChildSessionKey"];
+  },
   shouldYield?: () => boolean,
-): SynchronousWork<Map<string, string[]>> {
-  const children = new Map<string, string[]>();
+): SynchronousWork<Map<string, SessionChildLink[]>> {
+  const children = new Map<string, SessionChildLink[]>();
   if (params.keys.length === 0) {
     return children;
   }
-  const subagentRuns = params.subagentRuns ?? buildSubagentSessionListReadIndex(params.now);
   const parents = new Set(params.keys);
   // One store pass discovers both persisted navigation and runtime-only controller links.
   for (const key of Object.keys(params.store)) {
@@ -267,18 +273,23 @@ export function* buildStoreChildSessionIndexWork(
       yield;
     }
     const entry = params.store[key];
-    if (!entry || params.excludedChildKeys?.has(key)) {
+    if (!entry) {
       continue;
     }
-    for (const owner of resolveSessionChildOwners({
-      key,
-      entry,
-      now: params.now,
-      subagentRuns,
-    })) {
-      if (parents.has(owner)) {
+    const runs = params.subagentRunsByChildSessionKey.get(key.trim()) ?? [];
+    const owners = new Set([
+      ...runs.map(
+        (run) =>
+          normalizeOptionalString(run.controllerSessionKey) ||
+          normalizeOptionalString(run.requesterSessionKey),
+      ),
+      normalizeOptionalString(entry.spawnedBy),
+      normalizeOptionalString(entry.parentSessionKey),
+    ]);
+    for (const owner of owners) {
+      if (owner && owner !== key && parents.has(owner)) {
         const siblings = children.get(owner) ?? [];
-        siblings.push(key);
+        siblings.push({ key, entry });
         children.set(owner, siblings);
       }
     }

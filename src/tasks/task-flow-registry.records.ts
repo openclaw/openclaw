@@ -61,7 +61,7 @@ export type FlowRecordPatch = Omit<
   endedAt?: number | null;
 };
 
-export type FlowRecordCreateFields = {
+type FlowRecordCreateFields = {
   ownerKey: string;
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
   status?: TaskFlowStatus;
@@ -76,6 +76,10 @@ export type FlowRecordCreateFields = {
   createdAt?: number;
   updatedAt?: number;
   endedAt?: number | null;
+};
+
+export type ManagedTaskFlowCreateFields = FlowRecordCreateFields & {
+  controllerId: string;
 };
 
 export type ManagedTaskFlowMutation = "setWaiting" | "resume" | "finish" | "fail" | "requestCancel";
@@ -178,6 +182,14 @@ export function areTaskFlowRecordsEqual(
   return isDeepStrictEqual(fields(left), fields(right));
 }
 
+export function isTaskMirroredFlowSyncUnchanged(prepared: PreparedTaskMirroredFlowSync): boolean {
+  // Older mirrored rows stored SQL NULL for the same cleared wait state as JSON null.
+  return areTaskFlowRecordsEqual(
+    { ...prepared.current, waitJson: prepared.current.waitJson ?? null },
+    { ...prepared.next, revision: prepared.current.revision },
+  );
+}
+
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
   const controllerId =
@@ -203,6 +215,24 @@ export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRec
     cancelRequestedAt: record.cancelRequestedAt ?? undefined,
     endedAt: record.endedAt ?? undefined,
   };
+}
+
+export function selectTaskFlowRecords(
+  source: ReadonlyMap<string, TaskFlowRecord>,
+  ownerKey?: string,
+): TaskFlowRecord[] {
+  const normalizedOwnerKey = ownerKey?.trim();
+  if (normalizedOwnerKey === "") {
+    return [];
+  }
+  const records = [...source.values()];
+  const selected =
+    normalizedOwnerKey === undefined
+      ? records
+      : records.filter((flow) => flow.ownerKey.trim() === normalizedOwnerKey);
+  return selected
+    .map((flow) => cloneFlowRecord(flow))
+    .toSorted((left, right) => right.createdAt - left.createdAt);
 }
 
 export function snapshotFlowRecords(source: ReadonlyMap<string, TaskFlowRecord>): TaskFlowRecord[] {
@@ -233,7 +263,7 @@ export function assertControllerId(controllerId?: string | null): string {
   return normalized;
 }
 
-export function resolveFlowBlockedSummary(
+function resolveFlowBlockedSummary(
   task: Pick<TaskRecord, "status" | "terminalOutcome" | "terminalSummary" | "progressSummary">,
 ): string | undefined {
   if (task.status !== "succeeded" || task.terminalOutcome !== "blocked") {
@@ -244,7 +274,7 @@ export function resolveFlowBlockedSummary(
   );
 }
 
-export function deriveTaskFlowStatusFromTask(
+function deriveTaskFlowStatusFromTask(
   task: Pick<TaskRecord, "status" | "terminalOutcome">,
 ): TaskFlowStatus {
   if (task.status === "queued") {
@@ -265,7 +295,7 @@ export function deriveTaskFlowStatusFromTask(
   return "failed";
 }
 
-export function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
+function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
   return (
     status === "succeeded" ||
     status === "blocked" ||
@@ -275,7 +305,7 @@ export function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
   );
 }
 
-export function resolveTaskMirroredFlowTiming(
+function resolveTaskMirroredFlowTiming(
   task: Pick<TaskRecord, "createdAt" | "lastEventAt" | "endedAt">,
   isTerminal: boolean,
 ): { updatedAt: number; endedAt?: number } {
@@ -284,6 +314,46 @@ export function resolveTaskMirroredFlowTiming(
   }
   const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
   return { updatedAt: endedAt, endedAt };
+}
+
+export function buildTaskMirroredFlowCreateFields(params: {
+  task: Pick<
+    TaskRecord,
+    | "ownerKey"
+    | "taskId"
+    | "notifyPolicy"
+    | "status"
+    | "terminalOutcome"
+    | "label"
+    | "task"
+    | "createdAt"
+    | "lastEventAt"
+    | "endedAt"
+    | "terminalSummary"
+    | "progressSummary"
+  >;
+  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
+}): CreateFlowRecordParams {
+  const terminalFlowStatus = deriveTaskFlowStatusFromTask(params.task);
+  const timing = resolveTaskMirroredFlowTiming(
+    params.task,
+    isTerminalTaskFlowStatus(terminalFlowStatus),
+  );
+  return {
+    syncMode: "task_mirrored",
+    ownerKey: params.task.ownerKey,
+    requesterOrigin: params.requesterOrigin,
+    status: terminalFlowStatus,
+    notifyPolicy: params.task.notifyPolicy,
+    goal:
+      normalizeOptionalString(params.task.label) ?? (params.task.task.trim() || "Background task"),
+    blockedTaskId:
+      terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
+    blockedSummary: resolveFlowBlockedSummary(params.task),
+    createdAt: params.task.createdAt,
+    updatedAt: timing.updatedAt,
+    ...(timing.endedAt !== undefined ? { endedAt: timing.endedAt } : {}),
+  };
 }
 
 export function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {

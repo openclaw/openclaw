@@ -12,6 +12,7 @@ import {
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
 import { writeArchiveStreamToFile, type PreparedBackupArchive } from "./backup-create-stream.js";
+import * as directoryDurability from "./directory-durability.js";
 import { getPublishFileExclusiveFailureDetails } from "./directory-durability.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -92,17 +93,23 @@ describe("backup archive publication", () => {
     async (code) => {
       const { outputPath, plan } = await createPublication("openclaw-backup-no-link-");
       const prepared = await prepareArchive(plan);
-      const linkSpy = vi
-        .spyOn(fs, "link")
+      const publicationSpy = vi
+        .spyOn(directoryDurability, "publishFileExclusive")
         .mockRejectedValue(Object.assign(new Error("unsupported"), { code }));
       try {
         await expect(publishPreparedBackupArchive({ plan, prepared })).rejects.toThrow(
           /requires hard-link support/iu,
         );
+        expect(publicationSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            targetPath: plan.canonicalOutputPath,
+            strategy: "link-required",
+          }),
+        );
         await expect(fs.lstat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.lstat(prepared.archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
-        linkSpy.mockRestore();
+        publicationSpy.mockRestore();
       }
     },
   );

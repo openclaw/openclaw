@@ -105,7 +105,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
       expect(exec.toolNames).toEqual(["exec", "process", schedulerToolName]);
       expect(exec.description).toBe(
-        "Run shell now; background continuation supported. Use yieldMs/background, then process for logs/status/input/intervention. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+        "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
       );
       expect(process.description).toBe(
         "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
@@ -119,7 +119,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(exec.toolNames).toEqual(["exec", "process"]);
     expect(exec.description).toBe(
-      "Run shell now; background continuation supported. Use yieldMs/background, then process for logs/status/input/intervention. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process.description).toBe(
       "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention.",
@@ -266,7 +266,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     }
   });
 
-  it("preserves the existing fully authorized session-send description byte for byte", () => {
+  it("renders the authorized session-send modes and external routes", () => {
     const [tool] = applyToolAvailabilityDescriptions([
       { name: "sessions_send", description: describeSessionsSendTool() },
       { name: "conversations_list", description: "list" },
@@ -279,6 +279,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
         "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
         "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
         'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.',
+        "mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work; mode:followup starts or queues a later turn without steering. mode:resume continues your paused native child task; returns runId/taskRunId, with completion from the task owner, not inline. Resume rejects watch:true and positive timeoutSeconds. Omit mode for existing automatic routing.",
         "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
         'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
         "watch:true: notice arrives when others later change target session.",

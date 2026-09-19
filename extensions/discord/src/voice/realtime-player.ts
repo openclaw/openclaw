@@ -1,6 +1,8 @@
 import type { AudioPlayer, AudioResource } from "@discordjs/voice";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
+export const DISCORD_REALTIME_PLAYBACK_IDLE_MS = 2_000;
+
 export type DiscordRealtimePlayerRequest = {
   isReady: () => boolean;
   createResource: () => AudioResource;
@@ -48,6 +50,18 @@ export class DiscordRealtimePlayer {
       this.queue.push(request);
     }
     this.drain();
+  }
+
+  isRetiring(request: DiscordRealtimePlayerRequest): boolean {
+    if (this.current !== request) {
+      return false;
+    }
+    const state = this.player.state;
+    // Once padding starts, the SDK cannot read new PCM even before it emits Idle.
+    return (
+      state.status !== loadDiscordVoiceSdk().AudioPlayerStatus.Idle &&
+      state.resource.silenceRemaining >= 0
+    );
   }
 
   cancel(request: DiscordRealtimePlayerRequest): void {
@@ -99,7 +113,8 @@ export class DiscordRealtimePlayer {
     this.player.stop(true);
   }
 
-  private transition(action: () => void): void {
+  /** Prevent retiring one lane from granting playback to a sibling that is also retiring. */
+  transition(action: () => void): void {
     const wasChanging = this.changing;
     this.changing = true;
     try {

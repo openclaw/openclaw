@@ -163,7 +163,7 @@ describe("session workspace state", () => {
     );
 
     expect(mount.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
-    expect(mount.textContent).toContain("src/slow.ts");
+    expect(mount.querySelector('button[aria-label="src/slow.ts"]')).not.toBeNull();
   });
 
   it("rotates Files and Review ownership across a same-client reconnect", async () => {
@@ -728,24 +728,40 @@ describe("openSessionWorkspaceFile", () => {
     { root: "/workspace", expected: "/workspace/src/readme.md" },
     { root: "C:\\workspace", expected: "C:\\workspace\\src\\readme.md" },
   ])(
-    "opens rendered workspace-browser rows beneath $root with the full path",
+    "keeps the opened workspace-browser row selected beneath $root across refresh",
     async ({ root, expected }) => {
-      const getFile = vi.fn().mockResolvedValue({
+      const getFile = vi.fn().mockImplementation(async (_sessionKey, requestedPath) => ({
         sessionKey: "agent:main:current",
         root,
         file: {
-          path: expected,
-          workspacePath: "src/readme.md",
+          path: requestedPath,
+          workspacePath:
+            requestedPath === "src/readme.md" ? "nested/src/readme.md" : "src/readme.md",
           name: "readme.md",
           kind: "read",
           missing: false,
           content: "# Browser file\n",
         },
-      });
+      }));
       const listFiles = vi.fn().mockResolvedValue({
         sessionKey: "agent:main:current",
         root,
-        files: [],
+        files: [
+          {
+            kind: "modified",
+            path: expected,
+            workspacePath: "src/readme.md",
+            name: "readme.md",
+            missing: false,
+          },
+          {
+            kind: "read",
+            path: "src/readme.md",
+            workspacePath: "nested/src/readme.md",
+            name: "readme.md",
+            missing: false,
+          },
+        ],
         browser: {
           path: "",
           entries: [{ kind: "file", name: "readme.md", path: "src/readme.md" }],
@@ -780,6 +796,44 @@ describe("openSessionWorkspaceFile", () => {
 
       await vi.waitFor(() => expect(getFile).toHaveBeenCalledOnce());
       expect(getFile.mock.calls[0]?.[1]).toBe(expected);
+      const expectSelectedRow = (selectedPath = "src/readme.md") => {
+        render(
+          renderSessionWorkspaceRail(createSessionWorkspaceProps(state, { expanded: true })),
+          container,
+        );
+        const browserSelected = container.querySelector(
+          ".chat-workspace-rail__list--browser .chat-workspace-rail__file--active",
+        );
+        expect(Boolean(browserSelected)).toBe(selectedPath === "src/readme.md");
+        const selectedSessionRows = container.querySelectorAll(
+          ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser) .chat-workspace-rail__file--active .chat-workspace-rail__file-open",
+        );
+        expect(
+          Array.from(selectedSessionRows, (selectedRow) => selectedRow.getAttribute("aria-label")),
+        ).toEqual([selectedPath === "src/readme.md" ? expected : "src/readme.md"]);
+      };
+      await vi.waitFor(() => expectSelectedRow());
+      const changedRow = container.querySelector<HTMLButtonElement>(
+        ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser) .chat-workspace-rail__file-open",
+      );
+      changedRow!.click();
+      await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
+      expectSelectedRow();
+      expect(state.sessionWorkspaceState?.previews).toHaveLength(1);
+      createSessionWorkspaceProps(state).onRefresh();
+      await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
+      expectSelectedRow();
+      const nestedRow = Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          ".chat-workspace-rail__list:not(.chat-workspace-rail__list--browser) .chat-workspace-rail__file-open",
+        ),
+      ).at(-1)!;
+      nestedRow.click();
+      await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(3));
+      expect(getFile.mock.calls[2]?.[1]).toBe("src/readme.md");
+      await vi.waitFor(() => expectSelectedRow("nested/src/readme.md"));
+      expect(state.sessionWorkspaceState?.previews).toHaveLength(2);
     },
   );
 

@@ -15,7 +15,11 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  isSubagentCoordinationInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -128,6 +132,7 @@ export async function prepareAgentRunUserTurn(params: {
   privateCompletion?: true;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
+  deferTimeoutCompletion?: (settle: () => void) => boolean;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -242,7 +247,11 @@ export async function prepareAgentRunUserTurn(params: {
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
       const input: UserTurnInput = {
-        ...(params.privateCompletion ? { display: false as const } : {}),
+        ...(params.privateCompletion ||
+        isCompletionReportInputProvenance(params.inputProvenance) ||
+        isSubagentCoordinationInputProvenance(params.inputProvenance)
+          ? { display: false as const }
+          : {}),
         text:
           persistedMedia.omission === "inline-image-save-failed"
             ? [effectiveTranscriptInputText, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
@@ -308,18 +317,27 @@ export async function prepareAgentRunUserTurn(params: {
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (params.privateCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
-        try {
-          recorder.completeProcessing?.(
-            buildAgentRunTerminalOutcome({
-              status: "error",
-              stopReason: params.getAbortStopReason?.() ?? "rpc",
-            }),
-          );
-        } catch (error) {
-          params.context.logGateway.warn(
-            `private input cancellation persistence failed: ${formatForLog(error)}`,
-          );
+        const stopReason = params.getAbortStopReason?.() ?? "rpc";
+        const settle = () => {
+          try {
+            recorder.completeProcessing?.(
+              buildAgentRunTerminalOutcome({
+                status: stopReason === "timeout" ? "timeout" : "error",
+                stopReason,
+              }),
+            );
+          } catch (error) {
+            params.context.logGateway.warn(
+              `private input cancellation persistence failed: ${formatForLog(error)}`,
+            );
+          }
+        };
+        // Give the timed-out producer its existing terminal grace to supply
+        // final facts. Stop still records its non-retry receipt synchronously.
+        if (stopReason === "timeout" && params.deferTimeoutCompletion?.(settle)) {
+          return;
         }
+        settle();
       };
       // Abort reserves terminal ownership before notifying listeners. Record
       // the stop while that exact controller still exists, even after input consumption.
@@ -384,5 +402,22 @@ export function releasePreparedAgentRunUserTurn(
       handoffId: prepared.claimedExecApprovalFollowupHandoffId,
       claimId: prepared.execApprovalFollowupHandoffClaimId,
     });
+  }
+}
+
+/** Settles failed input while preserving both admission and settlement failures. */
+export function releasePreparedAgentRunUserTurnAfterFailure(
+  prepared: PreparedAgentRunUserTurn,
+  error: unknown,
+  disposition: "cancelled" | "interrupted" = "cancelled",
+): unknown {
+  try {
+    releasePreparedAgentRunUserTurn(prepared, disposition);
+    return error;
+  } catch (cleanupError) {
+    return new AggregateError(
+      [error, cleanupError],
+      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
+    );
   }
 }

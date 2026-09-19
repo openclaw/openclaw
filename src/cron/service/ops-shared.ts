@@ -1,14 +1,16 @@
 /** Shared cron operation invariants used across lifecycle, CRUD, and manual runs. */
-import { clearCronJobActive, markCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
+import { clearCronJobActive, type CronActiveJobMarker } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
+import { markServiceCronJobActive } from "./run-receipts.js";
 import { recomputeUnownedCronSchedules } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoadedForOperation, runPostPersistCronNotifications } from "./store.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
-import { type IsolatedAgentSetupTimeoutSignal, runsDetachedFromMainSession } from "./timer.js";
+import type { IsolatedAgentSetupTimeoutSignal } from "./timer.js";
 
 /** Resolves the effective agent using explicit job identity before configured defaults. */
 export function resolveEffectiveJobAgentId(
@@ -21,14 +23,10 @@ export function resolveEffectiveJobAgentId(
 export function markManualCronJobActive(
   state: CronServiceState,
   job: CronJob,
+  runReceipt: CronRunReceiptHandle,
 ): CronActiveJobMarker | undefined {
-  const jobId = job.id;
-  state.activeManualRunJobIds.add(jobId);
-  return markCronJobActive(jobId, {
-    agentId: resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)),
-    declarationKey: job.declarationKey,
-    preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
-  });
+  state.activeManualRunJobIds.add(job.id);
+  return markServiceCronJobActive(state, job, runReceipt);
 }
 
 export function clearManualCronJobActive(

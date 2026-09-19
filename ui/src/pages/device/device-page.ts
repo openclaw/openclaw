@@ -381,6 +381,7 @@ class DevicePage extends OpenClawLightDomElement {
           ? renderSettingsSection(
               { title: t("configPage.deviceSettings.app") },
               html`
+                ${this.toggle("app.nativeExperienceEnabled", app.nativeExperienceEnabled, "nativeExperience", t("configPage.deviceSettings.nativeExperienceHint"))}
                 ${
                   app.appearance !== undefined
                     ? renderSettingsRow({

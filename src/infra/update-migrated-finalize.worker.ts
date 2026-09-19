@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
@@ -19,6 +20,7 @@ import {
 import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { defaultRuntime } from "../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -30,6 +32,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
@@ -41,8 +44,9 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
+    routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
-      throw new Error("Candidate recovery writer is unavailable.");
+      throw new Error("Update recovery writer is unavailable.");
     }
     process.stdout.write(
       JSON.stringify({
@@ -69,6 +73,11 @@ async function finalizeMigratedUpdate(): Promise<void> {
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
+  if (input.params.opts.json) {
+    // The installed updater forwards this worker's stdout verbatim. Keep diagnostics
+    // on stderr through terminal-history reads and the process's database cleanup.
+    routeLogsToStderr();
+  }
   if (input.recoveryHandoff) {
     throw new Error(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
@@ -101,6 +110,27 @@ async function finalizeMigratedUpdate(): Promise<void> {
     if (!admissionEnv) {
       throw new Error("Grantless finalization requires its captured update environment.");
     }
+    // v2026.9.3 update-command-migrated.ts:149–195 sends this grantless handoff.
+    // Its captured meta.root is the lease key; activation can retarget that path.
+    // Only the same installation borrows the waiting parent's lease.
+    const meta = input.params.controlPlaneUpdateSentinelMeta;
+    const runId = input.params.opts.run?.runId ?? "";
+    const scratch = path.dirname(input.resultPath);
+    const legacyManagedParent =
+      input.params.result.before?.version === "2026.9.3" &&
+      admissionEnv.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+      admissionEnv.OPENCLAW_UPDATE_RUN_ID === runId &&
+      meta?.runId === runId &&
+      meta.handoffId &&
+      meta.root &&
+      meta.root === resolveUpdateInstallRoot(input.params.result.root ?? input.params.root) &&
+      path.basename(scratch).startsWith("openclaw-update-migrated-") &&
+      path.basename(input.resultPath) === "result.json" &&
+      ["TMPDIR", "TMP", "TEMP"].every(
+        (name) => resolveEnvironmentValue(process.env, name) === scratch,
+      )
+        ? { runId, handoffId: meta.handoffId, root: meta.root }
+        : undefined;
     for (const name of ["TMPDIR", "TMP", "TEMP"] as const) {
       const value = resolveEnvironmentValue(admissionEnv, name);
       if (value === undefined) {
@@ -109,18 +139,20 @@ async function finalizeMigratedUpdate(): Promise<void> {
         process.env[name] = value;
       }
     }
-    // Acquire before adopting the run or making effects. Missing newer grants
-    // still cannot bypass a live original or descendant in that same domain.
-    return await withUpdateCommandExecutor(input.params.opts.run?.runId ?? "", async (executor) => {
-      const fence = await executor.enter(input.params.result.root ?? input.params.root, {
-        activationTimeoutMs,
-      });
-      return await finalizeInput(input, fence, registerRun);
-    });
+    return await withUpdateCommandExecutor(
+      runId,
+      async (executor) => {
+        const fence = await executor.enter(input.params.result.root ?? input.params.root, {
+          activationTimeoutMs,
+        });
+        return await finalizeInput(input, fence, registerRun);
+      },
+      legacyManagedParent ? { legacyManagedParent } : undefined,
+    );
   }, input.params.opts);
   const terminal = getUpdateRun(finalized.run.runId, { env: finalized.run.env });
   if (!terminal || terminal.status === "running") {
-    throw new Error("Candidate finalization left the update run nonterminal.");
+    throw new Error("Update finalization left the update run nonterminal.");
   }
   const response: MigratedUpdateFinalizationResult = {
     result: finalized.result,
@@ -188,7 +220,14 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
             process.exitCode = code;
           },
         },
-        { repair: input.repair, nonInteractive: true },
+        {
+          repair: input.repair,
+          nonInteractive: true,
+          ...(input.yes !== undefined ? { yes: input.yes } : {}),
+          ...(input.workspaceSuggestions !== undefined
+            ? { workspaceSuggestions: input.workspaceSuggestions }
+            : {}),
+        },
         { inputHash: input.configInputHash, assertCurrent },
       );
     },
@@ -208,7 +247,7 @@ async function finalizeInput(
       input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
-    throw new Error("Candidate finalization requires its migrated update run.");
+    throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
   executorFence?.assertCurrent();
@@ -260,14 +299,18 @@ async function finalizeInput(
   let exitCode = 0;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
-    result = await finishUpdate({
-      ...input.params,
-      result: { ...input.params.result, runId: run.runId },
-      opts: { ...input.params.opts, run },
-      ...(stopped
-        ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
-        : {}),
-    });
+    // This worker already loaded the candidate; the local flag conveys no authority.
+    result = await finishUpdate(
+      {
+        ...input.params,
+        result: { ...input.params.result, runId: run.runId },
+        opts: { ...input.params.opts, run },
+        ...(stopped
+          ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
+          : {}),
+      },
+      { candidateRuntime: true },
+    );
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
       throw error;

@@ -1,11 +1,9 @@
-import { calculateUsageCost } from "@openclaw/llm-core";
+import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import { resolveModelCostConfig } from "../utils/usage-format.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -59,7 +57,9 @@ const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   return undefined;
 };
 
-const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptEntry | null => {
+export const parseUsageCostTranscriptRecord = (
+  entry: Record<string, unknown>,
+): ParsedTranscriptEntry | null => {
   const message = entry.message as Record<string, unknown> | undefined;
   if (!message || typeof message !== "object") {
     return null;
@@ -170,7 +170,7 @@ export const applyCostTotal = (
 // generated models.json because the Codex backend exposes no per-token price. Treating
 // such a config as a real $0 makes usage-cost report confident zero spend, which
 // silently blinds every budget/spike safeguard that keys off totalCost.
-const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): boolean => {
+const isModelPricingKnown = (cost: ModelCostConfig | undefined): boolean => {
   if (!cost) {
     return false;
   }
@@ -193,43 +193,28 @@ const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined
 export type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
-}) => ReturnType<typeof resolveModelCostConfig>;
+}) => ModelCostConfig | undefined;
 
-export function createUsageCostResolver(params?: {
-  config?: OpenClawConfig;
-  agentDir?: string;
-}): UsageCostResolver {
-  const cache = new Map<string, ReturnType<typeof resolveModelCostConfig>>();
-  return ({ provider, model }) => {
-    const key = `${provider ?? ""}\0${model ?? ""}`;
-    if (cache.has(key)) {
-      return cache.get(key);
-    }
-    const cost = resolveModelCostConfig({
-      provider,
-      model,
-      config: params?.config,
-      agentDir: params?.agentDir,
-    });
-    cache.set(key, cost);
-    return cost;
-  };
+type UsageCostEstimateEntry = ParsedTranscriptEntry & { usage: NormalizedUsage };
+
+export function needsUsageCostEstimate(
+  entry: ParsedTranscriptEntry | null,
+): entry is UsageCostEstimateEntry {
+  // Recorded estimates include request-time service tiers the current catalog cannot recover.
+  return (
+    Boolean(entry?.usage) &&
+    !(
+      (entry?.costTotal ?? 0) > 0 ||
+      entry?.costBreakdown?.totalOrigin === "provider-billed" ||
+      shouldPreserveRecordedZeroCost(entry?.costBreakdown)
+    )
+  );
 }
 
-export function parseUsageCostTranscriptEntry(
-  parsed: Record<string, unknown>,
+export function applyUsageCostEstimate(
+  entry: UsageCostEstimateEntry,
   resolveCost: UsageCostResolver,
-): ParsedTranscriptEntry | null {
-  const entry = parseTranscriptEntry(parsed);
-  // Recorded estimates include request-time service tiers the current catalog cannot recover.
-  if (
-    !entry?.usage ||
-    (entry.costTotal ?? 0) > 0 ||
-    entry.costBreakdown?.totalOrigin === "provider-billed" ||
-    shouldPreserveRecordedZeroCost(entry.costBreakdown)
-  ) {
-    return entry;
-  }
+): ParsedTranscriptEntry {
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
   const { totalTokens } = computeUsageTokenTotals(entry.usage);
   if (!isModelPricingKnown(cost) && totalTokens > 0) {

@@ -114,6 +114,19 @@ describe("plugin embedded-agent runtime admission", () => {
     expect(mocks.close).toHaveBeenCalledOnce();
   });
 
+  it.each([true, false])("ignores the shipped GitHub availability input %s", async (available) => {
+    await expect(
+      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+        runPluginEmbeddedAgent({ ...params, githubPublicationAvailable: available }),
+      ),
+    ).resolves.toEqual({ payloads: [] });
+    expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce();
+    expect(mocks.runEmbeddedAgentCore.mock.calls[0]![0]).not.toHaveProperty(
+      "githubPublicationAvailable",
+    );
+    expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
   it("records exact admission and attribution-only completion without plugin identifiers", async () => {
     const executionIdentityToken = {
       tokenVersion: 1,

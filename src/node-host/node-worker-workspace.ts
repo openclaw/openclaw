@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type {
@@ -50,6 +51,7 @@ import {
   type NodeWorkerWorkspaceLaunchReference,
   type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
+import { NodeWorkerWorkspaceProcesses } from "./node-worker-workspace-processes.js";
 import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -103,14 +105,16 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
   private readonly deletingWorkspaceGenerations = new Set<string>();
   private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
+  readonly processes = new NodeWorkerWorkspaceProcesses();
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv; ephemeral?: boolean } = {}) {
     const env = options.env ?? process.env;
     const configuredRoot = path.resolve(
       options.root ?? path.join(resolveStateDir(env), "node-host"),
     );
-    fs.mkdirSync(configuredRoot, { recursive: true });
+    fs.mkdirSync(configuredRoot, { recursive: true, mode: 0o700 });
     this.root = fs.realpathSync.native(configuredRoot);
+    tightenPrivateDirRootSync(this.root, 0o700);
     // Git artifacts are machine caches, outside the per-lease state scrub boundary.
     const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
     this.seedsRoot = path.resolve(home, ".openclaw-worker", "git-seeds");
@@ -171,16 +175,10 @@ export class NodeWorkerWorkspaceRuntime {
       identity.gatewayNamespace,
       identity.generationKey,
     );
-    let released = false;
     return {
       workspaceDir: identity.workspaceDir,
       ...(prepared ? { homeDir: prepared.home_dir } : {}),
-      release: () => {
-        if (!released) {
-          released = true;
-          finishOperation();
-        }
-      },
+      release: finishOperation,
     };
   }
 
@@ -192,7 +190,12 @@ export class NodeWorkerWorkspaceRuntime {
     for (const protection of this.activeRetainProtections.get(gatewayNamespace) ?? []) {
       protection.add(generationKey);
     }
+    let released = false;
     return () => {
+      if (released) {
+        return;
+      }
+      released = true;
       const count = this.activeWorkspaceOperations.get(generationKey) ?? 0;
       if (count <= 1) {
         this.activeWorkspaceOperations.delete(generationKey);
@@ -688,6 +691,16 @@ export class NodeWorkerWorkspaceRuntime {
           HOME: homeDir,
           ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
         };
+        if (input.process) {
+          return await this.processes.execute({
+            input,
+            workspaceDir,
+            env: commandEnv,
+            signal,
+            retainWorkspace: () =>
+              this.beginWorkspaceOperation(input.gatewayNamespace, generationKey),
+          });
+        }
         const result = await runCommandWithTimeout(input.argv, {
           cwd: workspaceDir,
           baseEnv: commandEnv,
@@ -695,6 +708,7 @@ export class NodeWorkerWorkspaceRuntime {
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           ...(signal ? { signal } : {}),
           killProcessTree: true,
+          requireProcessTreeExtinction: true,
           maxOutputBytes: {
             stdout: NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
             stderr: NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES,

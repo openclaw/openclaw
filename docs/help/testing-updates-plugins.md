@@ -19,6 +19,7 @@ keys and network-touching suites, see [Testing live](/help/testing-live).
 
 - [What we protect](#what-we-protect) - the guarantees these lanes exist to defend.
 - [Local proof during development](#local-proof-during-development) - the commands to run while you iterate.
+- [Headless node auto-update proof](#headless-node-auto-update-proof) - installed-node activation and shared-Gateway safeguards.
 - [Docker lanes](#docker-lanes) - lane reference: what each lane runs and when.
 - [Package Acceptance](#package-acceptance) - lane reference: the acceptance matrix and its gates.
 - [Release default](#release-default) - which lanes a release candidate must clear.
@@ -86,6 +87,44 @@ pnpm plugin-sdk:api:diff -- --base "$base_sha" --head "$head_sha"
 Release npm preflight uses the same readable diff against the prior published
 dist-tag and prints the 8-character acknowledgement digest required when that
 release changes the Plugin SDK API.
+
+## Headless node auto-update proof
+
+`pnpm test:e2e:node-auto-update <built-openclaw.tgz> [new-artifact-directory]`
+runs a real installed-package scenario on Linux. Run it in a task-owned Testbox
+or Crabbox with Node, npm, and registry access. It needs no provider credentials
+and is opt-in; the default `pnpm test:e2e` aggregate does not run it.
+
+Build and pack the candidate on the test host, then pass that exact tarball:
+
+```bash
+pnpm build
+node scripts/package-openclaw-for-docker.mjs --skip-build \
+  --output-dir /tmp/openclaw-node-update-package \
+  --output-name openclaw-node-update.tgz
+pnpm test:e2e:node-auto-update \
+  /tmp/openclaw-node-update-package/openclaw-node-update.tgz \
+  /tmp/openclaw-node-update-proof
+```
+
+The proof starts isolated Gateway, paired-node, supervisor, and fixture-registry
+processes. It verifies busy-work deferral, idle activation, preserved pairing
+and launch options, activation cooldown, all three public opt-outs, and retention
+of the working node when a candidate is malformed. A same-state Gateway/node
+case confirms that the Gateway process, configuration, and global installation
+stay unchanged while the node activates its private runtime. A separate cell
+runs the published `openclaw@2026.9.4` updater against the candidate.
+
+A legacy-plugin case returns from its command while a child keeps running,
+then proves that a missing idle-work callback blocks activation both during
+that work and after the child finishes.
+
+Use a new artifact directory outside the source checkout for every run, or omit
+it to create a fresh temporary directory. The scenario retains `observations.json`
+and per-process logs there and stops its child processes on completion or failure.
+Collect the proof before stopping the remote lease. This scenario proves Linux
+behavior; it does not establish Windows or macOS activation coverage. See
+[Node auto-updates](/cli/node#automatic-updates) for the operator contract.
 
 ## Docker lanes
 
@@ -184,6 +223,41 @@ normal Package Acceptance coverage and in release soak.
 Those default release runs pin this scenario to the published 2026.9.4 driver,
 including when the source candidate still reports version 2026.9.4; other
 scenarios retain their existing baseline selection.
+
+The opt-in `projects-doctor`, `projects-startup-migration`, and `taskflow-restoration` scenarios require the exact
+published `openclaw@2026.9.4` baseline and a frozen candidate tarball. They use
+isolated state, manual restart, and no live providers or registry companion fixtures;
+none runs through `reported-issues` or `far-reaching`. They verify the original
+published driver and installed candidate payload bytes, including when their version
+strings are equal. Select one with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO` and set
+`OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.4`.
+
+`projects-doctor` preserves one registered project and one configured workspace,
+then runs the real `doctor --lint --only core/doctor/project-clone-shape --json`
+twice. It checks stored rows, schema, sentinels, and read-only snapshot cleanup.
+`projects-startup-migration` prepares two independent project/worktree specimens
+through the published owners using local Git. Each has a verified backup and
+synthetic legacy session JSON/JSONL imported through published Doctor. The update
+must repair the first specimen's canonical workspace through candidate Doctor.
+The second state stays outside that update's discovery. Before startup, the
+candidate's Doctor schema owner runs under its maintenance lock to upgrade that
+database while preserving the legacy workspace fields and exact session/transcript
+bytes. Its first normal Gateway startup must preserve that state. After
+clean shutdown, an explicit `doctor --fix --non-interactive` repairs its canonical
+workspace; a second startup must leave the repaired state unchanged. These are
+supported legacy-format imports, not historical runtime-generated sessions.
+Both Gateway runs must become ready and report clean shutdown before persisted
+readback. Set
+`OPENCLAW_UPGRADE_SURVIVOR_STARTUP_BINDINGS` to a reviewed JSON file containing the
+candidate `commit`, `agentSchema`, and `operations.prepare`/`operations.open`
+triples of compiled basename, exact export symbol, and SHA-256. The snapshot
+preparer and SQLite opener must match the installed candidate payload; the file
+is mounted read-only. This scenario uses no remote repository or model turn.
+`taskflow-restoration` preserves three terminal tasks and two flows, starts a fresh
+candidate Gateway, exercises awaited task SDK reads through a synthetic local plugin,
+and reads two task pages on the same Gateway connection. Complete task, delivery,
+and flow records are checked again after Gateway shutdown. The taskflow cell covers
+terminal persisted state; it does not exercise active task recovery or provider work.
 
 The `legacy-operator-state` scenario uses the published baseline's own CLI to
 create a second agent, allowlist exec approvals, and two command cron jobs: one
@@ -484,6 +558,23 @@ Start with the artifact identity:
 - Upgrade survivor summary: `.artifacts/upgrade-survivor/summary.json`,
   including baseline version, candidate version, scenario, phase timings, and
   config recipe coverage.
+
+The `legacy-operator-state` survivor installs a matching published companion
+through a moving tag (`latest`, `beta`, or `alpha`). If npm confirms that the
+exact companion version was never published, the row records that companion as
+unavailable in `baselineCompanion` and continues the remaining operator-state
+and external-plugin migration checks. Registry errors still fail fixture setup.
+An update that has not started reports an `unknown` outcome; a failed update
+attempt reports `failed`, independently of later scenario assertions.
+
+Failure capture retains the latest session SQLite migration manifest and Doctor
+issue report in the private diagnostics snapshot, subject to bounded size limits.
+The published diagnostics contain issue histograms and capture omissions rather
+than raw session details. Collect private artifacts before removing the test host.
+Container-owned observation directories can require `sudo tar` on that isolated
+host; keep their permissions intact. When collecting through a remote wrapper,
+use distinct success/failure download destinations. A successful download does
+not change the survivor exit code or `summary.status`.
 
 Prefer rerunning the failed exact lane with the same package artifact over
 rerunning the whole release umbrella.

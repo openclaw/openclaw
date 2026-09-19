@@ -11,7 +11,11 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   legacyConfigRules,
@@ -65,6 +69,8 @@ async function removeCodexDoctorFixture(stateDir: string): Promise<void> {
   // the temporary state dir; both must be released before removal or Windows keeps the files
   // locked and the removal fails with EBUSY. Agent close first: it releases leases through
   // shared state, so the reverse order can reopen it.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   resetPluginStateStoreForTests();
   await fs.rm(stateDir, { recursive: true, force: true });
@@ -136,7 +142,9 @@ async function createBindingMigrationFixture(options: {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 });
 

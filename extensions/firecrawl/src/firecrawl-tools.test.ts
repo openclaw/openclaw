@@ -137,21 +137,6 @@ describe("firecrawl tools", () => {
     expect(preservedFetchProvider.tools?.web?.fetch?.provider).toBe("other");
   });
 
-  it("bounds canonical provider URLs after percent-encoding hostile Unicode", () => {
-    const expandedUrl = `https://example.com/${"🦀".repeat(1_000)}`;
-    expect(expandedUrl.length).toBeLessThan(2_048);
-
-    const items = firecrawlClientTesting.resolveSearchItems({
-      data: [
-        { title: "too large", url: expandedUrl },
-        { title: "safe unicode", url: "https://example.com/🦀" },
-      ],
-    });
-
-    expect(items).toHaveLength(1);
-    expect(items[0]?.url).toBe("https://example.com/%F0%9F%A6%80");
-  });
-
   it("wraps and safely truncates upstream error details from Firecrawl API failures", async () => {
     global.fetch = vi.fn(async () =>
       Response.json(

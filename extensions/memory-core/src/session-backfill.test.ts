@@ -19,7 +19,7 @@ import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
 } from "./dreaming-state.js";
-import { listMemoryEntryOrigins, recordMemorySessionTombstones } from "./memory-entry-origins.js";
+import { listMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import {
   markSessionBackfillRewindBaseline,
@@ -37,7 +37,11 @@ import {
   recordGroundedShortTermCandidates,
   recordShortTermRecalls,
 } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness, dreamingTestState } from "./test-helpers.js";
+import {
+  createMemoryCoreTestHarness,
+  dreamingTestState,
+  seedMemoryForgetTombstones,
+} from "./test-helpers.js";
 
 const harness = createMemoryCoreTestHarness();
 
@@ -161,7 +165,7 @@ describe("runSessionBackfill", () => {
         owner: true,
       },
     ]);
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: ["forgotten"] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["forgotten"] });
 
     const result = await runSessionBackfill({
       agentId: "main",
@@ -291,7 +295,7 @@ describe("runSessionBackfill", () => {
       source: "memory" as const,
       sessionOrigin: { agentId: "main", sessionId: "forgotten" },
     };
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: ["forgotten"] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["forgotten"] });
 
     await recordShortTermRecalls({
       workspaceDir,

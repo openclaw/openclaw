@@ -319,6 +319,26 @@ export async function buildReplyPayloads(params: {
   const retryBlockedDirectPayloads = (params.directBlockDeliveries ?? [])
     .filter((delivery) => delivery.pending || !shouldRetryReplyDispatch(delivery.outcome))
     .map((delivery) => delivery.payload);
+  for (const payload of dedupedPayloads) {
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    const direct = (params.directBlockDeliveries ?? []).filter(
+      (delivery) =>
+        isReplyPayloadTerminalContent(delivery.payload) &&
+        getReplyPayloadMetadata(delivery.payload)?.assistantMessageIndex === assistantMessageIndex,
+    );
+    const directSources =
+      direct.some((delivery) => delivery.source?.complete === false) &&
+      direct
+        .map((delivery) => delivery.payload.text ?? "")
+        .join("")
+        .trim() === payload.text?.trim()
+        ? Array.from(new Set(direct.flatMap((delivery) => delivery.source ?? [])))
+        : undefined;
+    const sources = params.blockReplyPipeline?.getSourceRecovery?.(payload) ?? directSources;
+    if (sources) {
+      setReplyPayloadMetadata(payload, { blockReplySources: sources });
+    }
+  }
   const directTextFragmentsByAssistantMessage = new Map<number | undefined, string[]>();
   for (const sentPayload of retryBlockedDirectPayloads) {
     if (!isReplyPayloadTerminalContent(sentPayload)) {
@@ -337,6 +357,9 @@ export async function buildReplyPayloads(params: {
     }
   }
   const isDirectBlockRetryBlocked = (payload: ReplyPayload) => {
+    if (getReplyPayloadMetadata(payload)?.blockReplySources) {
+      return false;
+    }
     const contentKey = createBlockReplyContentKey(payload);
     const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
     return retryBlockedDirectPayloads.some(
@@ -361,7 +384,11 @@ export async function buildReplyPayloads(params: {
     return applicableFragments ? applicableFragments.join("").trim() === normalizedText : false;
   };
   const preserveUnsentMediaAfterBlockSend = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError || payload.isFallbackNotice) {
+    if (
+      payload.isError ||
+      payload.isFallbackNotice ||
+      getReplyPayloadMetadata(payload)?.blockReplySources
+    ) {
       return payload;
     }
     if (params.blockReplyPipeline?.isFinalPayloadRetryBlocked?.(payload)) {

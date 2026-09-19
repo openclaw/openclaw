@@ -115,6 +115,31 @@ suite.define(() => {
     await expect.poll(() => page.locator(".lobster-pet--act-pet").count()).toBe(0);
   });
 
+  it("keeps resting visitors proportionate and aligned with their perch", async () => {
+    for (const seed of [0, 42, 77, 1234]) {
+      await configureComposerPet({ mode: "offline", outcome: "ok", seed });
+      await page.clock.runFor(1600);
+      const shape = await page.locator("openclaw-lobster-pet").evaluate((pet) => {
+        for (const animation of pet.getAnimations({ subtree: true })) {
+          animation.pause();
+          animation.currentTime = Number(animation.effect?.getTiming().delay) || 0;
+        }
+        const sprite = pet.querySelector(
+          ".lobster-pet__motion > .lobster-pet:not(.lobster-pet--twin)",
+        )!;
+        const svg = sprite.querySelector<SVGSVGElement>(".lobster-pet__svg")!;
+        const matrix = svg.getScreenCTM()!;
+        const foot = new DOMPoint(60, 105).matrixTransform(matrix);
+        return {
+          aspect: Math.hypot(matrix.a, matrix.b) / Math.hypot(matrix.c, matrix.d),
+          footOffset: foot.y - sprite.getBoundingClientRect().bottom,
+        };
+      });
+      expect(shape.aspect).toBeCloseTo(1, 2);
+      expect(Math.abs(shape.footOffset)).toBeLessThan(0.2);
+    }
+  });
+
   it("uses the composer ledge and floor, then clears the floor as soon as typing starts", async () => {
     await configureComposerPet({ mode: "offline", outcome: "ok", seed: 42 });
     expect(await page.locator("openclaw-app-sidebar openclaw-lobster-pet").count()).toBe(0);
@@ -153,6 +178,33 @@ suite.define(() => {
       };
     });
     expect(hop).toEqual({ spot: "floor", hops: 1 });
+    const landings = await pet.evaluate((element) => {
+      const sprite = element.querySelector<HTMLElement>(
+        ".lobster-pet__motion > .lobster-pet:not(.lobster-pet--twin)",
+      )!;
+      const body = sprite.querySelector<HTMLElement>(".lobster-pet__body")!;
+      const animation = body
+        .getAnimations()
+        .find((entry) => (entry as CSSAnimation).animationName === "lobster-pet-landing")!;
+      animation.pause();
+      const frames = [0.14, 0.86].map((fraction) => {
+        animation.currentTime = Number(animation.effect!.getTiming().duration) * fraction;
+        const box = body.getBoundingClientRect();
+        const parent = sprite.getBoundingClientRect();
+        return {
+          width: box.width / parent.width,
+          height: box.height / parent.height,
+          footOffset: box.bottom - parent.bottom,
+        };
+      });
+      animation.play();
+      return frames;
+    });
+    for (const landing of landings) {
+      expect(landing.width).toBeLessThanOrEqual(1.06);
+      expect(landing.height).toBeGreaterThanOrEqual(0.939);
+      expect(Math.abs(landing.footOffset)).toBeLessThan(0.2);
+    }
     await page.clock.runFor(1300);
     await page.screenshot({ path: suite.artifactDir + "/floor-visit.png", animations: "disabled" });
     const textarea = page.locator(".new-session-page__message");

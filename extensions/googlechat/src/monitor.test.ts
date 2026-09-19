@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatIngressMonitor,
@@ -201,7 +202,7 @@ describe("googlechat monitor bot loop protection", () => {
         inbound: { run: runTurn },
       },
     } as unknown as GoogleChatCoreRuntime;
-    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    const runtime = createRuntimeSpies() satisfies GoogleChatRuntimeEnv;
     const account = {
       accountId,
       config: {
@@ -298,7 +299,7 @@ describe("googlechat monitor inbound space classification", () => {
       event,
       account,
       config: {},
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
     });
@@ -351,7 +352,7 @@ describe("googlechat monitor inbound space classification", () => {
         }),
         account: googleChatMediaTestAccount,
         config: {},
-        runtime: { error: vi.fn(), log: vi.fn() },
+        runtime: createRuntimeSpies(),
         core,
         mediaMaxMb: 10,
       });
@@ -414,7 +415,7 @@ describe("googlechat monitor inbound space classification", () => {
     },
   ])("explains an unsupported $name without downloading it", async ({ text, driveDataRef }) => {
     const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
-    const runtime = { error: vi.fn(), log: vi.fn() };
+    const runtime = createRuntimeSpies();
     allowGoogleChatMediaSender();
 
     await processGoogleChatTestEvent({
@@ -458,7 +459,7 @@ describe("googlechat monitor inbound space classification", () => {
     { name: "no caption", text: "" },
   ])("keeps $name and every attachment fact when the first file is oversized", async ({ text }) => {
     const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
-    const runtime = { error: vi.fn(), log: vi.fn() };
+    const runtime = createRuntimeSpies();
     const turnAdoptionLifecycle = {
       admission: "exclusive",
       onAdopted: vi.fn(async () => {}),
@@ -560,7 +561,7 @@ describe("googlechat monitor inbound space classification", () => {
         }),
         account: googleChatMediaTestAccount,
         config: {},
-        runtime: { error: vi.fn(), log: vi.fn() },
+        runtime: createRuntimeSpies(),
         core,
         mediaMaxMb: 10,
       }),
@@ -577,7 +578,7 @@ describe("googlechat monitor inbound space classification", () => {
       stateDir,
     });
     const { buildContext, core, runTurn } = createInboundClassificationHarness();
-    const runtime = { error: vi.fn(), log: vi.fn() };
+    const runtime = createRuntimeSpies();
     const account = googleChatMediaTestAccount;
     const receivedBodies: string[] = [];
     apiMocks.downloadGoogleChatMedia.mockRejectedValueOnce(
@@ -673,7 +674,7 @@ describe("googlechat monitor inbound space classification", () => {
         credentialSource: "inline",
       } as ResolvedGoogleChatAccount,
       config: {},
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
       turnAdoptionLifecycle,
@@ -720,7 +721,7 @@ describe("googlechat monitor inbound space classification", () => {
       event,
       account,
       config: {},
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
     });
@@ -787,7 +788,7 @@ describe("googlechat monitor inbound space classification", () => {
       event,
       account,
       config: { agents: { entries: { "agent-1": agent } } },
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
     });
@@ -870,7 +871,7 @@ describe("googlechat monitor inbound space classification", () => {
       event,
       account,
       config: {},
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
     });
@@ -927,7 +928,7 @@ describe("googlechat monitor sender bot status", () => {
         credentialSource: "inline",
       } as ResolvedGoogleChatAccount,
       config: {},
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
     });
@@ -955,7 +956,7 @@ describe("googlechat monitor sender bot status", () => {
         credentialSource: "inline",
       } as ResolvedGoogleChatAccount,
       config: {},
-      runtime: { error: vi.fn(), log: vi.fn() },
+      runtime: createRuntimeSpies(),
       core,
       mediaMaxMb: 10,
     });
@@ -969,7 +970,7 @@ describe("googlechat monitor sender bot status", () => {
 describe("googlechat monitor direct messages", () => {
   it("omits thread metadata from DM reply context and typing messages", async () => {
     const { buildContext, core, runTurn } = createInboundClassificationHarness();
-    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    const runtime = createRuntimeSpies() satisfies GoogleChatRuntimeEnv;
     const account = {
       accountId: "work",
       config: {
@@ -1024,7 +1025,7 @@ describe("googlechat monitor direct messages", () => {
 
   it("drops invalid event timestamps from inbound runtime payloads", async () => {
     const { buildContext, core, runTurn } = createInboundClassificationHarness();
-    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    const runtime = createRuntimeSpies() satisfies GoogleChatRuntimeEnv;
     const account = {
       accountId: "work",
       config: {

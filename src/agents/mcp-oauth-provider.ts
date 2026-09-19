@@ -15,6 +15,14 @@ export type McpOAuthConfig = {
   clientMetadataUrl?: unknown;
 };
 
+export type McpOAuthLoginLifecycle = {
+  signal: AbortSignal;
+  assertCurrent: () => void;
+  onAuthorizationPublished: (state: string) => void;
+  beforeTokensSaved: () => void;
+  onTokensSaved: () => void;
+};
+
 const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
@@ -51,20 +59,30 @@ function buildOAuthClientMetadata(
 
 export function bindMcpOAuthLeaseAssertion(
   lease: OpenClawStateLeaseContext | undefined,
+  assertCurrent?: () => void,
 ): ((database: DatabaseSync) => void) | undefined {
-  return lease ? (database) => lease.assertOwnedInTransaction(database) : undefined;
+  return lease || assertCurrent
+    ? (database) => {
+        assertCurrent?.();
+        lease?.assertOwnedInTransaction(database);
+      }
+    : undefined;
 }
 
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
 export function withMcpOAuthLeaseSignal(
   fetchFn: FetchLike | undefined,
   leaseSignal: AbortSignal,
+  assertCurrent?: () => void,
 ): FetchLike {
   const baseFetch: FetchLike = fetchFn ?? ((url, init) => fetch(url, init));
   return async (url, init) => {
+    assertCurrent?.();
     const requestSignal = init?.signal;
     const signal = requestSignal ? AbortSignal.any([requestSignal, leaseSignal]) : leaseSignal;
-    return await baseFetch(url, { ...init, signal });
+    const response = await baseFetch(url, { ...init, signal });
+    assertCurrent?.();
+    return response;
   };
 }
 
@@ -83,13 +101,25 @@ export function createMcpOAuthClientProvider(params: {
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
   lease?: OpenClawStateLeaseContext;
+  login?: McpOAuthLoginLifecycle;
 }): OAuthClientProvider {
   const config = params.config ?? {};
   const storeKey = params.identity.storeKey;
-  const assertOwnedInTransaction = bindMcpOAuthLeaseAssertion(params.lease);
-  const updateStore = (update: (store: McpOAuthStore) => McpOAuthStore) =>
-    updateMcpOAuthStore(storeKey, update, assertOwnedInTransaction);
+  let preparedVerifier: string | undefined;
+  const assertOwnedInTransaction = bindMcpOAuthLeaseAssertion(
+    params.lease,
+    params.login?.assertCurrent,
+  );
+  const updateStore = (
+    update: (store: McpOAuthStore) => McpOAuthStore,
+    beforeCommit?: () => void,
+  ) =>
+    updateMcpOAuthStore(storeKey, update, (database) => {
+      assertOwnedInTransaction?.(database);
+      beforeCommit?.();
+    });
   const assertAuthorizationRedirectAllowed = () => {
+    params.login?.assertCurrent();
     if (params.allowAuthorizationRedirect !== true) {
       throw new Error(
         `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
@@ -106,6 +136,18 @@ export function createMcpOAuthClientProvider(params: {
     },
     state() {
       assertAuthorizationRedirectAllowed();
+      if (params.login) {
+        const store = readMcpOAuthStore(storeKey);
+        if (
+          store.tokens?.access_token &&
+          store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
+          (store.tokenExpiresAt === undefined || store.tokenExpiresAt > Date.now())
+        ) {
+          throw new Error(
+            "Existing authentication could not be refreshed. Use the CLI sign-in flow.",
+          );
+        }
+      }
       // State validates one browser round trip. It is not reusable persisted state.
       return randomUUID();
     },
@@ -147,28 +189,42 @@ export function createMcpOAuthClientProvider(params: {
           next.tokenExpiresAt = tokenExpiresAt;
         }
         return next;
-      });
+      }, params.login?.beforeTokensSaved);
+      params.login?.onTokensSaved();
     },
     async redirectToAuthorization(authorizationUrl) {
       assertAuthorizationRedirectAllowed();
+      const state = authorizationUrl.searchParams.get("state");
+      if (params.login && (!state || !preparedVerifier)) {
+        throw new Error("MCP OAuth authorization preparation is incomplete.");
+      }
       updateStore((store) => ({
         ...beginMcpOAuthAuthorization(store),
+        ...(preparedVerifier ? { codeVerifier: preparedVerifier } : {}),
         lastAuthorizationUrl: authorizationUrl.toString(),
         redirectUrl: resolveOAuthRedirectUrl(config, store),
       }));
+      preparedVerifier = undefined;
+      if (state) {
+        params.login?.onAuthorizationPublished(state);
+      }
     },
     saveCodeVerifier(codeVerifier) {
       assertAuthorizationRedirectAllowed();
-      updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), codeVerifier }));
+      preparedVerifier = codeVerifier;
     },
     codeVerifier() {
-      const codeVerifier = readMcpOAuthStore(storeKey).codeVerifier;
+      const codeVerifier = preparedVerifier ?? readMcpOAuthStore(storeKey).codeVerifier;
       if (!codeVerifier) {
         throw new Error("Missing MCP OAuth code verifier. Run the login flow again.");
       }
       return codeVerifier;
     },
     invalidateCredentials(scope) {
+      params.login?.assertCurrent();
+      if (params.login) {
+        throw new Error("Existing authentication was retained. Use the CLI sign-in flow.");
+      }
       updateStore((store) => {
         const next: McpOAuthStore = { ...store };
         if (scope === "all" || scope === "client") {

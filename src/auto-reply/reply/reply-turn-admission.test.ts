@@ -1,36 +1,22 @@
 // Tests reply turn admission decisions for active, queued, and aborted runs.
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
-import * as restartRecovery from "../../agents/main-session-recovery/main-session-restart-recovery.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
   replaceSessionEntry,
-  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import * as sessionEntryAccessor from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
-  beginSessionWorkAdmission,
-  consumeSessionWorkAdmissionHandoff,
-  getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
-  isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
-  type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   createReplyOperation,
@@ -41,7 +27,12 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
-import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import {
+  admitTestReplyTurn,
+  createSessionStore,
+  createSessionStoreFor,
+} from "./reply-turn-admission.test-support.js";
 
 const recoveryOwnerReleaseMocks = vi.hoisted(() => ({
   beforeRelease: vi.fn(async () => {}),
@@ -77,20 +68,11 @@ vi.mock(
   }),
 );
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 function createTestReplyOperation(
   overrides: Omit<Parameters<typeof createReplyOperation>[0], "resetTriggered"> &
     Partial<Pick<Parameters<typeof createReplyOperation>[0], "resetTriggered">>,
 ) {
   return createReplyOperation({ resetTriggered: false, ...overrides });
-}
-
-function admitTestReplyTurn(
-  overrides: Omit<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered"> &
-    Partial<Pick<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered">>,
-) {
-  return admitReplyTurn({ kind: "visible", resetTriggered: false, ...overrides });
 }
 
 async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyTurn>[0]) {
@@ -99,36 +81,6 @@ async function admitTestReplyOperation(params: Parameters<typeof admitTestReplyT
     throw new Error("Fixture requires an admitted reply operation");
   }
   return admission.operation;
-}
-
-function createSessionStore(entries: Record<string, object>): string {
-  const root = tempDirs.make("openclaw-reply-admission-");
-  // The store handle stays a sessions.json path; the sqlite-backed accessor
-  // resolves it to the per-agent DB, so fixtures must seed through the accessor.
-  const storePath = path.join(root, "sessions.json");
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    replaceSessionEntrySync({ sessionKey, storePath }, entry as SessionEntry);
-  }
-  return storePath;
-}
-
-function createSessionStoreFor(sessionKey: string, sessionId: string) {
-  return createSessionStore({ [sessionKey]: { sessionId, updatedAt: Date.now() } });
-}
-
-function createRecoveryGatewayContext() {
-  const recoveryRuntime: GatewayRecoveryRuntime = {
-    dispatchSessionMethod: vi.fn(),
-    dispatchAgent: vi.fn(),
-    waitForAgent: vi.fn(),
-    sendRecoveryNotice: vi.fn(),
-  };
-  // Admission consumes only these Gateway-owned capabilities; execution is
-  // represented by the recovery boundary and its real session handoff below.
-  return {
-    getRuntimeConfig: () => ({}),
-    recoveryRuntime,
-  } as GatewayRequestContext;
 }
 
 async function readSessionEntry(
@@ -157,252 +109,6 @@ describe("reply turn admission", () => {
     if (admission.status === "owned") {
       expect(admission.operation.originatingLeafEntryId).toBe("leaf-before-run");
       admission.operation.complete();
-    }
-  });
-
-  it.each(["started", "concurrent winner"] as const)(
-    "resumes interrupted work before new input and keeps followups behind its owner: %s",
-    async (outcome) => {
-      const sessionKey = "agent:main:main";
-      const sessionId = "interrupted-channel-session";
-      const entry: SessionEntry = {
-        sessionId,
-        updatedAt: Date.now(),
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "old-channel-claim",
-        restartRecoveryDeliverySourceRunId: "old-channel-source",
-        restartRecoveryDeliveryContext: { channel: "discord", to: "synthetic-channel" },
-        restartRecoverySourceIngress: "channel",
-      };
-      const storePath = createSessionStore({ [sessionKey]: entry });
-      const context = createRecoveryGatewayContext();
-      const resolveGatewayContext = () => ({ ...context });
-      const root = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, sessionId],
-        resolveGatewayContext,
-        assertAllowed: () => {},
-      });
-      let recoveryLease: SessionWorkAdmissionLease | undefined;
-      const retry = vi
-        .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
-        .mockImplementationOnce(async (request) => {
-          expect(request).toMatchObject({
-            expectedSessionId: sessionId,
-            expectedRecoveryRunId: "old-channel-claim",
-            expectedRecoverySourceRunId: "old-channel-source",
-            gatewayRuntime: context.recoveryRuntime,
-          });
-          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-          expect(root.isActive()).toBe(true);
-          const owner = await beginSessionWorkAdmission({
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-            owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-            resolveGatewayContext,
-            assertAllowed: () => {},
-          });
-          recoveryLease = consumeSessionWorkAdmissionHandoff({
-            handoffId: owner.createHandoff(),
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-          });
-          expect(recoveryLease).toBe(owner);
-          await owner.run(() => {
-            expect(isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(
-              false,
-            );
-            return runExclusiveSessionLifecycleMutation({
-              scope: storePath,
-              identities: [sessionKey, sessionId],
-              run: () =>
-                replaceSessionEntry(
-                  { storePath, sessionKey },
-                  {
-                    ...entry,
-                    abortedLastRun: false,
-                    restartRecoveryRuns: [
-                      {
-                        runId: "old-channel-claim",
-                        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-                      },
-                    ],
-                  },
-                ),
-            });
-          });
-          return {
-            started: outcome === "started" ? 1 : 0,
-            settled: 0,
-            failed: 0,
-            skipped: outcome === "started" ? 0 : 1,
-          };
-        });
-      let visible: Awaited<ReturnType<typeof admitTestReplyTurn>> | undefined;
-      let followup: Awaited<ReturnType<typeof admitTestReplyTurn>> | undefined;
-      let followupPromise: ReturnType<typeof admitTestReplyTurn> | undefined;
-      const abort = new AbortController();
-      try {
-        visible = await root.run(() =>
-          admitTestReplyTurn({
-            sessionKey,
-            sessionId,
-            storePath,
-            expectedSessionId: sessionId,
-            resolveGatewayContext,
-            waitForActive: false,
-          }),
-        );
-        expect(visible.status).toBe("owned");
-        expect(retry).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-          restartRecoveryDeliveryRunId: "old-channel-claim",
-          restartRecoveryDeliverySourceRunId: "old-channel-source",
-        });
-        expect(
-          loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery?.foregroundClaims,
-        ).toBeUndefined();
-        expect(
-          getSessionWorkAdmissionOwnerRelease({
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-            owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-          }),
-        ).toBeDefined();
-        if (visible.status === "owned") {
-          visible.operation.complete();
-        }
-        root.release();
-        let followupSettled = false;
-        followupPromise = admitTestReplyTurn({
-          sessionKey,
-          sessionId,
-          storePath,
-          expectedSessionId: sessionId,
-          resolveGatewayContext,
-          kind: "queued_followup",
-          upstreamAbortSignal: abort.signal,
-        });
-        void followupPromise.then(() => {
-          followupSettled = true;
-        });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(followupSettled).toBe(false);
-        await replaceSessionEntry(
-          { storePath, sessionKey },
-          { sessionId, updatedAt: Date.now(), status: "done" },
-        );
-        recoveryLease?.release();
-        followup = await followupPromise;
-        expect(followup.status).toBe("owned");
-        expect(retry).toHaveBeenCalledOnce();
-      } finally {
-        abort.abort();
-        recoveryLease?.release();
-        root.release();
-        if (visible?.status === "owned") {
-          visible.operation.complete();
-        }
-        followup ??= await followupPromise;
-        if (followup?.status === "owned") {
-          followup.operation.complete();
-        }
-        retry.mockRestore();
-      }
-    },
-  );
-
-  it.each(["visible", "queued_followup"] as const)(
-    "preserves pending recovery when no runtime starts without looping %s admission",
-    async (kind) => {
-      const sessionKey = "agent:main:main";
-      const sessionId = "pending-recovery-session";
-      const entry: SessionEntry = {
-        sessionId,
-        updatedAt: Date.now(),
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "interrupted-claim",
-        restartRecoveryDeliverySourceRunId: "interrupted-source",
-      };
-      const storePath = createSessionStore({ [sessionKey]: entry });
-      const context = createRecoveryGatewayContext();
-      const retry = vi
-        .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
-        .mockResolvedValueOnce({ started: 0, settled: 0, failed: 0, skipped: 1 });
-      try {
-        const admission = admitTestReplyTurn({
-          sessionKey,
-          sessionId,
-          storePath,
-          expectedSessionId: sessionId,
-          resolveGatewayContext: () => context,
-          kind,
-        });
-        if (kind === "queued_followup") {
-          await expect(admission).resolves.toEqual({ status: "skipped", reason: "active-run" });
-        } else {
-          await expect(admission).rejects.toThrow("still waiting for restart recovery");
-        }
-        expect(retry).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(entry);
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-      } finally {
-        retry.mockRestore();
-      }
-    },
-  );
-
-  it("waits for the named recovery owner before admitting a queued followup", async () => {
-    const sessionKey = "agent:main:queued-recovery-owner";
-    const sessionId = "queued-recovery-owner";
-    const storePath = createSessionStoreFor(sessionKey, sessionId);
-    const owner = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-      assertAllowed: () => {},
-    });
-    const loadSpy = vi.spyOn(sessionEntryAccessor, "loadSessionEntryForAdmission");
-    const controller = new AbortController();
-    const admission = admitTestReplyTurn({
-      sessionKey,
-      sessionId,
-      expectedSessionId: sessionId,
-      storePath,
-      kind: "queued_followup",
-      upstreamAbortSignal: controller.signal,
-    });
-    let settled = false;
-    void admission.then(() => {
-      settled = true;
-    });
-    let result: Awaited<typeof admission> | undefined;
-    let completed = false;
-    try {
-      await vi.waitFor(() => expect(loadSpy.mock.calls.length).toBeGreaterThanOrEqual(2));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(settled).toBe(false);
-      owner.release();
-      result = await admission;
-      expect(result.status).toBe("owned");
-      if (result.status === "owned") {
-        result.operation.complete();
-        completed = true;
-      }
-    } finally {
-      controller.abort();
-      owner.release();
-      result ??= await admission;
-      if (!completed && result.status === "owned") {
-        result.operation.complete();
-      }
-      loadSpy.mockRestore();
     }
   });
 

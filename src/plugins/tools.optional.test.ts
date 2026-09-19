@@ -1063,15 +1063,7 @@ describe("resolvePluginTools optional tools", () => {
       plugin: createFeishuToolManifest(),
     });
     loadOpenClawPluginsMock.mockReturnValue(
-      createToolRegistry([
-        {
-          pluginId: "feishu",
-          optional: false,
-          source: "/tmp/feishu.js",
-          names: ["feishu_doc"],
-          factory,
-        },
-      ]),
+      createToolRegistry([createNamedToolEntry("feishu", "feishu_doc", { factory })]),
     );
 
     const tools = resolvePluginTools({
@@ -1137,15 +1129,7 @@ describe("resolvePluginTools optional tools", () => {
       },
     });
     loadOpenClawPluginsMock.mockReturnValue(
-      createToolRegistry([
-        {
-          pluginId: "account-demo",
-          optional: false,
-          source: "/tmp/account-demo.js",
-          names: ["account_demo_image"],
-          factory,
-        },
-      ]),
+      createToolRegistry([createNamedToolEntry("account-demo", "account_demo_image", { factory })]),
     );
 
     const tools = resolvePluginTools({
@@ -1186,15 +1170,7 @@ describe("resolvePluginTools optional tools", () => {
       plugin: createFeishuToolManifest(),
     });
     loadOpenClawPluginsMock.mockReturnValue(
-      createToolRegistry([
-        {
-          pluginId: "feishu",
-          optional: false,
-          source: "/tmp/feishu.js",
-          names: ["feishu_doc"],
-          factory,
-        },
-      ]),
+      createToolRegistry([createNamedToolEntry("feishu", "feishu_doc", { factory })]),
     );
 
     const tools = resolvePluginTools({
@@ -1658,19 +1634,7 @@ describe("resolvePluginTools optional tools", () => {
   );
 
   it("warns when cold registry load still does not provide the selected plugin tools", () => {
-    const context = {
-      ...createContext(),
-      config: {
-        ...createContext().config,
-        plugins: {
-          ...createContext().config.plugins,
-          entries: {
-            "optional-demo": { enabled: true },
-          },
-        },
-      },
-    };
-    const config = context.config;
+    const { rawContext, autoEnabledConfig: config } = createAutoEnabledOptionalContext();
     const registry = createToolRegistry([]);
     loadOpenClawPluginsMock.mockReturnValue(registry);
     installToolManifestSnapshot({
@@ -1681,18 +1645,20 @@ describe("resolvePluginTools optional tools", () => {
       }),
     });
 
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
-        context,
-        toolAllowlist: ["optional_tool"],
-      }),
-    );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const tools = resolvePluginTools(
+        createResolveToolsParams({
+          context: { ...rawContext, config },
+          toolAllowlist: ["optional_tool"],
+        }),
+      );
 
-    expect(tools).toStrictEqual([]);
-    expectSingleDiagnosticMessage(
-      registry.diagnostics,
-      "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
-    );
+      expect(tools).toStrictEqual([]);
+      expectSingleDiagnosticMessage(
+        registry.diagnostics,
+        "plugin tool registry did not include selected plugin tools after cold load (optional-demo)",
+      );
+    }
   });
 
   it("keeps active-owner callbacks while a missing sibling loads", () => {
@@ -1901,13 +1867,7 @@ describe("resolvePluginTools optional tools", () => {
   it("does not invoke named optional tool factories without a matching allowlist", () => {
     const factory = vi.fn(() => makeTool("optional_tool"));
     setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: true,
-        source: "/tmp/optional-demo.js",
-        names: ["optional_tool"],
-        factory,
-      },
+      createNamedToolEntry("optional-demo", "optional_tool", { optional: true, factory }),
     ]);
 
     expect(resolveOptionalDemoTools()).toHaveLength(0);
@@ -1941,20 +1901,11 @@ describe("resolvePluginTools optional tools", () => {
     const ownerFactory = vi.fn(() => makeTool("optional_tool"));
     const foreignFactory = vi.fn(() => makeTool("optional_tool"));
     setRegistry([
-      {
-        pluginId: "optional-demo",
+      createNamedToolEntry("optional-demo", "optional_tool", {
         optional: true,
-        source: "/tmp/optional-demo.js",
-        names: ["optional_tool"],
         factory: ownerFactory,
-      },
-      {
-        pluginId: "multi",
-        optional: true,
-        source: "/tmp/multi.js",
-        names: ["optional_tool"],
-        factory: foreignFactory,
-      },
+      }),
+      createNamedToolEntry("multi", "optional_tool", { optional: true, factory: foreignFactory }),
     ]);
 
     const tools = resolvePluginTools(
@@ -2522,15 +2473,7 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("rejects plugin id collisions with core tool names", () => {
-    const registry = setRegistry([
-      {
-        pluginId: "message",
-        optional: false,
-        source: "/tmp/message.js",
-        names: ["optional_tool"],
-        factory: () => makeTool("optional_tool"),
-      },
-    ]);
+    const registry = setRegistry([createNamedToolEntry("message", "optional_tool")]);
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -2544,20 +2487,8 @@ describe("resolvePluginTools optional tools", () => {
 
   it("allows a plugin to register a second tool when one tool shares the plugin id", () => {
     const registry = setRegistry([
-      {
-        pluginId: "demo",
-        optional: false,
-        source: "/tmp/demo.js",
-        names: ["demo"],
-        factory: () => makeTool("demo"),
-      },
-      {
-        pluginId: "demo",
-        optional: false,
-        source: "/tmp/demo.js",
-        names: ["extra_tool"],
-        factory: () => makeTool("extra_tool"),
-      },
+      createNamedToolEntry("demo", "demo"),
+      createNamedToolEntry("demo", "extra_tool"),
     ]);
 
     const tools = resolvePluginTools(createResolveToolsParams({}));
@@ -2685,7 +2616,9 @@ describe("resolvePluginTools optional tools", () => {
         field === "schema"
           ? "broken_tool missing parameters object"
           : `ordinary ${field} getter failure`;
-      const broken =
+      const expectedMessage = `plugin tool is malformed (schema-bug): ${reason}`;
+      const siblingNames = ["valid_tool", "independent_tool"];
+      let broken =
         field === "schema"
           ? createMalformedTool("broken_tool")
           : Object.defineProperty(makeTool("broken_tool"), field, {
@@ -2704,16 +2637,24 @@ describe("resolvePluginTools optional tools", () => {
         createNamedToolEntry("independent-owner", "independent_tool"),
       ]);
 
-      const tools = resolvePluginTools(createResolveToolsParams());
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const tools = resolvePluginTools(createResolveToolsParams());
 
-      expectResolvedToolNames(tools, ["valid_tool", "independent_tool"]);
-      expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool is malformed (schema-bug):");
-      expect(registry.diagnostics[0]?.message).toContain(reason);
-      for (const tool of tools) {
-        await expect(tool.execute("call", {}, undefined)).resolves.toEqual({
-          content: [{ type: "text", text: "ok" }],
-        });
+        expectResolvedToolNames(tools, siblingNames);
+        expectSingleDiagnosticMessage(registry.diagnostics, expectedMessage);
+        for (const tool of tools) {
+          await expect(tool.execute("call", {}, undefined)).resolves.toEqual({
+            content: [{ type: "text", text: "ok" }],
+          });
+        }
       }
+
+      broken = Object.defineProperty(makeTool("broken_tool"), "execute", { value: null });
+      expectResolvedToolNames(resolvePluginTools(createResolveToolsParams()), siblingNames);
+      expect(registry.diagnostics.map(({ message }) => message)).toEqual([
+        expect.stringContaining(expectedMessage),
+        expect.stringContaining("broken_tool missing execute function"),
+      ]);
     },
   );
 
@@ -2906,15 +2847,7 @@ describe("resolvePluginTools optional tools", () => {
         },
       };
     });
-    setRegistry([
-      {
-        pluginId: "cache-test",
-        optional: false,
-        source: "/tmp/cache-test.js",
-        names: ["cached_tool"],
-        factory,
-      },
-    ]);
+    setRegistry([createNamedToolEntry("cache-test", "cached_tool", { factory })]);
 
     const first = resolvePluginTools(
       createResolveToolsParams({
@@ -2951,13 +2884,7 @@ describe("resolvePluginTools optional tools", () => {
   it("retains a scoped plugin registry across unrelated active registry replacement", async () => {
     const factory = vi.fn(() => makeTool("cached_lifecycle_tool"));
     setRegistry([
-      {
-        pluginId: "cache-lifecycle-test",
-        optional: false,
-        source: "/tmp/cache-lifecycle-test.js",
-        names: ["cached_lifecycle_tool"],
-        factory,
-      },
+      createNamedToolEntry("cache-lifecycle-test", "cached_lifecycle_tool", { factory }),
     ]);
     const scopedRegistry = createToolRegistry([
       createNamedToolEntry("cache-lifecycle-test", "cached_lifecycle_tool", { factory }),
@@ -2980,13 +2907,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(tool?.name).toBe("cached_lifecycle_tool");
     expect(factory).toHaveBeenCalledTimes(2);
 
-    const unrelatedEntry: MockRegistryToolEntry = {
-      pluginId: "unrelated-live",
-      optional: false,
-      source: "/tmp/unrelated-live.js",
-      names: ["unrelated_live_tool"],
-      factory: () => makeTool("unrelated_live_tool"),
-    };
+    const unrelatedEntry = createNamedToolEntry("unrelated-live", "unrelated_live_tool");
     const replacementRegistry = createToolRegistry([unrelatedEntry]);
     replacementRegistry.plugins.push(createToolRuntimeRecord("cache-lifecycle-test"));
     setActivePluginRegistry?.(replacementRegistry as never, "provider-runtime", "default", "/tmp");
@@ -3031,15 +2952,7 @@ describe("resolvePluginTools optional tools", () => {
           };
         });
       const factory = makeFactory(1);
-      setRegistry([
-        {
-          pluginId: "cache-test",
-          optional: false,
-          source: "/tmp/cache-test.js",
-          names: ["cached_tool"],
-          factory,
-        },
-      ]);
+      setRegistry([createNamedToolEntry("cache-test", "cached_tool", { factory })]);
 
       const first = resolvePluginTools(
         createResolveToolsParams({
@@ -3151,15 +3064,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("keeps cached ordinary plugin tools free of network provenance", async () => {
     const factory = vi.fn(() => makeTool("cached_ordinary_tool"));
-    setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: false,
-        source: "/tmp/optional-demo.js",
-        names: ["cached_ordinary_tool"],
-        factory,
-      },
-    ]);
+    setRegistry([createNamedToolEntry("optional-demo", "cached_ordinary_tool", { factory })]);
 
     const [fresh] = resolvePluginTools(createResolveToolsParams());
     const [cached] = resolvePluginTools(createResolveToolsParams());
@@ -3188,15 +3093,7 @@ describe("resolvePluginTools optional tools", () => {
         };
       },
     }));
-    setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: false,
-        source: "/tmp/optional-demo.js",
-        names: ["cached_network_tool"],
-        factory,
-      },
-    ]);
+    setRegistry([createNamedToolEntry("optional-demo", "cached_network_tool", { factory })]);
 
     const [fresh] = resolvePluginTools(createResolveToolsParams());
     const [cached] = resolvePluginTools(createResolveToolsParams());
@@ -3273,15 +3170,7 @@ describe("resolvePluginTools optional tools", () => {
         },
       },
     ]);
-    setRegistry([
-      {
-        pluginId: "fuzzplugin",
-        optional: false,
-        source: "/tmp/fuzzplugin.js",
-        names: ["mockplugin_status"],
-        factory,
-      },
-    ]);
+    setRegistry([createNamedToolEntry("fuzzplugin", "mockplugin_status", { factory })]);
 
     const first = resolvePluginTools(createResolveToolsParams());
     const second = resolvePluginTools(createResolveToolsParams());
@@ -3306,15 +3195,7 @@ describe("resolvePluginTools optional tools", () => {
         },
       };
     });
-    setRegistry([
-      {
-        pluginId: "cache-session-test",
-        optional: false,
-        source: "/tmp/cache-session-test.js",
-        names: ["cached_session_tool"],
-        factory,
-      },
-    ]);
+    setRegistry([createNamedToolEntry("cache-session-test", "cached_session_tool", { factory })]);
 
     const first = resolvePluginTools(
       createResolveToolsParams({
@@ -3367,15 +3248,7 @@ describe("resolvePluginTools optional tools", () => {
           },
         };
       });
-      setRegistry([
-        {
-          pluginId: "cache-origin-test",
-          optional: false,
-          source: "/tmp/cache-origin-test.js",
-          names: ["cached_origin_tool"],
-          factory,
-        },
-      ]);
+      setRegistry([createNamedToolEntry("cache-origin-test", "cached_origin_tool", { factory })]);
 
       resolvePluginTools(
         createResolveToolsParams({
@@ -3789,15 +3662,7 @@ describe("resolvePluginTools optional tools", () => {
       const ctx = rawCtx as { sandboxed?: boolean };
       return ctx.sandboxed ? null : makeTool("sandbox_sensitive_tool");
     });
-    setRegistry([
-      {
-        pluginId: "sandbox-sensitive",
-        optional: false,
-        source: "/tmp/sandbox-sensitive.js",
-        names: ["sandbox_sensitive_tool"],
-        factory,
-      },
-    ]);
+    setRegistry([createNamedToolEntry("sandbox-sensitive", "sandbox_sensitive_tool", { factory })]);
 
     const hostTools = resolvePluginTools(
       createResolveToolsParams({

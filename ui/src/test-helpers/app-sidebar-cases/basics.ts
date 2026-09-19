@@ -308,7 +308,7 @@ describe("AppSidebar agent chip", () => {
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/00000002",
+      pathname: "/chat/main/00000002000040008000000000000000",
       search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
     });
   });
@@ -585,11 +585,20 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
-  it("nests subagents under the main session, including alias parent keys", async () => {
+  it.each([
+    { key: "main", mainKey: "main", pinned: false },
+    { key: "agent:main:main", mainKey: "main", pinned: true },
+    { key: "agent:main:workspace", mainKey: "workspace", pinned: false },
+    { key: "global", mainKey: "main", pinned: true, scope: "global" },
+  ])("shows only Home for $key even with subagents", async ({ key, mainKey, pinned, scope }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    // The Gateway's literal parent key can differ from its canonical main key.
-    const harness = createSessionsHarness("main", ["main"]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    const harness = createSessionsHarness("main", [key]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", {
+      defaultId: "main",
+      mainKey,
+      scope: scope === "global" ? "global" : "per-sender",
+      agents: [{ id: "main", identity: { name: "Molty" } }],
+    });
     harness.publishList({
       result: {
         ts: 2,
@@ -598,39 +607,63 @@ describe("AppSidebar agent chip", () => {
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
           {
-            key: "main",
-            kind: "direct",
+            key,
+            kind: scope === "global" ? "global" : "direct",
+            label: "[OpenClaw heartbeat poll]",
+            category: "Team",
+            pinned,
             updatedAt: 5,
             childSessions: ["agent:main:subagent:thread-a"],
           },
           {
             key: "agent:main:subagent:thread-a",
-            spawnedBy: "main",
+            spawnedBy: key,
             kind: "direct",
             label: "Spawned thread",
             updatedAt: 4,
+            hasActiveRun: true,
+            status: "running",
           },
         ],
       },
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector('[data-session-key="main"]')).not.toBeNull();
+    expect(sidebar.querySelectorAll('.nav-item--home[href="/chat/main"]')).toHaveLength(1);
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector(`[data-child-session-toggle="${key}"]`)).toBeNull();
     expect(sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]')).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>('[data-child-session-toggle="main"]')?.click();
+    expect(
+      sidebar.querySelector('.nav-item--home .session-glyph__ring[aria-label="Subagents working"]'),
+    ).not.toBeNull();
+
+    const result = harness.sessions.state.result!;
+    harness.publishList({
+      result: {
+        ...result,
+        ts: 3,
+        sessions: result.sessions.map((row) =>
+          row.key === "agent:main:subagent:thread-a"
+            ? Object.assign({}, row, {
+                hasActiveRun: false,
+                status: "failed",
+                endedAt: 6,
+                updatedAt: 6,
+                lastRunError: "Review failed",
+              })
+            : row,
+        ),
+      },
+    });
     await sidebar.updateComplete;
-    const promoted = sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]');
-    expect(promoted).not.toBeNull();
-    expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(true);
-    expect(promoted?.textContent).toContain("Spawned thread");
-    expect(promoted?.querySelector("[data-sidebar-session-pin]")).toBeNull();
-    promoted?.querySelector<HTMLButtonElement>("[data-session-menu]")?.click();
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-session-menu",
+    expect(sidebar.querySelectorAll(".nav-item--home")).toHaveLength(1);
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(
+      sidebar.querySelector('.nav-item--home [data-session-attention="error"]'),
+    ).not.toBeNull();
+    expect(sidebar.querySelector(".nav-item--home")?.textContent).toContain(
+      "Child session Spawned thread failed: Review failed",
     );
-    expect(menu).not.toBeNull();
-    await menu?.updateComplete;
-    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 });

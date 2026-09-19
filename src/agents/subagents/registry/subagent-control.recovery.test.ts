@@ -27,6 +27,7 @@ import {
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
 import * as sessionLifecycle from "../../../sessions/session-lifecycle-admission.js";
+import { observeSessionWorkAdmissionDrain } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
 import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
@@ -311,21 +312,16 @@ it.each(
         admission.release();
       },
     });
-    const interruptAdmissions = sessionLifecycle.interruptSessionWorkAdmissions;
-    const drain = vi
-      .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
-      .mockImplementation(async (params) => {
-        const released = await interruptAdmissions(params);
-        if (params.scope === storePath && Array.from(params.identities).includes(aKey)) {
-          expect(released).toBe(true);
-          expect(isAgentRunDirectAbortReason(admissionStopReason)).toBe(true);
-          // Recovery/reset runs after the real drain, before the kill owner finishes,
-          // without holding an admission across its bounded deadline.
-          entered.resolve();
-          await resume.promise;
-        }
-        return released;
-      });
+    const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
+      if (params.scope === storePath && Array.from(params.identities).includes(aKey)) {
+        expect(released).toBe(true);
+        expect(isAgentRunDirectAbortReason(admissionStopReason)).toBe(true);
+        // Recovery/reset runs after the real drain, before the kill owner finishes,
+        // without holding an admission across its bounded deadline.
+        entered.resolve();
+        await resume.promise;
+      }
+    });
     const dispatchChild = vi.fn(async () => {});
     enqueueSwarmRun({
       groupId: "recovery-lane",
@@ -677,7 +673,7 @@ it.each(
       try {
         await pending;
       } finally {
-        drain.mockRestore();
+        restoreDrain();
         releaseSwarmRun("a");
         releaseSwarmRun("child");
         releaseSwarmRun("fresh-capacity");

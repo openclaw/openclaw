@@ -11,12 +11,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { JsonObject } from "./protocol.js";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createStartedThreadHarness,
   fastWait,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
-  seedRunSessionOwnerForTest,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";

@@ -3,8 +3,8 @@ import type { Duplex } from "node:stream";
 import {
   rejectWebSocketUpgrade,
   startWebSocketKeepalive,
+  WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
-import { WebSocketServer } from "ws";
 import { attachBrowserScreencastViewer } from "./session.js";
 import { consumeBrowserScreencastToken } from "./tokens.js";
 

@@ -13,12 +13,12 @@ import {
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
-  listOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "./openclaw-agent-db.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

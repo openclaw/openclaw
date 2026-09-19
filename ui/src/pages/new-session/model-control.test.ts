@@ -127,7 +127,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
-        { agentId: "main", limitPerHost: 1 },
+        { agentId: "main", metadataOnly: true },
         { signal: expect.any(AbortSignal) },
       ),
     );
@@ -982,29 +982,42 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
-  it("drops a stored model and its reasoning override when the model is unavailable", async () => {
-    const { context, request } = contextWith([
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
-    ]);
-    const notify = vi.fn();
-    const onSelectionChange = vi.fn();
-    const control = new NewSessionModelControl(notify, onSelectionChange);
+  it.each(["missing", "denied"])(
+    "drops a stored model and reasoning when the model is %s",
+    async (state) => {
+      const { context, request } = contextWith([
+        { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+        ...(state === "denied"
+          ? [
+              {
+                id: "retired-model",
+                name: "Retired model",
+                provider: "anthropic",
+                manualSelectionAllowed: false,
+              },
+            ]
+          : []),
+      ]);
+      const notify = vi.fn();
+      const onSelectionChange = vi.fn();
+      const control = new NewSessionModelControl(notify, onSelectionChange);
 
-    control.load(context, "main", true, {
-      preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
-    });
-    await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
-    expect(control.thinkingLevel).toBe("high");
+      control.load(context, "main", true, {
+        preference: { model: "openai/gpt-5.6-sol", thinkingLevel: "high" },
+      });
+      await vi.waitFor(() => expect(control.selected).toBe("openai/gpt-5.6-sol"));
+      expect(control.thinkingLevel).toBe("high");
 
-    control.load(context, "main", true, {
-      preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
-    });
+      control.load(context, "main", true, {
+        preference: { model: "anthropic/retired-model", thinkingLevel: "high" },
+      });
 
-    expect(request).toHaveBeenCalledOnce();
-    expect(control.selected).toBe("");
-    expect(control.thinkingLevel).toBe("");
-    expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
-  });
+      expect(request).toHaveBeenCalledOnce();
+      expect(control.selected).toBe("");
+      expect(control.thinkingLevel).toBe("");
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ model: "", thinkingLevel: "" });
+    },
+  );
 
   it("drops a stored reasoning override when its option is no longer available", async () => {
     const { context, request } = contextWith([

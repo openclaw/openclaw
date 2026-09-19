@@ -553,6 +553,15 @@ class WearTalkAvatarTest {
     assertEquals(WearAvatarMotionInputs(animationSeconds = 12.5f, mouthLevel = 1f), inputs)
   }
 
+  private fun pcm16LeMouthLevels(
+    pcm: ByteArray,
+    sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
+    frameMillis: Int = MOUTH_FRAME_MILLIS,
+  ): List<Float> =
+    Pcm16MouthLevelAccumulator(sampleRateHz, frameMillis).run {
+      append(pcm) + flush()
+    }
+
   private fun samplesForFrames(frameCount: Int): Int = WEAR_REALTIME_SAMPLE_RATE_HZ * MOUTH_FRAME_MILLIS / 1_000 * frameCount
 
   private fun pcm16Le(

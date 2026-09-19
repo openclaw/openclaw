@@ -12,6 +12,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import {
@@ -230,7 +231,11 @@ module.exports = {
               : {},
         };
         const params = {
-          agentFacts: { ...prepared.agentFacts[0]!, authStore },
+          agentFacts: {
+            ...prepared.agentFacts[0]!,
+            authStore,
+            input: { ...prepared.agentFacts[0]!.input, config: captureRuntimeConfig(runtime) },
+          },
           pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         };
         expect(params.agentFacts.providerIds).toContain(provider);

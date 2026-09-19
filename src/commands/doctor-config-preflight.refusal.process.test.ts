@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -16,13 +17,15 @@ import {
   runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = createFixtureLifetime();
+afterAll(() => tempDirs.cleanup());
+const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
 
 describe("Doctor CLI migration refusal", () => {
   it.each(["index.js", "entry.js"])(
     "refuses missing deferral metadata through %s with the 2026.9.2 row only in WAL",
     (entry) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-doctor-update-wal-"));
+      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-update-wal-"));
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
@@ -102,38 +105,40 @@ describe("Doctor CLI migration refusal", () => {
     60_000,
   );
 
-  it("fails closed with manual recovery for an unsupported workspace and conflicting exec policy", async () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-doctor-unsupported-state-"));
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(root, "workspace");
-    const configPath = path.join(root, "openclaw.json");
-    const sourcePath = path.join(stateDir, "exec-approvals.json");
-    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.mkdirSync(workspaceDir);
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
-        plugins: { enabled: false },
-      }),
-    );
-    const legacy = JSON.stringify({ version: 1, defaults: { security: "full" }, agents: {} });
-    fs.writeFileSync(sourcePath, legacy);
-    const env = {
-      PATH: process.env.PATH,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-      NO_COLOR: "1",
-      CI: "1",
-    };
-    const runtimeRoot = createBuiltRuntime(root);
-    await runIsolatedModuleScript(
-      env,
-      `
+  it(
+    "fails closed with manual recovery for an unsupported workspace and conflicting exec policy",
+    async () => {
+      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-unsupported-state-"));
+      const stateDir = path.join(root, "state");
+      const workspaceDir = path.join(root, "workspace");
+      const configPath = path.join(root, "openclaw.json");
+      const sourcePath = path.join(stateDir, "exec-approvals.json");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(workspaceDir);
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
+          plugins: { enabled: false },
+        }),
+      );
+      const legacy = JSON.stringify({ version: 1, defaults: { security: "full" }, agents: {} });
+      fs.writeFileSync(sourcePath, legacy);
+      const env = {
+        PATH: process.env.PATH,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+        NO_COLOR: "1",
+        CI: "1",
+      };
+      const runtimeRoot = createBuiltRuntime(root);
+      await runIsolatedModuleScript(
+        env,
+        `
       import { openOpenClawStateDatabase, closeOpenClawStateDatabaseForTest } from "./src/state/openclaw-state-db.ts";
       import { resolveWorkspaceStateIdentity } from "./src/agents/workspace-state-identity.ts";
       import { writeExecApprovalsConfigRow } from "./src/infra/exec-approvals-sqlite.ts";
@@ -143,47 +148,50 @@ describe("Doctor CLI migration refusal", () => {
       writeExecApprovalsConfigRow({ db, file: { version: 1, defaults: { security: "deny" }, agents: {} } });
       closeOpenClawStateDatabaseForTest();
     `,
-      { runtimeRoot, timeoutMs: 60_000 },
-    );
-    const result = runBuiltRuntime(
-      runtimeRoot,
-      env,
-      ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-      60_000,
-    );
-    const output = `${result.stdout}\n${result.stderr}`;
-    const text = output.replaceAll("│", " ").replace(/\s+/g, " ");
-    expect(result.error, output).toBeUndefined();
-    expect(result.status, output).toBe(1);
-    expect(output).toContain(databasePath);
-    expect(output).toContain(workspaceDir);
-    expect(text).toContain("unsupported workspace setup version 99");
-    expect(text).toContain("compatible OpenClaw build");
-    expect(output).toContain(sourcePath);
-    expect(text).toContain("reconcile this file");
-    expect(text).not.toMatch(/(?:openclaw\s+)?doctor\s+--(?:fix|repair)/i);
-    expect(output).not.toContain("Doctor complete.");
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe(legacy);
-    const db = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(db.prepare("SELECT version FROM workspace_setup_state").all()).toEqual([
-        { version: 99 },
-      ]);
-      const policy = db
-        .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
-        .get();
-      expect(JSON.parse(String(policy?.raw_json))).toMatchObject({
-        defaults: { security: "deny" },
-      });
-    } finally {
-      db.close();
-    }
-  }, 120_000);
+        { runtimeRoot, timeoutMs: DOCTOR_CHILD_TIMEOUT_MS },
+      );
+      const result = await tempDirs.track(
+        runBuiltRuntime(
+          runtimeRoot,
+          env,
+          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+          DOCTOR_CHILD_TIMEOUT_MS,
+        ),
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+      const text = output.replaceAll("│", " ").replace(/\s+/g, " ");
+      expect(result.code, output).toBe(1);
+      expect(output).toContain(databasePath);
+      expect(output).toContain(workspaceDir);
+      expect(text).toContain("unsupported workspace setup version 99");
+      expect(text).toContain("compatible OpenClaw build");
+      expect(output).toContain(sourcePath);
+      expect(text).toContain("reconcile this file");
+      expect(text).not.toMatch(/(?:openclaw\s+)?doctor\s+--(?:fix|repair)/i);
+      expect(output).not.toContain("Doctor complete.");
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe(legacy);
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(db.prepare("SELECT version FROM workspace_setup_state").all()).toEqual([
+          { version: 99 },
+        ]);
+        const policy = db
+          .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
+          .get();
+        expect(JSON.parse(String(policy?.raw_json))).toMatchObject({
+          defaults: { security: "deny" },
+        });
+      } finally {
+        db.close();
+      }
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS, DOCTOR_CHILD_TIMEOUT_MS),
+  );
 
   it.each([false, true])(
     "honors the ordered graph with valid TUI=%s",
     async (validTui) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-doctor-refusal-"));
+      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-refusal-"));
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const tuiPath = path.join(stateDir, "tui", "last-session.json");
@@ -204,23 +212,24 @@ describe("Doctor CLI migration refusal", () => {
       fs.writeFileSync(tuiPath, tuiRaw);
       fs.writeFileSync(approvalsPath, approvalsRaw);
       const runtimeRoot = createBuiltRuntime(root);
-      const result = runBuiltRuntime(
-        runtimeRoot,
-        {
-          PATH: process.env.PATH,
-          HOME: root,
-          USERPROFILE: root,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-          NO_COLOR: "1",
-          CI: "1",
-        },
-        ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-        60_000,
+      const result = await tempDirs.track(
+        runBuiltRuntime(
+          runtimeRoot,
+          {
+            PATH: process.env.PATH,
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+            NO_COLOR: "1",
+            CI: "1",
+          },
+          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+          DOCTOR_CHILD_TIMEOUT_MS,
+        ),
       );
       const output = `${result.stdout}\n${result.stderr}`;
-      expect(result.error, output).toBeUndefined();
       expect(result.signal, output).toBeNull();
       const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
         readOnly: true,
@@ -230,7 +239,7 @@ describe("Doctor CLI migration refusal", () => {
           .prepare("SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'")
           .all();
         if (validTui) {
-          expect(result.status, output).toBe(0);
+          expect(result.code, output).toBe(0);
           expect(output).toContain("Doctor complete.");
           expect(output.indexOf("TUI last-session pointer(s)")).toBeGreaterThanOrEqual(0);
           expect(output.indexOf("Imported legacy exec approvals")).toBeGreaterThan(
@@ -244,7 +253,7 @@ describe("Doctor CLI migration refusal", () => {
           expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsRaw);
           expect(fs.readFileSync(tuiPath, "utf8")).toBe(tuiRaw);
           expect(approvals).toEqual([]);
-          expect(result.status, output).toBe(1);
+          expect(result.code, output).toBe(1);
           expect(output).toContain("Failed reading legacy TUI last-session state");
           expect(output).not.toContain("Imported legacy exec approvals");
           expect(output).not.toContain("Doctor complete.");
@@ -254,6 +263,93 @@ describe("Doctor CLI migration refusal", () => {
         db.close();
       }
     },
-    60_000,
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
   );
+});
+
+describe("Doctor CLI config recovery", () => {
+  it("repairs retired and unknown keys and migrates legacy state with the system agent in one run", async () => {
+    const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-config-state-"));
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const configPath = path.join(root, "openclaw.json");
+    const sessionsDir = path.join(stateDir, "sessions");
+    const workspaceSource = path.join(workspaceDir, ".openclaw", "workspace-state.json");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(path.dirname(workspaceSource), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "digest" } },
+          entries: { other: {}, digest: { workspace: workspaceDir } },
+        },
+        browser: { relayBindHost: "127.0.0.1", obsoleteSetting: true },
+        commands: { modelsWrite: true },
+        gateway: { mode: "local", auth: { mode: "none" } },
+        plugins: { enabled: false },
+      }),
+    );
+    const completedAt = "2026-09-01T12:00:00.000Z";
+    fs.writeFileSync(
+      workspaceSource,
+      JSON.stringify({ version: 1, setupCompletedAt: completedAt }),
+    );
+    fs.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({ legacy: { sessionId: "legacy-session", updatedAt: 1 } }),
+    );
+    fs.writeFileSync(path.join(sessionsDir, "legacy-session.jsonl"), "{}\n");
+    const runtimeRoot = createBuiltRuntime(root);
+    const result = await tempDirs.track(
+      runBuiltRuntime(
+        runtimeRoot,
+        {
+          PATH: process.env.PATH,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+          NO_COLOR: "1",
+          CI: "1",
+        },
+        ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+        60_000,
+      ),
+    );
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.code, output).toBe(0);
+    expect(output).toContain("Doctor complete.");
+    const repaired = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(repaired.browser).not.toHaveProperty("relayBindHost");
+    expect(repaired.browser).not.toHaveProperty("obsoleteSetting");
+    expect(repaired.commands).not.toHaveProperty("modelsWrite");
+    expect(repaired.agents.defaults.systemAgent.agentId).toBe("digest");
+    expect(fs.existsSync(workspaceSource)).toBe(false);
+    expect(fs.existsSync(path.join(sessionsDir, "sessions.json"))).toBe(false);
+    const agentDb = new DatabaseSync(
+      path.join(stateDir, "agents", "digest", "agent", "openclaw-agent.sqlite"),
+      { readOnly: true },
+    );
+    try {
+      expect(agentDb.prepare("SELECT current_session_id FROM session_nodes").all()).toContainEqual({
+        current_session_id: "legacy-session",
+      });
+    } finally {
+      agentDb.close();
+    }
+    const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      expect(db.prepare("SELECT setup_completed_at FROM workspace_setup_state").all()).toEqual([
+        { setup_completed_at: completedAt },
+      ]);
+    } finally {
+      db.close();
+    }
+  }, 75_000);
 });

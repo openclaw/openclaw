@@ -6,15 +6,13 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  getActiveTranscriptKysely,
-  withCurrentProjectionSnapshot,
-} from "./session-accessor.sqlite-active-projection.js";
+import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptEventRow,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,

@@ -189,6 +189,13 @@ export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTrans
   return { nodes, byId, ...navigation };
 }
 
+/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly unknown[],
+): string | undefined {
+  return scanSessionTranscriptTree(events).leafId ?? undefined;
+}
+
 export function scanSessionTranscriptNavigation<T>(
   entries: Iterable<T>,
   storage: SessionTranscriptNavigationStorage<T>,
@@ -362,6 +369,19 @@ export function selectSessionTranscriptActiveEntries<T, R>(params: {
     return [entry, ...activeEntries];
   }
   return activeEntries;
+}
+
+export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTree<T>) {
+  const referencedParents = new Set(
+    tree.nodes.flatMap((node) =>
+      isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
+    ),
+  );
+  return tree.nodes.filter(
+    (node) =>
+      !isSessionTranscriptLeafControl(node.entry) &&
+      (node.id === tree.leafId || !referencedParents.has(node.id)),
+  );
 }
 
 /** Select one normalized path, retaining a reachable suffix after missing ancestors. */

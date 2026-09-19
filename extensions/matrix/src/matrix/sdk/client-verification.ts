@@ -20,6 +20,10 @@ import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } fro
 const normalizeNullableVerificationString = normalizeNullableString;
 
 export abstract class MatrixClientVerification extends MatrixClientCore {
+  async refreshOwnDeviceKeys(): Promise<void> {
+    await this.client.getCrypto()?.userHasCrossSigningKeys(await this.getUserId(), true);
+  }
+
   async getRoomKeyBackupStatus(): Promise<MatrixRoomKeyBackupStatus> {
     if (!this.encryptionEnabled) {
       return {
@@ -137,7 +141,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
   }
 
   async getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus> {
-    const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
+    const recoveryKey = await this.recoveryKeyStore.getRecoveryKeySummary();
     const userId = this.client.getUserId() ?? this.selfUserId ?? null;
     const deviceId = this.client.getDeviceId()?.trim() || null;
     const diagnosticTimeoutMs = Math.min(this.localTimeoutMs, MATRIX_STATUS_DIAGNOSTIC_TIMEOUT_MS);

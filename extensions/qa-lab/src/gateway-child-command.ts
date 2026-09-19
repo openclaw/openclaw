@@ -26,7 +26,6 @@ type QaGatewayChildDirectCommand = {
 };
 
 const QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS = 120_000;
-const QA_GATEWAY_CLI_DRAIN_TIMEOUT_MS = 1_000;
 
 type QaGatewayChildVerifiedCommand = Omit<QaGatewayChildDirectCommand, "processBoundary"> & {
   processBoundary: QaGatewayProcessBoundaryConfig;
@@ -105,16 +104,12 @@ async function readQaGatewayCliCommand(
     fail(`qa gateway cli stdin failed: ${createQaGatewayCliError(error).message}`),
   );
   child.once("exit", (code) => finish(code ?? 1));
-  const closed = new Promise<void>((resolve) => {
-    child.once("close", () => resolve());
-  });
   const onAbort = () => fail("qa gateway CLI cancelled: lifecycle is closed");
   lifetime.signal.addEventListener("abort", onAbort, { once: true });
   const executionTimer = setTimeout(
     () => fail(`qa gateway CLI exceeded ${QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS}ms`),
     QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS,
   );
-  let drainTimer: NodeJS.Timeout | undefined;
   let exitCode: number | undefined;
   let stopped: Awaited<ReturnType<QaGatewayChildLifecycle["stopProcess"]>>;
   try {
@@ -124,19 +119,14 @@ async function readQaGatewayCliCommand(
     // even after success/errors; never wait for close after unconfirmed shutdown.
     stopped = await lifetime.stopProcess(owned);
     if (stopped.process !== "unconfirmed") {
-      await Promise.race([
-        closed,
-        new Promise<void>((resolve) => {
-          drainTimer = setTimeout(() => {
-            fail("qa gateway CLI stdio did not close after process-tree shutdown");
-            resolve();
-          }, QA_GATEWAY_CLI_DRAIN_TIMEOUT_MS);
-        }),
-      ]);
+      try {
+        await lifetime.waitForClose(owned);
+      } catch (error) {
+        fail(error);
+      }
     }
   } finally {
     clearTimeout(executionTimer);
-    clearTimeout(drainTimer);
     lifetime.signal.removeEventListener("abort", onAbort);
     child.stdin?.destroy();
     child.stdout?.destroy();

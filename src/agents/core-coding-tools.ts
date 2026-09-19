@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -13,6 +14,7 @@ import {
   type SkillInstructionDeliveryCache,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuardWithOptions,
+  wrapSandboxFileToolPath,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -22,6 +24,7 @@ import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
+import { relativePathInsideSandboxRoot } from "./path-policy.js";
 import type { SandboxContext } from "./sandbox.js";
 import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -29,18 +32,9 @@ import { createLsTool, type LsOperations } from "./sessions/tools/ls.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 
-function sandboxReadMounts(
-  sandbox: SandboxContext,
-): Array<{ containerRoot: string; hostRoot: string }> | undefined {
-  const mounts = buildSandboxFsMounts(sandbox)
-    .filter((mount) => mount.source !== "workspace")
-    .map((mount) => ({ containerRoot: mount.containerRoot, hostRoot: mount.hostRoot }));
-  return mounts.length > 0 ? mounts : undefined;
-}
-
-function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
+function resolveSkillReadRoots(skills?: SkillSnapshot["resolvedSkills"]): string[] | undefined {
   const roots = new Set<string>();
-  for (const skill of skillsSnapshot?.resolvedSkills ?? []) {
+  for (const skill of skills ?? []) {
     const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
     const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
     const root = baseDir || (filePath ? path.dirname(filePath) : "");
@@ -64,14 +58,16 @@ function guardHostWorkspaceTool(
 
 type CoreCodingToolsOptions = {
   abortSignal?: AbortSignal;
+  attachmentReadRoot?: string;
   codingRoot: string;
   containmentRoot: string;
   includeBaseCodingTools: boolean;
-  includeShellTools: boolean;
+  shellTools: "disabled" | "patch-only" | "full";
   workspaceOnly: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
+  skillReadResources?: SkillSnapshot["resolvedSkills"];
   skillInstructionPaths?: readonly string[];
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   modelContextWindowTokens?: number;
@@ -94,14 +90,20 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   if (
     sandboxRoot &&
     !sandboxFsBridge &&
-    (options.includeBaseCodingTools || options.includeShellTools)
+    (options.includeBaseCodingTools || options.shellTools !== "disabled")
   ) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
-  const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options.skillsSnapshot);
+  const skillReadResources = options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills;
+  const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(skillReadResources);
+  const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
+  const hostReadRoots = [
+    ...(skillReadRoots ?? []),
+    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+  ];
   const needsReadOnlyWorkspaceSkillMounts =
-    options.includeShellTools || (options.includeBaseCodingTools && options.workspaceOnly);
+    options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
       ? resolveReadOnlyWorkspaceSkillMounts({
@@ -112,6 +114,26 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           workspaceAccess: sandbox.workspaceAccess,
         })
       : [];
+
+  // Older external SDK bridges predate pathMappings. Only absence selects
+  // their reconstructed admission; a supplied empty table is authoritative.
+  const sandboxFileMounts =
+    sandbox &&
+    ((options.includeBaseCodingTools && options.workspaceOnly) ||
+      (options.shellTools !== "disabled" &&
+        options.applyPatchEnabled &&
+        options.applyPatchWorkspaceOnly))
+      ? (sandboxFsBridge?.pathMappings ?? buildSandboxFsMounts(sandbox))
+      : [];
+  const sandboxWorkspaceMounts = sandbox
+    ? sandboxFileMounts.filter(
+        (mount) =>
+          relativePathInsideSandboxRoot(sandbox.containerWorkdir, mount.containerRoot) !== null,
+      )
+    : [];
+  // Declared mount read exceptions do not grant writes or enumeration outside
+  // the container workspace. Both sets reuse the same effective selection.
+  const sandboxReadMounts = sandboxFileMounts;
 
   const base: AnyAgentTool[] = [];
   if (options.includeBaseCodingTools) {
@@ -139,16 +161,29 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
       });
       // Skill-content read exceptions do not grant directory enumeration outside the workspace.
+      const guardedLs = options.workspaceOnly
+        ? wrapToolWorkspaceRootGuardWithOptions(
+            ls,
+            sandboxRoot ?? options.containmentRoot,
+            sandboxRoot
+              ? {
+                  containerMounts: sandboxWorkspaceMounts,
+                  containerWorkdir: sandbox.containerWorkdir,
+                  bridge: sandboxFsBridge,
+                  normalizeGuardedPathParams: true,
+                }
+              : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+          )
+        : ls;
+      // Resolve the default directory before the guard as well as execution.
       base.push(
-        options.workspaceOnly
-          ? wrapToolWorkspaceRootGuardWithOptions(
-              ls,
-              sandboxRoot ?? options.containmentRoot,
-              sandboxRoot
-                ? { containerWorkdir: sandbox.containerWorkdir, bridge: sandboxFsBridge }
-                : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
-            )
-          : ls,
+        sandboxRoot
+          ? wrapSandboxFileToolPath(guardedLs, {
+              root: sandboxRoot,
+              bridge: sandboxFsBridge!,
+              defaultPath: ".",
+            })
+          : guardedLs,
       );
     }
     const read = sandboxRoot
@@ -170,12 +205,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           sandboxRoot ?? options.containmentRoot,
           sandboxRoot
             ? {
-                additionalContainerMounts: sandboxReadMounts(sandbox),
+                containerMounts: sandboxReadMounts,
                 containerWorkdir: sandbox.containerWorkdir,
                 bridge: sandboxFsBridge,
+                readPathValidation: "bridge",
               }
             : {
-                additionalRoots: skillReadRoots,
+                additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },
@@ -191,7 +227,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           cwd: options.codingRoot,
         });
     base.push(
-      wrapReadToolWithSkillContent(wrapped, options.skillsSnapshot?.resolvedSkills, {
+      wrapReadToolWithSkillContent(wrapped, skillReadResources, {
         modelContextWindowTokens: options.modelContextWindowTokens,
         imageSanitization: options.imageSanitization,
         cwd: options.codingRoot,
@@ -230,14 +266,18 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     base.push(
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
+            containerMounts: sandboxWorkspaceMounts,
             containerWorkdir: sandbox.containerWorkdir,
             bridge: sandboxFsBridge,
+            normalizeGuardedPathParams: true,
           })
         : edit,
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(write, sandboxRoot, {
+            containerMounts: sandboxWorkspaceMounts,
             containerWorkdir: sandbox.containerWorkdir,
             bridge: sandboxFsBridge,
+            normalizeGuardedPathParams: true,
           })
         : write,
     );
@@ -245,22 +285,30 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   options.recordToolPrepStage?.("base-coding-tools");
 
   const shell: AnyAgentTool[] = [];
-  if (options.includeShellTools) {
-    if (options.applyPatchEnabled && (!sandboxRoot || allowWorkspaceWrites)) {
-      shell.push(
-        createApplyPatchTool({
-          cwd: options.codingRoot,
-          root: options.containmentRoot,
-          sandbox:
-            sandboxRoot && allowWorkspaceWrites
-              ? { root: sandboxRoot, bridge: sandboxFsBridge! }
-              : undefined,
-          workspaceOnly: options.applyPatchWorkspaceOnly,
-          memoryWriteProvenance: options.memoryWriteProvenance,
-          abortSignal: options.abortSignal,
-        }),
-      );
-    }
+  if (
+    options.shellTools !== "disabled" &&
+    options.applyPatchEnabled &&
+    (!sandboxRoot || allowWorkspaceWrites)
+  ) {
+    shell.push(
+      createApplyPatchTool({
+        cwd: options.codingRoot,
+        root: options.containmentRoot,
+        sandbox:
+          sandboxRoot && allowWorkspaceWrites
+            ? {
+                root: sandboxRoot,
+                bridge: sandboxFsBridge!,
+                workspaceMounts: sandboxWorkspaceMounts,
+              }
+            : undefined,
+        workspaceOnly: options.applyPatchWorkspaceOnly,
+        memoryWriteProvenance: options.memoryWriteProvenance,
+        abortSignal: options.abortSignal,
+      }),
+    );
+  }
+  if (options.shellTools === "full") {
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,

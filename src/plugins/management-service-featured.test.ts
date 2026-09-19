@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { OfficialExternalPluginCatalogEntry } from "./official-external-plugin-catalog.js";
@@ -182,6 +183,52 @@ const hostedImpostorEntry = hostedFeedEntry({
 });
 
 describe("plugin management Featured authority", () => {
+  it.each([
+    ["slack", "@openclaw/slack"],
+    ["msteams", "@openclaw/msteams"],
+    ["amazon-bedrock", "@openclaw/amazon-bedrock-provider"],
+  ])(
+    "joins the published %s counterpart to its bundled or npm installation",
+    async (id, packageName) => {
+      for (const origin of ["bundled", "global"] as const) {
+        mocks.metadata.mockReturnValue(
+          metadataSnapshot({
+            id,
+            packageName,
+            origin,
+            ...(origin === "global" ? { installRecord: { source: "npm", spec: packageName } } : {}),
+          }),
+        );
+        mocks.officialCatalog.mockResolvedValue(
+          hostedCatalog([hostedFeedEntry({ packageName, title: id })]),
+        );
+        clearManagedPluginCatalogCache();
+        const local = await listManagedPlugins({ config: {}, env: {} });
+        const items = joinClawHubPluginCatalog({
+          local,
+          remote: [
+            {
+              packageName,
+              displayName: id,
+              ownerHandle: "openclaw",
+              family: "code-plugin",
+              isOfficial: true,
+              categories: [],
+            },
+          ],
+          includeBundledOnly: true,
+          intent: "all",
+          query: id,
+        });
+        expect(items).toHaveLength(1);
+        expect(items[0]).toMatchObject({
+          catalog: { packageName, official: true, author: "openclaw" },
+          local: { pluginId: id, installed: true, action: "manage" },
+        });
+      }
+    },
+  );
+
   it("projects listing metadata from a top-level hosted feed entry", async () => {
     const icon = "https://cdn.example.test/expedia.png";
     const officialCatalog = {
@@ -425,9 +472,19 @@ describe("plugin management Featured authority", () => {
   });
 
   it.each([
-    { id: "workboard", name: "Workboard", packageName: "@openclaw/workboard" },
-    { id: "memory-wiki", name: "Memory Wiki", packageName: "@openclaw/memory-wiki" },
-  ])("keeps local curation for private bundled-only $name", async (plugin) => {
+    {
+      id: "workboard",
+      name: "Workboard",
+      packageName: "@openclaw/workboard",
+      featured: true,
+    },
+    {
+      id: "memory-wiki",
+      name: "Memory Wiki",
+      packageName: "@openclaw/memory-wiki",
+      featured: false,
+    },
+  ])("resolves bundled $name curation from its publication state", async (plugin) => {
     mocks.metadata.mockReturnValue(metadataSnapshot(plugin));
     mocks.officialCatalog.mockResolvedValue(
       hostedCatalog([
@@ -448,7 +505,7 @@ describe("plugin management Featured authority", () => {
         id: plugin.id,
         name: plugin.name,
         packageName: plugin.packageName,
-        featured: true,
+        featured: plugin.featured,
         order: 10,
       }),
     ]);

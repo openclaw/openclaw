@@ -27,6 +27,8 @@ export function promptVerb(command: FileTransferNodeInvokeCommand): string {
       return "Write file";
     case "file.fetch":
       return "Read file";
+    case "file.stat":
+      return "Read file metadata";
   }
   return command;
 }

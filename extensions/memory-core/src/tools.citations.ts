@@ -1,4 +1,3 @@
-// Memory Core plugin module implements tools.citations behavior.
 import {
   parseAgentSessionKey,
   type MemoryCitationsMode,

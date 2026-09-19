@@ -2,12 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   closeOpenClawStateDatabaseForTest,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { createOperatorApprovalSessionEventRuntime } from "./operator-approval-session-events.js";
 import {
   insertOperatorApproval,
@@ -22,6 +23,7 @@ const SOURCE_SESSION_KEY = "agent:main:child";
 const PARENT_SESSION_KEY = "agent:main:parent";
 const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
+const subscriptions: Array<() => void> = [];
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
@@ -125,6 +127,10 @@ function createRuntime(params: {
   reconcileTerminal?: Parameters<
     typeof createOperatorApprovalSessionEventRuntime
   >[0]["reconcileTerminal"];
+  getLiveManager?: Parameters<
+    typeof createOperatorApprovalSessionEventRuntime
+  >[0]["getLiveManager"];
+  isCurrent?: () => boolean;
 }) {
   const subscribers = createSessionMessageSubscriberRegistry();
   const broadcastToConnIds = vi.fn<GatewayBroadcastToConnIdsFn>();
@@ -136,6 +142,8 @@ function createRuntime(params: {
     controlUiBasePath: params.controlUiBasePath,
     now: params.now,
     reconcileTerminal: params.reconcileTerminal,
+    getLiveManager: params.getLiveManager,
+    isCurrent: params.isCurrent,
   });
   return { broadcastToConnIds, runtime, subscribers };
 }
@@ -170,6 +178,9 @@ function insertPendingApproval(params: {
 
 describe("operator approval session events", () => {
   afterEach(() => {
+    for (const unsubscribe of subscriptions.splice(0)) {
+      unsubscribe();
+    }
     vi.useRealTimers();
     vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
@@ -530,6 +541,14 @@ describe("operator approval session events", () => {
     // Replay reconciliation runs only after the manager exists; route it
     // through a holder so both sides can stay const.
     const managerHolder: { current?: ExecApprovalManager } = {};
+    const executionEvents: AgentEventPayload[] = [];
+    subscriptions.push(
+      onAgentEvent((event) => {
+        if (event.runId === "approval-owner-run" && event.stream === "execution") {
+          executionEvents.push(event);
+        }
+      }),
+    );
     const parent = createClient({
       connId: "parent-reviewer",
       scopes: ["operator.approvals"],
@@ -541,6 +560,7 @@ describe("operator approval session events", () => {
       now: () => Date.now(),
       reconcileTerminal: (record) =>
         managerHolder.current?.reconcileDurableTerminal(record) ?? false,
+      getLiveManager: () => managerHolder.current,
     });
     const runtime = harness.runtime;
     const onExpired = vi.fn();
@@ -560,12 +580,17 @@ describe("operator approval session events", () => {
       {
         command: "printf replay-expiry",
         sessionKey: SOURCE_SESSION_KEY,
+        sessionId: "approval-owner-session",
+        runId: "approval-owner-run",
         agentId: "main",
       },
       3_000,
       "replay-expiry-with-waiter",
     );
     const decisionPromise = manager.register(record, 3_000);
+    expect(executionEvents.map((event) => event.data)).toEqual([
+      { approval: { id: record.id, state: "pending" } },
+    ]);
     harness.broadcastToConnIds.mockClear();
     vi.setSystemTime(record.expiresAtMs);
 
@@ -576,6 +601,10 @@ describe("operator approval session events", () => {
       truncated: false,
     });
     await expect(decisionPromise).resolves.toBeNull();
+    expect(executionEvents.map((event) => event.data)).toEqual([
+      { approval: { id: record.id, state: "pending" } },
+      { approval: { id: record.id, state: "resolved" } },
+    ]);
     expect(onExpired).toHaveBeenCalledOnce();
     expect(onExpired).toHaveBeenCalledWith(
       expect.objectContaining({ id: record.id, status: "expired" }),
@@ -597,5 +626,61 @@ describe("operator approval session events", () => {
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+  });
+
+  it("does not revive attention from stale, unmatched, unavailable, or retired approval observations", () => {
+    const record = createPendingRecord({
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+    let current = true;
+    let live: ExecApprovalRecord<OperatorApprovalRecord["source"]> = {
+      id: record.id,
+      request: record.source,
+      createdAtMs: record.createdAtMs,
+      expiresAtMs: record.expiresAtMs,
+    };
+    let managerAvailable = true;
+    const manager = { runtimeEpoch: record.runtimeEpoch, getLiveSnapshot: () => live };
+    const runtime = createRuntime({
+      clients: [],
+      getLiveManager: () => (managerAvailable ? manager : undefined),
+      isCurrent: () => current,
+    }).runtime;
+    const executionEvents: AgentEventPayload[] = [];
+    subscriptions.push(
+      onAgentEvent((event) => {
+        if (event.runId === record.source.runId && event.stream === "execution") {
+          executionEvents.push(event);
+        }
+      }),
+    );
+    runtime.publish({ phase: "pending", record });
+    expect(executionEvents).toHaveLength(1);
+    executionEvents.length = 0;
+    live = { ...live, resolvedAtMs: Date.now() };
+    runtime.publish({ phase: "pending", record });
+    live = {
+      ...live,
+      resolvedAtMs: undefined,
+      request: { ...live.request, sessionId: "replacement-session" },
+    };
+    runtime.publish({ phase: "pending", record });
+    live = {
+      ...live,
+      request: { ...live.request, sessionId: record.source.sessionId },
+      expiresAtMs: Date.now() - 1,
+    };
+    runtime.publish({ phase: "pending", record });
+    live = { ...live, expiresAtMs: record.expiresAtMs };
+    manager.runtimeEpoch = "replacement-manager";
+    runtime.publish({ phase: "pending", record });
+    manager.runtimeEpoch = record.runtimeEpoch;
+    managerAvailable = false;
+    runtime.publish({ phase: "pending", record });
+    managerAvailable = true;
+    current = false;
+    runtime.publish({ phase: "pending", record });
+    expect(executionEvents).toEqual([]);
   });
 });

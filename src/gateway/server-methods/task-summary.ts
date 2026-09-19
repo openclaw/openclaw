@@ -1,6 +1,7 @@
 // Public task summaries keep task-registry internals and unbounded status text
 // out of gateway responses and events.
 import type { TaskSummary } from "../../../packages/gateway-protocol/src/index.js";
+import { getTaskExecutionObservation } from "../../tasks/task-execution-observation.js";
 import { hasTaskTranscript } from "../../tasks/task-history.js";
 import { getTaskActivitySnapshot } from "../../tasks/task-registry-activity.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
@@ -14,7 +15,6 @@ import {
 
 type TaskLedgerStatus = TaskSummary["status"];
 
-const TASK_PROMPT_MAX_CHARS = 4_000;
 const TASK_RESULT_MAX_CHARS = 4_000;
 
 const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
@@ -49,6 +49,7 @@ function sanitizeOptionalTaskText(
 
 export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolean }): TaskSummary {
   const activity = getTaskActivitySnapshot(task.taskId);
+  const execution = getTaskExecutionObservation(task);
   const lastActivity = sanitizeOptionalTaskText(activity?.lastActivity);
   const progressResult = sanitizeTaskStatusText(task.progressSummary);
   const terminalResult = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
@@ -58,9 +59,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     truncateTaskStatusText(terminalResult, TASK_STATUS_DETAIL_MAX_CHARS) || undefined;
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
   const lastToolName = sanitizeOptionalTaskText(task.lastToolName);
-  const prompt = opts?.includePrompt
-    ? sanitizeTaskPromptText(task.task, TASK_PROMPT_MAX_CHARS) || undefined
-    : undefined;
+  const prompt = opts?.includePrompt ? sanitizeTaskPromptText(task.task) || undefined : undefined;
   const result = opts?.includePrompt
     ? (task.runtime === "subagent" || task.runtime === "acp"
         ? progressResult
@@ -76,6 +75,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     kind: task.taskKind ?? task.runtime,
     runtime: task.runtime,
     status: TASK_STATUS_TO_LEDGER_STATUS[task.status],
+    execution,
     title: formatTaskStatusTitle(task),
     ...(task.agentId ? { agentId: task.agentId } : {}),
     sessionKey: task.requesterSessionKey,

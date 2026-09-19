@@ -48,7 +48,7 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { jsonResult, textResult, type AnyAgentTool } from "./tools/common.js";
 
 export {
   clearToolSearchCatalog,
@@ -148,10 +148,10 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   };
 }
 
-function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
+function formatToolSearchBatchResponse(results: ToolSearchBatchGroup[]): AgentToolResult<{
   results: ToolSearchBatchGroup[];
   truncated?: true;
-} {
+}> {
   const bounded: ToolSearchBatchGroup[] = results.map((result) => {
     const candidates = result.candidates
       .map(compactBatchCandidate)
@@ -165,7 +165,9 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
   });
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
-  while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+  let payload = render();
+  let text = JSON.stringify(payload, null, 2);
+  while (text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -188,8 +190,10 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
     removable.candidates.pop();
     removable.truncated = true;
     truncated = true;
+    payload = render();
+    text = JSON.stringify(payload, null, 2);
   }
-  return render();
+  return textResult(text, payload);
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
@@ -355,7 +359,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             candidates: await runtime.search(search.query, { limit: search.limit }),
           })),
         );
-        return jsonResult(boundToolSearchBatchResponse(results));
+        return formatToolSearchBatchResponse(results);
       },
     },
     {

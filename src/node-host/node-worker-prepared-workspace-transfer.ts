@@ -5,17 +5,16 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
+  parseWorkspaceManifest,
+  overlayWorkspaceManifest,
+} from "../gateway/worker-environments/workspace-manifest-worker.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../gateway/worker-environments/workspace-reconcile-apply.js";
-import {
-  changedPaths,
-  manifestNodes,
-} from "../gateway/worker-environments/workspace-reconcile-core.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import type {
@@ -29,75 +28,6 @@ export type NodeWorkerPreparedWorkspaceTransfer = {
   store: NodeWorkerPreparedWorkspaceStore;
 };
 
-function applySourceChanges(
-  source: WorkerWorkspaceManifest,
-  prepared: WorkerWorkspaceManifest,
-  incoming: WorkerWorkspaceManifest,
-): WorkerWorkspaceManifest {
-  const sourceNodes = manifestNodes(source);
-  const incomingNodes = manifestNodes(incoming);
-  const nodes = manifestNodes(prepared);
-  const changed = changedPaths(source, incoming);
-  const replaced = new Set(
-    [...changed].filter(
-      (entryPath) =>
-        incomingNodes.get(entryPath)?.type !== "directory" &&
-        (incomingNodes.has(entryPath) || sourceNodes.get(entryPath)?.type !== "directory"),
-    ),
-  );
-  for (const entryPath of nodes.keys()) {
-    let remove = changed.has(entryPath);
-    for (
-      let parent = path.posix.dirname(entryPath);
-      !remove && parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      remove = replaced.has(parent);
-    }
-    if (remove) {
-      nodes.delete(entryPath);
-    }
-  }
-  for (const entryPath of changed) {
-    const entry = incomingNodes.get(entryPath);
-    if (!entry) {
-      continue;
-    }
-    nodes.set(entryPath, entry);
-    // A caller child replaces a setup-created file at any required directory ancestor.
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      nodes.set(parent, { path: parent, type: "directory" });
-    }
-  }
-  // Removing the last pristine child does not remove setup-only siblings or their parents.
-  for (const entryPath of nodes.keys()) {
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      if (!nodes.has(parent)) {
-        nodes.set(parent, { path: parent, type: "directory" });
-      }
-    }
-  }
-  return {
-    version: 1,
-    baseCommit: incoming.baseCommit,
-    entries: [...nodes.values()].filter(
-      (entry): entry is WorkerWorkspaceManifestEntry =>
-        entry?.type === "file" || entry?.type === "symlink",
-    ),
-    directories: [...nodes.values()].flatMap((entry) =>
-      entry?.type === "directory" ? [entry.path] : [],
-    ),
-  };
-}
-
 /** Download only the eligible delta; absolute build paths and ignored output stay in place. */
 export async function prepareNodeWorkerWorkspaceOverlay(params: {
   prepared: NodeWorkerPreparedWorkspaceTransfer;
@@ -109,12 +39,13 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
 }) {
   const { row, store } = params.prepared;
   const readManifest = async (ref: string) =>
-    parseWorkerWorkspaceManifest(
+    await parseWorkspaceManifest(
       await fsp.readFile(
         path.join(row.home_dir, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
         "utf8",
       ),
       ref,
+      params.signal,
     );
   const source = await readManifest(row.source_manifest_ref);
   if (!source.baseCommit || params.manifest.baseCommit !== source.baseCommit) {
@@ -135,13 +66,13 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   let target = params.manifest;
   let targetRef = params.manifestRef;
   if (params.sourceOverlay) {
-    const raw = serializeWorkerWorkspaceManifest(applySourceChanges(source, base, params.manifest));
-    targetRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-    target = parseWorkerWorkspaceManifest(raw, targetRef);
+    const overlay = await overlayWorkspaceManifest(source, base, params.manifest, params.signal);
+    targetRef = overlay.manifestRef;
+    target = overlay.manifest;
   }
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
   return {
-    changed: changedPaths(base, target),
+    changed: changedPaths(base, target, params.signal),
     materializeSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
       destination: string,

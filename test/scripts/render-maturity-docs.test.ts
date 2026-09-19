@@ -1,10 +1,17 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 // Maturity docs renderer tests cover evidence-backed generated-doc checks.
 import fs from "node:fs";
 import path from "node:path";
 import { Parser } from "htmlparser2";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import {
+  buildQaOccurrenceEvidenceSummary,
+  createQaEvidenceInvocation,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceOccurrence,
+} from "../../extensions/qa-lab/api.js";
 import {
   qaMaturityTaxonomyIdentity,
   qaProfileEvidencePlan,
@@ -58,6 +65,24 @@ function runCli(...args: string[]) {
       encoding: "utf8",
     },
   );
+}
+
+function createMaturityInvocation(count: number) {
+  return createQaEvidenceInvocation({
+    scenarios: Array.from({ length: count }, () => ({
+      id: "same-label",
+      execution: { kind: "script" },
+    })),
+    channel: null,
+    launch: {
+      source: { ref: null, integrity: null },
+      runtime: { id: null, version: null },
+      package: null,
+      protocol: null,
+      accountRef: null,
+      proofClass: null,
+    },
+  });
 }
 
 function writeQaEvidence(params: {
@@ -223,6 +248,233 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
+  it.each(["full", "slim"] as const)(
+    "accounts for unresolved root instances separately from %s evidence rows",
+    (evidenceMode) => {
+      const evidenceDir = tempDirs.make("openclaw-maturity-unresolved-");
+      const outputDir = tempDirs.make("openclaw-maturity-unresolved-docs-");
+      writeQaEvidence({
+        dir: evidenceDir,
+        entries: [{ id: "same-label", status: "pass" }],
+        scorecard: allProfileScorecardFixture(),
+      });
+      const evidencePath = path.join(evidenceDir, "qa-evidence.json");
+      const legacy = validateQaEvidenceSummaryJson(
+        JSON.parse(fs.readFileSync(evidencePath, "utf8")),
+      );
+      const invocation = createMaturityInvocation(6);
+      const passing = invocation.begin(0);
+      invocation.complete(passing, { status: "pass", entries: legacy.entries });
+      invocation.select(0, passing);
+      // The second instance never starts; each remaining selected attempt is rowless.
+      for (const [index, status] of (["pass", "fail", "blocked", "skipped"] as const).entries()) {
+        const observation = invocation.begin(index + 2);
+        invocation.complete(observation, { status, entries: [] });
+        invocation.select(index + 2, observation);
+      }
+      const evidence = validateQaEvidenceSummaryJson({
+        ...invocation.snapshot({ generatedAt: legacy.generatedAt, profile: "all", evidenceMode }),
+        profilePlan: legacy.profilePlan,
+        scorecard: legacy.scorecard,
+      });
+      const raw = JSON.stringify(evidence);
+      fs.writeFileSync(evidencePath, raw);
+      const staticAssetsDir = path.join(outputDir, "assets");
+      fs.mkdirSync(staticAssetsDir);
+      fs.writeFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "preserved\n");
+      const args = [
+        "--output-dir",
+        outputDir,
+        "--evidence-dir",
+        evidenceDir,
+        "--static-assets-dir",
+        staticAssetsDir,
+      ];
+      const rejected = runCli(...args);
+      expect(rejected.status, rejected.stderr).toBe(1);
+      expect(rejected.stderr).toContain("5 unresolved scheduled instances");
+      expect(rejected.stderr.match(/same-label \(unresolved\)/g)).toHaveLength(5);
+      expect(fs.existsSync(path.join(outputDir, "maturity"))).toBe(false);
+      expect(fs.readFileSync(path.join(staticAssetsDir, "taxonomy.yaml"), "utf8")).toBe(
+        "preserved\n",
+      );
+      expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
+
+      const allowed = runCli(...args, "--allow-failures");
+      expect(allowed.status, allowed.stderr).toBe(0);
+      const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+      expect(scorecard).toContain("<span>1 checks - 1 passed</span>");
+      expect(scorecard).toContain("<span>5 unresolved scheduled instances</span>");
+      expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
+    },
+  );
+
+  it.each(["pass", "fail", "blocked", "ownerless"] as const)(
+    "excludes contained unresolved instances while preserving %s row accounting",
+    (status) => {
+      const evidenceDir = tempDirs.make("openclaw-maturity-contained-");
+      const outputDir = tempDirs.make("openclaw-maturity-contained-docs-");
+      writeQaEvidence({
+        dir: evidenceDir,
+        entries: [{ id: "same-label", status: "pass" }],
+        scorecard: allProfileScorecardFixture(),
+      });
+      const evidencePath = path.join(evidenceDir, "qa-evidence.json");
+      const legacy = validateQaEvidenceSummaryJson(
+        JSON.parse(fs.readFileSync(evidencePath, "utf8")),
+      );
+      const child = createMaturityInvocation(2);
+      const childStatus = status === "ownerless" ? "pass" : status;
+      const childObservation = child.begin(0);
+      child.complete(childObservation, {
+        status: childStatus,
+        entries: legacy.entries.map((entry) =>
+          Object.assign({}, entry, { result: { status: childStatus } }),
+        ),
+      });
+      child.select(0, childObservation);
+      const childEvidence = child.snapshot({ generatedAt: legacy.generatedAt });
+      const parent = createMaturityInvocation(1);
+      const parentObservation = parent.begin(0);
+      const parentAnchor = parent.anchors[0];
+      if (!parentAnchor) {
+        throw new Error("fixture is missing its scheduled parent");
+      }
+      parent.complete(parentObservation, {
+        status: "pass",
+        entries: legacy.entries,
+        childEvidence,
+        receipts: [
+          {
+            id: `${parentObservation}:child`,
+            phase: "prepared",
+            identity: parentAnchor.launch,
+            artifact: {
+              kind: "producer-evidence",
+              path: "child.json",
+              source: "maturity-renderer-fixture",
+              sha256: createHash("sha256").update(JSON.stringify(childEvidence)).digest("hex"),
+            },
+          },
+        ],
+      });
+      parent.select(0, parentObservation);
+      const evidence = parent.snapshot({ generatedAt: legacy.generatedAt, profile: "all" });
+      if (status === "ownerless") {
+        evidence.occurrences.push({
+          ...parentAnchor,
+          id: "ownerless-diagnostic",
+          parentCell: null,
+          scenario: null,
+          terminalStatus: "fail",
+        });
+        evidence.entries.push(
+          ...legacy.entries.map((entry) =>
+            Object.assign({}, entry, {
+              test: { ...entry.test, id: "ownerless-diagnostic" },
+              result: { status: "fail" as const },
+              effective: true,
+              binding: { occurrenceId: "ownerless-diagnostic", assertionId: null, receiptId: null },
+            }),
+          ),
+        );
+      }
+      const raw = JSON.stringify(
+        validateQaEvidenceSummaryJson({
+          ...evidence,
+          profilePlan: legacy.profilePlan,
+          scorecard: legacy.scorecard,
+        }),
+      );
+      fs.writeFileSync(evidencePath, raw);
+      const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+      expect(result.status, result.stderr).toBe(status === "pass" ? 0 : 1);
+      expect(result.stderr).not.toContain("(unresolved)");
+      if (status === "pass") {
+        const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+        expect(scorecard).toContain("<span>2 checks - 2 passed</span>");
+        expect(scorecard).not.toContain("unresolved scheduled");
+      } else {
+        expect(result.stderr).toContain(
+          status === "ownerless" ? "ownerless-diagnostic (fail)" : `same-label (${status})`,
+        );
+      }
+      expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
+    },
+  );
+
+  it("renders the effective retry while retaining the original failed observation", () => {
+    const evidenceDir = tempDirs.make("openclaw-maturity-occurrences-");
+    const outputDir = tempDirs.make("openclaw-maturity-occurrence-docs-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "same-label", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+    const evidencePath = path.join(evidenceDir, "qa-evidence.json");
+    const legacy = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+    const anchor: QaEvidenceOccurrence = {
+      id: "scheduled-instance",
+      parentCell: { scenarioId: "same-label", executionKind: "script", channel: null },
+      scenario: { kind: "instance", resultOccurrenceId: "retry" },
+      retryOf: null,
+      terminalStatus: null,
+      assertions: null,
+      launch: {
+        source: { ref: null, integrity: null },
+        runtime: { id: null, version: null },
+        package: null,
+        protocol: null,
+        accountRef: null,
+        proofClass: null,
+      },
+      receipts: [],
+    };
+    const first: QaEvidenceOccurrence = {
+      ...anchor,
+      id: "first",
+      scenario: { kind: "observation", instanceOccurrenceId: anchor.id },
+      terminalStatus: "fail",
+    };
+    const retry: QaEvidenceOccurrence = {
+      ...first,
+      id: "retry",
+      retryOf: first.id,
+      terminalStatus: "pass",
+    };
+    const entry = legacy.entries[0]!;
+    const evidence = buildQaOccurrenceEvidenceSummary({
+      generatedAt: legacy.generatedAt,
+      profile: legacy.profile,
+      profilePlan: legacy.profilePlan,
+      scorecard: legacy.scorecard,
+      occurrences: [anchor, first, retry],
+      entries: [
+        {
+          ...entry,
+          result: { status: "fail" },
+          effective: false,
+          binding: { occurrenceId: first.id, assertionId: null, receiptId: null },
+        },
+        {
+          ...entry,
+          effective: true,
+          binding: { occurrenceId: retry.id, assertionId: null, receiptId: null },
+        },
+      ],
+    });
+    const raw = JSON.stringify(evidence);
+    fs.writeFileSync(evidencePath, raw);
+    const rendered = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    expect(rendered.status, rendered.stderr).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+    const evidenceCard = scorecard.match(
+      /<div className="maturity-evidence-card">[\s\S]*?<\/div>/,
+    )?.[0];
+    expect(evidenceCard).toContain("<span>1 checks - 1 passed</span>");
+    expect(evidenceCard).not.toContain("failed");
+    expect(fs.readFileSync(evidencePath, "utf8")).toBe(raw);
+  });
   it("rejects unresolved taxonomy routes and anchors while accepting published mirrors", () => {
     const fixtureDir = tempDirs.make("openclaw-maturity-docs-links-");
     const docsRoot = path.join(fixtureDir, "docs");
@@ -724,6 +976,27 @@ describe("maturity docs renderer CLI", () => {
         id,
       ).toHaveLength(1);
     }
+    for (const [current, legacy] of [
+      [
+        "community-channel-cohort",
+        "mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat",
+      ],
+      [
+        "regional-channel-cohort",
+        "feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels",
+      ],
+    ]) {
+      for (const id of [current, legacy]) {
+        expect(
+          taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+          id,
+        ).toHaveLength(1);
+      }
+    }
+    expect(taxonomy).toContain(
+      "**Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack)",
+    );
+    expect(taxonomy).toContain("[WeChat](/channels/wechat), [WeCom](/channels/wecom)");
     for (const id of [
       "chromeos-raspberry-pi-and-small-linux-devices",
       "raspberry-pi-and-small-linux-devices",

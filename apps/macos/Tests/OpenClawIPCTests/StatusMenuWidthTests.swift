@@ -31,13 +31,17 @@ struct StatusMenuWidthTests {
 
         let session = Self.session(
             "A very long session title that continues for considerably more than forty-five characters")
-        let approval = ExecApprovalQueueItem(
-            id: "long-command",
-            request: ExecApprovalPromptRequest(
-                command: "openclaw doctor --fix --verbose --check-every-registered-capability-host",
-                sessionKey: session.key),
-            createdAtMs: 1,
-            expiresAtMs: Int(Date().addingTimeInterval(60).timeIntervalSince1970 * 1000))
+        let approval = try JSONDecoder().decode(
+            ExecApprovalQueueItem.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "id": "long-command",
+                "request": [
+                    "command": "openclaw doctor --fix --verbose --check-every-registered-capability-host",
+                    "sessionKey": session.key,
+                ],
+                "createdAtMs": 1,
+                "expiresAtMs": Int(Date().addingTimeInterval(60).timeIntervalSince1970 * 1000),
+            ]))
         let gateways = [
             DashboardGatewayMenuItem(
                 target: .primary,

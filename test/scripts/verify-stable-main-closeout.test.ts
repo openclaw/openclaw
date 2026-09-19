@@ -33,7 +33,14 @@ function runCli(...args: string[]) {
   });
 }
 
-type LinuxAsset = { name: string; digest: string; state: string; size: number; bytes?: string };
+type LinuxAsset = {
+  name: string;
+  digest: string;
+  state: string;
+  size: number;
+  bytes?: string;
+  id?: number;
+};
 const linuxRepository = "openclaw/openclaw";
 
 function linuxAsset(name: string, bytes: string): LinuxAsset {
@@ -61,19 +68,24 @@ function linuxPublication(version: string) {
       },
     }),
   );
-  return {
-    tagName: `v${version}`,
-    isDraft: false,
-    isPrerelease: false,
-    assets: [
-      { name: appimage, digest: `sha256:${"1".repeat(64)}`, state: "uploaded", size: 100 },
-      { name: deb, digest: `sha256:${"2".repeat(64)}`, state: "uploaded", size: 100 },
-      linuxAsset(
+  const assets: LinuxAsset[] = [
+    { name: appimage, digest: `sha256:${"1".repeat(64)}`, state: "uploaded", size: 100, id: 101 },
+    { name: deb, digest: `sha256:${"2".repeat(64)}`, state: "uploaded", size: 100, id: 102 },
+    {
+      ...linuxAsset(
         "SHA256SUMS.linux-app.txt",
         `${"1".repeat(64)}  ./${appimage}\n${"2".repeat(64)}  ./${deb}\n`,
       ),
-      selector,
-    ],
+      id: 103,
+    },
+    selector,
+  ];
+  return {
+    databaseId: 42,
+    tagName: `v${version}`,
+    isDraft: false,
+    isPrerelease: false,
+    assets,
   };
 }
 
@@ -111,7 +123,13 @@ function linuxCloseoutFixture(carried = false, tag = "v2026.9.4") {
     `openclaw-${version}-postpublish-evidence.json`,
     "immutable evidence",
   );
-  const carrier = { tagName: tag, isDraft: false, isPrerelease: false, assets: [evidence] };
+  const carrier = {
+    databaseId: 42,
+    tagName: tag,
+    isDraft: false,
+    isPrerelease: false,
+    assets: [evidence],
+  };
   if (carried) {
     carrier.assets.push(
       expectDefined(
@@ -140,13 +158,27 @@ process.stdout.write('${"a".repeat(40)}\\n');
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const releases = JSON.parse(fs.readFileSync(process.env.LINUX_CLOSEOUT_REMOTE, 'utf8'));
+if (args[0] === 'api' && args[1]?.startsWith('repos/${linuxRepository}/commits/')) {
+  process.stdout.write('${"a".repeat(40)}\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1]?.startsWith('repos/${linuxRepository}/releases/tags/')) {
+  const tag = args[1].slice('repos/${linuxRepository}/releases/tags/'.length);
+  const release = releases[tag];
+  if (!release) throw new Error('Missing release');
+  process.stdout.write(JSON.stringify({id: release.databaseId, tag_name: tag,
+    draft: release.isDraft, prerelease: release.isPrerelease,
+    assets: release.assets.map(({bytes, ...asset}) => asset)}));
+  process.exit(0);
+}
 const release = releases[args[2]];
 if (args[0] !== 'release' || !release) throw new Error('Unexpected GitHub operation');
 if (args[1] === 'view') {
+  if (args[args.indexOf('--json') + 1].includes('databaseId')) throw new Error('Unknown JSON field: databaseId');
   process.stdout.write(JSON.stringify({...release, assets: release.assets.map(({bytes, ...asset}) => asset)}));
 } else if (args[1] === 'download') {
   const name = args[args.indexOf('--pattern') + 1];
-  if (!['latest.json', 'SHA256SUMS.linux-app.txt'].includes(name)) throw new Error('Binary download forbidden');
+  if (!['latest.json', 'SHA256SUMS.linux-app.txt', 'OpenClaw-' + args[2].slice(1) + '-linux.json'].includes(name)) throw new Error('Binary download forbidden');
   const asset = release.assets.find(asset => asset.name === name);
   if (!asset || typeof asset.bytes !== 'string') throw new Error('Missing asset');
   process.stdout.write(asset.bytes);
@@ -188,6 +220,31 @@ if (args[1] === 'view') {
     publishLinux() {
       carrier.assets = [evidence, ...linuxPublication(version).assets];
     },
+    publishImmutable() {
+      const publication = linuxPublication(version);
+      const selector = expectDefined(
+        publication.assets.find((asset) => asset.name === "latest.json"),
+        "selector",
+      );
+      const value = JSON.parse(expectDefined(selector.bytes, "selector bytes"));
+      value.linuxPublication = {
+        schemaVersion: 1,
+        sourceSha: "a".repeat(40),
+        toolingSha: "b".repeat(40),
+        channelSha: "c".repeat(40),
+        releaseId: 42,
+        publicKeySha256: "d".repeat(64),
+        assets: publication.assets
+          .filter((asset) => asset.name !== "latest.json")
+          .map((asset) => ({
+            id: asset.id,
+            name: asset.name,
+            size: asset.size,
+            sha256: asset.digest.slice(7),
+          })),
+      };
+      carrier.assets.push(linuxAsset(`OpenClaw-${version}-linux.json`, JSON.stringify(value)));
+    },
     params() {
       return { ...baseParams, release: metadata() };
     },
@@ -217,6 +274,24 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
+  it("accepts only the validated exact late immutable Linux manifest", () => {
+    const fixture = linuxCloseoutFixture();
+    expect(fixture.run().status).toBe(0);
+    const original = readFileSync(fixture.outputPath);
+    writeFileSync(fixture.originalPath, original);
+    fixture.publishLinux();
+    fixture.publishImmutable();
+    const replay = fixture.run(true);
+    expect(replay.status, replay.stderr).toBe(0);
+    expect(readFileSync(fixture.outputPath)).toEqual(original);
+    const immutable = expectDefined(
+      fixture.carrier.assets.find((asset) => asset.name.endsWith("-linux.json")),
+      "immutable manifest",
+    );
+    immutable.digest = `sha256:${"f".repeat(64)}`;
+    expect(fixture.run(true).status).toBe(1);
+  });
+
   it.each([
     { carried: false, tag: "v2026.9.4" },
     { carried: true, tag: "v2026.9.4" },

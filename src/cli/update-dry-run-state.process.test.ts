@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { LegacyStateMigrationPlan } from "../infra/state-migrations.types.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
@@ -51,7 +52,8 @@ function runUpdateProcess(root: string, args: string[], env: NodeJS.ProcessEnv =
   const configPath = path.join(root, "config", "openclaw.json");
   const stateDir = path.join(root, "state");
   const entryPath = path.resolve("openclaw.mjs");
-  return spawnSync(process.execPath, [entryPath, ...args], {
+  const nodeArgs = process.versions.bun ? [] : resolveVitestNodeArgs({ ...process.env, ...env });
+  return spawnSync(process.execPath, [...nodeArgs, entryPath, ...args], {
     cwd: path.resolve("."),
     encoding: "utf8",
     env: {

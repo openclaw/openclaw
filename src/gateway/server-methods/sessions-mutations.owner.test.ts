@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionsPatchManyParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -9,6 +10,7 @@ import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller
 import { callInProcessGatewayTool } from "../../agents/tools/in-process-gateway.js";
 import {
   loadSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,10 +34,16 @@ import {
 } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
-afterEach(() => {
-  flushPendingSessionsChangedEvents();
+afterEach(async () => {
+  await flushPendingSessionsChangedEvents();
   closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
 });
@@ -114,6 +122,7 @@ describe("sessions.patch", () => {
         boardFace: "chat",
       });
       const requestContext = context({});
+      await initializeSessionReadContext(requestContext);
       requestContext.getClientConnIds = () => new Set();
       requestContext.resolveGatewayContext = () => requestContext;
       const tool = createDashboardTool({ agentSessionKey: sessionKey, agentId: "main" });
@@ -328,13 +337,26 @@ describe("sessions.patch", () => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const catalogEntered = createDeferredCore();
-        const catalogRelease = createDeferredCore();
-        const loadGatewayModelCatalog = vi.fn(async () => {
+        type CatalogSnapshot = Awaited<
+          ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>
+        >;
+        const catalogRelease = createDeferredCore<CatalogSnapshot>();
+        const snapshot: CatalogSnapshot = {
+          agentId: "main",
+          agentDir: state.agentDir("main"),
+          workspaceDir: state.workspaceDir,
+          config: cfg,
+          catalogComplete: true,
+          entries: [],
+          routeVariants: [],
+        };
+        const loadGatewayModelCatalogSnapshot = vi.fn<
+          GatewayRequestContext["loadGatewayModelCatalogSnapshot"]
+        >(async () => {
           catalogEntered.resolve();
-          await catalogRelease.promise;
-          return [];
+          return catalogRelease.promise;
         });
-        requestContext.loadGatewayModelCatalog = loadGatewayModelCatalog;
+        requestContext.loadGatewayModelCatalogSnapshot = loadGatewayModelCatalogSnapshot;
         const applyPermissionMode = vi.fn(async (_mode: string | null, revoke: () => void) => {
           revoke();
           entered.resolve();
@@ -362,7 +384,7 @@ describe("sessions.patch", () => {
         try {
           if (prepareCatalog) {
             await Promise.race([catalogEntered.promise, first]);
-            expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+            expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
             expect(applyPermissionMode).not.toHaveBeenCalled();
             expect(patched).not.toHaveBeenCalled();
             expect(isSessionPermissionChangePending(sessionId)).toBe(false);
@@ -371,7 +393,7 @@ describe("sessions.patch", () => {
               loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
             ).toBe("guarded");
           }
-          catalogRelease.resolve();
+          catalogRelease.resolve(snapshot);
           await Promise.race([entered.promise, first]);
           expect(applyPermissionMode).toHaveBeenCalledTimes(1);
           expect(responses[0]).not.toHaveBeenCalled();
@@ -391,7 +413,7 @@ describe("sessions.patch", () => {
           expect(responses[0]).toHaveBeenCalledWith(true, expect.any(Object), undefined);
           expect(responses[1]).toHaveBeenCalledWith(true, expect.any(Object), undefined);
           expect(patched).toHaveBeenCalledTimes(2);
-          expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(prepareCatalog ? 1 : 0);
+          expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(prepareCatalog ? 1 : 0);
           expect(isSessionPermissionChangePending(sessionId)).toBe(false);
           expect(
             loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
@@ -402,11 +424,147 @@ describe("sessions.patch", () => {
             ).toBe("low");
           }
         } finally {
-          catalogRelease.resolve();
+          catalogRelease.resolve(snapshot);
           release.resolve();
           await Promise.allSettled([first, second]);
           unregisterInternalHook("session:patch", patched);
           clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        }
+      });
+    },
+  );
+
+  it.each([
+    { restore: false, revokeFirst: false },
+    { restore: false, revokeFirst: true },
+    { restore: true, revokeFirst: true },
+  ])(
+    "releases provisional batch permissions while a later target prepares its catalog (restore=$restore, revoked=$revokeFirst)",
+    async ({ restore, revokeFirst }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const keys = ["agent:main:batch-permission-first", "agent:main:batch-permission-second"];
+        const scope = (sessionKey: string) => ({ agentId: "main", env: state.env, sessionKey });
+        for (const [index, sessionKey] of keys.entries()) {
+          await upsertSessionEntryCore(scope(sessionKey), {
+            sessionId: sessionKey,
+            updatedAt: 1,
+            permissionMode: "guarded",
+            ...(restore ? { archivedAt: 1 } : {}),
+            ...(index === 1 ? { thinkingLevel: "off" } : {}),
+          });
+        }
+        const cfg: OpenClawConfig = {};
+        const requestContext = context(cfg);
+        const catalogEntered = createDeferredCore();
+        const catalogRelease = createDeferredCore();
+        requestContext.loadGatewayModelCatalogSnapshot = vi.fn(async () => {
+          catalogEntered.resolve();
+          await catalogRelease.promise;
+          return {
+            agentId: "main",
+            agentDir: state.agentDir("main"),
+            workspaceDir: state.workspaceDir,
+            config: cfg,
+            catalogComplete: true,
+            entries: [],
+            routeVariants: [],
+          };
+        });
+        const handles = keys.map(() => ({
+          ...createEmbeddedRunHandle(),
+          applyPermissionMode: vi.fn(async (_mode: string | null, revoke: () => void) => {
+            revoke();
+            return true;
+          }),
+        }));
+        keys.forEach((key, index) => setActiveEmbeddedRun(key, handles[index]!, key));
+        let revoked = false;
+        const respond = vi.fn();
+        // This continuation belongs to an independent lifecycle writer, outside
+        // the handler's reentrant writer context.
+        const lifecycleWrite = catalogEntered.promise.then(async () => {
+          await patchSessionEntryCore(scope(keys[1]!), () => ({
+            status: "running",
+            lifecycleRunId: "batch-catalog-run",
+          }));
+          revoked = revokeFirst;
+        });
+        const params = {
+          targets: keys.map((key) => ({ key, expectedSessionId: key })),
+          patch: {
+            model: null,
+            permissionMode: "read-only",
+            ...(restore ? { archived: false } : {}),
+          },
+        } satisfies SessionsPatchManyParams;
+        const request: GatewayRequestHandlerOptions = {
+          req: {
+            type: "req",
+            id: "batch-permission-catalog",
+            method: "sessions.patchMany",
+            params,
+          },
+          params,
+          client: client(),
+          context: requestContext,
+          isWebchatConnect: () => true,
+          sessionMutationAuthorization: {
+            assertCurrent: () => {},
+            assertTargetCurrent: ({ sessionKey }) => {
+              if (revoked && sessionKey === keys[0]) {
+                throw new Error("First target authority was revoked");
+              }
+            },
+          },
+          respond,
+        };
+        const pending = sessionMutationHandlers["sessions.patchMany"]!(request);
+        try {
+          await Promise.race([catalogEntered.promise, pending]);
+          expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+          for (const key of keys) {
+            expect(isSessionPermissionChangePending(key)).toBe(false);
+            expect(loadSessionEntry(scope(key))?.permissionMode).toBe("guarded");
+          }
+          await lifecycleWrite;
+          expect(loadSessionEntry(scope(keys[1]!))).toMatchObject({
+            status: "running",
+            lifecycleRunId: "batch-catalog-run",
+          });
+          catalogRelease.resolve();
+          await pending;
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            {
+              outcomes: [
+                revokeFirst
+                  ? { key: keys[0], ok: false, error: expect.any(Object) }
+                  : { key: keys[0], ok: true },
+                { key: keys[1], ok: true },
+              ],
+            },
+            undefined,
+          );
+          for (const [index, key] of keys.entries()) {
+            const applied = index === 1 || !revokeFirst;
+            expect(loadSessionEntry(scope(key))?.permissionMode).toBe(
+              applied ? "read-only" : "guarded",
+            );
+            expect(handles[index]!.applyPermissionMode).toHaveBeenCalledTimes(applied ? 1 : 0);
+            expect(isSessionPermissionChangePending(key)).toBe(false);
+          }
+          if (restore) {
+            expect(loadSessionEntry(scope(keys[0]!))?.archivedAt).toBe(1);
+            expect(loadSessionEntry(scope(keys[1]!))?.archivedAt).toBeUndefined();
+          }
+          expect(loadSessionEntry(scope(keys[1]!))).toMatchObject({
+            status: "running",
+            lifecycleRunId: "batch-catalog-run",
+          });
+        } finally {
+          catalogRelease.resolve();
+          await Promise.allSettled([pending, lifecycleWrite]);
+          keys.forEach((key, index) => clearActiveEmbeddedRun(key, handles[index]!, key));
         }
       });
     },

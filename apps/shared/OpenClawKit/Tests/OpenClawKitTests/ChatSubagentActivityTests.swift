@@ -32,6 +32,12 @@ struct ChatSubagentActivityTests {
         #expect(retained.snippet == "Applying patch")
         #expect(retained.diffStat == ChatToolDiffStat(files: 1, added: 7, removed: 2))
 
+        state.upsert(
+            self.task(id: "task-1", status: "completed", title: "Final layout review", endedAt: 2000),
+            nowMilliseconds: 5000,
+            source: .snapshot)
+        #expect(state.presentation().rows.first?.terminalObservedAt == 2000)
+
         state.removeExpired(nowMilliseconds: 61999)
         #expect(state.presentation().rows.count == 1)
         state.removeExpired(nowMilliseconds: 62000)

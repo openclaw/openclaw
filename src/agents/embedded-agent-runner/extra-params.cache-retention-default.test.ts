@@ -37,6 +37,7 @@ function applyAndExpectWrapped(params: {
 // Keep cache-retention warning/debug output out of assertion logs.
 vi.mock("./logger.js", () => ({
   log: {
+    isEnabled: () => false,
     debug: vi.fn(),
     warn: vi.fn(),
   },

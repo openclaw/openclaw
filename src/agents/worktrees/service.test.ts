@@ -197,7 +197,10 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
-    expectCheckoutTimeouts(commandSpy, ["origin/main"]);
+    expectCheckoutTimeouts(commandSpy, [
+      "origin/main",
+      await git(created.path, "rev-parse", "HEAD"),
+    ]);
   });
 
   it("reads registry records without retiring a temporarily unavailable worktree", async () => {
@@ -497,7 +500,7 @@ describe("ManagedWorktreeService", () => {
       let checkoutFailed = false;
       commandSpy.mockImplementation(async (...args) => {
         const result = await runCommand(...args);
-        if (isWorktreeAdd(args[0]) && result.code !== 0) {
+        if (args[0][0] === "git" && args[0].includes("read-tree") && result.code !== 0) {
           checkoutFailed = true;
           if (admission === "aborted") {
             controller.abort(closed);
@@ -521,7 +524,7 @@ describe("ManagedWorktreeService", () => {
           admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
         );
         expect(checkoutFailed).toBe(true);
-        expectCheckoutTimeouts(commandSpy, ["origin/main"]);
+        expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit]);
         expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
         expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
         return;
@@ -529,10 +532,9 @@ describe("ManagedWorktreeService", () => {
       const created = await creation;
       expect(checkoutFailed).toBe(true);
       expect(created.baseRef).toBe("HEAD");
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(
-        await git(repo, "rev-parse", "HEAD"),
-      );
-      expectCheckoutTimeouts(commandSpy, ["origin/main", "HEAD"]);
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
+      expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit, "HEAD", localHead]);
     },
   );
 

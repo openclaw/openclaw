@@ -35,6 +35,7 @@ import {
   MANAGERS_BY_ACCOUNT_ID,
   PERSIST_BY_ACCOUNT_ID,
   ensureBindingsLoaded,
+  ensureBindingsLoadedAsync,
   rememberThreadBindingToken,
   normalizeTargetKind,
   normalizeThreadBindingDurationMs,
@@ -505,6 +506,13 @@ export function createThreadBindingManager(params: {
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;
+}
+
+export async function createThreadBindingManagerAsync(
+  params: Parameters<typeof createThreadBindingManager>[0],
+): Promise<ThreadBindingManager> {
+  await ensureBindingsLoadedAsync();
+  return createThreadBindingManager(params);
 }
 
 export function createNoopThreadBindingManager(accountId?: string): ThreadBindingManager {

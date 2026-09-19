@@ -394,6 +394,14 @@ describe("openai completions params", () => {
     const disabled = buildOpenAICompletionsParams(baseModel, context, {
       reasoning: "off",
     } as never) as { reasoning?: unknown; reasoning_effort?: unknown };
+    const mappedOff = buildOpenAICompletionsParams(
+      {
+        ...baseModel,
+        compat: { ...baseModel.compat, reasoningEffortMap: { off: "low" } },
+      },
+      context,
+      { reasoning: "off" } as never,
+    );
 
     expect(enabled.max_tokens).toBe(32768);
     expect(enabled).not.toHaveProperty("max_completion_tokens");
@@ -401,6 +409,7 @@ describe("openai completions params", () => {
     expect(enabled.reasoning_effort).toBe("medium");
     expect(disabled.reasoning).toEqual({ enabled: false });
     expect(disabled).not.toHaveProperty("reasoning_effort");
+    expect(mappedOff).toMatchObject({ reasoning: { enabled: true }, reasoning_effort: "low" });
   });
 
   it("omits unsupported disabled reasoning for completions providers", () => {

@@ -21,9 +21,13 @@ import { runIsolatedCompletion } from "./isolated-completion.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
-it.each(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] as const)(
+it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] as const)(
   "retains standalone isolated completion resources through %s",
-  async (mode) => {
+  async (mode, testContext) => {
+    if (mode === "cancel-tail" && process.versions.bun) {
+      // Restore this probe when transformed Fetch bodies forward cancellation under Bun.
+      testContext.skip();
+    }
     const roots = createSyncSuiteTempRootTracker("isolated-completion-resources");
     const root = fs.realpathSync(roots.makeTempDir());
     const providerDir = path.join(root, "provider");

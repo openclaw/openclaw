@@ -10,7 +10,7 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
-import type { ThinkingContent } from "../llm/types.js";
+import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
@@ -96,6 +96,12 @@ export type StreamBlockState = {
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
+  answerSegments: Array<{
+    textEnd: number;
+    messageEnd: number;
+    finalMessageStart: number;
+    lastAssistant: AssistantMessage;
+  }>;
   toolMetas: Array<{
     toolName?: string;
     toolCallId?: string;
@@ -236,7 +242,7 @@ export type EmbeddedAgentSubscribeState = {
   >;
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
-  lastAssistant?: AgentMessage;
+  lastAssistant?: AssistantMessage;
 };
 
 /** Handler context bundling params, mutable state, emitters, and helper hooks. */
@@ -249,7 +255,7 @@ export type EmbeddedAgentSubscribeContext = {
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
-  noteLastAssistant: (msg: AgentMessage, options?: { hasToolResults: boolean }) => void;
+  noteLastAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
@@ -266,6 +272,8 @@ export type EmbeddedAgentSubscribeContext = {
       sourceText?: string;
       assistantMessageIndex?: number;
       final?: boolean;
+      completeMarkdownChunk?: boolean;
+      startsAtLineStart?: boolean;
       finalReply?: ReplyDirectiveParseResult;
     },
   ) => void;

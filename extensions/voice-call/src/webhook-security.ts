@@ -1,4 +1,3 @@
-// Voice Call plugin module implements webhook security behavior.
 import crypto from "node:crypto";
 import { isIP } from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

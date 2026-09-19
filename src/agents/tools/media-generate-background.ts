@@ -40,6 +40,7 @@ export type MediaGenerateToolOptions = {
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;

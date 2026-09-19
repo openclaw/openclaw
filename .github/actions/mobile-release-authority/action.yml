@@ -1,9 +1,9 @@
 name: Mobile release authority
-description: Authorize, revalidate, and record exact mobile beta release targets.
+description: Authorize, revalidate, inspect, and record exact mobile beta release targets.
 
 inputs:
   operation:
-    description: Bounded action operation (authorize, revalidate, or record).
+    description: Bounded action operation (authorize, revalidate, record, or inspect).
     required: true
   platform:
     description: Mobile store platform (ios or android).
@@ -44,6 +44,12 @@ inputs:
     default: ""
 
 outputs:
+  inspection-validated:
+    description: Live read-only inspection admission; not publication authority.
+    value: ${{ steps.inspect.outputs.inspection_validated }}
+  inspection-app-store-version:
+    description: App Store version from the approved candidate, not the next live plan.
+    value: ${{ steps.inspect.outputs.ios_app_store_version }}
   actor:
     description: Authorized actor.
     value: ${{ steps.authorize.outputs.actor }}
@@ -133,6 +139,14 @@ runs:
         }
         fs.appendFileSync(process.env.GITHUB_ENV, `${lines.join("\n")}\n`);
         NODE
+
+    - name: Validate read-only iOS inspection authority
+      id: inspect
+      if: inputs.operation == 'inspect'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: node --experimental-strip-types "$MOBILE_ACTION_PATH/authority.mjs" inspect
 
     - name: Authorize exact release branch head
       id: authorize

@@ -8,6 +8,7 @@ import {
 import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -70,8 +71,9 @@ function provider(
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
@@ -81,6 +83,33 @@ afterAll(() => {
 });
 
 describe("session upstream monitor", () => {
+  it("discards discovery after the monitor is aborted", async () => {
+    const database = createDatabaseOptions();
+    createLink("agent:main:adopted:aborted-discovery", "claude", database);
+    const lifecycle = new AbortController();
+    const loadEntry = vi.fn(() => ({ sessionId: "session-aborted", updatedAt: 100 }));
+    const check = vi.fn(async () => []);
+    const missingCounts = createMissingCounts();
+    missingCounts.set("previous-watch", { count: 2, linkUpdatedAt: 100 });
+    const tick = runSessionUpstreamMonitorTick(
+      {
+        ...database,
+        signal: lifecycle.signal,
+        providers: [provider("claude", check)],
+        loadEntry,
+        isRunActive: () => false,
+        loadOwnRecentUserTexts: async () => [],
+      },
+      missingCounts,
+    );
+    lifecycle.abort();
+    await tick;
+
+    expect(loadEntry).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+    expect([...missingCounts]).toEqual([["previous-watch", { count: 2, linkUpdatedAt: 100 }]]);
+  });
+
   it("records watched activity once and advances its marker", async () => {
     const database = createDatabaseOptions();
     const watched = "agent:main:adopted:watched";
@@ -262,9 +291,11 @@ describe("session upstream monitor", () => {
     const sessionKey = "agent:main:adopted:missing-stopped";
     createLink(sessionKey, "claude", database);
     const thirdResult = createDeferred<Array<{ kind: "missing"; sessionKey: string }>>();
+    const scanStarted = [createDeferred(), createDeferred(), createDeferred()] as const;
     let scan = 0;
     const check = vi.fn(async () => {
       scan += 1;
+      scanStarted[scan - 1]?.resolve();
       return scan === 3 ? await thirdResult.promise : [{ kind: "missing" as const, sessionKey }];
     });
     const monitor = startSessionUpstreamMonitor({
@@ -277,8 +308,13 @@ describe("session upstream monitor", () => {
 
     try {
       await vi.advanceTimersByTimeAsync(15_000);
+      await scanStarted[0].promise;
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(45_000);
+      await scanStarted[1].promise;
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(60_000);
+      await scanStarted[2].promise;
       expect(check).toHaveBeenCalledTimes(3);
 
       monitor.stop();

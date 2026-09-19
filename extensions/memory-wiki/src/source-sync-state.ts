@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type {
   OpenKeyedStoreOptions,
@@ -343,26 +344,12 @@ async function readImportedSourcePageForNotes(
   // Notes; large generated source content must not prevent safe pruning.
   const opened = await vault.open(pagePath);
   try {
-    const readSlice = async (position: number, length: number): Promise<string> => {
-      const buffer = Buffer.alloc(length);
-      let totalBytesRead = 0;
-      while (totalBytesRead < length) {
-        const { bytesRead } = await opened.handle.read(
-          buffer,
-          totalBytesRead,
-          length - totalBytesRead,
-          position + totalBytesRead,
-        );
-        if (bytesRead === 0) {
-          throw new Error("Memory Wiki source page changed during bounded Notes recovery");
-        }
-        totalBytesRead += bytesRead;
-      }
-      return buffer.toString("utf8");
-    };
-
     const headerBytes = Math.min(MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES, opened.stat.size);
-    const header = await readSlice(0, headerBytes);
+    const headerBuffer = Buffer.alloc(headerBytes);
+    if ((await readFileWindowFully(opened.handle, headerBuffer, 0)) !== headerBytes) {
+      throw new Error("Memory Wiki source page changed during bounded Notes recovery");
+    }
+    const header = headerBuffer.toString("utf8");
 
     const contentFence = /(?:^|\r?\n)## Content\r?\n(`+)[^\r\n]*(?=\r?\n|$)/u.exec(header);
     if (!contentFence) {

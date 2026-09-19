@@ -58,7 +58,7 @@ type TabState = {
   target?: { id: string; sessionId?: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
   retiring?: Promise<void>;
-  /** Extension loss invalidated attachment work that auto-attach clients still expect restored. */
+  /** Native or extension loss invalidated attachment work that auto-attach clients expect restored. */
   restoreAttachment: boolean;
 };
 
@@ -316,12 +316,17 @@ export class ExtensionRelayBridge {
       }
       case "detached": {
         const tab = this.tabs.get(msg.tabId);
+        const recover = tab !== undefined && msg.reason === "target_closed" && !tab.retiring;
         if (tab) {
           tab.attaching = undefined;
+          tab.restoreAttachment = recover;
         }
         this.sessions.retireTab(msg.tabId);
         if (tab?.target) {
           tab.target.sessionId = undefined;
+        }
+        if (recover) {
+          this.autoAttachTab(msg.tabId);
         }
         break;
       }
@@ -423,7 +428,6 @@ export class ExtensionRelayBridge {
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
-    const shouldAutoAttach = [...this.clients].some((client) => client.autoAttach);
     for (const tabId of this.tabs.keys()) {
       if (!nextIds.has(tabId)) {
         this.sessions.retireTab(tabId);
@@ -441,22 +445,23 @@ export class ExtensionRelayBridge {
       } else {
         this.tabs.set(info.tabId, { info, claimants: new Set(), restoreAttachment: false });
       }
-      if (shouldAutoAttach && shouldAttach) {
-        for (const client of this.clients) {
-          if (!client.autoAttach || client.detachedTabs.has(info.tabId)) {
-            continue;
-          }
-          void this.withAttachedTab(client, info.tabId, (attached) => {
-            this.announceAttachedTab(
-              info.tabId,
-              attached,
-              this.autoAttachRecipients(info.tabId, attached.sessionId),
-            );
-          }).catch((err: unknown) =>
-            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`),
-          );
-        }
+      if (shouldAttach) {
+        this.autoAttachTab(info.tabId);
       }
+    }
+  }
+
+  private autoAttachTab(tabId: number): void {
+    for (const client of this.autoAttachRecipients(tabId)) {
+      void this.withAttachedTab(client, tabId, (attached) => {
+        this.announceAttachedTab(
+          tabId,
+          attached,
+          this.autoAttachRecipients(tabId, attached.sessionId),
+        );
+      }).catch((err: unknown) =>
+        log.warn(`auto-attach of accessible tab ${tabId} failed: ${String(err)}`),
+      );
     }
   }
 

@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { ErrorCodes, GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
 describe("chat pane read markers", () => {
@@ -66,7 +69,7 @@ describe("chat pane read markers", () => {
       scopes: ["operator.write"],
       session: {},
     },
-    ...(["read-only", "suggest", "draft"] as const).map((visibility) => ({
+    ...(["shared", "read-only", "suggest", "draft", undefined] as const).map((visibility) => ({
       name: `${visibility} viewer participation`,
       methods: ["sessions.patch"],
       scopes: ["operator.write"],
@@ -93,6 +96,7 @@ describe("chat pane read markers", () => {
       kind: "direct" as const,
       updatedAt: 20,
       unread: true,
+      agentStatus: { note: "Working", expiresAt: Date.now() + 60_000 },
       ...session,
     };
 
@@ -105,7 +109,7 @@ describe("chat pane read markers", () => {
   });
 
   it.each([
-    { visibility: "shared", sharingRole: "viewer", scopes: ["operator.write"] },
+    { visibility: "shared", sharingRole: "member", scopes: ["operator.write"] },
     { visibility: "read-only", sharingRole: "member", scopes: ["operator.write"] },
     { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
     { visibility: "draft", sharingRole: "admin", scopes: ["operator.admin"] },
@@ -160,6 +164,57 @@ describe("chat pane read markers", () => {
     pane.markSessionRead(row);
 
     expect(patch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { code: ErrorCodes.INVALID_REQUEST, retries: false },
+    { code: ErrorCodes.FORBIDDEN, retries: false },
+    { code: ErrorCodes.APPROVAL_NOT_FOUND, retries: false },
+    { code: ErrorCodes.UNAVAILABLE, retries: true },
+    { code: "CLIENT_TIMEOUT", retries: true },
+  ])("handles $code read failures across active snapshots", async ({ code, retries }) => {
+    const error =
+      code === "CLIENT_TIMEOUT"
+        ? new GatewayProtocolRequestTimeoutError({
+            method: "sessions.patch",
+            timeoutMs: 1000,
+            requestSent: true,
+          })
+        : new GatewayRequestError({ code, message: "Read acknowledgement rejected" });
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        throw error;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
+    const { context } = pane;
+    const errors = vi.fn();
+    onTestFinished(
+      context.sessions.subscribe((state) => {
+        if (state.error) {
+          errors(state.error);
+        }
+      }),
+    );
+    const row: GatewaySessionRow = {
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 20,
+      unread: true,
+      agentStatus: { note: "Working", expiresAt: Date.now() + 60_000 },
+    };
+
+    pane.markSessionRead(row);
+    await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(1));
+    pane.markSessionRead({ ...row, updatedAt: 21 });
+    if (retries) {
+      await vi.waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+    }
+
+    expect(request).toHaveBeenCalledTimes(retries ? 2 : 1);
+    expect(errors).toHaveBeenCalledTimes(retries ? 2 : 1);
+    expect(context.sessions.state.error).toBe(error.message);
   });
 
   it("does not clear unread from a hidden retained pane", () => {

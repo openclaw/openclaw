@@ -1,4 +1,3 @@
-// Discord plugin module implements ack reactions behavior.
 import {
   createStatusReactionController,
   logAckFailure,

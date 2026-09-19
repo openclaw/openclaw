@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames: () => [
+  listKnownProviderAuthEnvVarNamesCore: () => [
     "OPENAI_API_KEY",
     "OPENAI_ADMIN_KEY",
     "ANTHROPIC_ADMIN_KEY",

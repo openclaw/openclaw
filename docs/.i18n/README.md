@@ -110,6 +110,11 @@ terms. Give them the same `target` when they name the same thing. Keep the
 targets different only when the case itself carries meaning, as it does for a
 display name and its identifier (`Cohere` and `cohere`, `Meta` and `meta`).
 
+The changed-label check currently covers the Simplified Chinese glossary only.
+Bare version labels such as `v2026.9.5` and `v2026.9.5-beta.1` do not require
+glossary entries in any language. Titles containing prose, such as
+`v2026.9.5: Security`, still follow the normal terminology rules.
+
 ## Translation mechanics
 
 - `scripts/docs-i18n` still owns translation generation.

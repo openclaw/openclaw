@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import releaseVersionCases from "../apps/linux/tests/release_version_cases.json" with { type: "json" };
 import {
   classifyReleaseTrain,
   collectReleaseVersionFloorErrors,
@@ -38,10 +39,15 @@ describe("release version policy", () => {
     expect(collectReleaseVersionFloorErrors("2026.7.1")).toEqual([]);
   });
 
-  it("orders prereleases, finals, and corrections", () => {
-    expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
-    expect(compareReleaseVersions("2026.3.29-beta.1", "2026.3.29")).toBe(-1);
-    expect(compareReleaseVersions("2026.3.29-2", "2026.3.29")).toBe(1);
+  it.each(releaseVersionCases.ordered)(
+    "orders shared desktop release $current -> $candidate",
+    ({ current, candidate, ordering }) => {
+      expect(compareReleaseVersions(candidate, current)).toBe(ordering);
+    },
+  );
+
+  it.each(releaseVersionCases.unrecognized)("leaves %s outside calendar ordering", (version) => {
+    expect(parseReleaseVersion(version)).toBeNull();
   });
 
   it.each([

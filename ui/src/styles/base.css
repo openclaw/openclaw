@@ -121,6 +121,7 @@
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
 
   /* Theme-invariant presentation colors. */
+  --task-suggestion-action-fg: #fafafa;
   --button-icon-bg: #ffffff;
   --brand-logo-chip-bg: #ffffff;
   --qr-bg: #ffffff;
@@ -409,22 +410,18 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* The composer's resting shape is the multiline one; its single-line pill
-     opts back out to a circular corner in chat/layout.css, because the
-     superellipse flattens a fully rounded end. */
-  .option-card.option-card,
-  .agent-chat__input.agent-chat__input {
+  .option-card.option-card {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
-  /* The transcript search bar's bottom corners round with its .card ancestor
+  /* The transcript search bar's bottom corners round with its .chat ancestor
      so the two edges stay optically parallel; only two corners are rounded,
-     and .chat:has(> .agent-chat__search-bar) zeroes .card's own radius while
+     and .chat:has(> .agent-chat__search-bar) zeroes .chat's own radius while
      the search bar is present (see chat/layout.css). corner-shape still
      needs to be set here even though the top two corners are 0 (a 0-radius
      corner draws no curve either way): the bottom two are standing in for
-     .card's own squircle corner at the seam, so they need the same shape,
+     .chat's own squircle corner at the seam, so they need the same shape,
      not just the same radius, to actually match it. */
   .agent-chat__search-bar.agent-chat__search-bar {
     border-radius: 0 0 calc(14px * var(--openclaw-corner-radius-scale))
@@ -911,6 +908,13 @@ wa-dropdown-item[disabled] {
   cursor: not-allowed;
 }
 
+/* The submenu safe triangle follows the pointer and can cover sibling rows,
+   trapping hover on tall or flipped menus. Let real rows receive the pointer;
+   Web Awesome still owns submenu closing and its pointer-exit grace period. */
+wa-dropdown-item::part(submenu)::before {
+  pointer-events: none;
+}
+
 /* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
 wa-dropdown-item[checkbox-adjacent] {
   padding-inline-start: 1em;
@@ -1061,17 +1065,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-@keyframes dashboard-enter {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes shimmer {
   from {
     transform: translateX(-100%);
@@ -1111,8 +1104,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     transparent 75%
   );
   content: "";
-  /* Rest offscreen: with reduced motion the animation collapses to one instant
-     iteration, and without this the highlight band would settle over the block. */
+  /* Keep the highlight offscreen when reduced motion disables the sweep. */
   transform: translateX(-100%);
   animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
@@ -1149,6 +1141,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     --hide-duration: 0ms;
   }
 
+  .skeleton::after,
   .chat-controls__inline-select[open] > wa-popup::part(popup) {
     animation: none !important;
   }

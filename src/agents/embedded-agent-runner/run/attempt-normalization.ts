@@ -44,7 +44,7 @@ import {
 } from "./terminal-outcome.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 

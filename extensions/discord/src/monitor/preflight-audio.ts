@@ -1,4 +1,3 @@
-// Discord plugin module implements preflight audio behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
 import { createChannelPreflightAudio } from "openclaw/plugin-sdk/media-understanding-runtime";

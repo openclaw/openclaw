@@ -248,34 +248,37 @@ describe("defineSingleProviderPluginEntry", () => {
     ).resolves.toMatchObject({ provider: { apiKey: "test-key" } });
   });
 
-  it("preserves manifest-owned onboarding scope and assistant metadata", () => {
-    const manifest = createProviderManifest();
-    const entry = defineSingleProviderPluginEntry({
-      id: "demo",
-      name: "Demo Provider",
-      description: "Demo provider plugin",
-      manifest: {
-        ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
-      },
-      provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
-    });
+  it.each(["manual-only", "detected-only"] as const)(
+    "preserves manifest-owned onboarding scope and %s assistant metadata",
+    (assistantVisibility) => {
+      const manifest = createProviderManifest();
+      const entry = defineSingleProviderPluginEntry({
+        id: "demo",
+        name: "Demo Provider",
+        description: "Demo provider plugin",
+        manifest: {
+          ...manifest,
+          providerAuthChoices: [
+            {
+              ...manifest.providerAuthChoices[0]!,
+              assistantPriority: 4,
+              assistantVisibility,
+              onboardingFeatured: true,
+              onboardingScopes: ["text-inference", "music-generation"],
+            },
+          ],
+        },
+        provider: { label: "Demo", docsPath: "/providers/demo", catalog: {} },
+      });
 
-    expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
-      assistantPriority: 4,
-      assistantVisibility: "manual-only",
-      onboardingFeatured: true,
-      onboardingScopes: ["text-inference", "music-generation"],
-    });
-  });
+      expect(capturePluginRegistration(entry).providers[0]?.auth[0]?.wizard).toMatchObject({
+        assistantPriority: 4,
+        assistantVisibility,
+        onboardingFeatured: true,
+        onboardingScopes: ["text-inference", "music-generation"],
+      });
+    },
+  );
 
   it("creates registration-scoped provider state for provider factories", () => {
     let registrations = 0;
@@ -311,21 +314,21 @@ describe("defineSingleProviderPluginEntry", () => {
 
   it("merges manifest onboarding metadata with provider-owned wizard model policies", () => {
     const manifest = createProviderManifest();
+    const manifestChoice = {
+      ...manifest.providerAuthChoices[0]!,
+      assistantPriority: 4,
+      modelTarget: "utility",
+      assistantVisibility: "manual-only",
+      onboardingFeatured: true,
+      onboardingScopes: ["text-inference", "music-generation"],
+    };
     const entry = defineSingleProviderPluginEntry({
       id: "demo",
       name: "Demo Provider",
       description: "Demo provider plugin",
       manifest: {
         ...manifest,
-        providerAuthChoices: [
-          {
-            ...manifest.providerAuthChoices[0]!,
-            assistantPriority: 4,
-            assistantVisibility: "manual-only",
-            onboardingFeatured: true,
-            onboardingScopes: ["text-inference", "music-generation"],
-          },
-        ],
+        providerAuthChoices: [manifestChoice],
       },
       provider: {
         label: "Demo",
@@ -348,6 +351,7 @@ describe("defineSingleProviderPluginEntry", () => {
       groupLabel: "Demo providers",
       groupHint: "Manifest-owned setup",
       assistantPriority: 4,
+      modelTarget: "utility",
       assistantVisibility: "manual-only",
       onboardingFeatured: true,
       onboardingScopes: ["text-inference", "music-generation"],

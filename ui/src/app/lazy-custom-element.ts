@@ -232,10 +232,8 @@ export const COMMAND_PALETTE_ELEMENT = {
   loadModule: () => import("../components/command-palette.ts"),
 } satisfies OptionalCustomElement;
 
-const DEBUG_OVERLAY_TAG = "openclaw-debug-overlay";
-
 export const DEBUG_OVERLAY_ELEMENT = {
-  tagName: DEBUG_OVERLAY_TAG,
+  tagName: "openclaw-debug-overlay",
   get label() {
     return t("debug.overlay.title");
   },
@@ -284,18 +282,18 @@ export const DESKTOP_PANEL_ELEMENT = {
   loadModule: () => import("../components/desktop/desktop-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const LINK_READER_PANEL_ELEMENT = {
+  tagName: "openclaw-link-reader-panel",
+  get label() {
+    return t("linkReader.title");
+  },
+  loadModule: () => import("../components/link-reader-panel.ts"),
+} satisfies OptionalCustomElement;
+
 export const DASHBOARD_DOCUMENT_ELEMENT = {
   tagName: "openclaw-board-document",
   label: "dashboard document",
   loadModule: () => import("../components/board/board-document.ts"),
-} satisfies OptionalCustomElement;
-
-export const ASSISTANT_PANEL_ELEMENT = {
-  tagName: "openclaw-assistant-panel",
-  get label() {
-    return t("assistantPanel.title");
-  },
-  loadModule: () => import("../components/assistant-panel.ts"),
 } satisfies OptionalCustomElement;
 
 // Loaded only for approval document URLs: the approval page pulls the protocol

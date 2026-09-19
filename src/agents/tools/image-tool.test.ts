@@ -5,9 +5,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
+import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
@@ -150,26 +152,26 @@ function readMockAuthProfileStore(agentDir?: string): {
   }
 }
 
+function readMockRuntimeAuthProfileStore(agentDir?: string) {
+  const store = readMockAuthProfileStore(agentDir);
+  if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
+    store.profiles["openai:default"] = {
+      provider: "openai",
+      type: "oauth",
+    };
+  }
+  return store;
+}
+
 vi.mock("../auth-profiles.js", () => ({
   externalCliDiscoveryForProviderAuth: (params: { provider: string }) => params,
-  ensureAuthProfileStore: (agentDir?: string) => {
-    const store = readMockAuthProfileStore(agentDir);
-    if (process.env.OPENCLAW_TEST_CODEX_CLI_OAUTH === "1") {
-      store.profiles["openai:default"] = {
-        provider: "openai",
-        type: "oauth",
-      };
-    }
-    return store;
-  },
-  ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) =>
-    readMockAuthProfileStore(agentDir),
-  hasAnyAuthProfileStoreSource: (agentDir?: string) => {
-    if (!agentDir) {
-      return false;
-    }
-    return fsSync.existsSync(path.join(agentDir, "auth-profiles.json"));
-  },
+  ensureAuthProfileStore: readMockRuntimeAuthProfileStore,
+  loadAuthProfileStoreForRuntime: readMockRuntimeAuthProfileStore,
+  loadAuthProfileStoreForRuntimeAsync: async (agentDir?: string) =>
+    readMockRuntimeAuthProfileStore(agentDir),
+  ensureAuthProfileStoreWithoutExternalProfiles: readMockAuthProfileStore,
+  hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+    Boolean(agentDir && fsSync.existsSync(path.join(agentDir, "auth-profiles.json"))),
   listProfilesForProvider: (
     store: { profiles?: Record<string, { provider?: string }> },
     provider: string,
@@ -3335,6 +3337,131 @@ describe("image compression policy", () => {
           staticMaxSidePx === undefined ? 1 : 0,
         );
         expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+      } finally {
+        resetModelGenerationFixtureState();
+        await state.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { route: "primary", supplied: "captured", expected: "captured", maxSidePx: 96 },
+    { route: "override", supplied: "captured", expected: "captured", maxSidePx: 96 },
+    { route: "fallback", supplied: "captured", expected: "captured", maxSidePx: 96 },
+    { route: "primary", supplied: "ambient", expected: "ambient", maxSidePx: 192 },
+    { route: "primary", supplied: "none", expected: "ambient", maxSidePx: 192 },
+  ])(
+    "uses $supplied metadata for $route image selection and compression",
+    async ({ route, supplied, expected, maxSidePx }) => {
+      const state = await createOpenClawTestState({ label: "image-captured-planning" });
+      try {
+        const provider = "image-planning";
+        const cfg = {
+          agents: {
+            defaults: {
+              imageQuality: "high",
+              imageModel: {
+                primary: `${provider}/${route === "fallback" ? "unavailable" : "entry"}`,
+                ...(route === "fallback" ? { fallbacks: [`${provider}/entry`] } : {}),
+              },
+            },
+          },
+          models: {
+            providers: {
+              [provider]: {
+                api: "openai-completions",
+                baseUrl: "https://image-planning.example.test/v1",
+                models: [
+                  { id: "captured", side: 96 },
+                  { id: "ambient", side: 192 },
+                  { id: "unavailable", side: 256 },
+                ].map(({ id, side }) =>
+                  Object.assign(makeModelDefinition(id, ["text", "image"]), {
+                    mediaInput: { image: { maxSidePx: side, preferredSidePx: side } },
+                  }),
+                ),
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+        const generation = (modelId: string) => {
+          const fixture = createModelGenerationFixture({
+            agentDir: state.agentDir("image"),
+            workspaceDir: state.workspaceDir,
+            config: cfg,
+            label: modelId,
+            provider,
+            requestProvider: provider,
+            modelId,
+          });
+          const metadataSnapshot = createPluginMetadataSnapshot({
+            config: cfg,
+            workspaceDir: state.workspaceDir,
+            manifestRegistry: {
+              plugins: fixture.metadataSnapshot.plugins.map((plugin) => ({
+                ...plugin,
+                modelIdNormalization: {
+                  providers: { [provider]: { aliases: { entry: modelId } } },
+                },
+              })),
+              diagnostics: [],
+            },
+          });
+          metadataSnapshot.owners.modelIdNormalizationPolicies =
+            collectManifestModelIdNormalizationPolicies(metadataSnapshot.plugins);
+          return {
+            ...fixture,
+            metadataSnapshot,
+            preparedModelRuntime: { ...fixture.preparedModelRuntime, metadataSnapshot },
+          };
+        };
+        const captured = generation("captured");
+        const ambient = generation("ambient");
+        publishCurrentModelGeneration(ambient);
+        const observed: Array<{ model: string; width: number; height: number }> = [];
+        installImageUnderstandingProviderDeps(
+          [
+            {
+              id: provider,
+              capabilities: ["image"],
+              describeImage: async (request) => {
+                const dimensions =
+                  request.mime === "image/png"
+                    ? readPngDimensions(request.buffer)
+                    : readJpegDimensions(request.buffer);
+                observed.push({ model: request.model, ...dimensions });
+                if (request.model === "unavailable") {
+                  throw new Error("fixture image model unavailable");
+                }
+                return { text: "inspected", model: request.model };
+              },
+            },
+          ],
+          { useDefaultResolveModelAsync: true },
+        );
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir: state.agentDir("image"),
+          workspaceDir: state.workspaceDir,
+          ...(supplied === "none"
+            ? {}
+            : {
+                preparedModelRuntime: (supplied === "captured" ? captured : ambient)
+                  .preparedModelRuntime,
+              }),
+        });
+        const source = createLargeColorBlockPng(256);
+        const result = await withPluginRuntimeGenerationScope(ambient.preparedModelRuntime, () =>
+          tool.execute("image", {
+            path: `data:image/png;base64,${source.toString("base64")}`,
+            ...(route === "override" ? { model: `${provider}/entry` } : {}),
+          }),
+        );
+        expect.soft(result.details).toMatchObject({ model: `${provider}/${expected}` });
+        expect
+          .soft(observed.map(({ model }) => model))
+          .toEqual(route === "fallback" ? ["unavailable", expected] : [expected]);
+        expect.soft(observed.at(-1)).toMatchObject({ width: maxSidePx, height: maxSidePx });
       } finally {
         resetModelGenerationFixtureState();
         await state.cleanup();

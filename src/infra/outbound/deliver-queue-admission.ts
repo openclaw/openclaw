@@ -75,7 +75,7 @@ export async function stageAndEnqueueOutboundDelivery(
   params: InternalDeliverOutboundPayloadsParams,
   preparedBatch: PreparedOutboundBatch,
   options?: {
-    getStablePreparation?: () => StableDeliveryPreparation;
+    getStablePreparation?: () => Promise<StableDeliveryPreparation>;
     claimForLiveDelivery?: boolean;
   },
 ): Promise<{ id: string; created: boolean; producerClaimId?: string } | null> {
@@ -171,7 +171,7 @@ export async function stageAndEnqueueOutboundDelivery(
         ? await enqueuePreparedDeliveryOnce(
             delivery,
             params.deliveryIntentId,
-            options.getStablePreparation(),
+            await options.getStablePreparation(),
             stateDir,
             staged.mediaStageId,
             params.deliveryQueueStateContext,

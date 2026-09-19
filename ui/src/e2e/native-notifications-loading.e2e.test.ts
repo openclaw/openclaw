@@ -31,7 +31,7 @@ suite.define(() => {
           viewport,
           recordVideo: { dir: suite.artifactDir, size: viewport },
         },
-        async ({ page }) => {
+        async ({ context, page }) => {
           const notificationModules: string[] = [];
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
@@ -77,6 +77,25 @@ suite.define(() => {
               ? ".new-session-page__composer textarea"
               : ".agent-chat__composer-combobox textarea",
           );
+          if (native) {
+            // A warm composer can render before native startup. Playwright evaluate
+            // grants activation, so observe through CDP before any page interaction.
+            const protocol = await context.newCDPSession(page);
+            try {
+              await expect
+                .poll(async () => {
+                  const { result } = await protocol.send("Runtime.evaluate", {
+                    expression: "window.notificationProof",
+                    returnByValue: true,
+                    userGesture: false,
+                  });
+                  return result.value;
+                })
+                .toContainEqual({ type: "status", event: null, userActivation: false });
+            } finally {
+              await protocol.detach();
+            }
+          }
           await composer.fill("Check notification startup.");
           expect(notificationModules).toHaveLength(native ? 1 : 0);
           await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });

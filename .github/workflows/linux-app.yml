@@ -44,6 +44,7 @@ jobs:
             ffmpeg \
             file \
             gir1.2-atspi-2.0 \
+            gnome-keyring \
             gstreamer1.0-libav \
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-good \
@@ -58,6 +59,7 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
             mesa-utils \
+            openbox \
             patchelf \
             pciutils \
             procps \
@@ -65,6 +67,7 @@ jobs:
             python3-gi \
             wget \
             wmctrl \
+            x11-utils \
             xauth \
             xdg-utils \
             xdotool \
@@ -131,6 +134,32 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: ${{ runner.temp }}/linux-inline-browser
+
+      - name: Test native Gateway switching
+        id: gateway-switch
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/linux-gateway-switch"
+          xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-switch \
+            --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch" \
+            2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/run.log"
+          mkdir -p "${RUNNER_TEMP}/linux-gateway-switch/onboarding"
+          xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-onboarding \
+            --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch/onboarding" \
+            2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/onboarding/run.log"
+
+      - name: Upload native Gateway switching proof
+        if: always() && steps.gateway-switch.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-gateway-switch
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/linux-gateway-switch
 
       - name: Stage AppImage GStreamer plugins
         if: github.event_name == 'workflow_dispatch'
@@ -280,3 +309,39 @@ jobs:
         # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
         # compile coverage `check --all-targets` used to give.
         run: cargo +stable test --locked --all-targets
+
+      - name: Verify native macOS power lifecycle
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
+
+  test-windows-power:
+    name: Test Windows power lifecycle
+    # Match the optional Windows desktop-test bundle runner.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/linux/src-tauri/target
+          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-app-${{ runner.os }}-
+
+      - name: Verify native Windows power lifecycle
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture

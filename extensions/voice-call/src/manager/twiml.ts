@@ -1,4 +1,3 @@
-// Voice Call plugin module implements twiml behavior.
 import { escapeXml } from "../voice-mapping.js";
 
 // TwiML builders for manager-initiated notify and DTMF redirect flows.

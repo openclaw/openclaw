@@ -1,18 +1,20 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 }
 
 describe("ManagedWorktreeService branch discovery", () => {
@@ -38,8 +40,45 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
+    const disk = fsSync.statfsSync(root);
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
+      type: disk.type,
+      files: disk.files,
+      frsize: disk.frsize,
+      ffree: disk.ffree,
+      bsize: 4096,
+      blocks: 1024 ** 4 / 4096,
+      bavail: (100 * 1024 ** 3) / 4096,
+      bfree: (100 * 1024 ** 3) / 4096,
+    });
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(repo, "remote", "add", "origin", remote);
+    await git(repo, "fetch", "origin");
+    await git(repo, "remote", "set-head", "origin", "-a");
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    await git(remote, "branch", "-m", "main", "next");
+    await git(repo, "config", "fetch.prune", "true");
+    await git(repo, "config", "remote.origin.followRemoteHEAD", "never");
+
+    const created = await service.create({ repoRoot: repo, name: "default-base" });
+
+    expect(created.baseRef).toBe("HEAD");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
+    expect(await git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+      "refs/remotes/origin/main",
+    );
+    await expect(
+      service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/HEAD" }),
+    ).rejects.toThrow(InvalidWorktreeBaseRefError);
+    expect(await git(repo, "branch", "--list", "openclaw/explicit-base")).toBe("");
+    expect(service.listRegistryRecords()).toEqual([created]);
   });
 
   it("reports Git, plain-directory, and unavailable repository status", async () => {

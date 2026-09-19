@@ -111,6 +111,7 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "TranscriptUtteranceSchema",
   "UserProfileAvatarMimeSchema",
   "UserProfileGitHubIdentitySchema",
+  "UserProfileIdSchema",
   "UserProfileSchema",
   "UsersLinkEmailParamsSchema",
   "UsersLinkEmailResultSchema",

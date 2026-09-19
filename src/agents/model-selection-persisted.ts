@@ -2,21 +2,23 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
-import type { ModelRef } from "./model-ref-shared.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { parseModelRef } from "./model-selection-normalize.js";
 
 function normalizePersistedDefaultProvider(value: unknown): string {
   return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
 }
 
-export function resolvePersistedOverrideModelRef(params: {
-  defaultProvider?: unknown;
-  overrideProvider?: unknown;
-  overrideModel?: unknown;
-  routeResolution?: ModelFallbackRouteResolution;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
-}): ModelRef | null {
+export function resolvePersistedOverrideModelRef(
+  params: {
+    defaultProvider?: unknown;
+    overrideProvider?: unknown;
+    overrideModel?: unknown;
+    routeResolution?: ModelFallbackRouteResolution;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef | null {
   const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
   const overrideProvider = normalizeOptionalString(params.overrideProvider);
   const overrideModel = normalizeOptionalString(params.overrideModel);
@@ -32,6 +34,7 @@ export function resolvePersistedOverrideModelRef(params: {
     parseModelRef(encodedOverride, defaultProvider, {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     }) ?? {
       provider: overrideProvider || defaultProvider,
       model: overrideModel,

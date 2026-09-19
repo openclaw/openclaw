@@ -6,16 +6,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import type {
-  WorkerWorkspaceManifest,
-  WorkerWorkspaceManifestEntry,
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
+import {
+  parseWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+  type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
-  parseWorkerWorkspaceManifest,
+  MAX_RECONCILIATION_TOTAL_BYTES,
+  changedPaths,
   recoverWorkerWorkspaceReconciliation,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
@@ -776,34 +778,151 @@ describe("worker workspace reconciliation recovery", () => {
     ).toThrow("too large");
   });
 
-  it("counts serialized reconciliation records at the exact transfer boundary", () => {
-    const entries = (count: number, hash: string) =>
-      Array.from({ length: count }, (_, index) => ({
-        path: `entry-${index.toString().padStart(5, "0")}`,
-        type: "file" as const,
-        mode: 0o644,
-        size: 1,
-        sha256: hash.repeat(64),
-      }));
-    const manifest = (values: WorkerWorkspaceManifestEntry[]): WorkerWorkspaceManifest => ({
+  it("compares decoded entries by their typed fields and honors cancellation", () => {
+    const file = {
+      path: "file",
+      type: "file" as const,
+      mode: 0o644,
+      size: 1,
+      sha256: "a".repeat(64),
+    };
+    const base: WorkerWorkspaceManifest = { version: 1, baseCommit: null, entries: [file] };
+    const current: WorkerWorkspaceManifest = {
+      ...base,
+      entries: [
+        { sha256: file.sha256, size: file.size, mode: file.mode, type: file.type, path: file.path },
+      ],
+    };
+    expect(workerWorkspaceTransferPaths(current, base)).toEqual([]);
+    expect([...changedPaths(base, current)]).toEqual([]);
+    for (const change of [{ mode: 0o755 }, { size: 2 }, { sha256: "b".repeat(64) }]) {
+      expect(
+        workerWorkspaceTransferPaths({ ...current, entries: [{ ...file, ...change }] }, base),
+      ).toEqual(["file"]);
+    }
+    const controller = new AbortController();
+    const reason = new Error("workspace owner closed");
+    controller.abort(reason);
+    expect(() => workerWorkspaceTransferPaths(current, base, controller.signal)).toThrow(reason);
+  });
+
+  it("preserves directory transitions, deletion accounting, and payload order", () => {
+    const file = (entryPath: string): WorkerWorkspaceManifestEntry => ({
+      path: entryPath,
+      type: "file",
+      mode: 0o644,
+      size: 0,
+      sha256: "a".repeat(64),
+    });
+    const base: WorkerWorkspaceManifest = {
       version: 1,
       baseCommit: null,
-      entries: values,
-    });
-    const modificationBoundary = MAX_RECONCILIATION_ENTRIES / 2;
-    const base = manifest(entries(modificationBoundary, "a"));
-    const current = manifest(entries(modificationBoundary, "b"));
-    expect(workerWorkspaceTransferPaths(current, base)).toHaveLength(modificationBoundary);
-
-    const overBase = manifest(entries(modificationBoundary + 1, "a"));
-    const overCurrent = manifest(entries(modificationBoundary + 1, "b"));
-    expect(() => workerWorkspaceTransferPaths(overCurrent, overBase)).toThrow(
-      `exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+      directories: ["old-empty", "to-file"],
+      entries: [
+        file("to-directory"),
+        file("to-file/child"),
+        { path: "link", type: "symlink", mode: 0o777, target: "before" },
+      ],
+    };
+    const current: WorkerWorkspaceManifest = {
+      version: 1,
+      baseCommit: null,
+      directories: ["new-empty", "to-directory"],
+      entries: [
+        { path: "link", type: "symlink", mode: 0o777, target: "after" },
+        file("to-file"),
+        file("to-directory/child"),
+      ],
+    };
+    expect(workerWorkspaceTransferPaths(current, base)).toEqual([
+      "link",
+      "to-file",
+      "to-directory/child",
+    ]);
+    expect([...changedPaths(base, current)]).toEqual([
+      "old-empty",
+      "to-file",
+      "to-directory",
+      "to-file/child",
+      "link",
+      "new-empty",
+      "to-directory/child",
+    ]);
+    expect(workerWorkspaceTransferPaths({ ...base, entries: [], directories: [] }, base)).toEqual(
+      [],
     );
+  });
 
-    const additions = manifest(entries(MAX_RECONCILIATION_ENTRIES, "c"));
-    const empty = manifest([]);
-    expect(workerWorkspaceTransferPaths(additions, empty)).toHaveLength(MAX_RECONCILIATION_ENTRIES);
-    expect(workerWorkspaceTransferPaths(empty, additions)).toEqual([]);
+  it("retains owned input payloads while excluding ordinary derived paths", async () => {
+    const local = await temporaryDirectory("workspace-comparison-inputs");
+    const directory = stagedInputDirectory("a".repeat(64));
+    await ensureStagedInputDirectory(local, directory);
+    await fs.writeFile(path.join(local, directory, "input.pyc"), "base");
+    await fs.mkdir(path.join(local, "node_modules"));
+    await fs.writeFile(path.join(local, "node_modules", "cache"), "base");
+    const base = await manifestFor(local);
+    const current: WorkerWorkspaceManifest = {
+      ...base,
+      entries: base.entries.map((entry) =>
+        entry.type === "file" && !entry.path.endsWith(".gitignore")
+          ? { ...entry, sha256: "b".repeat(64) }
+          : entry,
+      ),
+    };
+    expect(workerWorkspaceTransferPaths(current, base)).toEqual([`${directory}/input.pyc`]);
+    expect([...changedPaths(base, current)]).toEqual([`${directory}/input.pyc`]);
+  });
+
+  it("counts only changed payload bytes and includes UTF-8 symlink targets", () => {
+    const entries: WorkerWorkspaceManifestEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      path: `file-${index}`,
+      type: "file",
+      mode: 0o644,
+      size: MAX_RECONCILIATION_FILE_BYTES,
+      sha256: "a".repeat(64),
+    }));
+    const empty: WorkerWorkspaceManifest = { version: 1, baseCommit: null, entries: [] };
+    const current: WorkerWorkspaceManifest = { ...empty, entries };
+    expect(
+      entries.reduce((bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0),
+    ).toBe(MAX_RECONCILIATION_TOTAL_BYTES);
+    expect(workerWorkspaceTransferPaths(current, empty)).toEqual(
+      entries.map((entry) => entry.path),
+    );
+    const extra: WorkerWorkspaceManifest = {
+      ...current,
+      entries: [...entries, { path: "link", type: "symlink", mode: 0o777, target: "a" }],
+    };
+    const lastIndex = entries.length - 1;
+    const lastFile = entries[lastIndex]!;
+    if (lastFile.type === "file") {
+      extra.entries[lastIndex] = { ...lastFile, size: lastFile.size - 1 };
+    }
+    expect(workerWorkspaceTransferPaths(extra, empty)).toEqual([
+      ...entries.map((entry) => entry.path),
+      "link",
+    ]);
+    extra.entries[entries.length] = { path: "link", type: "symlink", mode: 0o777, target: "é" };
+    expect(() => workerWorkspaceTransferPaths(extra, empty)).toThrow(
+      "staged result exceeds its byte limit",
+    );
+    expect(workerWorkspaceTransferPaths(extra, current)).toEqual([lastFile.path, "link"]);
+  });
+
+  it("accepts a directory replacement spanning two complete supported inventories", () => {
+    const manifest = (prefix: string): WorkerWorkspaceManifest => ({
+      version: 1,
+      baseCommit: null,
+      entries: [],
+      directories: Array.from(
+        { length: MAX_WORKSPACE_INVENTORY_ENTRIES },
+        (_, index) => `${prefix}-${index.toString().padStart(6, "0")}`,
+      ),
+    });
+    const base = manifest("removed");
+    const current = manifest("added");
+
+    expect(workerWorkspaceTransferPaths(current, base)).toEqual([]);
+    expect(changedPaths(base, current).size).toBe(2 * MAX_WORKSPACE_INVENTORY_ENTRIES);
   });
 });

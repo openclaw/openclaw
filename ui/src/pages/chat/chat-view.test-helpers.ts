@@ -1,5 +1,11 @@
-import type { ReactiveControllerHost } from "lit";
+import { render, type ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalScopeConfigured,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
+import { renderChat } from "./chat-view.ts";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
@@ -93,4 +99,103 @@ export function stubAnimationFrames() {
       callback(0);
     }
   };
+}
+
+type ChatProps = Parameters<typeof renderChat>[0];
+
+export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
+  const transcript = createTestTranscript();
+  const sessionKey = overrides.sessionKey ?? "main";
+  const sessionHost = overrides.sessionHost;
+  const exactSelectedSession = overrides.sessions?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, sessionKey),
+  );
+  const selectedSession = Object.hasOwn(overrides, "selectedSession")
+    ? overrides.selectedSession
+    : (exactSelectedSession ??
+      (sessionHost && isUiGlobalScopeConfigured(sessionHost)
+        ? overrides.sessions?.sessions.find((row) =>
+            uiSessionRowMatchesSelectedChat(sessionHost, row.key, sessionKey),
+          )
+        : undefined));
+  return {
+    transcript,
+    paneId: "single",
+    sessionKey,
+    onSessionKeyChange: () => undefined,
+    thinkingLevel: null,
+    showThinking: false,
+    showToolCalls: true,
+    loading: false,
+    sending: false,
+    compactionStatus: null,
+    fallbackStatus: null,
+    messages: [],
+    toolMessages: [],
+    streamSegments: [],
+    stream: null,
+    streamStartedAt: null,
+    assistantAvatarUrl: null,
+    draft: "",
+    modelCatalog: [],
+    modelSwitching: false,
+    queue: [],
+    realtimeTalkActive: false,
+    realtimeTalkStatus: "idle",
+    realtimeTalkDetail: null,
+    connected: true,
+    canSend: true,
+    disabledReason: null,
+    error: null,
+    runError: null,
+    approvalCanGrant: false,
+    sessions: null,
+    selectedSession,
+    canvasPluginSurfaceUrl: null,
+    embedSandboxMode: "scripts",
+    allowExternalEmbedUrls: false,
+    assistantName: "Val",
+    sendShortcut: "enter",
+    assistantAvatar: null,
+    userName: null,
+    userAvatar: null,
+    assistantAttachmentAuthToken: null,
+    autoExpandToolCalls: false,
+    attachments: [],
+    onAttachmentsChange: () => undefined,
+    showNewMessages: false,
+    onScrollToBottom: () => undefined,
+    onRefresh: () => undefined,
+    getDraft: () => "",
+    onDraftChange: () => undefined,
+    onRequestUpdate: () => undefined,
+    onSend: () => undefined,
+    onToggleRealtimeTalk: () => undefined,
+    onToggleRealtimeCamera: () => undefined,
+    onDismissError: () => undefined,
+    onAbort: () => undefined,
+    onQueueRemove: () => undefined,
+    onQueueSteer: () => undefined,
+    onClearHistory: () => undefined,
+    onOpenSessionCheckpoints: () => undefined,
+    agentsList: null,
+    currentAgentId: "main",
+    onAgentChange: () => undefined,
+    onNavigateToAgent: () => undefined,
+    onSessionSelect: () => undefined,
+    onOpenSidebar: () => undefined,
+    onChatScroll: () => undefined,
+    basePath: "",
+    ...overrides,
+  };
+}
+
+export function renderChatView(overrides: Partial<ChatProps> = {}) {
+  const container = document.createElement("div");
+  render(renderChat(createChatProps(overrides)), container);
+  return container;
+}
+
+export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
+  render(renderChat(createChatProps(overrides)), container);
 }

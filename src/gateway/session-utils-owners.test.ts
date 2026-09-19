@@ -50,12 +50,18 @@ it.each([true, false, undefined])(
     const store: Record<string, SessionEntry> = {
       "agent:main:subagent:recent": {
         sessionId: "subagent-recent",
-        updatedAt: 5,
+        updatedAt: 6,
         createdActor: { type: "human", source: "profile", id: "profile-bob" },
       },
       "Subagent:legacy": {
         sessionId: "subagent-legacy",
+        updatedAt: 5,
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "agent:main:legacy-child": {
+        sessionId: "legacy-child",
         updatedAt: 4,
+        spawnedBy: "agent:main:discussion",
         createdActor: { type: "human", source: "profile", id: "profile-bob" },
       },
       "agent:main:discussion": {
@@ -89,8 +95,8 @@ it.each([true, false, undefined])(
         : ["agent:main:subagent:recent", "Subagent:legacy"],
     );
     expect(result).toMatchObject({
-      totalCount: excludeSubagents ? 3 : 5,
-      peopleSessionCount: excludeSubagents ? 3 : 5,
+      totalCount: excludeSubagents ? 3 : 6,
+      peopleSessionCount: excludeSubagents ? 3 : 6,
       nextOffset: 2,
       hasMore: true,
     });
@@ -99,7 +105,7 @@ it.each([true, false, undefined])(
         ? [["profile-ada", 3]]
         : [
             ["profile-ada", 3],
-            ["profile-bob", 2],
+            ["profile-bob", 3],
           ],
     );
     expect(result.owners?.map((owner) => owner.id)).toEqual(
@@ -1006,7 +1012,7 @@ it("keeps the serialized list response deterministic for the current filter path
   const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}],"thinkingOptions":["off","minimal","low","medium","high"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
+    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"runtimeSelectionLocked":false,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100,"snapshotAt":1000000}]}',
   ].join("");
 
   expect(JSON.stringify(result)).toBe(expectedSerializedResponse);

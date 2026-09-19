@@ -61,12 +61,14 @@ export function expectUnavailableMemorySearchDetails(
     error: string;
     warning: string;
     action: string;
+    timeoutMs?: number;
   },
 ) {
   expect(details).toEqual({
     results: [],
     disabled: true,
     unavailable: true,
+    ...(params.timeoutMs === undefined ? {} : { timedOut: true, timeoutMs: params.timeoutMs }),
     error: params.error,
     warning: params.warning,
     action: params.action,

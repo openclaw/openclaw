@@ -214,22 +214,16 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     },
   );
 
-  it("prepares dedicated workers, bounds distinct databases, and retains ownership until termination joins", async () => {
+  it("prepares dedicated workers beyond four databases and retains ownership until termination joins", async () => {
     const directory = tempDirs.make("bun-sqlite-worker-selection-");
     const paths = Array.from({ length: 5 }, (_, index) => path.join(directory, `${index}.sqlite`));
     const active: SqliteWorkerStore<FixtureOperations>[] = [];
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < paths.length; index += 1) {
       const store = await openStore(paths[index]!);
       active.push(store);
       await store.execute({ type: "append", input: { value: `database ${index}` } });
     }
-    const [overflow] = await Promise.allSettled([openStore(paths[4]!)]);
-    if (overflow.status === "fulfilled") {
-      await overflow.value.close();
-    }
-    expect(overflow).toMatchObject({ status: "rejected", reason: { code: "overloaded" } });
-    expect(existsSync(paths[4]!)).toBe(false);
-    expect(runtime.launches).toBe(4);
+    expect(runtime.launches).toBe(5);
     for (const [index, store] of active.entries()) {
       expect(await store.execute({ type: "read", input: undefined })).toEqual([
         `database ${index}`,
@@ -239,7 +233,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     await fs.link(paths[0]!, aliasPath);
     const alias = await openStore(aliasPath);
     await alias.execute({ type: "append", input: { value: "shared alias" } });
-    expect(runtime.launches).toBe(4);
+    expect(runtime.launches).toBe(5);
     await active[0]!.close();
     expect(await alias.execute({ type: "read", input: undefined })).toEqual([
       "database 0",
@@ -260,8 +254,6 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     let reopening: Promise<SqliteWorkerStore<FixtureOperations>> | undefined;
     try {
       await terminating.promise;
-      // Leave room for a replacement so the database owner, not the worker cap, must block it.
-      await active[3]!.close();
       const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const backendPath = await fs.realpath(
         fileURLToPath(new URL("./sqlite-worker-store.test-support.ts", import.meta.url)),
@@ -285,9 +277,8 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         },
       );
       await inspected.promise;
-      // Resume the admission continuation after its last filesystem inspection.
       await Promise.resolve();
-      expect(runtime.launches).toBe(4);
+      expect(runtime.launches).toBe(5);
       expect(reopenSettled).toBe(false);
       vi.mocked(fs.stat).mockImplementation(actualFs.stat);
       release.resolve();
@@ -297,9 +288,9 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         "database 0",
         "shared alias",
       ]);
-      expect(runtime.launches).toBe(5);
+      expect(runtime.launches).toBe(6);
       expect(await active[1]!.execute({ type: "read", input: undefined })).toEqual(["database 1"]);
-      expect(await active[2]!.execute({ type: "read", input: undefined })).toEqual(["database 2"]);
+      expect(await active[4]!.execute({ type: "read", input: undefined })).toEqual(["database 4"]);
     } finally {
       release.resolve();
       termination.mockRestore();

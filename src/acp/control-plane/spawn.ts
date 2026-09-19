@@ -40,6 +40,7 @@ export async function cleanupFailedAcpSpawn(params: {
     }
   };
   let deletionStarted = false;
+  let deletionExecution: Promise<void> | undefined;
   const cancellation = new AbortController();
   try {
     await runWithGatewayToolCleanupContext(async () => {
@@ -61,6 +62,9 @@ export async function cleanupFailedAcpSpawn(params: {
         // New /acp rows can have no revision yet. The private guard preserves
         // exact absence as well as recorded revisions throughout deletion.
         {
+          onExecution: (execution) => {
+            deletionExecution = execution;
+          },
           sessionMutationCommitGuard: () => {
             cancellation.signal.throwIfAborted();
             context.requestEntryLifetime?.signal.throwIfAborted();
@@ -96,5 +100,10 @@ export async function cleanupFailedAcpSpawn(params: {
       });
     }
     logVerbose(`acp-spawn: provisional session cleanup failed: ${String(error)}`);
+  } finally {
+    if (deletionStarted) {
+      // The response deadline does not cancel an admitted session mutation.
+      await deletionExecution;
+    }
   }
 }

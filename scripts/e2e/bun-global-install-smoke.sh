@@ -389,7 +389,7 @@ NODE
     "$gateway_port"
 
   echo "==> Representative CLI state under $runtime_label"
-  run_installed_cli status --json --timeout 1 >"$CLI_STATUS_LOG" 2>&1
+  run_installed_cli status --json >"$CLI_STATUS_LOG" 2>&1
   run_installed_cli plugins list --json >"$CLI_PLUGINS_LOG" 2>&1
 
   echo "==> Local mocked agent turn under $runtime_label"

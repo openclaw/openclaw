@@ -4,8 +4,11 @@ import type { TasksHistoryResult } from "../../../packages/gateway-protocol/src/
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
+  deleteSessionEntryLifecycle,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,7 +25,8 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient, runTaskHandler } from "./tasks.test-helpers.js";
 
 type ReadTaskHistory = NonNullable<AgentHarness["taskHistory"]>["read"];
@@ -93,10 +97,15 @@ describe("tasks.history", () => {
   it("reads and pages a registered harness transcript without a child session", async () => {
     await withHistoryState(async () => {
       const older = { role: "user", content: "Inspect the files" };
-      const latest = { role: "assistant", content: "The files are consistent" };
+      const latest = {
+        role: "toolResult",
+        messageId: "latest",
+        content: "The files are consistent",
+      };
+      const activity = [{ messageId: "latest", items: [] }];
       const read = vi.fn<ReadTaskHistory>(async ({ cursor }) =>
         cursor === undefined
-          ? { messages: [latest], nextCursor: "older-page" }
+          ? { messages: [latest], activity, nextCursor: "older-page" }
           : { messages: [older] },
       );
       registerHistoryReader(read);
@@ -107,6 +116,7 @@ describe("tasks.history", () => {
       const first = await runTaskHandler("tasks.history", { taskId: task.taskId, limit: 1 });
       expect(first.calls[0]?.[0]).toBe(true);
       expect(first.payload?.messages).toEqual([latest]);
+      expect(first.payload?.activity).toEqual(activity);
       const cursor = expectDefined(first.payload?.nextCursor, "older task history cursor");
       const second = await runTaskHandler("tasks.history", {
         taskId: task.taskId,
@@ -141,7 +151,24 @@ describe("tasks.history", () => {
         "Second child message",
         "Latest child message",
       ]) {
-        await appendTranscriptMessage(scope, { message: { role: "assistant", content } });
+        await appendTranscriptMessage(scope, {
+          message:
+            content === "Latest child message"
+              ? {
+                  role: "toolResult",
+                  toolCallId: "poll",
+                  toolName: "process",
+                  isError: false,
+                  content,
+                  details: {
+                    status: "completed",
+                    sessionId: "job",
+                    aggregated: "done",
+                    exitCode: 0,
+                  },
+                }
+              : { role: "assistant", content },
+        });
       }
       const task = createTaskFixture("subagent", {
         requesterSessionKey,
@@ -150,7 +177,7 @@ describe("tasks.history", () => {
         runId: "openclaw-child",
         task: "Inspect synthetic files",
       });
-      const context = createDirectChatContext();
+      const context = await createHistoryReadContext();
       const first = await runTaskHandler(
         "tasks.history",
         { taskId: task.taskId, limit: 2 },
@@ -163,6 +190,7 @@ describe("tasks.history", () => {
         { content: "Second child message" },
         { content: "Latest child message" },
       ]);
+      expect(first.payload?.activity).toEqual([{ messageId: expect.any(String), items: [] }]);
       const cursor = expectDefined(first.payload?.nextCursor, "older child transcript cursor");
       const second = await runTaskHandler(
         "tasks.history",
@@ -175,6 +203,192 @@ describe("tasks.history", () => {
       expect(second.payload?.nextCursor).toBeUndefined();
     });
   });
+
+  it("reads and pages the recorded cron generation after its continuation alias is removed", async () => {
+    await withHistoryState(async () => {
+      const baseKey = "agent:main:cron:history-job";
+      const oldScope = { agentId: "main", sessionKey: baseKey, sessionId: "old-cron" };
+      await upsertSessionEntryCore(oldScope, { sessionId: oldScope.sessionId, updatedAt: 1 });
+      for (const content of ["Old first", "Old second", "Old last"]) {
+        await appendTranscriptMessage(oldScope, { message: { role: "assistant", content } });
+      }
+      const alias = `${baseKey}:run:${oldScope.sessionId}`;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: alias },
+        {
+          sessionId: oldScope.sessionId,
+          updatedAt: 1,
+        },
+      );
+      const removed = await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        target: { canonicalKey: alias, storeKeys: [alias] },
+        archiveTranscript: false,
+        expectedSessionId: oldScope.sessionId,
+      });
+      expect(removed.deleted).toBe(true);
+      const latest = { ...oldScope, sessionId: "new-cron" };
+      await upsertSessionEntryCore(latest, { sessionId: latest.sessionId, updatedAt: 2 });
+      await appendTranscriptMessage(latest, {
+        message: { role: "assistant", content: "Latest run only" },
+      });
+      const task = createTaskFixture("cron", {
+        taskKind: "automation_run",
+        sourceId: "history-job",
+        runId: "internal-old-run",
+        requesterSessionKey: "",
+        ownerKey: "",
+        scopeKind: "system",
+        childSessionKey: alias,
+        agentId: "main",
+        task: "History job",
+        detail: { kind: "cron-run", sessionId: oldScope.sessionId },
+      });
+      const context = await createHistoryReadContext();
+      const first = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 2 },
+        {},
+        null,
+        context,
+      );
+      expect(first.calls[0]?.[0]).toBe(true);
+      expect(first.payload?.messages).toMatchObject([
+        { content: "Old second" },
+        { content: "Old last" },
+      ]);
+      const cursor = expectDefined(first.payload?.nextCursor, "older cron history cursor");
+      const second = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 2, cursor },
+        {},
+        null,
+        context,
+      );
+      expect(second.payload?.messages).toMatchObject([{ content: "Old first" }]);
+      expect(second.payload?.nextCursor).toBeUndefined();
+      const rotationContext = await createHistoryReadContext({
+        readChatStartupProjection: async () => {
+          await upsertSessionEntryCore(oldScope, { sessionId: "concurrent-new-run", updatedAt: 3 });
+          return undefined;
+        },
+      });
+      const duringRotation = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, limit: 2 },
+        {},
+        null,
+        rotationContext,
+      );
+      expect(duringRotation.calls[0]?.[0]).toBe(true);
+      expect(duringRotation.payload?.messages).toMatchObject([
+        { content: "Old second" },
+        { content: "Old last" },
+      ]);
+      const baseScope = { agentId: "main", sessionKey: baseKey };
+      await upsertSessionEntryCore(baseScope, {
+        sessionId: "shared-new-run",
+        updatedAt: 4,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: "another-owner" },
+      });
+      const revokedContext = await createHistoryReadContext({
+        readChatStartupProjection: async () => {
+          await upsertSessionEntryCore(baseScope, {
+            sessionId: "private-new-run",
+            updatedAt: 5,
+          });
+          await patchSessionEntryCore(baseScope, () => ({ visibility: "draft" }));
+          return undefined;
+        },
+      });
+      const revoked = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        identifiedClient(["operator.read"], "retained-viewer"),
+        revokedContext,
+      );
+      expect(loadGatewaySessionEntryReadOnly(baseKey, { agentId: "main" }).entry).toMatchObject({
+        sessionId: "private-new-run",
+        visibility: "draft",
+      });
+      expect(revoked.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+      expect(revoked.payload?.messages).toBeUndefined();
+      const changedContext = await createHistoryReadContext({
+        readChatStartupProjection: async () => {
+          markTaskTerminalById({
+            taskId: task.taskId,
+            status: "succeeded",
+            endedAt: 3,
+            detail: { kind: "cron-run", sessionId: latest.sessionId },
+          });
+          return undefined;
+        },
+      });
+      const stale = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId },
+        {},
+        null,
+        changedContext,
+      );
+      expect(stale.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+      expect(stale.payload?.messages).toBeUndefined();
+      const changed = await runTaskHandler(
+        "tasks.history",
+        { taskId: task.taskId, cursor },
+        {},
+        null,
+        context,
+      );
+      expect(changed.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+    });
+  });
+
+  it.each(["unrelated", "missing", "unrecorded"] as const)(
+    "does not substitute current history for a %s cron generation",
+    async (generation) => {
+      await withHistoryState(async () => {
+        const baseKey = "agent:main:cron:history-job";
+        for (const [sessionKey, sessionId] of [
+          [baseKey, "latest"],
+          ["agent:main:cron:another-job", "unrelated"],
+        ] as const) {
+          const scope = { agentId: "main", sessionKey, sessionId };
+          await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+          await appendTranscriptMessage(scope, {
+            message: { role: "assistant", content: "Not this run" },
+          });
+        }
+        const task = createTaskFixture("cron", {
+          taskKind: "automation_run",
+          sourceId: "history-job",
+          runId: "old-run",
+          requesterSessionKey: "",
+          ownerKey: "",
+          scopeKind: "system",
+          childSessionKey: baseKey,
+          agentId: "main",
+          task: "History job",
+          detail: {
+            kind: "cron-run",
+            ...(generation === "unrecorded" ? {} : { sessionId: generation }),
+          },
+        });
+        const result = await runTaskHandler(
+          "tasks.history",
+          { taskId: task.taskId },
+          {},
+          null,
+          await createHistoryReadContext(),
+        );
+        expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+        expect(result.payload?.messages).toBeUndefined();
+      });
+    },
+  );
 
   it.each(["own", "foreign", "incognito"] as const)(
     "checks %s requester access before invoking the harness",
@@ -219,7 +433,7 @@ describe("tasks.history", () => {
         if (change === "requester access") {
           config.gateway!.roles!.definitions.reader!.sessions = { others: "view" };
         }
-        const context = createDirectChatContext({ getRuntimeConfig: () => config });
+        const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
         const task = createNativeTask();
         const entered = createDeferred();
         const history = createDeferred<TasksHistoryResult>();

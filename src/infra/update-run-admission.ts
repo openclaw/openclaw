@@ -3,17 +3,20 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import { formatErrorMessage } from "./errors.js";
 import { assertSqliteIntegrity, SqliteRepairableForeignKeyError } from "./sqlite-integrity.js";
 
-const readyDatabases = new WeakSet<DatabaseSync>();
+export class UpdateRunAdmissionBusyError extends Error {
+  readonly reason = "update-ledger-busy";
+}
 
 export function runUpdateRunAdmission<T>(
   operation: (db: DatabaseSync, recoveryChanges: string[]) => T,
   options: OpenClawStateDatabaseOptions,
   contract: {
     schemaSql: string;
-    initializeSchema: (db: DatabaseSync) => void;
+    busyTimeoutMs?: number;
     recoverTaskDeliveryOrphans: boolean;
   },
 ): T {
@@ -45,11 +48,18 @@ export function runUpdateRunAdmission<T>(
         {
           schemaSql: contract.schemaSql,
           operationLabel: "update.run",
+          busyTimeoutMs: contract.busyTimeoutMs,
           initializeAdditiveSchema: true,
           ...(inspection.repairable ? { recoverTaskDeliveryOrphans: true } : {}),
         },
       );
     } catch (error) {
+      if (isOpenClawStateWriteContentionError(error)) {
+        throw new UpdateRunAdmissionBusyError(
+          "Update history is busy. Admission was deferred; previous history is unchanged. Retry `openclaw update` after the current database writer finishes.",
+          { cause: error },
+        );
+      }
       if (!inspection.repairable) {
         throw error;
       }
@@ -59,21 +69,13 @@ export function runUpdateRunAdmission<T>(
       );
     }
   }
-  let committedDatabase: DatabaseSync | undefined;
-  const result = runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
-      if (!readyDatabases.has(db)) {
-        contract.initializeSchema(db);
-      }
-      committedDatabase = db;
+      db.exec(contract.schemaSql); // sqlite-allow-raw -- Canonical first-use ledger DDL in its write transaction.
       return operation(db, []);
     },
     options,
     { operationLabel: "update.run" },
   );
-  if (committedDatabase && !committedDatabase.isTransaction) {
-    readyDatabases.add(committedDatabase);
-  }
-  return result;
 }

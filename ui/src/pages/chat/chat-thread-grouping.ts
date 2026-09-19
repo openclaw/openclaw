@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   extractAssistantTextForPhase,
   resolveAssistantMessagePhase,
@@ -126,9 +127,12 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup.runId !== runId ||
       currentUserTurnIdentity !== userTurnIdentity ||
       splitsAssistantKind ||
+      messageClientSourcesKey(currentGroup.sourceClients ?? []) !==
+        messageClientSourcesKey(normalized.sourceClients ?? []) ||
       (shouldSplitBySender &&
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
+          currentGroup.senderSession?.label !== normalized.senderSession?.label ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
@@ -142,6 +146,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         senderLabel,
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
+        ...(normalized.sourceClients ? { sourceClients: normalized.sourceClients } : {}),
         messages: [source],
         visibleContent,
         timestamp,

@@ -294,8 +294,8 @@ describe("follow-up delivery channel boundary", () => {
     ).toEqual([]);
   });
 
-  it("renders post-compaction model failures after queued payload selection", () => {
-    const decision = resolveFollowupDeliveryDecision({
+  it("renders post-compaction model failures after queued payload selection", async () => {
+    const decision = await resolveFollowupDeliveryDecision({
       turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
       execution: {
         runId: "run-1",

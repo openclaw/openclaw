@@ -6,16 +6,16 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
-let fixtureTemplate: ReturnType<typeof createMainRefreshTemplate> | undefined;
+const fixtureTemplates = new Map<boolean, ReturnType<typeof createMainRefreshTemplate>>();
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
@@ -30,6 +30,9 @@ function createFixtureGit(root: string) {
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
+    // The source template is copied immediately after commits; a detached
+    // repack must not remove loose objects while that copy is reading them.
+    GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
     GIT_ALLOW_PROTOCOL: "file",
     GIT_TERMINAL_PROMPT: "0",
     XDG_CONFIG_HOME: join(home, ".config"),
@@ -45,7 +48,7 @@ function createFixtureGit(root: string) {
   return { env, realGit, git };
 }
 
-function createMainRefreshTemplate(directory: string) {
+function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
   const root = realpathSync(directory);
   const canonical = join(root, "canonical");
   const origin = join(root, "origin.git");
@@ -55,7 +58,9 @@ function createMainRefreshTemplate(directory: string) {
   git(canonical, "config", "user.name", "OpenClaw Test");
   git(canonical, "config", "user.email", "test@example.invalid");
   git(canonical, "config", "core.hooksPath", "/dev/null");
-  git(canonical, "config", "extensions.worktreeConfig", "true");
+  if (perWorktreeConfig) {
+    git(canonical, "config", "extensions.worktreeConfig", "true");
+  }
   copyPrWrapperSources(canonical);
   cpSync(join(process.cwd(), ".github", "workflows"), join(canonical, ".github", "workflows"), {
     recursive: true,
@@ -92,10 +97,21 @@ function createMainRefreshTemplate(directory: string) {
 
 // Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
 // transport faults, and GitHub responses are synthetic.
-export function createMainRefreshFixture(directory: string) {
-  const template = (fixtureTemplate ??= createMainRefreshTemplate(
-    templateDirs.make("openclaw-pr-main-refresh-template-"),
-  ));
+export function createMainRefreshFixture(
+  directory: string,
+  options: { perWorktreeConfig?: boolean; partialCloneFilter?: string } = {},
+) {
+  // Existing regression fixtures retain worktreeConfig; acceleration starts with
+  // a distinct pristine fixture, never a shared-config reset after sparse use.
+  const perWorktreeConfig = options.perWorktreeConfig !== false;
+  let template = fixtureTemplates.get(perWorktreeConfig);
+  if (!template) {
+    template = createMainRefreshTemplate(
+      templateDirs.make("openclaw-pr-main-refresh-template-"),
+      perWorktreeConfig,
+    );
+    fixtureTemplates.set(perWorktreeConfig, template);
+  }
   const root = realpathSync(directory);
   const canonical = join(root, "canonical");
   const origin = join(root, "origin.git");
@@ -104,11 +120,28 @@ export function createMainRefreshFixture(directory: string) {
   mkdirSync(bin);
   const { env, realGit, git } = createFixtureGit(root);
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
-  // Copy complete object stores (including sameTreeHead), never shared refs or
-  // hardlinks. Create worktrees afterward so their absolute back-links stay local.
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-  cpSync(template.canonical, canonical, copyOptions);
   cpSync(template.origin, origin, copyOptions);
+  if (options.partialCloneFilter) {
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    git(
+      root,
+      "clone",
+      `--filter=${options.partialCloneFilter}`,
+      pathToFileURL(origin).href,
+      canonical,
+    );
+    git(canonical, "config", "user.name", "OpenClaw Test");
+    git(canonical, "config", "user.email", "test@example.invalid");
+    git(canonical, "config", "core.hooksPath", "/dev/null");
+    if (perWorktreeConfig) {
+      git(canonical, "config", "extensions.worktreeConfig", "true");
+    }
+  } else {
+    // Copy complete object stores (including sameTreeHead), never shared refs or
+    // hardlinks. Create worktrees afterward so their absolute back-links stay local.
+    cpSync(template.canonical, canonical, copyOptions);
+  }
   git(canonical, "remote", "set-url", "origin", origin);
   git(canonical, "config", `url.${origin}.insteadOf`, "https://github.com/fixture/repo");
   git(
@@ -119,7 +152,7 @@ export function createMainRefreshFixture(directory: string) {
     "https://github.com/fixture/repo.git",
   );
   git(canonical, "worktree", "add", "--detach", worktree, head);
-  symlinkSync(join(process.cwd(), "node_modules"), join(canonical, "node_modules"), "dir");
+  linkPrWrapperDependencies(canonical);
   const local = join(worktree, ".local");
   mkdirSync(local);
   const metadata = {
@@ -359,6 +392,20 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
+if (args[0] === 'browse' && args[1] === '--no-browser') {
+  console.log('https://github.com/fixture/repo');
+  process.exit(0);
+}
+const repositoryLocatorRequest = JSON.stringify(args) === JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo']);
+if (repositoryLocatorRequest) {
+  // Locator metadata cannot satisfy the separate fresh repository-ID binding.
+  console.log(JSON.stringify({ full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' }));
+  process.exit(0);
+}
+if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
+    JSON.stringify(args) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+  throw new Error('Unexpected authoritative repository request');
+}
 let value;
 if (args[0] === 'auth') process.exit(1);
 if (args[0] === 'pr' && args[1] === 'view') {
@@ -406,8 +453,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
   value = [];
 } else if (args[0] === 'api') {
   const endpoint = args.find((arg, index) => index > 0 &&
-    (arg === 'graphql' || arg === 'users/fixture' || arg.startsWith('repos/')));
-  if (endpoint === 'graphql') {
+    (arg === 'graphql' || arg === 'rate_limit' || arg === 'users/fixture' || arg.startsWith('repos/')));
+  if (endpoint === 'rate_limit') {
+    value = { resources: {
+      graphql: { remaining: 0, limit: 5000, reset: 1893456000 },
+      core: { remaining: 4999, limit: 5000, reset: 1893459600 },
+    } };
+  } else if (endpoint === 'graphql') {
     if (control.failAuth) process.exit(1);
     if (args.some(arg => arg.includes('viewer { login }'))) {
       if (control.viewerRateLimited) {
@@ -425,18 +477,27 @@ if (args[0] === 'pr' && args[1] === 'view') {
       } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
       value = { data: { repository: {
-        id: 'fixture-repo', nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo',
+        id: 'fixture-repo', databaseId: 123, nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo',
         ref: { target: { oid: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } },
         pullRequest: control.metadata,
       } } };
     } else {
       throw new Error('Unexpected GraphQL request');
     }
+  } else if (endpoint === 'repos/fixture/repo') {
+    value = {
+      id: 123, node_id: 'fixture-repo', full_name: 'fixture/repo',
+      html_url: 'https://github.com/fixture/repo',
+    };
   } else if (endpoint === 'repos/fixture/repo/commits/${head}') {
     const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', ${JSON.stringify(head)}]).split('\\n');
     value = { commit: { author: { name, email } }, author: { ...control.metadata.author, type: 'User' } };
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
+  } else if (endpoint?.includes('/commits/') && endpoint.includes('/check-runs?')) {
+    value = [{ check_runs: [] }];
+  } else if (endpoint?.includes('/commits/') && endpoint.includes('/status?')) {
+    value = [{ statuses: [] }];
   } else if (new RegExp('^repos/fixture/repo/commits/[0-9a-f]{40}$').test(endpoint)) {
     const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae',
       endpoint.split('/').at(-1) + '^{commit}']).split('\\n');
@@ -460,17 +521,43 @@ if (args[0] === 'pr' && args[1] === 'view') {
       event({ kind: 'review-comments' });
       value = [control.reviewComments];
     }
-  } else if (endpoint === 'repos/fixture/repo/pulls/42') {
+  } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number + '/files?per_page=100') {
+    value = [control.metadata.files.map(file => ({
+      filename: file.path, additions: file.additions, deletions: file.deletions,
+      status: file.changeType === 'DELETED' ? 'removed' : file.changeType.toLowerCase(),
+    }))];
+  } else if (endpoint === 'repos/fixture/repo/pulls/' + control.metadata.number) {
     let baseSha = control.metadata.baseRefOid;
-    if (control.remoteOnlyBase) {
+    // The hosted verifier's explicit GET follows the two preparation snapshots.
+    const hostedGateRead = JSON.stringify(args) === JSON.stringify(['api', endpoint, '--method', 'GET']);
+    if (control.remoteOnlyBase && hostedGateRead) {
       baseSha = control.remoteOnlyBase;
       runGit(['-C', origin, 'update-ref', 'refs/heads/main', baseSha]);
       const localObject = spawnSync(git, ['-C', canonical, 'cat-file', '-e', baseSha]);
       event({ kind: 'remote-only-base', sha: baseSha, localObject: localObject.status === 0 });
     }
     value = {
-      head: { sha: control.metadata.headRefOid, ref: 'topic', repo: { full_name: 'fixture/repo' } },
-      base: { sha: baseSha },
+      number: control.metadata.number,
+      title: control.metadata.title,
+      state: control.metadata.state === 'OPEN' ? 'open' : 'closed',
+      merged_at: control.metadata.state === 'MERGED' ? '2026-01-01T00:00:00Z' : null,
+      draft: control.metadata.isDraft,
+      user: control.metadata.author,
+      html_url: control.metadata.url,
+      body: control.metadata.body,
+      labels: control.metadata.labels,
+      assignees: control.metadata.assignees,
+      changed_files: control.metadata.changedFiles,
+      additions: control.metadata.additions,
+      deletions: control.metadata.deletions,
+      mergeable: control.metadata.mergeable === 'MERGEABLE' ? true : control.metadata.mergeable === 'CONFLICTING' ? false : null,
+      mergeable_state: control.metadata.mergeStateStatus.toLowerCase(),
+      head: { sha: control.metadata.headRefOid, ref: control.metadata.headRefName, repo: {
+        id: 123, full_name: control.metadata.headRepository.nameWithOwner,
+        name: control.metadata.headRepository.name, html_url: control.metadata.headRepository.url,
+        owner: control.metadata.headRepositoryOwner,
+      } },
+      base: { ref: control.metadata.baseRefName, sha: baseSha, repo: { id: control.metadata.isCrossRepository ? 456 : 123 } },
     };
   } else if (endpoint.endsWith('/actions/workflows/ci.yml/runs')) {
     event({ kind: 'ci-watched' });
@@ -551,6 +638,7 @@ exec grep "$@"
   }
   env.PATH = `${bin}${delimiter}${env.PATH ?? ""}`;
   env.OPENCLAW_GH_BIN = join(bin, "gh");
+  env.GH_REPO = "fixture/repo";
   env.OPENCLAW_TESTBOX = "1";
   // Advance only the real watcher's polling clock, so a stuck CI fixture
   // reaches its normal deadline without an hour-long regression test.
@@ -617,15 +705,20 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
         encoding: "utf8",
       });
     },
-    shell(command: string, bash = "bash") {
+    shell(command: string, shellOptions: { supervised?: boolean } = {}) {
+      // Sourced helpers bypass the entrypoint's Darwin heredoc protection.
+      const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
+      const args = [
+        "-c",
+        `set -euo pipefail\nscript_parent_dir="$1/scripts"\nsource "$script_parent_dir/lib/plain-gh.sh"\nfor library in worktree operation-lock common changelog gates push review prepare-core merge; do source "$script_parent_dir/pr-lib/$library.sh"; done\n${command}`,
+        "fixture",
+        canonical,
+      ];
       return spawnSync(
-        bash,
-        [
-          "-c",
-          `set -euo pipefail\nscript_parent_dir="$1/scripts"\nsource "$script_parent_dir/lib/plain-gh.sh"\nfor library in worktree operation-lock common changelog gates push review prepare-core merge; do source "$script_parent_dir/pr-lib/$library.sh"; done\n${command}`,
-          "fixture",
-          canonical,
-        ],
+        shellOptions.supervised ? process.execPath : bash,
+        shellOptions.supervised
+          ? [join(canonical, "scripts/pr-lib/process-group-runner.mjs"), canonical, bash, ...args]
+          : args,
         { cwd: canonical, env, encoding: "utf8" },
       );
     },

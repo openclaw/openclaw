@@ -76,6 +76,9 @@ the native compaction start and terminal status, but it does not
 expose a human-readable compaction summary or an auditable list of which
 entries Codex kept after compaction.
 
+Repeated completion notifications for the same compaction item count once and
+do not repeat completion hooks or active-plan restoration.
+
 Because Codex owns the canonical native thread, `tool_result_persist` does
 not rewrite Codex-native tool result records. It only applies when OpenClaw
 writes an OpenClaw-owned session transcript tool result.

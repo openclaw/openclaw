@@ -3,15 +3,13 @@ import {
   QuestionDispatchRefusedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/gateway-question.js";
+import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
-import {
-  admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
-  resolveFollowupAbortSignal,
-} from "./queue/types.js";
+import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 
@@ -79,6 +77,11 @@ export async function runReplyQuestionInput(
       caller,
       assertSourceCurrent,
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
+      onAnswerProcessed: () => {
+        if (state) {
+          state.questionInputHandled = true;
+        }
+      },
     });
     if (!claimed) {
       return { handled: false };
@@ -93,6 +96,25 @@ export async function runReplyQuestionInput(
         handled: true,
         payload: markReplyPayloadForSourceSuppressionDelivery({
           text: `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
+          isError: true,
+        }),
+      };
+    }
+    // Validation precedes commitment: keep the question open and explain how to retry.
+    const rejection = readQuestionRejection(error);
+    if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
+      const detail = error instanceof Error ? error.message.trim() : "";
+      if (state) {
+        state.admission = { status: "skipped", reason: "question-response-rejected" };
+      }
+      return {
+        handled: true,
+        payload: markReplyPayloadForSourceSuppressionDelivery({
+          text: `${
+            detail
+              ? `The answer was not accepted: ${detail}.`
+              : "The answer was not accepted because a question is still unanswered."
+          } The question is still open, so reply again and answer every question by number or question id.`,
           isError: true,
         }),
       };

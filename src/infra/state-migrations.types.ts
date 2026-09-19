@@ -88,6 +88,7 @@ export type LegacyStateDetection = {
     sessionPath: string;
     hasLegacy: boolean;
   };
+  pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
   voiceWake: {
     triggersPath: string;
     routingPath: string;
@@ -179,6 +180,12 @@ export type MigrationMessages = {
   changes: string[];
   warnings: string[];
   notices?: string[];
+  /** Active plugin owners whose required migration phases were inspected and completed. */
+  completedPluginIds?: readonly string[];
+  /** Actual loaded migration contracts, independent of detector or writer success. */
+  requiredPluginIds?: readonly string[];
+  /** Successful contract inspection found no state actions; this is not completion proof. */
+  statelessPluginIds?: readonly string[];
   rehearsal?: { outsideRootLegacyFileCount: number };
   /** The owner classified every warning as advisory, including a source-preserving skip. */
   warningDisposition?: "recoverable";
@@ -199,6 +206,8 @@ export type MigrationMessages = {
   }>;
   /** Every blocking warning is an ownership refusal confined to these agent databases. */
   refusedAgentDatabasePaths?: readonly string[];
+  /** Wrong-owner copies successfully quarantined by this pass, after verifying the original. */
+  recoveredAgentDatabasePaths?: readonly string[];
 };
 
 export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
@@ -230,8 +239,11 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   warnings: string[];
   notices?: string[];
   refusedAgentDatabasePaths?: readonly string[];
+  recoveredAgentDatabasePaths?: readonly string[];
   rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
+  /** The first refused step that prevented this step from running. */
+  originatingRefusal?: { stepId: string; code: string; message: string };
 };
 
 export type PlannedPluginDoctorAction = {
@@ -271,4 +283,14 @@ export type LegacyStateMigrationPlan = {
   };
   steps: LegacyStateMigrationStepPlan[];
   planDigest: string;
+};
+
+export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  runWithoutFileDetection?: boolean;
+  collectNotices?: boolean;
+  deferredExecution?: {
+    kind: "post-session-plugin";
+    plannedActions: readonly PlannedPluginDoctorAction[];
+  };
+  run: () => MigrationMessages | Promise<MigrationMessages>;
 };

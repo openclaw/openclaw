@@ -205,6 +205,98 @@ openclaw gateway stability --bundle latest --export
 
 Persisted bundles live under `~/.openclaw/logs/stability/` when events exist.
 
+## CPU profile
+
+An operator with `operator.admin` can request one in-memory profile of the Gateway's
+main JavaScript isolate:
+
+```bash
+openclaw gateway call diagnostics.cpuProfile --params '{}' --timeout 30000 --json
+```
+
+This Node-only RPC requests five seconds of sampling at a 10 ms interval. It opens
+no debugger port and sends no process signal. A disconnected caller or Gateway
+shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
+instead of queuing. No profile is written to disk or included in diagnostics exports.
+
+The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
+`actualDurationMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
+`sampleLossCount: null` because V8 does not expose an explicit lost-sample count.
+The complete result is limited to 1 MiB; larger profiles fail without truncating
+nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
+Node builtin locations use `node:` paths. External paths, eval labels, and other
+unrecognized names are redacted. Bounded code-symbol names at recognized locations
+are retained; their syntax does not prove that a computed name is public. Review
+the profile before sharing it. Graph edges, native signed script IDs, and sample order remain intact. V8 can
+emit samples out of timestamp order, so signed time deltas are preserved for profile
+viewers to reconstruct timestamps and order samples.
+
+Sampling can outlast the requested interval when the event loop is blocked. The
+response limit does not bound V8's internal allocation during that delay. Profile
+samples describe this isolate, not all process threads, and are not exact
+per-function CPU accounting.
+
+The RPC refuses a known active inspector listener, profiling flags, coverage
+collection, or any active Node tracing, including non-CPU categories. Stop tracing
+before requesting a profile, and do not enable it during capture: V8 can send raw
+profile chunks to an existing trace writer before this RPC sanitizes the result.
+The RPC cannot discover arbitrary third-party in-process inspector sessions;
+do not run it alongside another debugger, profiler, tracer, or coverage owner. An unavailable
+response names the reason and whether cleanup failed. If cleanup remains uncertain,
+further captures are refused; the RPC never restarts the Gateway automatically.
+
+## Sampling heap profile
+
+An operator with `operator.admin` can sample allocations in the Gateway's main
+JavaScript isolate without taking a whole-heap snapshot:
+
+```bash
+openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
+```
+
+The Node-only RPC defaults to five seconds and an average sampling interval of
+32 KiB. Parameters must be positive integers. Durations above 30 seconds are
+clamped to 30 seconds; intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
+collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
+than the requested capture. The critical-memory warning points to this RPC;
+pressure never starts a capture automatically.
+
+The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
+`heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
+bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,
+and `truncated`. When present, `profile` contains the sanitized V8 sampling tree
+and samples. Each node's `selfSize` is the estimated allocation bytes at that call
+site; sum its descendants for inclusive
+bytes. Samples link to nodes by `nodeId`.
+
+V8 can sample allocations made while constructing its own profile, after a call
+site has been translated into the returned tree. Samples without a matching tree
+node are omitted and reported in `unattributedSampleCount` and
+`unattributedSampleBytes`; native tree sizes remain unchanged. `truncated` is true
+when such references are omitted or a size-capped summary replaces the tree.
+
+The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
+`truncated` is true and `summary` replaces `profile`. Summary entries combine
+identical call stacks, retain up to eight frames in leaf-first order, and contain
+`selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
+at those sites, not an exact object count). Entries are ordered by `totalBytes`,
+then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive totals
+overlap across callers, so do not add them together. Start with large `selfBytes`
+and inspect the stack to identify the allocating code.
+
+Sampling is cheaper than a whole-heap snapshot but is still approximate. V8's
+default sampling mode excludes objects collected before capture ends; this is not
+an inventory of every transient allocation or objects allocated before capture.
+Native allocations, external buffers, other isolates, and other process threads
+are not attributed, so sampled bytes need not explain the full RSS change.
+
+Heap and CPU captures share one inspector owner: overlapping calls fail instead
+of queuing. Both use the same redaction, runtime-conflict checks, cancellation,
+and cleanup rules described above. No listener is opened and no file is written.
+Event-loop stalls can extend capture duration, and the response cap does not bound
+V8's internal sampling memory. Review retained code-symbol names before sharing.
+
 ## Useful options
 
 ```bash

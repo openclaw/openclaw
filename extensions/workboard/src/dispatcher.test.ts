@@ -816,10 +816,37 @@ describe("dispatchAndStartWorkboardCards", () => {
       "workboard_complete",
       "workboard_block",
     ]);
-    await expect(store.get(second.id)).resolves.toMatchObject({
-      status: "ready",
-      metadata: { automation: { dispatchCount: 1 } },
-    });
+    await expect(store.get(second.id)).resolves.toEqual(second);
+  });
+
+  it("preserves ready-card history on idle Gateway dispatch passes", async () => {
+    const store = createWorkboardSqliteTestStore();
+    await store.create({ title: "Occupied owner", status: "running", agentId: "main" });
+    const cards = await Promise.all(
+      [undefined, { dispatchCount: 225, lastDispatchAt: 1 }].map((automation) =>
+        store.create({
+          title: "Waiting for owner capacity",
+          status: "ready",
+          agentId: "main",
+          metadata: { automation },
+        }),
+      ),
+    );
+    const run = vi.fn();
+
+    for (const now of [10, 20, 30]) {
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { now, maxStarts: 1 },
+      });
+      expect(result.started).toEqual([]);
+      expect(result.startFailures).toEqual([]);
+      for (const card of cards) {
+        await expect(store.get(card.id)).resolves.toEqual(card);
+      }
+    }
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("shares one worker slot across cards dispatched with the same explicit owner", async () => {

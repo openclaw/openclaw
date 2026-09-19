@@ -11,7 +11,7 @@ title: "Channel QA reference"
 
 The Matrix adapter uses the disposable Docker-backed lane documented in
 [Matrix live lane](/concepts/qa-e2e-automation/operator-flow#matrix-live-lane).
-Buzz, Discord, Slack, Telegram, and WhatsApp run against pre-existing real
+Buzz, Discord, Slack, Telegram, and WhatsApp can run against pre-existing real
 transports, so their reference lives here.
 
 ### Shared CLI flags
@@ -38,7 +38,7 @@ Telegram fixes `--credential-source` to `convex`. Its Test Server userbot
 credential cannot be supplied through the shared environment credential mode.
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
-artifacts without setting a failing exit code. Telegram also accepts
+artifacts without setting a failing exit code. Discord and Telegram also accept
 `--list-scenarios` to print available scenario ids and exit; the other lanes
 do not expose that flag.
 

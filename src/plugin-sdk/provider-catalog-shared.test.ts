@@ -416,6 +416,7 @@ describe("provider-catalog-shared configured catalog entries", () => {
 
 describe("provider-catalog-shared manifest provider configs", () => {
   it("converts manifest model catalog rows into provider config rows", () => {
+    const contextWindows = [{ id: "128k", label: "128K", contextWindow: 128000 }];
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
@@ -429,6 +430,8 @@ describe("provider-catalog-shared manifest provider configs", () => {
           reasoning: true,
           contextWindow: 128_000,
           contextTokens: 64_000,
+          contextWindows,
+          contextWindowDefault: "128k",
           maxTokens: 8192,
           thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {
@@ -481,6 +484,8 @@ describe("provider-catalog-shared manifest provider configs", () => {
           },
           contextWindow: 128_000,
           contextTokens: 64_000,
+          contextWindows,
+          contextWindowDefault: "128k",
           maxTokens: 8192,
           thinkingLevelMap: { off: null, minimal: "low", max: "max" },
           mediaInput: {

@@ -46,6 +46,18 @@ describe("Control UI build chunking", () => {
     expect(controlUiStableChunkName("\0virtual:openclaw-control-ui-locale/ru")).toBeUndefined();
   });
 
+  it.each(["lit", "lit-html"])(
+    "keeps the lazy cache directive out of %s startup vendor code",
+    (name) => {
+      expect(
+        controlUiStableChunkName(`/repo/node_modules/${name}/directives/cache.js`),
+      ).toBeUndefined();
+      expect(
+        controlUiStableChunkName(`C:\\repo\\node_modules\\${name}\\directives\\cache.js`),
+      ).toBeUndefined();
+    },
+  );
+
   it("bounds only the initial module graph without recursively absorbing dependencies", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
@@ -71,7 +83,11 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
-    expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });
 

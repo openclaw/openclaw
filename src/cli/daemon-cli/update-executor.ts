@@ -22,7 +22,7 @@ export async function runGatewayServiceUpdateCommand(
     return;
   }
   if (mode === "check") {
-    writeGatewayServiceUpdateCapability();
+    await writeGatewayServiceUpdateCapability();
     return;
   }
   if (mode !== "run") {
@@ -70,9 +70,13 @@ export async function runGatewayServiceUpdateCommand(
     }
     // Destination admission never replaces the original installation's live authority.
     await withDelegatedUpdateCommandExecutor(grant, grant.runId, grant.root, async (fence) =>
-      withGatewayServiceUpdateAuthority(fence.assertCurrent, async () => {
-        await operation();
-      }),
+      withGatewayServiceUpdateAuthority(
+        fence.assertCurrent,
+        async () => {
+          await operation();
+        },
+        grant.originalParent?.key ?? grant.parent.key,
+      ),
     );
   } catch (cause) {
     throw new Error(

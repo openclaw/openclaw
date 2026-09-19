@@ -11,15 +11,12 @@ import {
 } from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
 } from "./native-hook-relay.js";
-import type {
-  CodexServerNotification,
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-} from "./protocol.js";
+import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
@@ -56,7 +53,7 @@ class CodexAttemptState {
   projectionClosed = false;
   pendingTerminalDynamicToolRelease?: {
     call: CodexDynamicToolCallParams;
-    response: CodexDynamicToolCallResponse;
+    response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   };
   terminalDynamicToolReleaseCheckScheduled = false;

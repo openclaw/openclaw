@@ -11,7 +11,7 @@ import {
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
 import { createSequentialQueue } from "./sequential-queue.js";
-import type { FeishuChatType } from "./types.js";
+import { normalizeFeishuEventChatType } from "./types.js";
 
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
@@ -62,12 +62,6 @@ type FeishuMessageReceiveHandlerContext = {
   resolveIngressLifecycle?: (data: unknown) => FeishuIngressLifecycle | undefined;
 };
 
-function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
-    ? value
-    : undefined;
-}
-
 function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | null {
   if (!isRecord(value)) {
     return null;
@@ -83,7 +77,7 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   }
   const messageId = readString(message.message_id);
   const chatId = readString(message.chat_id);
-  const chatType = normalizeFeishuChatType(message.chat_type);
+  const chatType = normalizeFeishuEventChatType(message.chat_type);
   const messageType = readString(message.message_type);
   // Feishu can deliver a legitimately empty message body; keep absent or
   // non-string bodies malformed instead of inventing fallback content.

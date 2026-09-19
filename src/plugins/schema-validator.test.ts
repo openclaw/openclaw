@@ -1815,11 +1815,17 @@ describe("schema validator", () => {
 
   it("recompiles when a stable cache key receives a different schema shape", () => {
     const cacheKey = "schema-validator.test.cache-key-drift";
+    const schema = { type: "string" };
     expectValidationSuccess({
       cacheKey,
-      schema: { type: "string" },
+      schema,
       value: "ok",
     });
+
+    expect(() =>
+      validateJsonSchemaValue({ cacheKey, schema: { type: 1n }, value: "ignored" }),
+    ).toThrow("invalid schema: <schema>.type: expected string or non-empty string array");
+    expectValidationSuccess({ cacheKey, schema, value: "still valid" });
 
     const result = expectValidationFailure({
       cacheKey,

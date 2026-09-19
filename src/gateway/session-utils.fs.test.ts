@@ -22,11 +22,13 @@ import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   ArchivedTranscriptReader,
+  type ReadRecentSessionMessagesOptions,
+  type ReadSessionMessagesAsyncOptions,
+} from "./session-transcript-archive-reader.js";
+import {
   buildSessionPreviewItems,
   readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
-  type ReadRecentSessionMessagesOptions,
-  type ReadSessionMessagesAsyncOptions,
 } from "./session-utils.fs.js";
 
 function filesystemReader(

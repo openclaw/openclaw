@@ -417,6 +417,14 @@
       "nativeDocumentInputs": ["pdf"]
     }
   },
+  "configGroups": [
+    {
+      "id": "native-sessions",
+      "title": "Native sessions",
+      "order": 10,
+      "properties": ["sessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

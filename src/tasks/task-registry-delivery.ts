@@ -6,11 +6,12 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayDetachedWorkContinuation,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { readTaskBackingInstance } from "./task-backing-records.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -69,7 +70,7 @@ function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDelivery
   return `${prefix}:${task.taskId}:${task.status}:${outcome}`;
 }
 
-function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
+export function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   if (task.scopeKind !== "session") {
     return {};
   }
@@ -98,7 +99,7 @@ function canDeliverTaskToRequesterOrigin(owner: TaskDeliveryOwner): boolean {
   return canDeliverToRequesterOrigin(owner.requesterOrigin);
 }
 
-function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
+export function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
@@ -166,19 +167,19 @@ function queueBlockedTaskFollowup(task: TaskRecord, owner: TaskDeliveryOwner) {
 }
 
 export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<TaskRecord | null> {
-  return await runTaskDeliveryWithIndependentAdmission(taskId, async () =>
+  return await runTaskDeliveryWithDetachedAdmission(taskId, async () =>
     maybeDeliverTaskTerminalUpdateUnderAdmission(taskId),
   );
 }
 
-async function runTaskDeliveryWithIndependentAdmission(
+async function runTaskDeliveryWithDetachedAdmission(
   taskId: string,
   deliver: () => Promise<TaskRecord | null>,
 ): Promise<TaskRecord | null> {
   ensureTaskRegistryReady({ refreshProjection: false });
   let admitted = false;
   try {
-    return await runWithGatewayIndependentRootWorkContinuation(async () => {
+    return await runWithGatewayDetachedWorkContinuation(async () => {
       admitted = true;
       return await deliver();
     }, "tasks:delivery");
@@ -227,9 +228,33 @@ function getPeerTasksForDelivery(task: TaskRecord): TaskRecord[] {
 
 type PreparedTaskTerminalDelivery = { result: TaskRecord | null } | TaskTerminalDelivery;
 
-function prepareTaskTerminalDelivery(taskId: string): PreparedTaskTerminalDelivery {
+type ReadSubagentRun =
+  (typeof import("../agents/subagents/registry/subagent-registry-read.js"))["getLatestSubagentRunByChildSessionKey"];
+
+function isSubagentSettlementPending(task: TaskRecord, readSubagentRun?: ReadSubagentRun): boolean {
+  if (task.runtime !== "subagent" || !task.runId || !task.childSessionKey || !readSubagentRun) {
+    return false;
+  }
+  const entry = readSubagentRun(task.childSessionKey);
+  const backing = readTaskBackingInstance(task.detail);
+  return Boolean(
+    entry?.requesterSettleWake &&
+    (entry.taskRunId ?? entry.runId) === task.runId &&
+    entry.requesterSessionKey === task.ownerKey &&
+    (backing?.runtime !== "subagent" || entry.generation === backing.generation),
+  );
+}
+
+function prepareTaskTerminalDelivery(
+  taskId: string,
+  readSubagentRun?: ReadSubagentRun,
+): PreparedTaskTerminalDelivery {
   const latest = tasks.get(taskId);
-  if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
+  if (
+    !latest ||
+    !shouldAutoDeliverTaskTerminalUpdate(latest) ||
+    isSubagentSettlementPending(latest, readSubagentRun)
+  ) {
     return { result: latest ? cloneTaskRecord(latest) : null };
   }
   const peers = latest.runId ? getPeerTasksForDelivery(latest) : [];
@@ -325,8 +350,16 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
     if (!claimed) {
       return early ?? null;
     }
+    const candidate = tasks.get(taskId);
+    // Native cancellation may still owe its requester a complete sibling batch.
+    // Resolve its owner lazily, then recheck current rows at each delivery boundary.
+    const readSubagentRun =
+      candidate?.runtime === "subagent" && candidate.status === "cancelled"
+        ? (await import("../agents/subagents/registry/subagent-registry-read.js"))
+            .getLatestSubagentRunByChildSessionKey
+        : undefined;
     let prepared = withTaskRegistryMutation(
-      () => prepareTaskTerminalDelivery(taskId),
+      () => prepareTaskTerminalDelivery(taskId, readSubagentRun),
       () => ({ result: null }),
     );
     if ("result" in prepared) {
@@ -344,7 +377,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         immediate = withTaskRegistryMutation(
           () => {
             // Runtime loading may admit another task with the preferred delivery claim.
-            const fresh = prepareTaskTerminalDelivery(taskId);
+            const fresh = prepareTaskTerminalDelivery(taskId, readSubagentRun);
             prepared = fresh;
             if ("result" in fresh) {
               return fresh.result;
@@ -455,7 +488,11 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
             error,
           });
           const beforeFallback = tasks.get(taskId);
-          if (!beforeFallback || !shouldAutoDeliverTaskTerminalUpdate(beforeFallback)) {
+          if (
+            !beforeFallback ||
+            !shouldAutoDeliverTaskTerminalUpdate(beforeFallback) ||
+            isSubagentSettlementPending(beforeFallback, readSubagentRun)
+          ) {
             return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
           }
           try {
@@ -493,7 +530,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
   taskId: string,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
-  return await runTaskDeliveryWithIndependentAdmission(taskId, async () =>
+  return await runTaskDeliveryWithDetachedAdmission(taskId, async () =>
     maybeDeliverTaskStateChangeUpdateUnderAdmission(taskId, latestEvent),
   );
 }

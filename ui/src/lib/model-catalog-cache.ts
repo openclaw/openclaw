@@ -2,6 +2,12 @@ import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/bro
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
+import {
+  hasUiSessionDefaults,
+  parseAgentSessionKey,
+  uiConversationMatches,
+  type UiSessionDefaultsHost,
+} from "./sessions/session-key.ts";
 
 export type ModelCatalogReadScope = Pick<
   ModelsListParams,
@@ -249,20 +255,51 @@ export function clearModelCatalogCache(client: ModelCatalogClient): void {
 export function invalidateModelCatalogCache(
   client: ModelCatalogClient,
   scope?: ModelCatalogInvalidationScope,
+  sessionDefaults?: UiSessionDefaultsHost,
+  retainedKeys?: ReadonlySet<string>,
 ): void {
   const cache = modelCatalogCache.get(client);
   if (!cache) {
     return;
   }
-  const matches = (readScope: ModelCatalogReadScope | undefined) =>
-    !scope ||
-    !readScope ||
-    ((!scope.sessionsOnly || readScope.sessionKey !== undefined) &&
-      (scope.agentId === undefined ||
-        readScope.agentId === undefined ||
-        readScope.agentId === scope.agentId.trim()) &&
-      (scope.sessionKey === undefined || readScope.sessionKey === scope.sessionKey) &&
-      (scope.authProfileId === undefined || readScope.authProfileId === scope.authProfileId));
+  const matches = (readScope: ModelCatalogReadScope | undefined) => {
+    if (readScope && retainedKeys?.has(modelCatalogKey(modelCatalogParams(readScope)))) {
+      return false;
+    }
+    if (!scope || !readScope) {
+      return true;
+    }
+    if (
+      (scope.sessionsOnly && readScope.sessionKey === undefined) ||
+      (scope.agentId !== undefined &&
+        readScope.agentId !== undefined &&
+        readScope.agentId !== scope.agentId.trim()) ||
+      (scope.authProfileId !== undefined && readScope.authProfileId !== scope.authProfileId)
+    ) {
+      return false;
+    }
+    if (scope.sessionKey === undefined) {
+      return true;
+    }
+    if (!sessionDefaults) {
+      return readScope.sessionKey === scope.sessionKey;
+    }
+    // Before routing facts arrive, a bare saved alias cannot be ruled out.
+    if (
+      readScope.sessionKey !== undefined &&
+      !hasUiSessionDefaults(sessionDefaults) &&
+      !parseAgentSessionKey(readScope.sessionKey)
+    ) {
+      return true;
+    }
+    return uiConversationMatches(
+      sessionDefaults,
+      readScope.sessionKey,
+      scope.sessionKey,
+      scope.agentId,
+      readScope.agentId,
+    );
+  };
   for (const read of cache.reads) {
     if (matches(read.scope)) {
       cache.reads.delete(read);

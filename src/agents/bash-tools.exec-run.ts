@@ -5,7 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
-  type ExecHost,
   loadExecApprovals,
   maxAsk,
   minSecurity,
@@ -22,10 +21,7 @@ import {
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  isSecretEgressProxyActive,
-  registerSecretEgressProxyRun,
-} from "../secrets/egress-proxy/registry.js";
+import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -47,7 +43,6 @@ import {
   DEFAULT_PENDING_MAX_OUTPUT,
   ExecProcessPreflightError,
   type ExecProcessHandle,
-  type ExecProcessOutcome,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -63,14 +58,11 @@ import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   createExecHostResolver,
+  createExecProcessSettlement,
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import {
-  type BackgroundExecTaskHandle,
-  createBackgroundExecTask,
-  finalizeBackgroundExecTask,
-} from "./bash-tools.exec-task-tracking.js";
+import { createBackgroundExecTask } from "./bash-tools.exec-task-tracking.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -78,6 +70,11 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import {
+  createExecToolExecutionTimeoutResolver,
+  resolveExecDefaultTimeoutSec,
+} from "./exec-tool-timeout.js";
+import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -87,22 +84,6 @@ type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
-function createExecProcessSettlement() {
-  const settlement: {
-    outcome: ExecProcessOutcome | null;
-    backgroundTask: BackgroundExecTaskHandle | null;
-    settle: (outcome: ExecProcessOutcome) => void;
-  } = {
-    outcome: null,
-    backgroundTask: null,
-    settle(outcome: ExecProcessOutcome) {
-      settlement.outcome = outcome;
-      finalizeBackgroundExecTask({ handle: settlement.backgroundTask, outcome });
-    },
-  };
-  return settlement;
-}
-
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
@@ -110,6 +91,10 @@ export function createExecTool(
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
+  const subagentExecution =
+    resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
+      cfg: defaults?.config,
+    }).depth > 0;
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
   let storeEnvPromise: Promise<SecretStoreExecEnvironment>;
@@ -128,8 +113,7 @@ export function createExecTool(
   );
   const allowBackground =
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
-  const defaultTimeoutSec =
-    defaults?.timeoutSec && defaults.timeoutSec > 0 ? defaults.timeoutSec : 1800;
+  const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {
     safeBins,
@@ -158,7 +142,7 @@ export function createExecTool(
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(
-    defaults?.notifySessionKey ?? defaults?.sessionKey,
+    defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -203,6 +187,7 @@ export function createExecTool(
       });
     },
     parameters: execSchema,
+    getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
@@ -308,7 +293,7 @@ export function createExecTool(
         sandboxAvailable: Boolean(defaults?.sandbox),
         sandboxRequired: defaults?.sandboxRequired,
       });
-      const host: ExecHost = target.effectiveHost;
+      const host = target.effectiveHost;
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
@@ -431,28 +416,26 @@ export function createExecTool(
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
         const useSecretEgress = secretEgressEnabled && host === "gateway";
-        let secretEgressEnv: Record<string, string> | undefined;
         if (useSecretEgress) {
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
           assertSourceActive();
-          secretEgressEnv = registerSecretEgressProxyRun(
-            defaults.operationalRunInstance,
-            storeEnv.secretEgressBindings ?? [],
-          );
         }
+        const secretEgressBindings = useSecretEgress
+          ? (storeEnv.secretEgressBindings ?? [])
+          : undefined;
         const { env, requestedEnv } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
           sandbox,
           containerWorkdir,
           channelContext: defaults?.channelContext,
+          subagentExecution,
           defaultPathPrepend,
           pluginEnv: resolvedExecEnvState?.pluginEnv,
           storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
-          secretEgressEnv,
           ...preparedRunEnvironment,
           warnings,
         });
@@ -514,6 +497,7 @@ export function createExecTool(
             command: params.command,
             workdir,
             env,
+            secretEgressBindings,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
             requestedEnv,
@@ -592,6 +576,7 @@ export function createExecTool(
           execCommand: execCommandOverride,
           workdir,
           env,
+          secretEgressBindings,
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
@@ -615,6 +600,7 @@ export function createExecTool(
           beforeSpawn: gatewayApproval?.revalidateBeforeExecution,
           assertCurrent: gatewayApproval?.assertCurrent,
           onSettledBeforeNotify: settlement.settle,
+          onActivity: settlement.activity,
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -689,6 +675,7 @@ export function createExecTool(
         // that settles before this timer fires must stay out of the task ledger.
         settlement.backgroundTask = createBackgroundExecTask({
           processSessionId: run.session.id,
+          command: run.session.command,
           sessionKey: notifySessionKey,
           agentId,
           startedAt: run.startedAt,

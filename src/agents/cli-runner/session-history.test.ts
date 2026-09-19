@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -29,7 +30,14 @@ const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 const RESEED_CURRENCY_GUIDANCE =
   "[Recovered history may be stale; verify current and time-sensitive facts before acting.]";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  });
+});
 
 async function loadCliSessionReseedMessages(
   params: Parameters<typeof loadCliSessionPromptContext>[0],

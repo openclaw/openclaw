@@ -186,6 +186,7 @@ export async function findTelegramPollRegistryEntry(params: {
   return normalizePollRegistryEntry(stored);
 }
 
+/** Retained for hosts whose ingress monitor does not support inspectAsync. */
 export function findTelegramPollRegistryEntrySync(params: {
   accountId?: string;
   pollId: string;

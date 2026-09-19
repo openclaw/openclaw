@@ -1,11 +1,13 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  runWithOpenClawStateBusyTimeout,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -18,16 +20,19 @@ export type OpenClawStateLeaseDatabase = {
   schemaPolicy?: "existing";
 };
 const leaseSchema = ["schema_meta", "state_leases"]
-  .map((table) => {
-    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
-    const marker = ") STRICT;";
-    const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
-    if (start < 0 || end < 0) {
-      throw new Error("Existing lease schema is unavailable.");
-    }
-    return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length);
-  })
+  .map((table) =>
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
+      endMarker: ") STRICT;",
+      errorMessage: "Existing lease schema is unavailable.",
+    }),
+  )
   .join("\n");
+
+export function prepareLeaseDatabase(database: OpenClawStateLeaseDatabase): void {
+  if (database.schemaPolicy !== "existing") {
+    runWithOpenClawStateBusyTimeout(() => undefined, database.options ?? {}, 0);
+  }
+}
 
 export function resolveLeaseDatabasePath(database: OpenClawStateLeaseDatabase): string {
   return database.schemaPolicy === "existing"

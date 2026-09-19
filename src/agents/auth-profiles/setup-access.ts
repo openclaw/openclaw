@@ -18,6 +18,11 @@ type SetupCredentialAccess = {
 
 const setupCredentialAccess = new AsyncLocalStorage<SetupCredentialAccess>();
 
+/** Detached runtime work must not inherit a writer's temporary credential access. */
+export function runOutsideSetupCredentialAccess<T>(run: () => T): T {
+  return setupCredentialAccess.exit(run);
+}
+
 export function isSetupCredentialAccessible(params: {
   profileId: string;
   credential: AuthProfileCredential;

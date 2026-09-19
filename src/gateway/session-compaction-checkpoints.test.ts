@@ -7,9 +7,20 @@ import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { claimAgentSessionWriter } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
+import {
+  clearActiveEmbeddedRun,
+  clearEmbeddedAgentRunAbortabilityForRunId,
+  isEmbeddedAgentRunActive,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionCompactionCheckpoint,
+} from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptEvent,
@@ -19,13 +30,18 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
-  createFileBackedCompactionCheckpointStore,
+  branchCheckpointSessionFromStoredBoundary,
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
+  restoreCheckpointSessionFromStoredBoundary,
 } from "./session-compaction-checkpoints.js";
 
 const tempDirs: string[] = [];
+const isolatedTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MAIN_AGENT_ID = "main";
 const MAIN_SESSION_KEY = "agent:main:main";
 
@@ -100,9 +116,67 @@ describe("session-compaction-checkpoints", () => {
       createdAt: 123,
       sandbox: "required" as const,
     };
+    const selection = {
+      providerOverride: "test-provider",
+      modelOverride: "test-model",
+      modelOverrideSource: "user" as const,
+      thinkingLevel: "high",
+      authProfileOverride: "test-provider:selected",
+      authProfileOverrideSource: "user" as const,
+      spawnedWorkspaceDir: dir,
+      spawnedCwd: dir,
+    };
+    const discardedTailState = {
+      activeWriterRunId: "discarded-tail-run",
+      lastRunError: "The discarded tail failed.",
+      cliSessionBindings: { "test-cli": { sessionId: "discarded-native-session" } },
+      cliSessionIds: { "test-cli": "discarded-native-session" },
+      claudeCliSessionId: "discarded-claude-session",
+      agentHarnessId: "test-cli",
+      restartRecoveryRuns: [{ runId: "discarded-tail-run", lifecycleGeneration: "old-generation" }],
+      restartRecoveryForceSafeTools: true,
+      mainRestartRecovery: { cycleId: "discarded-recovery", revision: 1, chargedAttempts: 1 },
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "Reply from the discarded tail.",
+        createdAt: 1,
+      },
+      pendingDeliveryNotice: {
+        createdAt: 1,
+        context: { channel: "test-channel", to: "test-recipient" },
+        intentId: "discarded-delivery",
+        state: "owed",
+      },
+      pendingTranscriptRepair: [{ id: "discarded-repair", text: "old reply", createdAt: 1 }],
+      contextTokens: 100_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus: {
+        schemaVersion: 1,
+        source: "pre-prompt-estimate",
+        updatedAt: 1,
+        provider: "test-provider",
+        model: "test-model",
+        route: "compact_only",
+        shouldCompact: true,
+        estimatedPromptTokens: 95_000,
+        contextTokenBudget: 100_000,
+        promptBudgetBeforeReserve: 100_000,
+        reserveTokens: 10_000,
+        effectiveReserveTokens: 10_000,
+        remainingPromptBudgetTokens: -5_000,
+        overflowTokens: 5_000,
+        toolResultReducibleChars: 0,
+        messageCount: 10,
+        unwindowedMessageCount: 10,
+        sessionId,
+      },
+      memoryFlush: { kind: "succeeded", compactionCount: 3 },
+    } satisfies Partial<InternalSessionEntry>;
 
     await upsertSessionEntryCore(scope, {
       ...sourceStamp,
+      ...selection,
+      ...discardedTailState,
       sessionId,
       sessionFile: marker,
       updatedAt: Date.now(),
@@ -138,6 +212,7 @@ describe("session-compaction-checkpoints", () => {
       reason: "manual",
       tokensBefore: 100,
       tokensAfter: 40,
+      tokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       preCompaction: {
         sessionId,
         leafId: sourceLeafId,
@@ -156,9 +231,8 @@ describe("session-compaction-checkpoints", () => {
       compactionCheckpoints: [checkpoint],
     });
 
-    const store = createFileBackedCompactionCheckpointStore();
     const branchKey = "agent:main:checkpoint-branch";
-    const branched = await store.branchCheckpointSession({
+    const branched = await branchCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sourceKey: sessionKey,
@@ -171,7 +245,7 @@ describe("session-compaction-checkpoints", () => {
         sandbox: "required",
       },
     });
-    const restored = await store.restoreCheckpointSession({
+    const restored = await restoreCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sessionKey,
@@ -189,6 +263,19 @@ describe("session-compaction-checkpoints", () => {
     });
     expect(branched.entry.createdAt).not.toBe(sourceStamp.createdAt);
     expect(restored.entry).toMatchObject(sourceStamp);
+    for (const result of [branched, restored]) {
+      expect(result.entry).toMatchObject(selection);
+      expect(result.entry).toMatchObject(
+        Object.fromEntries(Object.keys(discardedTailState).map((field) => [field, undefined])),
+      );
+      expect(result.entry).toMatchObject({
+        totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      });
+    }
+    expect(branched.entry.compactionCheckpoints).toBeUndefined();
+    expect(restored.entry.compactionCheckpoints).toEqual([checkpoint]);
     expect(branched.entry).not.toHaveProperty("sessionFile");
     expect(restored.entry).not.toHaveProperty("sessionFile");
     expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
@@ -211,6 +298,91 @@ describe("session-compaction-checkpoints", () => {
     expect(
       restoredEvents.some((event) => isAssistantTextEvent(event, "checkpoint branch source")),
     ).toBe(true);
+  });
+
+  test("starting a checkpoint branch does not supersede the source conversation's live writer", async () => {
+    const dir = await fs.realpath(isolatedTempDirs.make("openclaw-checkpoint-live-writer-"));
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    const sessionId = "checkpoint-running-source";
+    const sessionKey = "agent:main:checkpoint-running-source";
+    const runId = "checkpoint-source-run";
+    const lifecycleRevision = "checkpoint-source-revision";
+    const scope = { agentId: MAIN_AGENT_ID, sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(scope, {
+      sessionId,
+      lifecycleRevision,
+      activeWriterRunId: runId,
+      updatedAt: 1,
+    });
+    const message = await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Keep working in the source conversation.", timestamp: 1 },
+    });
+    const checkpoint: SessionCompactionCheckpoint = {
+      checkpointId: "running-source-checkpoint",
+      sessionKey,
+      sessionId,
+      createdAt: 1,
+      reason: "manual",
+      preCompaction: { sessionId, leafId: message.messageId },
+      postCompaction: { sessionId, leafId: message.messageId },
+    };
+    await upsertSessionEntryCore(scope, { compactionCheckpoints: [checkpoint] });
+    const handle = {
+      kind: "embedded" as const,
+      runId,
+      cancel: vi.fn(),
+      abort: vi.fn(),
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => {},
+    };
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext(runId, {
+      agentId: MAIN_AGENT_ID,
+      lifecycleGeneration,
+      sessionId,
+      sessionKey,
+    });
+    setActiveEmbeddedRun(sessionId, handle, sessionKey, sessionKey);
+    try {
+      const nextKey = "agent:main:checkpoint-running-branch";
+      const branched = await branchCheckpointSessionFromStoredBoundary({
+        agentId: MAIN_AGENT_ID,
+        expectedState: { sessionId, lifecycleRevision },
+        storePath,
+        sourceKey: sessionKey,
+        nextKey,
+        checkpointId: checkpoint.checkpointId,
+      });
+      if (branched.status !== "created") {
+        throw new Error("expected a checkpoint branch from the running source");
+      }
+      const branchTarget = { ...scope, sessionId: branched.entry.sessionId, sessionKey: nextKey };
+      await claimAgentSessionWriter({
+        agentId: MAIN_AGENT_ID,
+        config: { session: { store: storePath } },
+        sessionId: branchTarget.sessionId,
+        sessionKey: nextKey,
+        sessionTarget: branchTarget,
+        workspaceDir: dir,
+        prompt: "Continue the checkpoint branch.",
+        runId: "checkpoint-branch-run",
+        timeoutMs: 30_000,
+      });
+
+      expect(handle.cancel).not.toHaveBeenCalled();
+      expect(handle.abort).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId, activeWriterRunId: runId });
+      expect(loadSessionEntry(branchTarget)).toMatchObject({
+        sessionId: branchTarget.sessionId,
+        activeWriterRunId: "checkpoint-branch-run",
+      });
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey, sessionKey);
+      clearEmbeddedAgentRunAbortabilityForRunId(runId);
+      clearAgentRunContext(runId, lifecycleGeneration);
+    }
   });
 
   test.each(["branch", "restore"] as const)(
@@ -270,17 +442,16 @@ describe("session-compaction-checkpoints", () => {
       await ownerChangeStarted;
 
       const branchKey = `${sessionKey}:${mode}-conflict`;
-      const store = createFileBackedCompactionCheckpointStore();
       const mutation =
         mode === "branch"
-          ? store.branchCheckpointSession({
+          ? branchCheckpointSessionFromStoredBoundary({
               expectedState,
               storePath,
               sourceKey: sessionKey,
               nextKey: branchKey,
               checkpointId: checkpoint.checkpointId,
             })
-          : store.restoreCheckpointSession({
+          : restoreCheckpointSessionFromStoredBoundary({
               expectedState,
               storePath,
               sessionKey,
@@ -398,7 +569,7 @@ describe("session-compaction-checkpoints", () => {
     });
 
     const branchKey = "agent:main:stale-checkpoint-branch";
-    const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+    const branched = await branchCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sourceKey: sessionKey,
@@ -421,14 +592,13 @@ describe("session-compaction-checkpoints", () => {
       branchEvents.some((event) => isAssistantTextEvent(event, "entry id boundary message")),
     ).toBe(true);
 
-    const markerBranched =
-      await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
-        expectedState: checkpointExpectedState(sessionId),
-        storePath,
-        sourceKey: sessionKey,
-        nextKey: "agent:main:stale-marker-checkpoint-branch",
-        checkpointId: markerCheckpoint.checkpointId,
-      });
+    const markerBranched = await branchCheckpointSessionFromStoredBoundary({
+      expectedState: checkpointExpectedState(sessionId),
+      storePath,
+      sourceKey: sessionKey,
+      nextKey: "agent:main:stale-marker-checkpoint-branch",
+      checkpointId: markerCheckpoint.checkpointId,
+    });
     if (markerBranched.status !== "created") {
       throw new Error("expected stale-entry SQLite marker checkpoint branch");
     }
@@ -496,7 +666,7 @@ describe("session-compaction-checkpoints", () => {
       },
     );
 
-    const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+    const branched = await branchCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sourceKey: sessionKey,

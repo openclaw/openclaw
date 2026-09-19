@@ -123,11 +123,13 @@ it.each(
         const uninstall = page.querySelector<HTMLButtonElement>(
           '[aria-label="Uninstall Workboard"]',
         )!;
-        const toggle = page.querySelector<HTMLElement>("wa-switch")!;
+        const toggle = page.querySelector<HTMLButtonElement>(
+          '[aria-label="Disable Workboard"], [aria-label="Enable Workboard"]',
+        )!;
         expect(uninstall.getAttribute("aria-disabled")).toBe("true");
         expect(toggle.getAttribute("aria-disabled")).toBe("true");
         uninstall.click();
-        toggle.dispatchEvent(new Event("change", { bubbles: true }));
+        toggle.click();
       }
       const button = page.querySelector<HTMLButtonElement>('[aria-label="Reload Workboard"]');
       expect(button, "installed plugin exposes backend Reload").not.toBeNull();

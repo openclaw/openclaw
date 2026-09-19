@@ -48,7 +48,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 vi.mock("../../node-sqlite.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../node-sqlite.mjs")>()),
-  detectCurrentSqliteCapabilities: () => ({
+  detectCurrentSqliteCapabilities: async () => ({
     available: true,
     version: "3.51.3",
     text: mocks.currentAdmitted,
@@ -64,6 +64,8 @@ vi.mock("./windows-encoding.js", async (importOriginal) => ({
 
 const originalArgv = process.argv;
 const originalExecArgv = process.execArgv;
+const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
@@ -141,6 +143,16 @@ afterEach(() => {
   }
   process.argv = originalArgv;
   process.execArgv = originalExecArgv;
+  for (const [stream, descriptor] of [
+    [process.stdin, stdinTtyDescriptor],
+    [process.stdout, stdoutTtyDescriptor],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
@@ -838,9 +850,16 @@ describe("runtime recovery discovery", () => {
     });
   });
 
-  it.each([0, 7])(
-    "preserves the invocation and propagates replacement exit %s",
-    async (exitCode) => {
+  it.each([
+    { terminal: "none", stdinTTY: false, stdoutTTY: false, hide: true, exitCode: 0 },
+    { terminal: "none", stdinTTY: false, stdoutTTY: false, hide: true, exitCode: 7 },
+    { terminal: "stdin", stdinTTY: true, stdoutTTY: false, hide: false, exitCode: 0 },
+    { terminal: "stdout", stdinTTY: false, stdoutTTY: true, hide: false, exitCode: 7 },
+  ])(
+    "preserves invocation and replacement exit $exitCode with $terminal terminal stdio",
+    async ({ stdinTTY, stdoutTTY, hide, exitCode }) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: stdinTTY });
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: stdoutTTY });
       await withRecoveryHome(async (home) => {
         const candidate = await writeFixture(path.join(home, "bin/node"));
         mocks.admissible.add(candidate);
@@ -855,7 +874,11 @@ describe("runtime recovery discovery", () => {
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           candidate,
           ["--trace-warnings", "/fixture/dist/index.js", "doctor", "--non-interactive", "--fix"],
-          { stdio: "inherit", env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" } },
+          {
+            stdio: "inherit",
+            env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+            windowsHide: hide,
+          },
         );
         expect(process.cwd()).toBe(originalCwd);
         expect(exitSpy).not.toHaveBeenCalled();
@@ -935,6 +958,20 @@ describe("candidate admission probe", () => {
                 probe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
               }),
         stderr: "",
+      });
+
+      expect(isUsableNode(candidate)).toBe(false);
+    });
+  });
+
+  it("rejects candidates when the permission model denies child processes", async () => {
+    await withRecoveryHome(async (home) => {
+      const candidate = await writeFixture(path.join(home, "bin/node"));
+      mocks.admissible.add(candidate);
+      mocks.probe.mockImplementation(() => {
+        throw Object.assign(new Error("Access to this API has been restricted"), {
+          code: "ERR_ACCESS_DENIED",
+        });
       });
 
       expect(isUsableNode(candidate)).toBe(false);

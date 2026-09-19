@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);

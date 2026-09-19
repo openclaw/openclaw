@@ -5,8 +5,10 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
-import type { QaTransportOutboundSequenceMatch } from "./qa-transport.js";
+import { createQaBusState } from "./bus-state.js";
+import { createQaCrablineTransportAdapterFactory } from "./crabline-transport-factory.js";
+import { createQaTransportAdapter } from "./qa-transport-registry.js";
+import type { QaTransportAdapter, QaTransportOutboundSequenceMatch } from "./qa-transport.js";
 
 vi.mock("@openclaw/crabline", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/crabline")>();
@@ -30,7 +32,7 @@ const FINAL_TEXT = "accepted final marker";
 
 type TelegramMethod = "sendMessage" | "editMessageText" | "deleteMessage";
 type Observer = NonNullable<StartOpenClawCrablineAdapterParams["onEvent"]>;
-type Transport = Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>;
+type Transport = QaTransportAdapter;
 type Sequence = Awaited<ReturnType<NonNullable<Transport["waitForOutboundSequence"]>>>;
 type TelegramFixture = {
   transport: Transport;
@@ -46,15 +48,17 @@ type TelegramFixture = {
 
 async function withTelegramTransport(run: (fixture: TelegramFixture) => Promise<void>) {
   await withTempDir("qa-crabline-lifecycle-", async (outputDir) => {
-    const transport = await createQaCrablineTransportAdapter({
-      outputDir,
-      selection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
+    const state = createQaBusState();
+    const created = await createQaTransportAdapter(
+      {
+        channelId: "telegram",
+        driver: "crabline",
+        outputDir,
+        state,
       },
-    });
+      [createQaCrablineTransportAdapterFactory(state)],
+    );
+    const transport = created.adapter;
     try {
       const observe = vi.mocked(startOpenClawCrablineAdapter).mock.calls.at(-1)?.[0].onEvent;
       const telegram = transport.createGatewayConfig({
@@ -118,7 +122,7 @@ async function withTelegramTransport(run: (fixture: TelegramFixture) => Promise<
           }),
       });
     } finally {
-      await transport.cleanupAfterGatewayStop();
+      await created.cleanupAfterGatewayStop();
     }
   });
 }

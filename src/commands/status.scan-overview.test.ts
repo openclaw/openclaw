@@ -305,10 +305,22 @@ describe("collectStatusScanOverview", () => {
     expect(result.runtimeDegradation).toBeNull();
   });
 
-  it("reuses runtime degradation from a successful fallback probe without another status RPC", async () => {
+  it("reuses runtime status from a successful fallback probe without another status RPC", async () => {
     const bootstrap = await mocks.createStatusScanCoreBootstrap();
     const gatewaySnapshot = await bootstrap.gatewayProbePromise;
     const status = {
+      heartbeat: {
+        defaultAgentId: "main",
+        agents: [
+          {
+            agentId: "main",
+            enabled: true,
+            every: "30m",
+            everyMs: 1_800_000,
+            waitingForRoute: false,
+          },
+        ],
+      },
       degradedSecretOwners: [],
       degradedPlugins: [],
       startupMigrationWarning: "fallback warning",
@@ -329,6 +341,7 @@ describe("collectStatusScanOverview", () => {
     });
     expect(result.runtimeDegradation?.startupMigrationWarning).toBe("fallback warning");
     expect(result.runtimeDegradation?.sqliteWal).toEqual(sqliteWal);
+    expect(result.runtimeDegradation).toMatchObject({ heartbeat: status.heartbeat });
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.cfg).toEqual({ session: {} });
   });

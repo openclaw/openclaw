@@ -130,6 +130,8 @@ export const TARGET_KEYS = [
   "approvals.exec.targets[].accountId",
   "approvals.exec.targets[].threadId",
   "nodeHost",
+  "nodeHost.autoUpdate",
+  "nodeHost.autoUpdate.enabled",
   "nodeHost.agentRuns",
   "nodeHost.agentRuns.claude",
   "nodeHost.agentRuns.claude.enabled",

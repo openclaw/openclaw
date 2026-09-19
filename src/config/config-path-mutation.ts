@@ -25,12 +25,9 @@ function unsetPathForWriteAt(
     if (index === undefined || index >= value.length) {
       return { changed: false, value };
     }
-    if (isLeaf) {
-      const next = value.slice();
-      next.splice(index, 1);
-      return { changed: true, value: next };
-    }
-    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
+    const child = isLeaf
+      ? { changed: true, value: WRITE_PRUNED_OBJECT }
+      : unsetPathForWriteAt(value[index], pathSegments, depth + 1);
     if (!child.changed) {
       return { changed: false, value };
     }
@@ -46,16 +43,9 @@ function unsetPathForWriteAt(
   if (isBlockedObjectKey(segment) || !isRecord(value) || !Object.hasOwn(value, segment)) {
     return { changed: false, value };
   }
-  if (isLeaf) {
-    const next: Record<string, unknown> = { ...value };
-    delete next[segment];
-    return {
-      changed: true,
-      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
-    };
-  }
-
-  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
+  const child = isLeaf
+    ? { changed: true, value: WRITE_PRUNED_OBJECT }
+    : unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
   if (!child.changed) {
     return { changed: false, value };
   }

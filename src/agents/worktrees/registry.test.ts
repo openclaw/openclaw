@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
+  clearRegistryWorktreeProvisionedChunks,
   deleteRegistryWorktree,
   getRegistryWorktreeProvisionedChunk,
   findLiveRegistryWorktreeByOwner,
@@ -25,6 +26,21 @@ import {
 } from "./registry.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
+function isolatedWorktreeRecord(root: string): ManagedWorktreeRecord {
+  return {
+    id: "isolated",
+    name: "isolated",
+    repoFingerprint: "0123456789abcdef",
+    repoRoot: path.join(root, "repo"),
+    path: path.join(root, "isolated"),
+    branch: "openclaw/isolated",
+    baseRef: "HEAD",
+    ownerKind: "manual",
+    createdAt: 10,
+    lastActiveAt: 10,
+  };
+}
+
 describe("managed worktree registry", () => {
   let root: string;
   let env: NodeJS.ProcessEnv;
@@ -32,12 +48,59 @@ describe("managed worktree registry", () => {
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-worktree-registry-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "ambient"));
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   });
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("keeps explicit-state writes independent of a read-only ambient database", () => {
+    const ambient = openOpenClawStateDatabase();
+    const record = isolatedWorktreeRecord(root);
+    const chunk = { worktreeId: record.id, path: "sample.txt", chunkIndex: 0 };
+    const bytes = Buffer.from("synthetic snapshot bytes");
+    ambient.db.exec("PRAGMA query_only = ON");
+    try {
+      insertRegistryWorktree(env, record, { provisionedPaths: [chunk.path] });
+      expect(getRegistryWorktree(env, record.id)).toEqual(record);
+      insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+      expect(Buffer.from(getRegistryWorktreeProvisionedChunk(env, chunk)!)).toEqual(bytes);
+      clearRegistryWorktreeProvisionedChunks(env, record.id);
+      expect(getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
+      insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+      updateRegistryWorktree(env, record.id, { lastActiveAt: 20 });
+      expect(getRegistryWorktree(env, record.id)?.lastActiveAt).toBe(20);
+      deleteRegistryWorktree(env, record.id);
+      expect(getRegistryWorktree(env, record.id)).toBeUndefined();
+      expect(getRegistryWorktreeProvisionedChunk(env, chunk)).toBeUndefined();
+      expect(listRegistryWorktrees(process.env)).toEqual([]);
+    } finally {
+      ambient.db.exec("PRAGMA query_only = OFF");
+    }
+  });
+
+  it("rolls back explicit-state snapshot deletion when deleting its worktree fails", () => {
+    const record = isolatedWorktreeRecord(root);
+    const chunk = { worktreeId: record.id, path: "sample.txt", chunkIndex: 0 };
+    const bytes = Buffer.from("preserved snapshot bytes");
+    insertRegistryWorktree(env, record, { provisionedPaths: [chunk.path] });
+    insertRegistryWorktreeProvisionedChunk(env, { ...chunk, data: bytes });
+    const { db } = openOpenClawStateDatabase({ env });
+    db.exec(`
+      CREATE TEMP TRIGGER registry_delete_fault BEFORE DELETE ON worktrees
+      WHEN OLD.id = 'isolated'
+      BEGIN SELECT RAISE(ABORT, 'synthetic worktree deletion failure'); END;
+    `);
+
+    expect(() => deleteRegistryWorktree(env, record.id)).toThrow(
+      "synthetic worktree deletion failure",
+    );
+    expect(getRegistryWorktree(env, record.id)).toEqual(record);
+    expect(Buffer.from(getRegistryWorktreeProvisionedChunk(env, chunk) ?? [])).toEqual(bytes);
   });
 
   it("inspects absent legacy worktrees without creating the state database", async () => {

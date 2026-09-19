@@ -15,6 +15,8 @@ export const EXISTING_SESSION_LIMITS = {
     typeSelector: "existing-session type does not support selector targeting yet; use ref.",
     typeSlowly: "existing-session type does not support slowly=true; use fill/press instead.",
     typeTimeout: "existing-session type does not support timeoutMs overrides.",
+    insertText:
+      "Paste is not supported for existing-session browser profiles. Use a managed browser profile.",
     pressDelay: "existing-session press does not support delayMs.",
     hoverSelector: "existing-session hover does not support selector targeting yet; use ref.",
     hoverTimeout: "existing-session hover does not support timeoutMs overrides.",
@@ -84,6 +86,8 @@ export function getExistingSessionUnsupportedMessage(action: BrowserActRequest):
         return EXISTING_SESSION_LIMITS.act.typeSlowly;
       }
       return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.typeTimeout : null;
+    case "insertText":
+      return EXISTING_SESSION_LIMITS.act.insertText;
     case "press":
       return action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : null;
     case "hover":

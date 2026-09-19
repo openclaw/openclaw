@@ -84,6 +84,63 @@ function firstBuildChannelsTableCall(): unknown[] {
 }
 
 describe("scanStatus", () => {
+  it.each([
+    { name: "ready Gateway route", localWaiting: true, gatewayWaiting: false, expected: false },
+    { name: "waiting Gateway route", localWaiting: false, gatewayWaiting: true, expected: true },
+    { name: "missing Gateway heartbeat", localWaiting: true, expected: true },
+    { name: "unavailable Gateway status", localWaiting: true, unavailable: true, expected: true },
+  ])("reports heartbeat readiness from $name", async (testCase) => {
+    const cfg = createStatusScanConfig({
+      commands: { ownerAllowFrom: ["telegram:123456789"] },
+      channels: { telegram: { botToken: "test-token" } },
+    });
+    configureScanStatus({ hasConfiguredChannels: true, sourceConfig: cfg, resolvedConfig: cfg });
+    const createHeartbeat = (waitingForRoute: boolean) => ({
+      defaultAgentId: "main",
+      agents: [
+        {
+          agentId: "main",
+          enabled: true,
+          every: "30m",
+          everyMs: 1_800_000,
+          waitingForRoute,
+        },
+      ],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      ...createStatusSummary(),
+      heartbeat: createHeartbeat(testCase.localWaiting),
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    if (testCase.unavailable) {
+      mocks.callGateway.mockRejectedValue(new Error("missing scope: operator.read"));
+    } else {
+      mocks.callGateway.mockResolvedValue(
+        testCase.gatewayWaiting === undefined
+          ? {}
+          : { heartbeat: createHeartbeat(testCase.gatewayWaiting) },
+      );
+    }
+
+    const result = await scanStatus({});
+
+    expect(result.summary.heartbeat).toEqual({
+      defaultAgentId: "main",
+      agents: [expect.objectContaining({ agentId: "main", waitingForRoute: testCase.expected })],
+    });
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+  });
+
   it("passes sourceConfig into buildChannelsTable for summary-mode status output", async () => {
     const sourceConfig = createStatusScanConfig({
       marker: "source",
@@ -146,7 +203,7 @@ describe("scanStatus", () => {
       }),
     ).toBe(false);
     expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
-      timeoutMs: 2500,
+      timeoutMs: 10_000,
       fetchGit: false,
       includeRegistry: false,
       updateConfigChannel: null,

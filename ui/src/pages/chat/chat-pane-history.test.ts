@@ -43,6 +43,25 @@ describe("chat pane native history pagination", () => {
     expect(pane.chatProps?.userAvatar).toBe(user.avatarUrl);
   });
 
+  it("reuses the last resolved viewer identity while reconnecting drops selfUser", () => {
+    const { pane, context } = createRefreshChatPane();
+    const user = {
+      id: "profile-viewer",
+      name: "Viewer",
+      identity: { type: "profile" as const, id: "profile-viewer" },
+    };
+    context.gateway.snapshot.selfUser = user;
+    pane.render();
+    expect(pane.chatProps?.userId).toBe("profile-viewer");
+
+    // A reconnect briefly clears selfUser; peer alignment must not flash by
+    // falling back to null. The last resolved identity is presentation-only
+    // (alignment + sender label), never authorization.
+    context.gateway.snapshot.selfUser = null;
+    pane.render();
+    expect(pane.chatProps?.userId).toBe("profile-viewer");
+  });
+
   it.each(["pending", "resolved"] as const)(
     "keeps a %s people query selectable when selected-session metadata hydrates",
     async (replyState) => {
@@ -267,6 +286,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
@@ -541,6 +561,7 @@ describe("chat pane native history pagination", () => {
       expect(request).toHaveBeenCalledWith("chat.history", {
         sessionKey: state.sessionKey,
         limit: 1000,
+        maxBytes: 512 * 1024,
         offset: 2,
       });
       expect(observedRootMargin).toBe("1200px 0px 0px");
@@ -560,6 +581,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 512 * 1024,
       offset: 4,
     });
     await vi.waitFor(() => expect(pane.stagedOlderPage).not.toBeNull());
@@ -577,6 +599,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(3, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 512 * 1024,
       offset: 6,
     });
   });
@@ -624,6 +647,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenLastCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 512 * 1024,
       offset: 5,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([31, 32, 5, 6, 7, 8]);
@@ -872,6 +896,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
@@ -932,6 +957,7 @@ describe("chat pane native history pagination", () => {
     expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
       sessionKey: state.sessionKey,
       limit: 1000,
+      maxBytes: 512 * 1024,
       offset: 2,
     });
     expect(request).toHaveBeenNthCalledWith(

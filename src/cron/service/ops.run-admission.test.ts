@@ -203,6 +203,7 @@ describe("cron service run admission", () => {
     let active = 0;
     let peakActive = 0;
     const completed = new Set<string>();
+    const releaseRunners = createDeferred();
     const state = createAdmissionTestState({
       storePath: store.storePath,
       testAdmissionLimit: 4,
@@ -210,25 +211,32 @@ describe("cron service run admission", () => {
       runIsolatedAgentJob: vi.fn(async ({ job }: { job: { id: string } }) => {
         active += 1;
         peakActive = Math.max(peakActive, active);
-        await new Promise((resolve) => {
-          setTimeout(resolve, 2);
-        });
+        await releaseRunners.promise;
         active -= 1;
         completed.add(job.id);
         return { status: "ok" as const, summary: job.id };
       }),
     });
 
-    await onTimer(state);
+    const timer = onTimer(state);
+    try {
+      await vi.waitFor(() => expect(active).toBe(4));
+      releaseRunners.resolve();
+      await timer;
 
-    expect(completed).toEqual(new Set(jobs.map((job) => job.id)));
-    expect(peakActive).toBe(4);
-    const persisted = await loadCronStore(store.storePath);
-    expect(
-      persisted.jobs.every(
-        (job) => job.state.queuedAtMs === undefined && job.state.runningAtMs === undefined,
-      ),
-    ).toBe(true);
+      expect(completed).toEqual(new Set(jobs.map((job) => job.id)));
+      expect(peakActive).toBe(4);
+      const persisted = await loadCronStore(store.storePath);
+      expect(
+        persisted.jobs.every(
+          (job) => job.state.queuedAtMs === undefined && job.state.runningAtMs === undefined,
+        ),
+      ).toBe(true);
+    } finally {
+      stop(state);
+      releaseRunners.resolve();
+      await timer;
+    }
   });
 
   it("finalizes an admitted scheduled sibling before surfacing an activation failure", async () => {

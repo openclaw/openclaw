@@ -21,7 +21,7 @@ import {
 } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
-import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
+import { resolveProviderAuthEnvVarCandidatesCore } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -90,7 +90,7 @@ function hasProviderAuthEnvCredentialSource(params: {
   state: UsageAuthState;
   providerIds: string[];
 }): boolean {
-  const candidates = resolveProviderAuthEnvVarCandidates({
+  const candidates = resolveProviderAuthEnvVarCandidatesCore({
     config: params.state.cfg,
     env: {
       ...(process.env.VITEST ? process.env : {}),

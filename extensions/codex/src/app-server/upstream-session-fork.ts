@@ -8,8 +8,13 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import type { CodexSessionCatalogControlFactory } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { forkCanonicalCodexSession } from "./canonical-session-fork.js";
+import {
+  isCodexAppServerOverloadError,
+  isCodexAppServerPrewriteRequestCancellationError,
+} from "./client.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
-import type { CodexThread } from "./protocol.js";
+import type { CodexThread, CodexThreadForkResponse } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { createImportedCodexSession } from "./session-history-import.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
@@ -44,7 +49,7 @@ export async function forkCodexUpstreamSession(
         ? readConnectionFingerprint(params.upstream.ref)
         : undefined;
     const requestControl = sourceFingerprint
-      ? options.controlFactory.forUpstream(params.source.agentId, sourceFingerprint)
+      ? await options.controlFactory.forUpstream(params.source.agentId, sourceFingerprint)
       : undefined;
     if (!sourceFingerprint || !requestControl) {
       return {
@@ -126,23 +131,36 @@ export async function forkCodexUpstreamSession(
       if (!precheck.ok) {
         return { status: "failed", code: precheck.code, message: precheck.message };
       }
-      // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
-      const rawResponse = await control.forkThread({
-        threadId: sourceThreadId,
-        beforeTurnId: resolved.boundary.beforeTurnId,
-        ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
-        excludeTurns: true,
-      });
-      // Malformed responses do not establish ownership of any purported orphan id.
-      const response = assertCodexThreadForkResponse(rawResponse);
-      const threadId = response.thread.id.trim();
-      if (!threadId) {
-        throw new Error("Codex thread/fork response did not include a thread id");
-      }
-      // A contract-violating response reusing the source id would bind (and later
-      // archive) the original conversation; reject identity reuse outright.
-      if (threadId === sourceThreadId || threadId === sourceBinding?.threadId) {
-        throw new Error("Codex thread/fork response reused the source thread id");
+      let response: CodexThreadForkResponse;
+      let threadId: string;
+      try {
+        // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
+        const rawResponse = await control.forkThread({
+          threadId: sourceThreadId,
+          beforeTurnId: resolved.boundary.beforeTurnId,
+          ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
+          excludeTurns: true,
+        });
+        // Malformed responses do not establish ownership of any purported orphan id.
+        response = assertCodexThreadForkResponse(rawResponse);
+        threadId = response.thread.id.trim();
+        if (!threadId) {
+          throw new Error("Codex thread/fork response did not include a thread id");
+        }
+        // Reusing the source id would bind and later archive the original conversation.
+        if (threadId === sourceThreadId || threadId === sourceBinding?.threadId) {
+          throw new Error("Codex thread/fork response reused the source thread id");
+        }
+      } catch (error) {
+        // Native fork can subscribe before its RPC response or catalog update fails.
+        if (
+          !(error instanceof CodexAppServerScopedRequestRejectedError) &&
+          !isCodexAppServerPrewriteRequestCancellationError(error) &&
+          !isCodexAppServerOverloadError(error)
+        ) {
+          control.retireConnection?.();
+        }
+        throw error;
       }
       const forkedThreadId = threadId;
       try {

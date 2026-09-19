@@ -378,14 +378,33 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
       ${t("pluginsPage.noDiscoveryResults")}
     </p>`;
   }
+  const official = items.filter((plugin) => plugin.catalog.official);
+  const community = items.filter((plugin) => !plugin.catalog.official);
   return html`
-    <div class="plugin-catalog-grid plugin-catalog-grid--results">
-      ${repeat(
-        items,
-        (plugin) => plugin.id,
-        (plugin) => renderCatalogCard(plugin, props),
-      )}
-    </div>
+    ${
+      props.query.trim() && official.length > 0 && community.length > 0
+        ? html`
+            ${renderSection({
+              id: "official",
+              title: t("pluginsPage.official"),
+              items: official,
+              props,
+            })}
+            ${renderSection({
+              id: "community",
+              title: t("pluginsPage.community"),
+              items: community,
+              props,
+            })}
+          `
+        : html`<div class="plugin-catalog-grid plugin-catalog-grid--results">
+            ${repeat(
+              items,
+              (plugin) => plugin.id,
+              (plugin) => renderCatalogCard(plugin, props),
+            )}
+          </div>`
+    }
     ${props.loadMoreError ? renderError(props.loadMoreError, props.onLoadMore) : nothing}
     ${
       props.result?.nextCursor

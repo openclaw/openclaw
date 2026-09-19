@@ -93,6 +93,7 @@ it.each([
         setActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
       }
       const subscriptions = startGatewayEventSubscriptions({
+        signal: new AbortController().signal,
         log,
         broadcast: context.broadcast,
         broadcastToConnIds: context.broadcastToConnIds,
@@ -106,6 +107,7 @@ it.each([
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates: new Map(),
         terminalSessions: { closeTaskSessions: vi.fn() },
+        refreshConnectedUserProfiles: vi.fn(),
       });
       const writerEntered = createDeferred();
       const releaseWriter = createDeferred();

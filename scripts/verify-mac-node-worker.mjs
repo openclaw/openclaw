@@ -25,6 +25,9 @@ if (!runtimeArg || !expectedInfoPath) {
 const runtime = fs.realpathSync(runtimeArg);
 const node = path.join(runtime, "bin/node");
 const packageRoot = path.join(runtime, "lib/node_modules/openclaw");
+if (fs.existsSync(path.join(packageRoot, "dist/control-ui"))) {
+  throw new Error("Private worker must not contain Gateway Control UI assets");
+}
 const expected = JSON.parse(fs.readFileSync(expectedInfoPath, "utf8"));
 const actual = JSON.parse(fs.readFileSync(path.join(packageRoot, "dist/build-info.json"), "utf8"));
 for (const key of ["version", "commit", "builtAt", "buildId"]) {

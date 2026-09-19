@@ -263,7 +263,10 @@ async function executeModel(
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
       const available = models
-        .filter((entry: ModelCatalogEntry) => entry.available !== false)
+        .filter(
+          (entry: ModelCatalogEntry) =>
+            entry.available !== false && entry.manualSelectionAllowed !== false,
+        )
         .map((entry: ModelCatalogEntry) => entry.id);
       const lines = [t("chat.commandResults.model.current", { model: `\`${model}\`` })];
       if (available.length > 0) {

@@ -52,7 +52,8 @@ on pinned current `main` as the exact command and validation contract.
 6. Dispatch `plugin-npm-release.yml` from the same branch with
    `publish_scope=all-publishable`, the full release SHA as `ref`, and
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
-   readback, then save the successful plugin run ID.
+   readback, then save the successful plugin run ID. For a tooling-only failure,
+   use [trusted-main recovery](#trusted-main-npm-recovery) below.
 7. Publish core with the tag, `npm_dist_tag=extended-stable`, all three run IDs,
    and `full_release_validation_run_attempt=<saved-attempt>`. Normally dispatch
    from the canonical branch. For a workflow-only recovery after the candidate
@@ -60,7 +61,8 @@ on pinned current `main` as the exact command and validation contract.
    `release_candidate_branch=extended-stable/YYYY.M.33`; it still publishes the
    tag checkout and accepts canonical-branch, current-main, or trusted-pinned
    validation evidence; the prepared tarball and every evidence identity must
-   still match the candidate SHA.
+   still match the candidate SHA. A trusted-main plugin recovery run requires
+   this trusted-main core route; pass its successful ID as `plugin_npm_run_id`.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
    Verify signatures, provenance, inventories, exact versions, and selectors.
@@ -75,3 +77,53 @@ on pinned current `main` as the exact command and validation contract.
    tag; never rebuild or move the release tag.
 10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
     ClawHub, or private dist-tag artifacts from this path.
+
+## Trusted-main npm recovery
+
+Use this route when the frozen candidate's publishing tooling is the failure,
+for example an obsolete check rejecting validated dependency pins because npm
+`latest` advanced. Keep the candidate and its successful qualification unchanged.
+A product defect, known vulnerable dependency, or changed candidate needs its
+own repair and fresh qualification; workflow recovery does not waive those gates.
+
+This route uses existing inputs; #151282 added no workflow-dispatch inputs.
+In `gh workflow run`, `--ref main` selects trusted publishing **tooling**.
+The plugin input `-f ref=<release-sha>` selects the exact **package source**;
+never replace it with `main`, a branch name, or the tooling SHA.
+
+After the publication prerequisites above pass, dispatch:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref main \
+  -f publish_scope=all-publishable \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=extended-stable
+```
+
+Leave `plugins` empty and `preflight_only=false` (the default). A successful
+artifact or trusted-publisher preflight is not a successful publication run.
+The source must still equal the canonical `extended-stable/YYYY.M.33` tip;
+the workflow rechecks that tip immediately before each OIDC npm publish after
+the environment approval. Branch movement requires reassessing the candidate
+and replacing its qualification, not substituting a new SHA into old evidence.
+Keep final tags immutable and use a new patch for source changes after tagging.
+
+Save the successful plugin publication run ID after exact-version and selector
+readback. Dispatch `openclaw-npm-release.yml` with `--ref main` and the existing
+core recovery inputs from `docs/reference/RELEASING.md`:
+
+- `tag=vYYYY.M.P`, `preflight_only=false`, and `npm_dist_tag=extended-stable`.
+- `release_candidate_branch=extended-stable/YYYY.M.33`, including for patches
+  above `.33`; this is a core input, not a plugin input.
+- `plugin_npm_run_id=<successful-plugin-publication-run-id>` from this recovery.
+- Preserve `preflight_run_id`, `full_release_validation_run_id`, and
+  `full_release_validation_run_attempt` for the unchanged candidate. Current
+  qualified manifests supply both run IDs from the same successful validation.
+
+Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
+candidate binding. Record both workflows' actual tooling SHAs and run IDs in
+the release handoff. Required environment approvals, immutable artifact checks,
+and registry readback still apply; extended-stable token bootstrap is prohibited.
+Reuse already-published versions and verified bytes. If only core failed, retain
+the successful plugin run instead of dispatching plugin publication again.

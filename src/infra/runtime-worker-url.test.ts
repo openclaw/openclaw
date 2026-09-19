@@ -6,7 +6,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -109,7 +113,18 @@ describe("resolveRuntimeWorkerArgv", () => {
       const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+      expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
+        typescriptLoader && extension.endsWith("ts")
+          ? ["--import", import.meta.resolve("tsx/esm")]
+          : [],
+      );
     }
+  });
+
+  it("does not preload a file loader for non-file Worker URLs", () => {
+    expect(
+      resolveRuntimeWorkerThreadExecArgv(new URL("data:text/javascript,postMessage(1)")),
+    ).toEqual([]);
   });
 
   it.each(["ts", "mts", "cts"])(

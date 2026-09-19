@@ -17,7 +17,6 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import {
-  normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
   normalizeCronToolsAllowExecTarget,
   normalizeCronToolsAllowExecTargetRequirement,
@@ -29,6 +28,7 @@ import {
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
+import { normalizeCronToolsAllowProvenance } from "./tools-allow-provenance.js";
 import { isSystemOwnedCronPayloadKind, type CronJobCreate, type CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -406,19 +406,9 @@ export function normalizeCronJobInput(
   }
 
   if ("toolsAllowProvenance" in base) {
-    const provenance = isRecord(base.toolsAllowProvenance)
-      ? snapshotOwnCronRecord(base.toolsAllowProvenance)
-      : undefined;
-    if (
-      isRecord(provenance) &&
-      provenance.version === 1 &&
-      provenance.source === "final-executable-surface"
-    ) {
-      next.toolsAllowProvenance = {
-        version: 1,
-        source: "final-executable-surface",
-        callerOrigin: normalizeCronScheduledToolCallerOrigin(provenance.callerOrigin),
-      };
+    const provenance = normalizeCronToolsAllowProvenance(base.toolsAllowProvenance);
+    if (provenance) {
+      next.toolsAllowProvenance = provenance;
     } else {
       delete next.toolsAllowProvenance;
     }

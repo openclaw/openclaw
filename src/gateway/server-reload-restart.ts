@@ -455,6 +455,8 @@ class GatewayRestartTransaction {
       }
 
       let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
+      // Timeout and failed checks leave a live deferral owned by this request.
+      this.restartDeferral?.cancel();
       this.restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => this.options.getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
@@ -509,17 +511,15 @@ class GatewayRestartTransaction {
             );
           },
           onTimeout: (_pending, elapsedMs) => {
+            // Keep the handle until delivery or cancellation; forced attempts may retry.
             this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
           },
           onCheckError: (err) => {
-            this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
-              `restart deferral check failed (${String(err)}); restarting gateway now`,
+              `restart deferral check failed (${String(err)}); pending work is unknown, deferring and retrying`,
             );
           },
         },

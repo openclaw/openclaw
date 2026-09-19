@@ -11,7 +11,11 @@ import type {
   PluginFileCacheEntry,
   PluginJsonCacheResult,
 } from "./plugin-cache-files.types.js";
-import { bindPluginCacheRoot, getPluginCacheRoot } from "./plugin-cache.js";
+import {
+  bindPluginCacheRoot,
+  getPluginCacheRoot,
+  materializePluginCacheError,
+} from "./plugin-cache.js";
 
 const DEFAULT_PLUGIN_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -54,12 +58,21 @@ export function pluginCacheExistsSync(targetPath: string): boolean {
   return (facts.exists ??= fs.existsSync(targetPath));
 }
 
+function resolveRealpath(targetPath: string): string {
+  const absolute = path.resolve(targetPath);
+  if (absolute === targetPath && pluginCacheRealpathSync(targetPath, true) === targetPath) {
+    return targetPath;
+  }
+  // The JavaScript resolver supports paths that the native resolver may reject.
+  return fs.realpathSync(targetPath);
+}
+
 export function pluginCacheRealpathSync(targetPath: string, native = false): string | null {
   const facts = pathFacts(targetPath);
   const key = native ? "nativeRealpath" : "realpath";
   if (facts[key] === undefined) {
     try {
-      facts[key] = native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
+      facts[key] = native ? fs.realpathSync.native(targetPath) : resolveRealpath(targetPath);
       pathFacts(facts[key])[key] = facts[key];
     } catch {
       facts[key] = null;
@@ -74,15 +87,21 @@ export function refreshPluginCacheStat(targetPath: string): fs.Stats | null {
   return pluginCacheStatSync(targetPath);
 }
 
-export function pluginCacheStatSync(targetPath: string): fs.Stats | null {
+export function pluginCacheStatSync(targetPath: string, throwOnError = false): fs.Stats | null {
   const facts = pathFacts(targetPath);
   if (facts.stat === undefined) {
+    facts.statError = undefined;
     try {
       facts.stat = fs.statSync(targetPath);
       facts.exists = true;
-    } catch {
+    } catch (error) {
+      materializePluginCacheError(error);
+      facts.statError = error;
       facts.stat = null;
     }
+  }
+  if (facts.stat === null && throwOnError) {
+    throw facts.statError;
   }
   return facts.stat;
 }
@@ -106,6 +125,7 @@ export function readPluginCacheDirectory(targetPath: string): fs.Dirent[] {
     try {
       root.directory = { ok: true, entries: fs.readdirSync(targetPath, { withFileTypes: true }) };
     } catch (error) {
+      materializePluginCacheError(error);
       root.directory = { ok: false, error };
     }
   }
@@ -165,6 +185,9 @@ export function checkPluginCacheEntry(params: {
       checked = { ok: true, path: opened.path, rootRealPath: opened.rootRealPath, exists: true };
     }
   }
+  if (!checked.ok) {
+    materializePluginCacheError(checked.error);
+  }
   root.checkedEntries.set(key, checked);
   return checked;
 }
@@ -186,15 +209,16 @@ export function readPluginCacheFile(params: {
   const limitKey = JSON.stringify([key, maxBytes]);
   // A successful strict check also satisfies the bundled/raw-reader policy;
   // its failures never stand in for a more permissive read.
-  const strictKey = entryKey(params.relativePath, true);
-  const strict = params.rejectHardlinks ? undefined : root.files.get(strictKey);
+  const strict = params.rejectHardlinks
+    ? undefined
+    : root.files.get(entryKey(params.relativePath, true));
   const cached =
     root.files.get(key) ?? root.files.get(limitKey) ?? (strict?.ok ? strict : undefined);
   if (cached) {
     return enforceFileSize(cached, maxBytes);
   }
   const requestedPath = path.resolve(lexicalRoot, params.relativePath);
-  const checked = root.checkedEntries.get(entryKey(params.relativePath, params.rejectHardlinks));
+  const checked = root.checkedEntries.get(key);
   if (pathFacts(requestedPath).exists === false || (checked && (!checked.ok || !checked.exists))) {
     const entry: PluginFileCacheEntry = {
       ok: false,
@@ -251,7 +275,7 @@ export function readPluginCacheFile(params: {
         },
       };
       Object.assign(pathFacts(absolutePath), { exists: true, stat: opened.stat });
-      root.checkedEntries.set(entryKey(params.relativePath, params.rejectHardlinks), {
+      root.checkedEntries.set(key, {
         ok: true,
         path: opened.path,
         rootRealPath: opened.rootRealPath,
@@ -269,6 +293,9 @@ export function readPluginCacheFile(params: {
   }
   // fs-safe can report size rejection as a generic validation failure. Only successful
   // bytes satisfy other limits; failures retain the policy under which they were checked.
+  if (!entry.ok) {
+    materializePluginCacheError(entry.failure.error);
+  }
   root.files.set(entry.ok ? key : limitKey, entry);
   return entry;
 }
@@ -308,6 +335,7 @@ function readPluginCacheRegularFile(params: {
       Object.assign(pathFacts(absolutePath), { exists: true, stat });
       root.files.set(key, entry);
     } catch (error) {
+      materializePluginCacheError(error);
       entry = { ok: false, failure: { ok: false, reason: "io", error } };
       // A size rejection cannot stand in for an uncapped reader's policy.
       root.files.set(
@@ -360,6 +388,7 @@ export function parsePluginCacheJson(
         value: options.json5 ? parseJsonWithJson5Fallback(source) : JSON.parse(source),
       };
     } catch (error) {
+      materializePluginCacheError(error);
       file[key] = { ok: false, error };
     }
   }

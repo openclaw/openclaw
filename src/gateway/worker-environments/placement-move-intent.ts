@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureColumn, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as StateDatabase,
@@ -68,8 +69,7 @@ function moveSchemaSql(): string {
   return OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MOVE_SCHEMA_END.length);
 }
 
-// Single-slot per-handle memo: getPlacementMoves feeds the sessions read
-// projection, so the DDL/PRAGMA ensure must not run per read.
+// Placement reads feed the resident session projection; do not repeat DDL/PRAGMA per row.
 const ensuredMoveSchemaHandles = new WeakSet<DatabaseSync>();
 
 function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
@@ -280,6 +280,14 @@ function findMoveRowBySession(db: DatabaseSync, sessionId: string): MoveRow | un
   );
 }
 
+export function readWorkerPlacementMove(
+  db: DatabaseSync,
+  sessionId: string,
+): WorkerPlacementMoveIntent | undefined {
+  const row = findMoveRowBySession(db, sessionId);
+  return row ? fromRow(row) : undefined;
+}
+
 function findMoveRowByOperation(db: DatabaseSync, operationId: string): MoveRow | undefined {
   if (!ensureExistingWorkerPlacementMoveSchema(db)) {
     return undefined;
@@ -330,6 +338,7 @@ function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): v
   if (result.numAffectedRows !== 1n) {
     throw new Error(`Session ${intent.sessionId} placement move changed before completion`);
   }
+  sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
 }
 
 function requireExactAttachedEnvironment(
@@ -371,8 +380,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
   const { read, write, now } = runtime;
   return {
     getPlacementMove(sessionId: string): WorkerPlacementMoveIntent | undefined {
-      const row = findMoveRowBySession(read(), required(sessionId, "move session id"));
-      return row ? fromRow(row) : undefined;
+      return readWorkerPlacementMove(read(), required(sessionId, "move session id"));
     },
 
     getPlacementMoves(
@@ -511,6 +519,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           .updateTable("worker_session_placement_moves")
           .set({ last_error: boundedWorkerError(input.error), updated_at_ms: now() })
           .where((eb) => eb.and(exactMoveValues(intent)));
+        sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
         return executeSqliteQuerySync(db, statement).numAffectedRows === 1n;
       });
     },

@@ -1,10 +1,11 @@
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { readBuiltGatewayBuildId, verifyGitUpdateRecovery } from "./update-git-runtime.js";
+import { createUpdatePreflightFailure } from "./update-preflight-details.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { runStep } from "./update-runner-command.js";
 import {
@@ -13,18 +14,22 @@ import {
 } from "./update-runner-doctor.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
-import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
+import {
+  readCurrentGitUpdateRecovery,
+  recordGitRollbackOutcome,
+} from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import {
   resolveGitDoctorEntry,
+  runGitCleanCheckStep,
   runGitDoctorStep,
   runGitUpstreamStep,
 } from "./update-runner-git-steps.js";
 import {
+  fetchGitUpdateTarget,
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
-  resolveReleaseTagRemote,
   selectGitInspectionTarget,
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
@@ -114,6 +119,10 @@ export async function updateGitCheckout(params: {
   let candidateTransfer: Awaited<ReturnType<typeof prepareGitCandidateTransfer>>;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
+  let rollbackOutcome: NonNullable<UpdateRunResult["rollbackOutcome"]> = {
+    status: "not-needed",
+    reason: "Installed checkout was not changed",
+  };
   const prepareMutation = async (revision: string, root = gitRoot, runner = runCommand) => {
     if (mutationPrepared) {
       // Remote transport can outlive the earlier service inspection. Recheck
@@ -148,6 +157,7 @@ export async function updateGitCheckout(params: {
     reason,
     before,
     recovery,
+    rollbackOutcome,
     steps,
     durationMs: Date.now() - startedAt,
   });
@@ -268,39 +278,67 @@ export async function updateGitCheckout(params: {
     return restored && verified;
   };
   const rollbackError = async (reason: string) => {
-    // Admission can stop the service before import changes any source or runtime.
-    // Reverify retained artifacts without resetting an untouched checkout.
-    if (!sourceMutationStarted) {
-      if (!(await checkSourceUnchanged())) {
-        recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
-      }
-      return buildError(reason);
-    }
-    // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
-    if (stateMigrationStarted) {
-      return buildError(reason);
-    }
-    const sourceRestored = await rollback();
-    let runtimeRestored = true;
     try {
-      await runtimePromotion?.restore();
+      // Admission can stop the service before import changes any source or runtime.
+      // Reverify retained artifacts without resetting an untouched checkout.
+      if (!sourceMutationStarted) {
+        if (!(await checkSourceUnchanged())) {
+          recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
+        }
+        return buildError(reason);
+      }
+      // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
+      if (stateMigrationStarted) {
+        rollbackOutcome = {
+          status: "not-attempted",
+          reason: "State migration started; restoring code alone cannot restore operator state",
+        };
+        return buildError(reason);
+      }
+      const sourceRestored = await rollback();
+      let runtimeRestored = true;
+      try {
+        await runtimePromotion?.restore();
+      } catch (error) {
+        runtimeRestored = false;
+        steps.push({
+          name: "git runtime rollback",
+          command: "restore previous runtime",
+          cwd: gitRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: String(error),
+        });
+      }
+      recovery = !sourceRestored
+        ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
+        : !runtimeRestored
+          ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+          : await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
+      const restored = sourceRestored && runtimeRestored && recovery.serviceRestartSafe;
+      rollbackOutcome = {
+        status: restored ? "succeeded" : "failed",
+        reason: restored
+          ? "Previous checkout and runtime restored and verified"
+          : "Previous checkout or runtime restoration could not be verified",
+      };
+      return buildError(reason);
     } catch (error) {
-      runtimeRestored = false;
-      steps.push({
-        name: "git runtime rollback",
-        command: "restore previous runtime",
-        cwd: gitRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: String(error),
+      if (sourceMutationStarted && !stateMigrationStarted) {
+        rollbackOutcome = {
+          status: "failed",
+          reason: "Rollback threw before restoration could be verified",
+        };
+      }
+      throw error;
+    } finally {
+      recordGitRollbackOutcome({
+        outcome: rollbackOutcome,
+        progress: opts.progress,
+        root: gitRoot,
+        steps,
       });
     }
-    recovery = !sourceRestored
-      ? { serviceRestartSafe: false, reason: "source-rollback-failed" }
-      : !runtimeRestored
-        ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
-        : await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
-    return buildError(reason);
   };
   const runRequiredStep = async (name: string, argv: string[], reason: string) => {
     const result = await runStep(step(name, argv, gitRoot));
@@ -309,73 +347,11 @@ export async function updateGitCheckout(params: {
     }
     return mutationPrepared ? rollbackError(reason) : buildError(reason);
   };
-  const fetchTarget = async (root: string, targetStep: typeof step, name: string) => {
-    const fetch = await runStep(
-      targetStep(
-        name,
-        ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
-        root,
-      ),
-    );
-    if (fetch.exitCode !== 0 || channel === "dev") {
-      return fetch.exitCode === 0;
-    }
-    const remote = await runStep(targetStep("git remote", ["git", "-C", root, "remote"], root));
-    if (remote.exitCode !== 0) {
-      return false;
-    }
-    const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
-    const tracked = await runStep(
-      targetStep(
-        "git config update upstream",
-        ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
-        root,
-      ),
-    );
-    if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
-      return false;
-    }
-    const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
-    if (!tagRemote) {
-      steps.push({
-        name: "git release remote",
-        command: "git remote",
-        cwd: root,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail:
-          "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
-      });
-      return false;
-    }
-    // Only the release authority may replace shared tag refs. Disable pruning
-    // even when Git config enables it, so operator-only tags survive.
-    const tags = await runStep(
-      targetStep(
-        `git fetch tags ${tagRemote}`,
-        [
-          "git",
-          "-C",
-          root,
-          "fetch",
-          "--no-tags",
-          "--no-prune",
-          "--no-prune-tags",
-          tagRemote,
-          "+refs/tags/*:refs/tags/*",
-        ],
-        root,
-      ),
-    );
-    return tags.exitCode === 0;
-  };
-
-  const statusCheck = await runStep(step("clean check", gitCleanCheckArgs(gitRoot), gitRoot));
+  const { result: statusCheck, dirty } = await runGitCleanCheckStep(
+    step("clean check", gitCleanCheckArgs(gitRoot), gitRoot),
+  );
   if (statusCheck.exitCode !== 0) {
-    return buildError("clean-check-failed");
-  }
-  if (statusCheck.stdoutTail?.trim()) {
-    return buildError("dirty", "skipped");
+    return buildError(dirty ? "dirty" : "clean-check-failed");
   }
   const checkSourceUnchanged = async () => {
     const currentHead = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
@@ -395,7 +371,7 @@ export async function updateGitCheckout(params: {
       currentBranch !== branch ||
       currentStatus.stdout.trim()
     ) {
-      return { status: "skipped" as const, reason: "dirty" as const };
+      return { status: "error" as const, reason: "dirty" as const };
     }
     return undefined;
   };
@@ -415,8 +391,9 @@ export async function updateGitCheckout(params: {
           candidateSha,
           beforeSha,
           installedRoot: gitRoot,
+          installedRunCommand: runCommand,
           upstreamRef,
-          step: inspectionStep("git pack candidate", [], inspectionRoot),
+          step: inspectionStep("git pack update", [], inspectionRoot),
         });
         if (!transfer) {
           return { status: "error" as const, reason: "fetch-failed" };
@@ -433,7 +410,15 @@ export async function updateGitCheckout(params: {
         }
         return { status: "ok" as const };
       };
-      if (!(await fetchTarget(inspectionRoot, inspectionStep, "git target inspection fetch"))) {
+      if (
+        !(await fetchGitUpdateTarget({
+          root: inspectionRoot,
+          step: inspectionStep,
+          name: "git target inspection fetch",
+          channel,
+          steps,
+        }))
+      ) {
         return { status: "error" as const, reason: "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
@@ -454,6 +439,7 @@ export async function updateGitCheckout(params: {
         channel,
         devTarget,
         beforeSha,
+        beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,
         timeoutMs,
         defaultCommandEnv,
@@ -468,14 +454,14 @@ export async function updateGitCheckout(params: {
             timeoutMs,
           });
           if (candidate.code !== 0 || !candidate.stdout.trim()) {
-            throw new Error("Cannot inspect the validated Git candidate");
+            throw new Error("Cannot inspect the validated Git update");
           }
           await inspectTarget(candidate.stdout.trim(), root);
           if (opts.publishGitCheckout) {
             // A new checkout must settle its destination before runtime relocation
             // records absolute paths. Candidate build/validation has already finished.
             if ((await importCandidate(candidate.stdout.trim())).status !== "ok") {
-              throw new Error("Cannot import the admitted Git candidate");
+              throw new Error("Cannot import the admitted Git update");
             }
             gitRoot = await opts.publishGitCheckout();
             publishedCandidate = true;
@@ -523,10 +509,22 @@ export async function updateGitCheckout(params: {
         : buildError(inspectedTarget.reason, inspectedTarget.status);
     }
     if (!inspectedTarget && opts.publishGitCheckout) {
+      const failure = createUpdatePreflightFailure("target-git-inspection-missing");
+      steps.push({
+        name: "target-metadata-preflight",
+        command: "openclaw update",
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: failure.message,
+        failureFacts: failure.failureFacts,
+      });
       return buildError("target-metadata-preflight");
     }
     if (!inspectedTarget) {
-      if (!(await fetchTarget(gitRoot, step, "git fetch"))) {
+      if (
+        !(await fetchGitUpdateTarget({ root: gitRoot, step, name: "git fetch", channel, steps }))
+      ) {
         return buildError("fetch-failed");
       }
     }
@@ -544,6 +542,7 @@ export async function updateGitCheckout(params: {
         devTarget,
         targetRevision: tag ?? undefined,
         beforeSha,
+        beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,
         runCommand,
         timeoutMs,
@@ -700,19 +699,21 @@ export async function updateGitCheckout(params: {
     if (!mutationPrepared) {
       throw error;
     }
+    const fact = createUpdateErrorFact("git update", error, defaultCommandEnv);
     steps.push({
       name: "git update",
       command: "update checkout",
       cwd: gitRoot,
       durationMs: 0,
       exitCode: 1,
-      stderrTail: String(error),
+      stderrTail: fact.message,
+      failureFacts: [fact],
     });
     return await rollbackError(
       error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
     );
   } finally {
-    await candidateTransfer?.cleanup(step("git candidate pack cleanup", [], gitRoot));
+    await candidateTransfer?.cleanup(step("git update pack cleanup", [], gitRoot));
     await runtimePromotion?.cleanup();
   }
 }

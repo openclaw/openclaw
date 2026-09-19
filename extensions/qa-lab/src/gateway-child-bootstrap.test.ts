@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearRealTimeout, setTimeout as realTimeout } from "node:timers";
+import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
@@ -24,6 +25,12 @@ type FixtureRecord = {
   descendant?: number;
   tempRoot?: string;
   submittedKey?: string;
+  runtime?: "bun" | "node";
+  execPath?: string;
+  buildPrivateQa?: string | null;
+  enablePrivateQaCli?: string | null;
+  nodeOptions?: string | null;
+  gatewayOnlyEnvKeys?: string[];
 };
 
 // The fixture never contacts a provider or stores auth. Its independent failsafes
@@ -48,7 +55,14 @@ if (command === "descendant") {
   if (command === "models") for await (const chunk of process.stdin) input += chunk;
   const current = command === "models" ? args[args.indexOf("--provider") + 1]
     : command === "update" ? (args.includes("--help") ? "help" : "repair") : command;
-  write(current);
+  write(current, {
+    buildPrivateQa: process.env.OPENCLAW_BUILD_PRIVATE_QA ?? null,
+    enablePrivateQaCli: process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI ?? null,
+    nodeOptions: process.env.NODE_OPTIONS ?? null,
+    gatewayOnlyEnvKeys: Object.keys(process.env)
+      .filter((key) => ["OPENCLAW_BUILD_PRIVATE_QA", "OPENCLAW_ENABLE_PRIVATE_QA_CLI", "NODE_OPTIONS"].includes(key.toUpperCase()))
+      .sort(),
+  });
   if (current === phase) {
     process.on("SIGTERM", () => {
       if (mode === "running") for (const [fd, label] of [[1, "stdout"], [2, "stderr"]]) {
@@ -250,7 +264,13 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       providerMode: "mock-openai",
       controlUiEnabled: false,
       transportBaseUrl: "http://127.0.0.1:1",
-      runtimeEnvPatch: { QA_CLI_MARKER: "gateway" },
+      runtimeEnvPatch: {
+        NODE_OPTIONS: "--no-warnings",
+        Node_Options: "--trace-warnings",
+        OpenClaw_Build_Private_QA: "foreign",
+        OpenClaw_Enable_Private_QA_Cli: "foreign",
+        QA_CLI_MARKER: "gateway",
+      },
     });
     const env = {
       gateway,
@@ -282,7 +302,77 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       "message",
       "message",
     ]);
+    const runtimeEnv = ({ buildPrivateQa, enablePrivateQaCli, nodeOptions }: FixtureRecord) => ({
+      buildPrivateQa,
+      enablePrivateQaCli,
+      nodeOptions,
+    });
+    const bootstrapRecords = f
+      .records()
+      .filter((entry) => ["openai", "anthropic", "help", "repair"].includes(entry.kind));
+    expect(bootstrapRecords.map(runtimeEnv)).toEqual(
+      Array.from({ length: 4 }, () => ({
+        buildPrivateQa: null,
+        enablePrivateQaCli: null,
+        nodeOptions: null,
+      })),
+    );
+    expect(bootstrapRecords.map((entry) => entry.gatewayOnlyEnvKeys)).toEqual([[], [], [], []]);
+    expect(
+      f
+        .records()
+        .filter((entry) => entry.kind === "gateway" || entry.kind === "message")
+        .map(runtimeEnv),
+    ).toEqual(
+      Array.from({ length: 3 }, () => ({
+        buildPrivateQa: "1",
+        enablePrivateQaCli: "1",
+        nodeOptions: "--no-warnings",
+      })),
+    );
     expect(isQaPosixProcessGroupAlive(gateway.pid!)).toBe(true);
+  });
+
+  it("preloads each direct Gateway launch, restart, and child CLI command", async () => {
+    const f = await fixture("hang", "running");
+    const preloadPath = path.join(f.root, "runtime-preload.mjs");
+    await fs.writeFile(
+      preloadPath,
+      [
+        'import fs from "node:fs";',
+        `fs.appendFileSync(${JSON.stringify(path.join(f.root, "events.jsonl"))}, JSON.stringify({ kind: "preload", pid: process.pid, pgid: -1, runtime: process.versions.bun ? "bun" : "node", execPath: process.execPath }) + "\\n");`,
+      ].join("\n"),
+    );
+    const gateway = await f.owner.start({
+      repoRoot: process.cwd(),
+      command: f.command,
+      providerMode: "mock-openai",
+      controlUiEnabled: false,
+      transportBaseUrl: "http://127.0.0.1:1",
+      runtimePreloads: [pathToFileURL(preloadPath).href],
+    });
+
+    await gateway.runCli(["message", "edit", "--json"]);
+    await gateway.restartAfterStateMutation(async () => {});
+
+    const records = f.records();
+    const preloadedLaunches = records.filter((entry) => entry.kind === "preload");
+    expect(preloadedLaunches).toHaveLength(3);
+    expect(new Set(preloadedLaunches.map((entry) => entry.runtime))).toEqual(
+      new Set([process.versions.bun ? "bun" : "node"]),
+    );
+    expect(new Set(preloadedLaunches.map((entry) => entry.execPath))).toEqual(
+      new Set([process.execPath]),
+    );
+    for (const preload of preloadedLaunches) {
+      const index = records.indexOf(preload);
+      expect(records[index + 1]).toMatchObject({ pid: preload.pid });
+    }
+    expect(preloadedLaunches.map((entry) => records[records.indexOf(entry) + 1]?.kind)).toEqual([
+      "gateway",
+      "message",
+      "gateway",
+    ]);
   });
 
   it.each([

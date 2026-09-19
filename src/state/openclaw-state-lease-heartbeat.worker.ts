@@ -37,8 +37,10 @@ function withLifecycleCoordinator<T>(label: string, operation: () => T): T {
 function openHeartbeatDatabase() {
   // The parent's bound is a retry deadline, not ownership. Renewal below still
   // checks the exact current persisted owner/expiry before changing the row.
-  const deadline = Math.min(params.expiresAt, Date.now() + LEASE_HEARTBEAT_START_TIMEOUT_MS);
-  while (Date.now() < deadline && Atomics.load(shared, state.status) === state.starting) {
+  const deadline = Date.now() + LEASE_HEARTBEAT_START_TIMEOUT_MS;
+  const remaining = () =>
+    Math.min(deadline, Number(Atomics.load(shared, state.expiresAt))) - Date.now();
+  while (remaining() > 0 && Atomics.load(shared, state.status) === state.starting) {
     try {
       return withLifecycleCoordinator("maintenance heartbeat open", () =>
         openTrackedStateDatabase(params.path, { existingOnly: params.existingOnly }),
@@ -48,12 +50,7 @@ function openHeartbeatDatabase() {
         throw error;
       }
     }
-    Atomics.wait(
-      shared,
-      state.status,
-      state.starting,
-      Math.max(1, Math.min(25, deadline - Date.now())),
-    );
+    Atomics.wait(shared, state.status, state.starting, Math.max(1, Math.min(25, remaining())));
   }
   throw new Error("state lease heartbeat startup deadline expired or owner stopped");
 }

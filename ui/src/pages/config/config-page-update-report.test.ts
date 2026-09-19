@@ -104,7 +104,7 @@ describe("ConfigPage update failure reporting", () => {
           },
           subscribe: () => () => undefined,
           reportUpdateFailure,
-          refreshUpdateStatus: vi.fn(async () => undefined),
+          refreshUpdateStatus: vi.fn(async () => true),
           runUpdate: vi.fn(),
         },
       } as unknown as ApplicationContext;

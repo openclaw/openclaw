@@ -19,6 +19,7 @@ type UserChatMessageContentBlock = {
     kind: Extract<MediaKind, "audio" | "video" | "document">;
     label: string;
     mimeType?: string;
+    origin?: "paste" | "file";
   };
 };
 
@@ -63,6 +64,7 @@ function buildUserChatMessageContentBlocks(
         kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
         label: attachment.fileName?.trim() || "Attached file",
         mimeType: attachment.mimeType,
+        ...(attachment.origin ? { origin: attachment.origin } : {}),
       },
     });
   }

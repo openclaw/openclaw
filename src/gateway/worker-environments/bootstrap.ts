@@ -16,11 +16,7 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
-import {
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-} from "../../shared/worker-bundle-hash.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
@@ -48,11 +44,6 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-const WORKER_BUNDLE_ARTIFACT_PATHS = [
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-] as const;
 
 // Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
 // The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
@@ -460,9 +451,7 @@ case "$install" in
       exit 2
     fi
     tar -xzf "$package_archive" -C "$staging" --strip-components=3 \
-      package/dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH} \
-      package/dist/worker/${WORKER_BUNDLE_ENTRY_PATH} \
-      package/dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}
+      ${WORKER_BUNDLE_ARTIFACT_PATHS.map((entry) => `package/dist/worker/${entry}`).join(" ")}
     rm -f "$npm_pack_json" "$package_archive"
     ;;
   *)

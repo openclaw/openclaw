@@ -161,10 +161,12 @@ runs:
         fi
 
     - name: Configure dependency cache store
-      if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
+      if: inputs.cache-mode != 'off' && (runner.os != 'Windows' || inputs.dependency-cache == 'true')
       shell: bash
       run: |
         set -euo pipefail
+        # Store-only readers must use the publisher's path: Actions includes
+        # cache paths in its version, even when the keys are identical.
         # Keep both sides of pnpm's hard links below the workspace so one tar
         # archive preserves them without relying on runner-home path depth.
         # Pnpm also needs registry metadata for offline supply-chain checks.
@@ -181,7 +183,7 @@ runs:
         set -euo pipefail
         deps_input_fingerprint="$(node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs" \
           --workspace "$GITHUB_WORKSPACE" --frozen-lockfile "$FROZEN_LOCKFILE")"
-        cache_key="${GITHUB_REPOSITORY:?}-node-deps-v3-os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"
+        cache_key="${GITHUB_REPOSITORY:?}-node-deps-v4-os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"
         echo "key=$cache_key" >> "$GITHUB_OUTPUT"
 
     - name: Prepare dependency cache restore
@@ -196,6 +198,16 @@ runs:
           "$GITHUB_WORKSPACE/examples" \
           -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name node_modules \
           -exec rm -rf -- {} +
+
+    # hashFiles still traverses excluded dependency trees. Resolve before restore.
+    # Embedded step env is evaluated before its condition; keep the scan guarded
+    # and share its result across cache restore and configuration.
+    - name: Resolve Vitest transform cache generation
+      id: vitest-cache-generation
+      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore exact dependency cache
       id: dependency-cache
@@ -236,15 +248,6 @@ runs:
         # the complete store. Every miss can seed it from the coarser cache,
         # including legacy Blacksmith callers that disabled that old fallback.
         cache-mode: ${{ inputs.cache-mode != 'off' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && 'restore' || 'off' }}
-
-    # Embedded step env is evaluated before its condition. Keep this scan in a
-    # guarded script and share its result across cache restore and configuration.
-    - name: Resolve Vitest transform cache generation
-      id: vitest-cache-generation
-      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
-      shell: bash
-      run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore Vitest transform cache
       id: vitest-cache

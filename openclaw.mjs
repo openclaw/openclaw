@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
 import {
   consumeLauncherRootOptionToken,
   isForegroundGmailRunInvocation,
@@ -49,7 +50,7 @@ const ensureSupportedRuntimeVersion = async () => {
     );
     return process.exit(1);
   }
-  const probe = detectCurrentSqliteCapabilities();
+  const probe = await detectCurrentSqliteCapabilities();
   const failure = nodeRuntimeFailure(process.versions.node, probe);
   if (!failure) {
     const note = nodeRuntimeNote(process.versions.node, probe);
@@ -624,9 +625,18 @@ const tryOutputPrecomputedCommandHelp = () => {
 
 // Resolve Node before loading pending package lifecycle code or any built runtime modules.
 const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+if (
+  !waitingForNodeUpdateRespawn &&
+  (await runNodeHostLauncher({
+    entryPath: fileURLToPath(import.meta.url),
+    packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+  }))
+) {
+  process.exit(process.exitCode ?? 0);
+}
 const currentNodeRuntimeFailure = process.versions.bun
   ? null
-  : nodeRuntimeFailure(process.versions.node, detectCurrentSqliteCapabilities());
+  : nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
 
 if (!waitingForNodeUpdateRespawn) {
   // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
@@ -660,7 +670,8 @@ if (!waitingForNodeUpdateRespawn) {
 // so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
   waitingForNodeUpdateRespawn ||
-  (!isForegroundGmailRunInvocation(process.argv) &&
+  (!isNodeHostLauncherChild() &&
+    !isForegroundGmailRunInvocation(process.argv) &&
     !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
     (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
 

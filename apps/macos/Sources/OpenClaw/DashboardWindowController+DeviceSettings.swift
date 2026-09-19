@@ -83,6 +83,7 @@ extension DashboardWindowController {
 
     private static let booleanStateSettings: [DeviceSettingKey: ReferenceWritableKeyPath<AppState, Bool>] = [
         .showDockIcon: \.showDockIcon,
+        .nativeExperienceEnabled: \.nativeExperienceEnabled,
         .iconAnimationsEnabled: \.iconAnimationsEnabled,
         .debugPaneEnabled: \.debugPaneEnabled,
         .peekabooBridgeEnabled: \.peekabooBridgeEnabled,

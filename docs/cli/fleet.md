@@ -185,7 +185,7 @@ openclaw fleet stop acme
 openclaw fleet restart acme
 ```
 
-These commands operate on the registered container name. They fail if the tenant is unknown or the recorded runtime cannot perform the operation.
+These commands resolve the registered container name, verify ownership, and act on that inspected container's ID. They fail if the tenant is unknown or the recorded runtime cannot perform the operation.
 
 ## `fleet upgrade`
 

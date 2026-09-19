@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
@@ -11,8 +13,11 @@ import {
   readSessionTranscriptWatermark,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  waitForSessionTranscriptProjection,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   getSessionColdStorageStatus,
   runSessionColdStorageMaintenance,
@@ -27,12 +32,15 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
+import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
+import type { RespondFn } from "./server-methods/types.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
@@ -40,6 +48,8 @@ import {
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   beforeMaterialize: undefined as (() => Promise<void>) | undefined,
@@ -145,8 +155,75 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await testState.cleanup();
   });
 
+  it("does not generate conversation recaps for Cron runs", async () => {
+    const cronTarget = {
+      key: "agent:main:cron:job-1:run:run-1",
+      agentId: "main",
+    };
+    await upsertSessionEntryCore(
+      {
+        agentId: cronTarget.agentId,
+        sessionKey: cronTarget.key,
+      },
+      {
+        sessionId: "cron-run",
+        lifecycleRevision: "lifecycle-1",
+        updatedAt: 1,
+        activitySummary: {
+          version: 1,
+          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+          text: "A cached Cron recap must not be exposed.",
+          updatedAt: 1,
+          sessionId: "cron-run",
+          lifecycleRevision: "lifecycle-1",
+          generation: null,
+          maxSeq: 0,
+          leafEntryId: null,
+          coveredMessages: 0,
+          totalMessages: 0,
+          omittedContent: false,
+        },
+      },
+    );
+
+    expect(service.ensure(cronTarget)).toEqual({ state: "unavailable" });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it("backfills chronological chunks cumulatively and shares the durable result across viewers and restart", async () => {
     await messages(70);
+    await persistSessionTranscriptTurn(scope, {
+      messages: Array.from({ length: 129 }, (_, offset) => ({
+        eventId: `message-${70 + offset}`,
+        parentId: `message-${69 + offset}`,
+        message:
+          offset === 128
+            ? {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: "Old progress",
+                    textSignature: '{"v":1,"phase":"commentary"}',
+                  },
+                  {
+                    type: "text",
+                    text: "Shipped the fix. Waiting for review.",
+                    textSignature: '{"v":1,"phase":"final_answer"}',
+                  },
+                ],
+              }
+            : {
+                role: offset % 2 ? "toolResult" : "assistant",
+                content:
+                  offset % 2
+                    ? "Internal tool log dump"
+                    : [{ type: "toolCall", name: "internal_tool", arguments: {} }],
+              },
+      })),
+      touchSessionEntry: false,
+    });
     const originalActivity = read()?.updatedAt;
     complete.mockImplementation(async () =>
       result(`Recap through batch ${complete.mock.calls.length}.`),
@@ -155,7 +232,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       service.ensure(target);
     }
     await vi.waitFor(() => expect(view()?.state).toBe("current"));
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(3);
     const first = complete.mock.calls[0]?.[0];
     const second = complete.mock.calls[1]?.[0];
     expect(first).toMatchObject({ model: "utility", provider: "test" });
@@ -163,9 +240,15 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(JSON.parse(first!.prompt).messages.at(-1)).toContain("Outcome 63");
     expect(JSON.parse(second!.prompt)).toMatchObject({ previousRecap: "Recap through batch 1." });
     expect(JSON.parse(second!.prompt).messages.at(-1)).toContain("Outcome 69");
+    expect(JSON.parse(complete.mock.calls[2]![0].prompt).messages).toEqual([
+      "assistant: Shipped the fix. Waiting for review.",
+    ]);
+    expect(complete.mock.calls.map(([request]) => request.prompt).join("\n")).not.toMatch(
+      /Internal tool log dump|internal_tool|Old progress/,
+    );
     expect(read()?.activitySummary).toMatchObject({
-      coveredMessages: 70,
-      totalMessages: 70,
+      coveredMessages: 199,
+      totalMessages: 199,
       version: 1,
     });
     expect(read()?.updatedAt).toBe(originalActivity);
@@ -178,7 +261,167 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     });
     service.ensure(target);
     await vi.waitFor(() => expect(view()?.state).toBe("current"));
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps describe non-current while the newer first-turn recap is queued or held", async () => {
+    await messages(1);
+    complete.mockResolvedValueOnce(result("Only the request is recorded."));
+    service.ensure(target);
+    await vi.waitFor(() => expect(view()?.state).toBe("current"));
+    const previousWatermark = readSessionTranscriptWatermark(scope);
+    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    const context = bindSessionRowProjection(
+      createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      () => projection,
+    );
+    const describeSession = async () => {
+      const responses: Parameters<RespondFn>[] = [];
+      await sessionByKeyReadHandlers["sessions.describe"]!({
+        req: { type: "req", id: "recap-readiness", method: "sessions.describe", params: target },
+        params: target,
+        client: null,
+        context,
+        respond: (...response) => responses.push(response),
+        isWebchatConnect: () => false,
+      });
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.[0]).toBe(true);
+      return responses[0]?.[1];
+    };
+    const completion = createDeferred<ReturnType<typeof result>>();
+    try {
+      // Prime the real resident projection with the older, valid current summary.
+      expect(await describeSession()).toMatchObject({
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "current", text: "Only the request is recorded." },
+        },
+      });
+      expect(read()?.activitySummary).toMatchObject({
+        ...previousWatermark,
+        coveredMessages: 1,
+        totalMessages: 1,
+      });
+      complete.mockImplementationOnce(() => completion.promise);
+      await messages(1, 1);
+      const latestWatermark = readSessionTranscriptWatermark(scope);
+      expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
+      service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+      const updating = {
+        session: {
+          key: target.key,
+          sessionId: scope.sessionId,
+          activitySummary: { state: "updating", text: "Only the request is recorded." },
+        },
+      };
+      expect(await describeSession()).toMatchObject(updating);
+
+      terminal(service);
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      // No model result can commit while this exact completion is held.
+      expect(await describeSession()).toMatchObject(updating);
+      expect(read()?.activitySummary).toMatchObject({
+        ...previousWatermark,
+        coveredMessages: 1,
+        totalMessages: 1,
+      });
+
+      completion.resolve(result("Completed the first turn."));
+      await vi.waitFor(async () => {
+        expect(await describeSession()).toMatchObject({
+          session: {
+            key: target.key,
+            sessionId: scope.sessionId,
+            activitySummary: { state: "current", text: "Completed the first turn." },
+          },
+        });
+      });
+      expect(read()?.activitySummary).toMatchObject({
+        ...latestWatermark,
+        sessionId: scope.sessionId,
+        lifecycleRevision: "lifecycle-1",
+        coveredMessages: 2,
+        totalMessages: 2,
+      });
+      expect(complete).toHaveBeenCalledTimes(2);
+    } finally {
+      completion.resolve(result("Completed the first turn."));
+      try {
+        await service.dispose();
+      } finally {
+        projection.dispose();
+      }
+    }
+  });
+
+  it("commits a recap without decoding unrelated retained session entries", async () => {
+    await messages(2);
+    const unrelatedLabel = "Unrelated retained recap inventory marker";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:unrelated-recap" },
+      {
+        sessionId: "unrelated-recap-session",
+        updatedAt: Date.now(),
+        label: unrelatedLabel,
+        skillsSnapshot: { prompt: "Unrelated saved prompt. ".repeat(1024), skills: [] },
+      },
+    );
+    read();
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      service.ensure(target);
+      await vi.waitFor(() => expect(view()?.state).toBe("current"));
+      expect(read()?.activitySummary?.coveredMessages).toBe(2);
+      expect(parse.mock.calls.some(([json]) => json.includes(unrelatedLabel))).toBe(false);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it("does not decode saved prompts during transcript notification bursts", async () => {
+    await messages(2);
+    const prompt = "Saved recap prompt marker. ".repeat(40_000);
+    await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
+    const before = read()!;
+    const completion = createDeferred<ReturnType<typeof result>>();
+    complete.mockImplementationOnce(() => completion.promise);
+    service.ensure(target);
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
+      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
+    );
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+      }
+      expect(queries.rowCounts.entries).toBeGreaterThanOrEqual(100);
+      expect(queries.textBytes.entries).toBeLessThan(100 * 1024);
+      expect(parse.mock.calls.some(([json]) => json.includes("Saved recap prompt marker."))).toBe(
+        false,
+      );
+      expect(complete).toHaveBeenCalledTimes(1);
+    } finally {
+      parse.mockRestore();
+      queries.restore();
+      completion.resolve(result("Completed the requested work."));
+    }
+    // Transcript notifications defer the dirty follow-up until the refresh interval;
+    // the terminal event requests its immediate completion without another model call.
+    expect(view()?.state).toBe("updating");
+    terminal(service);
+    await vi.waitFor(() => expect(view()?.state).toBe("current"));
+    expect(read()).toMatchObject({
+      sessionId: before.sessionId,
+      lifecycleRevision: before.lifecycleRevision,
+      updatedAt: before.updatedAt,
+      skillsSnapshot: before.skillsSnapshot,
+      activitySummary: { text: "Completed the requested work.", coveredMessages: 2 },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes new work, catches up after archiving, and makes no calls for idle metadata changes", async () => {
@@ -197,21 +440,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await vi.waitFor(() => expect(read()?.activitySummary?.coveredMessages).toBe(4));
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read()?.archivedAt).toBeDefined();
-  });
-
-  it("retains the previous recap on failure and does not re-bill repeated ensure requests", async () => {
-    await messages(2);
-    service.ensure(target);
-    await vi.waitFor(() => expect(view()?.state).toBe("current"));
-    await messages(1, 2);
-    complete.mockRejectedValue(new Error("temporary failure"));
-    terminal(service);
-    await vi.waitFor(() => expect(view()?.state).toBe("unavailable"));
-    for (let index = 0; index < 20; index += 1) {
-      service.ensure(target);
-    }
-    expect(view()?.text).toBe("Completed the requested work.");
-    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it.each(["reset", "delete"] as const)(
@@ -243,6 +471,68 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       finish(result("Stale outcome must never be published."));
       await vi.waitFor(() => expect(view()?.state).not.toBe("updating"));
       expect(read()?.activitySummary).toBeUndefined();
+    },
+  );
+
+  it.each(["initialization", "lifecycle", "utility-model"] as const)(
+    "rejects a recap when %s changes while its write is queued",
+    async (change) => {
+      await messages(2);
+      const completion = createDeferred<ReturnType<typeof result>>();
+      complete.mockImplementationOnce(() => completion.promise);
+      service.ensure(target);
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
+
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const before = read()!;
+      const releaseWriter = createDeferred();
+      const writerScope = { agentId: scope.agentId, path: database.path };
+      const blocker = runExclusiveSqliteSessionWrite(
+        writerScope,
+        async () => {
+          await releaseWriter.promise;
+          if (change === "utility-model") {
+            cfg = { agents: { defaults: { utilityModel: "test/replacement-utility" } } };
+          } else {
+            runOpenClawAgentWriteTransaction((current) => {
+              writeSessionEntry(current, target.key, {
+                ...before,
+                ...(change === "initialization"
+                  ? { initializationPending: true }
+                  : { lifecycleRevision: "lifecycle-2" }),
+              });
+            }, writerScope);
+          }
+        },
+        "session-entry.patch",
+      );
+      try {
+        completion.resolve(result("Outdated recap must not be stored."));
+        await vi.waitFor(() =>
+          expect(SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.pending.length).toBeGreaterThan(
+            0,
+          ),
+        );
+        const beforeSettlement = changed.mock.calls.length;
+        releaseWriter.resolve();
+        await blocker;
+        await vi.waitFor(() => expect(changed.mock.calls.length).toBeGreaterThan(beforeSettlement));
+        expect(read()?.activitySummary).toBeUndefined();
+        expect(view()?.state).not.toBe("current");
+        expect(complete).toHaveBeenCalledTimes(1);
+        if (change === "utility-model" || change === "initialization") {
+          if (change === "initialization") {
+            await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }));
+          }
+          service.ensure(target);
+          await vi.waitFor(() => expect(view()?.state).toBe("current"));
+          expect(complete).toHaveBeenCalledTimes(2);
+        }
+      } finally {
+        completion.resolve(result("Outdated recap must not be stored."));
+        releaseWriter.resolve();
+        await blocker;
+      }
     },
   );
 
@@ -309,6 +599,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(readSessionTranscriptWatermark(scope).generation).toBe(oldWatermark.generation);
     expect(read()?.updatedAt).toBe(oldActivity);
     expect(view()?.state).toBe("stale");
+    // Offline edits rebuild asynchronously; finish the fixture before restarting its observer.
+    await waitForSessionTranscriptProjection(scope);
     service = createSessionActivitySummaries({
       getConfig: () => cfg,
       onChanged: changed,
@@ -325,14 +617,14 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const entry = read()!;
     const ordinary = await listSessionFixture({
       cfg,
-      storePath: "",
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       store: { [target.key]: entry },
       opts: {},
     });
     expect(ordinary.sessions[0]?.activitySummary).toBeUndefined();
     const activity = await listSessionFixture({
       cfg,
-      storePath: "",
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       store: { [target.key]: entry },
       opts: { includeActivitySummary: true },
     });
@@ -345,7 +637,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   it("does not let timeout release a preparation slot or dispatch a late model request", async () => {
     await messages(1);
     const secondTarget = { key: "agent:main:second-recap", agentId: "main" };
-    const thirdTarget = { key: "agent:main:third-recap", agentId: "main" };
+    const thirdTarget = { key: "agent:other:third-recap", agentId: "other" };
+    cfg.agents!.list = [{ id: "main" }, { id: "other", utilityModel: "test/other" }];
     for (const other of [secondTarget, thirdTarget]) {
       const otherScope = { agentId: other.agentId, sessionKey: other.key, sessionId: other.key };
       await upsertSessionEntryCore(otherScope, { sessionId: other.key, updatedAt: 1 });
@@ -370,7 +663,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       service.ensure(thirdTarget);
       await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(view()?.state).toBe("unavailable");
+      expect(view()?.state).toBe("updating");
       expect(prepare).toHaveBeenCalledTimes(2);
       for (const resolve of preparations) {
         resolve(prepared);
@@ -568,7 +861,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(entry).not.toHaveProperty("sessionId");
     const listed = await listSessionFixture({
       cfg,
-      storePath: "",
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       store: { [key]: entry! },
       opts: { includeActivitySummary: true },
     });

@@ -305,12 +305,9 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .desktop-spinner {
-        animation: none;
-      }
+      .desktop-spinner,
       .skeleton::after {
-        animation-duration: 0.01ms;
-        animation-iteration-count: 1;
+        animation: none;
       }
     }
   `;

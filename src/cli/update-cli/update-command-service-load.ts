@@ -29,6 +29,7 @@ export async function runGatewayInstallWithLoadBoundary(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   boundary: UpdateServiceLoadBoundary;
+  onResult?: (stdout: string) => void;
 }): Promise<"unverified"> {
   const controller = new AbortController();
   const signal = AbortSignal.any([
@@ -101,6 +102,7 @@ export async function runGatewayInstallWithLoadBoundary(params: {
     await handoff;
     params.signal?.throwIfAborted();
     params.boundary.assertCurrent();
+    params.onResult?.(result.stdout);
     if (failure || !approved || result.failed || result.exitCode !== 0) {
       throw new UpdateServiceLoadBoundaryError(
         "Staged gateway install did not complete its sealed load.",

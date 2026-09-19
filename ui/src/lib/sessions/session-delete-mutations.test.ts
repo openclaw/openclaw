@@ -1,12 +1,63 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import { createSessionDeletionHarness } from "./session-deletion.test-support.ts";
 
 describe("optimistic session deletion", () => {
+  it.each(["single", "batch"] as const)(
+    "preserves the recovery error and target through a %s deletion",
+    async (mode) => {
+      const h = createSessionDeletionHarness();
+      const target = {
+        key: h.alpha.key,
+        agentId: "main",
+        expectedSessionId: h.alpha.sessionId,
+        deleteTranscript: true,
+      };
+      const error = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Reconnect the device or continue on the Gateway.",
+        details: {
+          code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+          cause: "device_offline",
+          recoveryAction: "continue_on_gateway",
+          sessionId: h.alpha.sessionId,
+          source: { generation: 5, environmentId: "device-environment", ownerEpoch: 70 },
+        },
+      });
+      try {
+        await h.sessions.refresh({ force: true });
+        const operation =
+          mode === "single"
+            ? h.sessions.delete(target.key, target)
+            : h.sessions.deleteMany([target]);
+        const settled =
+          mode === "single"
+            ? expect(operation).rejects.toBe(error)
+            : expect(operation).resolves.toEqual({
+                deleted: [],
+                errors: [{ target, error }],
+                preservedWorktrees: [],
+              });
+        h.responses.get(target.key)!.reject(error);
+        await settled;
+        expect(h.sessions.deletionState(target.key)).toBeUndefined();
+        expect(h.sessions.state.result?.sessions).toContainEqual(h.alpha);
+      } finally {
+        h.responses.get(target.key)?.resolve({ deleted: false });
+        h.sessions.dispose();
+      }
+    },
+  );
+
   it.each(
     ["main", "agent:main:main"].flatMap((firstKey) =>
       (["single", "batch"] as const).flatMap((firstMode) =>
@@ -428,7 +479,8 @@ describe("optimistic session deletion", () => {
           expect(errors).toEqual([]);
         } else {
           expect(result.errors).toHaveLength(1);
-          expect(errors).toContain(result.errors[0]);
+          expect(result.errors[0]?.target).toEqual({ key: h.beta.key });
+          expect(errors).toContain(formatUiError(result.errors[0]?.error));
         }
         expect(h.responses.has(h.beta.key)).toBe(false);
         await h.sessions.refresh({ force: true });

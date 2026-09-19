@@ -240,7 +240,7 @@ function read\u0053tring() {}`;
     expect(audit.staleClassifications).toEqual([removed, blank]);
   });
 
-  it("scans a temporary repository and reports sorted, owner-specific diagnostics", () => {
+  it("scans a temporary repository and reports sorted, owner-specific diagnostics", async () => {
     const repoRoot = tempDirs.make("coercion-helper-guard-");
     fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
     fs.mkdirSync(path.join(repoRoot, "extensions", "demo"), { recursive: true });
@@ -257,7 +257,7 @@ function read\u0053tring() {}`;
     const stdout: string[] = [];
     const stderr: string[] = [];
     expect(
-      runCoercionHelperDeclarationGuard({
+      await runCoercionHelperDeclarationGuard({
         carveOuts: [
           {
             file: "src/z.ts",
@@ -295,7 +295,7 @@ function read\u0053tring() {}`;
     expect(output).toContain("Dependency-free, copied, generated, or serialized code");
   });
 
-  it("scans only tracked files when the repository has a Git index", () => {
+  it("scans only tracked files when the repository has a Git index", async () => {
     const repoRoot = tempDirs.make("coercion-helper-tracked-guard-");
     fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoRoot, "src", "tracked.ts"), "function readString() {}\n");
@@ -305,7 +305,7 @@ function read\u0053tring() {}`;
     const stderr: string[] = [];
 
     expect(
-      runCoercionHelperDeclarationGuard({
+      await runCoercionHelperDeclarationGuard({
         carveOuts: [],
         repoRoot,
         io: {

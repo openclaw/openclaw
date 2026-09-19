@@ -187,69 +187,38 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("bounds durationMs schema to positive values capped at 300000", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        durationMs?: {
-          minimum?: number;
-          maximum?: number;
-          type?: string;
-        };
-      };
-    };
-    expect(schema.properties?.durationMs?.type).toBe("integer");
-    expect(schema.properties?.durationMs?.minimum).toBe(1);
-    expect(schema.properties?.durationMs?.maximum).toBe(300_000);
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: { durationMs: { type: "integer", minimum: 1, maximum: 300_000 } },
+    });
   });
 
   it("bounds photos_latest limit schema to positive values capped at 20", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        limit?: {
-          minimum?: number;
-          maximum?: number;
-          type?: string;
-        };
-      };
-    };
-    expect(schema.properties?.limit?.type).toBe("integer");
-    expect(schema.properties?.limit?.minimum).toBe(1);
-    expect(schema.properties?.limit?.maximum).toBe(20);
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: { limit: { type: "integer", minimum: 1, maximum: 20 } },
+    });
   });
 
   it("advertises node media numeric constraints in the tool schema", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        maxWidth?: { minimum?: number; type?: string };
-        quality?: { minimum?: number; maximum?: number; type?: string };
-        delayMs?: { minimum?: number; type?: string };
-        fps?: { exclusiveMinimum?: number; type?: string };
-        screenIndex?: { minimum?: number; type?: string };
-      };
-    };
-    expect(schema.properties?.maxWidth).toMatchObject({ type: "integer", minimum: 1 });
-    expect(schema.properties?.quality).toMatchObject({ type: "number", minimum: 0, maximum: 1 });
-    expect(schema.properties?.delayMs).toMatchObject({ type: "integer", minimum: 0 });
-    expect(schema.properties?.fps).toMatchObject({ type: "number", exclusiveMinimum: 0 });
-    expect(schema.properties?.screenIndex).toMatchObject({ type: "integer", minimum: 0 });
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: {
+        maxWidth: { type: "integer", minimum: 1 },
+        quality: { type: "number", minimum: 0, maximum: 1 },
+        delayMs: { type: "integer", minimum: 0 },
+        fps: { type: "number", exclusiveMinimum: 0 },
+        screenIndex: { type: "integer", minimum: 0 },
+      },
+    });
   });
 
   it("advertises node command timeout constraints in the tool schema", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        timeoutMs?: { minimum?: number; type?: string };
-        maxAgeMs?: { minimum?: number; type?: string };
-        locationTimeoutMs?: { minimum?: number; type?: string };
-        invokeTimeoutMs?: { minimum?: number; type?: string };
-      };
-    };
-    expect(schema.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
-    expect(schema.properties?.maxAgeMs).toMatchObject({ type: "integer", minimum: 0 });
-    expect(schema.properties?.locationTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
-    expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: {
+        timeoutMs: { type: "integer", minimum: 1 },
+        maxAgeMs: { type: "integer", minimum: 0 },
+        locationTimeoutMs: { type: "integer", minimum: 1 },
+        invokeTimeoutMs: { type: "integer", minimum: 1 },
+      },
+    });
   });
 
   it("guides node discovery before describe", () => {
@@ -403,26 +372,63 @@ describe("createNodesTool screen_record duration guardrails", () => {
     },
   );
 
-  it("preserves independent explicit transport and node invoke timeouts", async () => {
-    gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    const tool = createNodesTool();
+  it.each(["screen_record", "camera_clip", "invoke", "location_get"])(
+    "preserves independent explicit transport and node invoke timeouts for %s",
+    async (action) => {
+      gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+      const tool = createNodesTool();
 
-    await tool.execute("call-explicit-timeout", {
-      action: "screen_record",
-      node: "macbook",
-      durationMs: 60_000,
-      timeoutMs: 5_000,
-      invokeTimeoutMs: 10_000,
-    });
+      await tool.execute("call-explicit-timeout", {
+        action,
+        node: "macbook",
+        durationMs: 60_000,
+        locationTimeoutMs: 60_000,
+        invokeCommand: "device.status",
+        timeoutMs: 5_000,
+        invokeTimeoutMs: 10_000,
+      });
 
-    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { timeoutMs?: unknown }]
-      | undefined;
-    expect(call?.[0]).toBe("node.invoke");
-    expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
-    expect(call?.[2].timeoutMs).toBe(10_000);
-  });
+      const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+        | [string, unknown, { timeoutMs?: unknown }]
+        | undefined;
+      expect(call?.[0]).toBe("node.invoke");
+      expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
+      expect(call?.[2].timeoutMs).toBe(10_000);
+    },
+  );
+
+  it.each([
+    {
+      action: "invoke",
+      input: { invokeCommand: "device.status", invokeTimeoutMs: 60_000 },
+      invokeTimeoutMs: 60_000,
+      transportTimeoutMs: 90_000,
+    },
+    {
+      action: "location_get",
+      input: { locationTimeoutMs: 60_000 },
+      invokeTimeoutMs: 90_000,
+      transportTimeoutMs: 120_000,
+    },
+  ])(
+    "allows long $action operations through both timeout layers",
+    async ({ action, input, invokeTimeoutMs, transportTimeoutMs }) => {
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+
+      await createNodesTool().execute("call-long-operation", {
+        action,
+        node: "macbook",
+        ...input,
+      });
+
+      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+        "node.invoke",
+        { timeoutMs: transportTimeoutMs },
+        expect.objectContaining({ timeoutMs: invokeTimeoutMs }),
+      );
+    },
+  );
 
   it.each([
     ["screen_record", 0],

@@ -9,13 +9,15 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { updateExecutorNativeEntrypoints } from "../cli/update-cli/update-command-executor-native-runtime.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import {
   runtimeProcessEntrypoints,
   SQLITE_READONLY_CHILD_ARG,
 } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import type {
   ManagedRepairBoundary,
   ManagedServiceManagerBoundaryRunner,
@@ -90,10 +92,10 @@ export function managedRepairConfig(baseUrl: string): OpenClawConfig {
 
 function managedRepairSpawnPreload(root: string): string {
   const snapshotWorkerArgs = resolveRuntimeWorkerArgv(
-    new URL("./update-candidate-state.worker.ts", import.meta.url),
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
   );
   const readOnlyWorkerArgs = resolveRuntimeWorkerArgv(
-    new URL(`./${runtimeProcessEntrypoints.sqliteReadOnly.sourceWorkerName}.ts`, import.meta.url),
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly),
   );
   return `const fs = require("node:fs");
     const childProcess = require("node:child_process");
@@ -156,20 +158,19 @@ export async function managedRepairUpdaterScript(params: {
   const candidate = path.join(params.root, "candidate");
   await fs.mkdir(candidate);
   await fs.symlink(path.resolve("dist"), path.join(candidate, "dist"), "dir");
-  const repairModule = new URL("../cli/update-cli/update-command-repair.ts", import.meta.url).href;
-  const admissionModule = new URL("../cli/update-cli/update-command-run.ts", import.meta.url).href;
-  const sentinelModule = new URL("./update-control-plane-sentinel.ts", import.meta.url).href;
+  // Finite runs share compiled entries; standalone/watch still needs the source loader.
+  const repairModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRepair);
+  const admissionModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun);
   const installRoot = params.phase === "verifying" ? candidate : params.root;
   return `void (async () => {
     // Source workers resolve the checkout's toolchain from the driver cwd.
     process.chdir(${JSON.stringify(path.resolve("."))});
-    ${params.sourceRuntimeImport}
+    ${repairModule.pathname.endsWith(".ts") ? params.sourceRuntimeImport : ""}
     const fs = require("node:fs");
     process.stderr.write("repair-boundary: loading admission\\n");
-    const { runUpdateCommandRepair } = await import(${JSON.stringify(repairModule)});
-    const { admitUpdateCommandRun } = await import(${JSON.stringify(admissionModule)});
-    const { UPDATE_RUN_ID_ENV } = await import(${JSON.stringify(sentinelModule)});
-    if (process.env[UPDATE_RUN_ID_ENV] !== ${JSON.stringify(params.runId)}) {
+    const { runUpdateCommandRepair } = await import(${JSON.stringify(repairModule.href)});
+    const { admitUpdateCommandRun } = await import(${JSON.stringify(admissionModule.href)});
+    if (process.env[${JSON.stringify(UPDATE_RUN_ID_ENV)}] !== ${JSON.stringify(params.runId)}) {
       throw new Error("The helper did not transfer the admitted update run.");
     }
     const run = await admitUpdateCommandRun({ opts: {}, root: ${JSON.stringify(installRoot)} });
@@ -183,7 +184,8 @@ export async function managedRepairUpdaterScript(params: {
       env: run.env,
       run,
       phase: ${JSON.stringify(params.phase)},
-      onEvent: ({ type }) => process.stderr.write("repair-boundary: " + type + "\\n"),
+      onEvent: (event) => process.stderr.write("repair-boundary: " + event.type +
+        (event.type === "turn-finished" ? " summary=" + JSON.stringify(event.summary) : "") + "\\n"),
       result: { status: "error", mode: "npm", reason: "candidate-validation-failed", steps: [], durationMs: 0 },
       validate: async () => {
         const ok = fs.existsSync(${JSON.stringify(path.join(candidate, "repair-second-exec.txt"))}) &&

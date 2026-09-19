@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements cli paths behavior.
 import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
@@ -13,6 +12,23 @@ export function toRepoRelativePath(repoRoot: string, filePath: string): string {
 
 export function isRepoRootRelativeRef(value: string) {
   return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
+}
+
+export function repoRootTokenArtifactPath(value: string): string | null {
+  const normalized = value.split(/[\\/]+/u).join("/");
+  return normalized.startsWith("<repo-root>/") ? normalized.slice("<repo-root>/".length) : null;
+}
+
+/** Retain the producer's known base when a bundle crosses output directories. */
+export function toRepoArtifactPath(repoRoot: string, filePath: string): string {
+  const absolutePath = path.resolve(filePath);
+  const relativePath = toRepoRelativePath(repoRoot, absolutePath);
+  return isRepoRootRelativeRef(relativePath) ? `<repo-root>/${relativePath}` : absolutePath;
+}
+
+export function resolveQaArtifactPath(repoRoot: string, evidenceDir: string, value: string) {
+  const repoPath = repoRootTokenArtifactPath(value);
+  return repoPath !== null ? path.resolve(repoRoot, repoPath) : path.resolve(evidenceDir, value);
 }
 
 export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {

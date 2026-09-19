@@ -1,6 +1,6 @@
 // Polls channel transports until they are ready for runtime work.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { danger } from "../globals.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleepWithAbort } from "./backoff.js";
 
@@ -55,7 +55,9 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
     if (now >= nextLogAt) {
       const elapsedMs = now - started;
       params.runtime.error?.(
-        danger(`${params.label} not ready after ${elapsedMs}ms (${lastError ?? "unknown error"})`),
+        theme.error(
+          `${params.label} not ready after ${elapsedMs}ms (${lastError ?? "unknown error"})`,
+        ),
       );
       nextLogAt = now + logIntervalMs;
     }
@@ -73,7 +75,7 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
   }
 
   params.runtime.error?.(
-    danger(`${params.label} not ready after ${timeoutMs}ms (${lastError ?? "unknown error"})`),
+    theme.error(`${params.label} not ready after ${timeoutMs}ms (${lastError ?? "unknown error"})`),
   );
   throw new Error(`${params.label} not ready (${lastError ?? "unknown error"})`);
 }

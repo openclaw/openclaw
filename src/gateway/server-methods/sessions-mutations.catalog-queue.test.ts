@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, test, vi } from "vitest";
+import { loadPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
@@ -42,7 +43,12 @@ function patchContext(
 ) {
   return {
     getRuntimeConfig: () => cfg,
-    loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: async (
+      params: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
+    ) => {
+      const entries = await loadGatewayModelCatalog(params);
+      return { entries, routeVariants: entries };
+    },
     getSessionEventSubscriberConnIds: () => new Set(),
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
@@ -77,8 +83,16 @@ test("catalog reload releases the agent writer while preserving same-session ord
     });
     expect(replacement).toBeDefined();
     const loadGatewayModelCatalog = vi.fn(async () => {
-      entered.resolve();
-      return await loadActualGatewayModelCatalog({ agentId: "main", getConfig: () => ({}) });
+      return await loadActualGatewayModelCatalog({
+        agentId: "main",
+        getConfig: () => ({}),
+        loadPublishedPreparedModelCatalogOwnerSnapshot: (params) => {
+          const pending = loadPublishedPreparedModelCatalogOwnerSnapshot(params);
+          // The real owner captures the replacement gate synchronously before returning.
+          entered.resolve();
+          return pending;
+        },
+      });
     });
     const context = patchContext(loadGatewayModelCatalog);
     const catalogResponse = vi.fn();

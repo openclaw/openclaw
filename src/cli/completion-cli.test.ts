@@ -289,6 +289,31 @@ _openclaw_root_completion
 
   itWithPowerShell.each([
     {
+      name: "an option after a shell value",
+      prefix: "openclaw completion --shell f",
+      suffix: " --yes",
+      expected: ["fish"],
+    },
+    {
+      name: "a shared command name after the root command",
+      prefix: "openclaw g",
+      suffix: " status --json",
+      expected: ["gateway"],
+    },
+  ])(
+    "ignores real PowerShell words after the cursor: $name",
+    async ({ prefix, suffix, expected }) => {
+      const program = createDocumentedCompletionProgram();
+      program.command("status").description("Root status").option("--json", "JSON output");
+
+      expect(
+        await powerShellCompletion.complete(program, `${prefix}${suffix}`, prefix.length),
+      ).toEqual(expected);
+    },
+  );
+
+  itWithPowerShell.each([
+    {
       name: "an omitted optional value",
       commandLine: "openclaw --mode --j",
       expected: ["--json"],
@@ -417,18 +442,18 @@ _openclaw_root_completion
     const script = getCompletionScript("fish", createCompletionProgram());
 
     expect(script).toContain(
-      'complete -c openclaw -n "__openclaw_command_path_matches --" -a "gateway" -d \'Gateway commands\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches" -a "gateway" -d \'Gateway commands\'',
     );
     expect(script).toContain(
-      'complete -c openclaw -n "__openclaw_command_path_matches gateway -- -t --token" -a "status" -d \'Show gateway status\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches gateway" -a "status" -d \'Show gateway status\'',
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches gateway -- -t --token\" -l force -d 'Force the action'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway\" -l force -d 'Force the action'",
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches gateway status -- -t --token\" -l json -d 'JSON output'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway status\" -l json -d 'JSON output'",
     );
-    expect(script).toContain("__openclaw_command_path_matches gateway -- -t --token");
+    expect(script).toContain("case 'gateway'\n        set value_options '-t' '--token'");
     expect(script).toContain("if contains -- $flag $value_options");
   });
 
@@ -578,11 +603,11 @@ _openclaw_root_completion
   it("scopes fish value-taking option skips to the active command path", () => {
     const script = getCompletionScript("fish", createCompletionProgram());
 
-    expect(script).toContain("__openclaw_command_path_matches agent -- --verbose");
-    expect(script).toContain("__openclaw_command_path_matches sessions cleanup --");
-    expect(script).not.toContain("__openclaw_command_path_matches sessions cleanup -- --verbose");
+    expect(script).toContain("case 'agent'\n        set value_options '--verbose'");
+    expect(script).toContain("__openclaw_command_path_matches sessions cleanup");
+    expect(script).not.toContain("case 'sessions cleanup'\n        set value_options '--verbose'");
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches sessions cleanup --\" -l dry-run -d 'Preview cleanup'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches sessions cleanup\" -l dry-run -d 'Preview cleanup'",
     );
   });
 
@@ -595,7 +620,7 @@ _openclaw_root_completion
     const fishScript = getCompletionScript("fish", program);
 
     expect(fishScript).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches -- --trigger-script --ws --workspace\" -l trigger-script -r -d 'Condition script file, or - for stdin'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches\" -l trigger-script -r -d 'Condition script file, or - for stdin'",
     );
     expect(fishScript).not.toContain(" -s > ");
     expect(fishScript).toContain(" -l ws -l workspace -r -d 'Workspace'");

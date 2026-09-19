@@ -185,7 +185,7 @@ export function createAgentAdmissionController(params: {
   const interrupt = (reason?: Error) => {
     // Draining an already-stopped admission must preserve its original cancellation reason.
     if (admittedRunAbort?.controller.signal.aborted) {
-      return;
+      return undefined;
     }
     const stopReason = isAgentRunDirectAbortReason(reason)
       ? "rpc"
@@ -194,10 +194,15 @@ export function createAgentAdmissionController(params: {
       admittedRunAbort.entry.abortStopReason = stopReason;
     }
     if (admittedRunAbort) {
+      const entry = admittedRunAbort.entry;
+      const ownsRun =
+        entry !== undefined &&
+        params.context.chatAbortControllers.get(params.runId) === entry &&
+        !entry.registrationCleanupRequested;
       admittedRunAbort.controller.abort(
         stopReason === "rpc" ? reason : createAgentRunRestartAbortError(),
       );
-      return;
+      return ownsRun ? { runId: params.runId } : undefined;
     }
     const reservedEntry = readGatewayDedupeEntry({
       dedupe: params.context.dedupe,
@@ -217,6 +222,7 @@ export function createAgentAdmissionController(params: {
         stopReason,
       });
     }
+    return undefined;
   };
 
   const acquire = async (scope: string) => {

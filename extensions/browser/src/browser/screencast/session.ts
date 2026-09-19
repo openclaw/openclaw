@@ -1,5 +1,5 @@
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CDPSession, Frame, Page } from "playwright-core";
-import type { WebSocket } from "ws";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { clearBrowserScreencastTokens, type BrowserScreencastTokenParams } from "./tokens.js";
 import { encodeBrowserScreencastFrame } from "./wire.js";

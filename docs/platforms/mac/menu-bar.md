@@ -5,6 +5,13 @@ read_when:
 title: "Menu bar"
 ---
 
+**Open Dashboard** and Gateway window actions use the **Web** experience by
+default. Enable **Native experience (Experimental)** under **Dashboard → Settings
+→ This Mac → App** to use native chat windows. The preference applies to the menu
+bar, Dock, main **Gateways** menu, and **File → New Gateway Window…** (Cmd-N).
+Settings always opens the web Dashboard settings page. See
+[WebChat](/platforms/mac/webchat) for switching behavior and native chat features.
+
 ## What is shown
 
 - The menu bar icon and the first status row of the menu show the current agent work state.
@@ -12,15 +19,19 @@ title: "Menu bar"
 - A root "Context" item opens a submenu with recent sessions instead of expanding them in the root menu.
 - A "Devices" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
 - A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available. Cost totals for **Today** and the daily chart use the Mac’s local time zone.
-- When two or more Gateways are available, the first status row includes the primary Gateway name. A root "Gateways" section then lists every Gateway with its health and primary marker. Select a row to open or focus that Gateway's dashboard. Hold Option to reveal "Set as Primary…" for eligible saved Gateways.
+- When two or more Gateways are available, the first status row includes the primary Gateway name. A root "Gateways" section then lists every Gateway with its health and primary marker. Select a row to open or focus that Gateway in the chosen experience. Hold Option to reveal "Set as Primary…" for eligible saved Gateways.
 - **Quick Chat** opens the floating main-session composer. Its current global shortcut appears beside the item.
 - **Settings…** (Cmd-,) opens Dashboard settings. App and device preferences live under **This Mac**, voice controls under **Talk**, and app update preferences under **Updates**.
 - **Connection…** opens the native Connection window. This is a standard macOS settings window with **Connection** and **Gateways** toolbar tabs. **Debug** also appears while the developer toggle is enabled. The window remains available when the Gateway is unreachable.
 - **About OpenClaw** opens the standard macOS About panel with version, build information, and credits.
 
-The app's main **Gateways** menu is always present. It lists the primary Gateway, when configured, followed by saved Gateways, with Command-1 through Command-9 assigned in that order. Each card shows health, version and shortened build ID, endpoint, latency, and the number of open dashboard windows when available. Browser-authenticated profiles also show **Access** and their session expiry. A **Primary** badge identifies the primary Gateway. A front-window marker follows the frontmost dashboard window. Selecting a card opens that Gateway's dashboard window or brings its existing window to the front. Hold Option to reveal **New … Window**, or press Option-Command with the same digit. Both open another independent window for that Gateway. **Manage Gateways…** opens **Connection → Gateways** and remains available when no Gateways are configured.
+The app's main **Gateways** menu is always present. It lists the primary Gateway, when configured, followed by **This Mac** when it also hosts a local Gateway, then saved Gateways, with Command-1 through Command-9 assigned in that order. Each card shows health, version and shortened build ID, endpoint, latency, and the number of open windows in the selected experience when available. Browser-authenticated profiles also show **Access** and their session expiry. A **Primary** badge identifies the primary Gateway. A front-window marker follows the selected experience's frontmost Gateway window. Selecting a card opens that Gateway in the chosen experience or brings its existing window to the front. Hold Option to reveal **New … Window**, or press Option-Command with the same digit. Both open another independent window for that Gateway. **Manage Gateways…** opens **Connection → Gateways** and remains available when no Gateways are configured.
 
-Gateway health probes run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its probes and disconnects probed saved Gateways with no open dashboard windows. The primary connection stays connected, and cached facts remain available until the app quits.
+Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**. When more than one Gateway is configured, the Dock menu also lists every Gateway from the same catalog, including the primary Gateway, **This Mac** when available, and saved profiles. Selecting one opens or focuses it in the chosen experience; a checkmark identifies that experience's frontmost Gateway window.
+
+Gateway status dots follow each open Dashboard’s live connection, including saved Gateways that are not primary. Green means connected, red means a connection error, and gray means no current connection result. If multiple windows show the same Gateway, it stays green while any of them is connected. The checkmark identifies the selected window’s Gateway; **Primary** is a separate setting.
+
+Gateway health probes run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its probes and disconnects probed saved Gateways with no open Web or Native windows. The primary connection stays connected, and cached facts remain available until the app quits.
 
 The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
 

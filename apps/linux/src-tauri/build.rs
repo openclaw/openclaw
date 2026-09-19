@@ -8,6 +8,8 @@ fn main() {
         "connect_discovered_gateway",
         "connect_remote_gateway",
         "discover_gateways",
+        "gateway_request",
+        "gateway_profile_request",
         "gateway_action",
         "install_cli",
         "native_browser_request",

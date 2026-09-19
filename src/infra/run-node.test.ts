@@ -1,5 +1,5 @@
 // Tests node process runner lifecycle and captured output.
-import { execFileSync, spawnSync as realSpawnSync, type SpawnOptions } from "node:child_process";
+import { spawnSync as realSpawnSync, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -10,466 +10,146 @@ import {
   bundledPluginFile,
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it as baseIt, vi } from "vitest";
-import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
+import { describe, expect, vi } from "vitest";
 import {
-  BUILD_STAMP_FILE,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata-paths.mts";
-import {
-  UPDATE_COMPATIBILITY_INVENTORY_FILE,
-  writeUpdateCompatibilityChunks,
-} from "../../scripts/lib/update-compat-chunks.mts";
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "../../scripts/lib/local-build-metadata.mts";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
-  runNodeMain,
 } from "../../scripts/run-node.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  previousReleaseInventory,
-  writeUpdateCompatibilityBuildFixture,
-} from "../../test/scripts/update-compat-chunks.test-support.js";
+  it,
+  ROOT_SRC,
+  ROOT_TSCONFIG,
+  ROOT_PACKAGE,
+  ROOT_TSDOWN,
+  RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS,
+  GENERATED_PLUGIN_ASSET_BUNDLE,
+  GENERATED_PLUGIN_ASSET_BUNDLE_HASH,
+  DIST_ENTRY,
+  BUILD_STAMP,
+  RUNTIME_POSTBUILD_STAMP,
+  DIST_PLUGIN_SDK_CORE,
+  DIST_CHANNEL_CATALOG,
+  DIST_BUILD_INFO,
+  DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
+  DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
+  DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
+  DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
+  DIST_LEGACY_CLI_EXIT_COMPAT,
+  DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
+  DIST_STABLE_ROOT_RUNTIME_SOURCE,
+  DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT,
+  DIST_STABLE_ROOT_RUNTIME_ALIAS,
+  DIST_LEGACY_ROOT_RUNTIME_TARGET,
+  DIST_LEGACY_ROOT_RUNTIME_COMPAT,
+  QA_LAB_PLUGIN_SDK_ENTRY,
+  QA_RUNTIME_PLUGIN_SDK_ENTRY,
+  EXTENSION_INDEX,
+  EXTENSION_SRC,
+  EXTENSION_EXTRA_SRC,
+  EXTENSION_SKILL,
+  EXTENSION_MANIFEST,
+  EXTENSION_PACKAGE,
+  EXTENSION_README,
+  DIST_EXTENSION_INDEX,
+  DIST_EXTENSION_SRC,
+  DIST_EXTENSION_SKILL,
+  DIST_EXTENSION_RUNTIME_SRC,
+  DIST_RUNTIME_EXTENSION_INDEX,
+  DIST_RUNTIME_EXTENSION_MANIFEST,
+  DIST_RUNTIME_EXTENSION_PACKAGE,
+  DIST_RUNTIME_EXTENSION_SKILL,
+  DIST_OPENCLAW_ALIAS_PACKAGE,
+  DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
+  DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,
+  DIFFS_PACKAGE,
+  DIFFS_VIEWER_RUNTIME_SOURCE,
+  DIST_DIFFS_VIEWER_RUNTIME,
+  DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
+  BUNDLED_HOOK_METADATA,
+  DIST_BUNDLED_HOOK_METADATA,
+  DIST_EXTENSION_MANIFEST,
+  DIST_EXTENSION_PACKAGE,
+  NEW_TIME,
+  createExitedProcess,
+  createPipedExitedProcess,
+  createFakeProcess,
+  skipRuntimePostBuild,
+  syncBundledPluginMetadata,
+  firstMockCall,
+  writeRuntimePostBuildScaffold,
+  expectedBuildSpawn,
+  statusCommandSpawn,
+  gatewayStatusCommandSpawn,
+  resolvePath,
+  isTsxScriptArgs,
+  expectPathMissing,
+  touchProjectFiles,
+  setupTrackedProject,
+  setupStampedProject,
+  writeImmutableDeploymentManifest,
+  createSpawnRecorder,
+  createCurrentGitSpawnRecorder,
+  createBuildRequirementDeps,
+  trackProjectWithGit,
+  runNodeCommand,
+  runStatusCommand,
+  runQaCommand,
+  expectManifestId,
+} from "../../test/scripts/run-node.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
-const it = baseIt.extend<{ tmp: string }>({
-  tmp: async ({ task: _task }, use) => {
-    await withTestDir({ prefix: "openclaw-run-node-" }, use);
-  },
-});
-
-const ROOT_SRC = "src/index.ts";
-const ROOT_TSCONFIG = "tsconfig.json";
-const ROOT_PACKAGE = "package.json";
-const ROOT_TSDOWN = "tsdown.config.ts";
-const RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS = [
-  "scripts/check-built-plugin-control-plane-modules.mts",
-  "scripts/copy-bundled-plugin-metadata.mts",
-  "scripts/copy-hook-metadata.ts",
-  "scripts/runtime-postbuild.mts",
-  "scripts/stage-bundled-plugin-runtime.mts",
-  "scripts/write-build-info.ts",
-  "scripts/write-official-channel-catalog.mts",
-] as const;
-const DEPLOYMENT_MANIFEST = "deployment.json";
-const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
-const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
-const DIST_ENTRY = "dist/entry.js";
-const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
-const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
-const DIST_PLUGIN_SDK_CORE = "dist/plugin-sdk/core.js";
-const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
-const DIST_BUILD_INFO = "dist/build-info.json";
-const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT = "dist/shared-Y6bNiw2w.js";
-const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT = "dist/shared-DTaQo6Hi.js";
-const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108 = "dist/shared-1Uyqkfns.js";
-const DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1 = "dist/shared-DFJEouXv.js";
-const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
-const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
-const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
-const DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT = "dist/model-catalog.runtime-EfGh5678.js";
-const DIST_STABLE_ROOT_RUNTIME_ALIAS = "dist/model-catalog.runtime.js";
-const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/abort.runtime.js";
-const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/abort.runtime-DX6vo4yJ.js";
-const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
-const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
-const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
-const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
-const EXTENSION_EXTRA_SRC = bundledPluginFile("demo", "src/extra.ts");
-const EXTENSION_SKILL = bundledPluginFile("demo", "skills/SKILL.md");
-const EXTENSION_MANIFEST = bundledPluginFile("demo", "openclaw.plugin.json");
-const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
-const EXTENSION_README = bundledPluginFile("demo", "README.md");
-const DIST_EXTENSION_INDEX = bundledDistPluginFile("demo", "index.js");
-const DIST_EXTENSION_SRC = bundledDistPluginFile("demo", "src/index.js");
-const DIST_EXTENSION_SKILL = bundledDistPluginFile("demo", "skills/SKILL.md");
-const DIST_EXTENSION_RUNTIME_SRC = "dist-runtime/extensions/demo/src/index.js";
-const DIST_RUNTIME_EXTENSION_INDEX = "dist-runtime/extensions/demo/index.js";
-const DIST_RUNTIME_EXTENSION_MANIFEST = "dist-runtime/extensions/demo/openclaw.plugin.json";
-const DIST_RUNTIME_EXTENSION_PACKAGE = "dist-runtime/extensions/demo/package.json";
-const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.md";
-const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
-const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE =
-  "dist/extensions/node_modules/openclaw/plugin-sdk/core.js";
-const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE =
-  "dist/extensions/node_modules/openclaw/plugin-sdk/string-coerce-runtime.js";
-const DIFFS_PACKAGE = "extensions/diffs/package.json";
-const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
-const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
-const DIST_RUNTIME_DIFFS_VIEWER_RUNTIME = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
-const BUNDLED_HOOK_METADATA = "src/hooks/bundled/demo/HOOK.md";
-const DIST_BUNDLED_HOOK_METADATA = "dist/bundled/demo/HOOK.md";
-const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
-const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
-
-const OLD_TIME = new Date("2026-03-13T10:00:00.000Z");
-const BUILD_TIME = new Date("2026-03-13T12:00:00.000Z");
-const NEW_TIME = new Date("2026-03-13T12:00:01.000Z");
-
-const BASE_PROJECT_FILES = {
-  [ROOT_TSCONFIG]: "{}\n",
-  [ROOT_PACKAGE]: '{"name":"openclaw-test"}\n',
-  [DIST_ENTRY]: "console.log('built');\n",
-  [BUILD_STAMP]: '{"head":"abc123"}\n',
-} as const;
-
-function createExitedProcess(code: number | null, signal: string | null = null) {
-  return {
-    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
-      if (event === "exit") {
-        queueMicrotask(() => cb(code, signal));
-      }
-      return undefined;
-    },
-  };
-}
-
-function createPipedExitedProcess(params: {
-  code?: number | null;
-  signal?: string | null;
-  stderr?: string;
-  stdout?: string;
-}) {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  return {
-    stdout,
-    stderr,
-    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
-      if (event === "exit") {
-        queueMicrotask(() => {
-          if (params.stdout) {
-            stdout.emit("data", Buffer.from(params.stdout));
-          }
-          if (params.stderr) {
-            stderr.emit("data", Buffer.from(params.stderr));
-          }
-          cb(params.code ?? 0, params.signal ?? null);
-        });
-      }
-      return undefined;
-    },
-  };
-}
-
-function createFakeProcess() {
-  return Object.assign(new EventEmitter(), {
-    pid: 4242,
-    execPath: process.execPath,
-  }) as unknown as NodeJS.Process;
-}
-
-// Launcher plumbing tests do not need the real runtime artifact copier.
-async function skipRuntimePostBuild(): Promise<void> {}
-
-async function syncBundledPluginMetadata(params?: {
-  cwd?: string;
-  env?: Record<string, string | undefined>;
-}): Promise<void> {
-  copyBundledPluginMetadata({ cwd: params?.cwd, env: params?.env });
-}
-
-function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
-  return mock.mock.calls[0];
-}
-
-async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
-  await fs.mkdir(path.join(tmp, "extensions"), { recursive: true });
-  await writeProjectFiles(tmp, {
-    [DIST_PLUGIN_SDK_CORE]: "export const core = true;\n",
-    [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
-    [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
-    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
-    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
-    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108]: "export function resolveNodeRunner() {}\n",
-    [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
-    [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
-    [DIST_OPENCLAW_ALIAS_PACKAGE]:
-      '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
-    [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]: "export * from '../../../../plugin-sdk/core.js';\n",
-  });
-  writeUpdateCompatibilityBuildFixture(tmp);
-  writeUpdateCompatibilityChunks({
-    distDir: path.join(tmp, "dist"),
-    sourceDir: tmp,
-    inventory: previousReleaseInventory,
-  });
-  await touchProjectFiles(
-    tmp,
-    [
-      DIST_CHANNEL_CATALOG,
-      DIST_BUILD_INFO,
-      DIST_PLUGIN_SDK_CORE,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_0229A108,
-      `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
-      ...previousReleaseInventory.releases.flatMap((release) =>
-        release.chunks.map((chunk) => `dist/${chunk.path}`),
-      ),
-      DIST_LEGACY_CLI_EXIT_COMPAT,
-      DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
-      DIST_OPENCLAW_ALIAS_PACKAGE,
-      DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE,
-    ],
-    BUILD_TIME,
-  );
-}
-
-function expectedBuildSpawn() {
-  return [process.execPath, "--import", "tsx", "scripts/build-all.mts", "qaRuntime"];
-}
-
-function statusCommandSpawn() {
-  return [process.execPath, "openclaw.mjs", "status"];
-}
-
-function gatewayStatusCommandSpawn() {
-  return [
-    process.execPath,
-    "openclaw.mjs",
-    "gateway",
-    "status",
-    "--deep",
-    "--require-rpc",
-    "--json",
-  ];
-}
-
-function resolvePath(tmp: string, relativePath: string) {
-  return path.join(tmp, relativePath);
-}
-
-function isTsxScriptArgs(args: string[], scriptPath: string): boolean {
-  return args[0] === "--import" && args[1] === "tsx" && args[2] === scriptPath;
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  let accessError: unknown;
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    accessError = error;
-  }
-  expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
-}
-
-async function writeProjectFiles(tmp: string, files: Record<string, string>) {
-  await Promise.all(
-    Object.entries(files).map(async ([relativePath, contents]) => {
-      const absolutePath = resolvePath(tmp, relativePath);
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-      await fs.writeFile(absolutePath, contents, "utf-8");
-    }),
-  );
-}
-
-async function touchProjectFiles(tmp: string, relativePaths: string[], time: Date) {
-  await Promise.all(
-    relativePaths.map(async (relativePath) => {
-      const absolutePath = resolvePath(tmp, relativePath);
-      await fs.utimes(absolutePath, time, time);
-    }),
-  );
-}
-
-async function setupTrackedProject(
-  tmp: string,
-  options: {
-    files?: Record<string, string>;
-    oldPaths?: string[];
-    buildPaths?: string[];
-    newPaths?: string[];
-  } = {},
-) {
-  await writeRuntimePostBuildScaffold(tmp);
-  await writeProjectFiles(tmp, {
-    ...BASE_PROJECT_FILES,
-    ...options.files,
-  });
-  await touchProjectFiles(tmp, options.oldPaths ?? [], OLD_TIME);
-  await touchProjectFiles(tmp, options.buildPaths ?? [], BUILD_TIME);
-  await touchProjectFiles(tmp, options.newPaths ?? [], NEW_TIME);
-}
-
-async function setupStampedProject(
-  tmp: string,
-  options: {
-    files?: Record<string, string>;
-    oldPaths?: string[];
-    newPaths?: string[];
-    rootSource?: boolean;
-    trackConfig?: boolean;
-  },
-): Promise<void> {
-  const files = {
-    ...(options.rootSource === false ? {} : { [ROOT_SRC]: "export const value = 1;\n" }),
-    ...options.files,
-  };
-  const excludedPaths = new Set([...(options.oldPaths ?? []), ...(options.newPaths ?? [])]);
-  const buildPaths = [
-    ...Object.keys(files).filter((filePath) => !excludedPaths.has(filePath)),
-    ...(options.trackConfig ? [ROOT_TSCONFIG, ROOT_PACKAGE] : []),
-    DIST_ENTRY,
-    BUILD_STAMP,
-  ];
-  await setupTrackedProject(tmp, {
-    files,
-    ...(options.oldPaths ? { oldPaths: options.oldPaths } : {}),
-    buildPaths,
-    ...(options.newPaths ? { newPaths: options.newPaths } : {}),
-  });
-}
-
-async function writeImmutableDeploymentManifest(tmp: string): Promise<void> {
-  await writeProjectFiles(tmp, {
-    [DEPLOYMENT_MANIFEST]: `${JSON.stringify({ kind: "git", sourceHead: "a".repeat(40) })}\n`,
-  });
-}
-
-function createSpawnRecorder(
-  options: {
-    gitHead?: string;
-    gitStatus?: string;
-  } = {},
-) {
-  const spawnCalls: string[][] = [];
-  const spawn = (cmd: string, args: string[]) => {
-    spawnCalls.push([cmd, ...args]);
-    return createExitedProcess(0);
-  };
-  const spawnSync = (cmd: string, args: string[]) => {
-    if (cmd === "git" && args[0] === "rev-parse" && options.gitHead !== undefined) {
-      return { status: 0, stdout: options.gitHead };
-    }
-    if (cmd === "git" && args[0] === "status" && options.gitStatus !== undefined) {
-      return { status: 0, stdout: options.gitStatus };
-    }
-    return { status: 1, stdout: "" };
-  };
-  return { spawnCalls, spawn, spawnSync };
-}
-
-function createCurrentGitSpawnRecorder(options: { gitHead?: string; gitStatus?: string } = {}) {
-  return createSpawnRecorder({ gitHead: "abc123\n", gitStatus: "", ...options });
-}
-
-function createBuildRequirementDeps(
-  tmp: string,
-  options: {
-    gitStatus?: string;
-    env?: Record<string, string>;
-  } = {},
-) {
-  const { spawnSync } = createCurrentGitSpawnRecorder({ gitStatus: options.gitStatus ?? "" });
-  return {
-    cwd: tmp,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
-    fs: fsSync,
-    spawnSync,
-    distRoot: path.join(tmp, "dist"),
-    distEntry: path.join(tmp, DIST_ENTRY),
-    buildStampPath: path.join(tmp, BUILD_STAMP),
-    runtimePostBuildStampPath: path.join(tmp, RUNTIME_POSTBUILD_STAMP),
-    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot("demo"))].map(
-      (sourceRoot) => ({
-        name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
-        path: sourceRoot,
-      }),
-    ),
-    configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
-      path.join(tmp, filePath),
-    ),
-  };
-}
-
-async function trackProjectWithGit(tmp: string) {
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      ["-c", `core.hooksPath=${path.join(tmp, ".git", "disabled-hooks")}`, ...args],
-      { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
-  git("init", "--quiet", "--template=");
-  git("config", "core.quotePath", "true");
-  git("add", "--all");
-  git(
-    "-c",
-    "user.name=OpenClaw Test",
-    "-c",
-    "user.email=test@openclaw.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "test: track runner fixture",
-  );
-  const stamp = `${JSON.stringify({ head: git("rev-parse", "HEAD") })}\n`;
-  await writeProjectFiles(tmp, {
-    [BUILD_STAMP]: stamp,
-    [RUNTIME_POSTBUILD_STAMP]: stamp,
-  });
-  await touchProjectFiles(tmp, [BUILD_STAMP, RUNTIME_POSTBUILD_STAMP], BUILD_TIME);
-  return {
-    git,
-    deps: { ...createBuildRequirementDeps(tmp), env: {}, spawnSync: realSpawnSync },
-  };
-}
-
-type RunNodeTestOptions = NonNullable<Parameters<typeof runNodeMain>[0]> & {
-  stdout?: NodeJS.WriteStream;
-};
-type RunNodeResult = Awaited<ReturnType<typeof runNodeMain>>;
-
-async function runNodeCommand(tmp: string, options: RunNodeTestOptions): Promise<RunNodeResult> {
-  const { env, ...overrides } = options;
-  return await runNodeMain({
-    cwd: tmp,
-    args: ["status"],
-    ...overrides,
-    env: { ...process.env, OPENCLAW_RUNNER_LOG: "0", ...env },
-    execPath: process.execPath,
-    platform: options.platform ?? process.platform,
-  } as RunNodeTestOptions);
-}
-
-type RunCommandParams = {
-  tmp: string;
-  args?: string[];
-  spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
-  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
-  stderr?: NodeJS.WriteStream;
-  env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: {
-    cwd?: string;
-    env?: Record<string, string | undefined>;
-  }) => void | Promise<void>;
-};
-
-async function runStatusCommand({ tmp, ...options }: RunCommandParams): Promise<RunNodeResult> {
-  return await runNodeCommand(tmp, options);
-}
-
-async function runQaCommand(params: RunCommandParams): Promise<RunNodeResult> {
-  return await runStatusCommand({
-    ...params,
-    args: ["qa", "suite", "--transport", "qa-channel", "--provider-mode", "mock-openai"],
-  });
-}
-
-async function expectManifestId(tmp: string, relativePath: string, id: string) {
-  const manifest = JSON.parse(await fs.readFile(resolvePath(tmp, relativePath), "utf-8")) as {
-    id?: unknown;
-  };
-  expect(manifest.id).toBe(id);
-}
-
 describe("run-node script", () => {
+  it.for([
+    { args: ["qa", "mantis", "run"], mantis: true },
+    { args: ["--dev", "qa", "mantis", "run"], mantis: true },
+    { args: ["--profile", "ci", "qa", "mantis", "run"], mantis: true },
+    { args: ["--profile=ci", "qa", "mantis", "run"], mantis: true },
+    { args: ["--no-color", "--log-level", "debug", "qa", "mantis", "run"], mantis: true },
+    { args: ["qa", "--profile", "ci", "mantis", "run"], mantis: true },
+    { args: ["--profile", "qa", "mantis", "run"], mantis: false },
+    { args: ["--profile", "ci", "qa", "suite"], mantis: false },
+    { args: ["status", "qa", "mantis", "run"], mantis: false },
+  ])(
+    "grants Mantis lifecycle IPC only to the parsed command: %j",
+    async ({ args, mantis }, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+      const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) =>
+        childArgs.includes("openclaw.mjs") ? child : createExitedProcess(0),
+      );
+      const outcome = runNodeCommand(tmp, {
+        args,
+        process: fakeProcess,
+        spawn,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
+      await vi.waitFor(() => expect(child.listenerCount("exit")).toBe(1));
+      try {
+        vi.useFakeTimers();
+        child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
+        fakeProcess.emit("SIGTERM");
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(child.kill.mock.calls).toEqual(mantis ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
+        if (mantis) {
+          await vi.advanceTimersByTimeAsync(115_000);
+          expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+        }
+      } finally {
+        child.emit("exit", 0, null);
+        await outcome;
+        vi.useRealTimers();
+      }
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
+
   it("starts the CLI only after the canonical runtime build completes", async ({ tmp }) => {
     const build = new EventEmitter();
     const spawn = vi.fn((_cmd: string, args: string[]) =>
@@ -1051,7 +731,7 @@ describe("run-node script", () => {
     await setupStampedProject(tmp, {
       files: {
         [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.ts"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
       trackConfig: true,
     });
@@ -1126,7 +806,7 @@ describe("run-node script", () => {
 
   it("skips runtime postbuild restaging when the runtime stamp is current", async ({ tmp }) => {
     await setupStampedProject(tmp, {
-      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
 
@@ -1146,7 +826,7 @@ describe("run-node script", () => {
 
   it("runs current immutable deployment artifacts without refreshing them", async ({ tmp }) => {
     await setupStampedProject(tmp, {
-      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
     await writeImmutableDeploymentManifest(tmp);
@@ -1180,7 +860,7 @@ describe("run-node script", () => {
   ]) {
     it(`refuses to regenerate missing ${label} in an immutable deployment`, async ({ tmp }) => {
       await setupStampedProject(tmp, {
-        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
         oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
       });
       await writeImmutableDeploymentManifest(tmp);
@@ -1218,7 +898,7 @@ describe("run-node script", () => {
         [EXTENSION_INDEX]: "export default {};\n",
         [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
         [DIST_EXTENSION_INDEX]: "export default {};\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
       trackConfig: true,
     });
@@ -1247,7 +927,7 @@ describe("run-node script", () => {
           missing === "overlay"
             ? {
                 [DIST_EXTENSION_INDEX]: "export default {};\n",
-                [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+                [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
               }
             : {},
         oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
@@ -1725,7 +1405,7 @@ describe("run-node script", () => {
   ])("does not rebuild for $label calls against an existing dirty dist", async ({ args }) => {
     await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupStampedProject(tmp, {
-        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
         trackConfig: true,
       });
 
@@ -1749,7 +1429,7 @@ describe("run-node script", () => {
 
   it("rechecks a dirty dashboard client after waiting for an active build", async ({ tmp }) => {
     await setupStampedProject(tmp, {
-      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
       trackConfig: true,
     });
     await fs.rm(resolvePath(tmp, BUILD_STAMP));
@@ -1790,8 +1470,16 @@ describe("run-node script", () => {
     });
 
     await waitingForLock;
-    await fs.writeFile(resolvePath(tmp, BUILD_STAMP), '{"head":"abc123"}\n', "utf-8");
-    await fs.writeFile(resolvePath(tmp, RUNTIME_POSTBUILD_STAMP), '{"head":"abc123"}\n', "utf-8");
+    await fs.writeFile(
+      resolvePath(tmp, BUILD_STAMP),
+      '{"head":"abc123","inputsClean":true}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      resolvePath(tmp, RUNTIME_POSTBUILD_STAMP),
+      '{"head":"abc123","inputsClean":true}\n',
+      "utf-8",
+    );
     releaseLock();
 
     await expect(clientRun).resolves.toBe(0);
@@ -1800,6 +1488,31 @@ describe("run-node script", () => {
     ]);
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
+
+  it.for([false, true])(
+    "keeps legacy client stamps subject to required output checks (missing: %s)",
+    async (missing, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+        trackConfig: true,
+      });
+      if (missing) {
+        await fs.rm(resolvePath(tmp, DIST_CHANNEL_CATALOG));
+      }
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync } = createCurrentGitSpawnRecorder();
+      expect(
+        await runStatusCommand({
+          tmp,
+          args: ["dashboard", "--no-open"],
+          spawn,
+          spawnSync,
+          runRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(missing ? 1 : 0);
+    },
+  );
 
   it("reports a clean tree explicitly when dist is current", async ({ tmp }) => {
     await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
@@ -1811,6 +1524,32 @@ describe("run-node script", () => {
       reason: "clean",
     });
   });
+
+  it.for(["build", "runtime"] as const)(
+    "refreshes dirty-built %s artifacts after restoring the same HEAD source",
+    async (scope, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files: { "scripts/runtime-postbuild.mts": "export {};\n" },
+        trackConfig: true,
+      });
+      const { git, deps } = await trackProjectWithGit(tmp);
+      const needsRefresh = () =>
+        scope === "build"
+          ? resolveBuildRequirement(deps).shouldBuild
+          : resolveRuntimePostBuildRequirement(deps).shouldSync;
+      expect(needsRefresh()).toBe(false);
+      const input = scope === "build" ? ROOT_SRC : "scripts/runtime-postbuild.mts";
+      const original = await fs.readFile(resolvePath(tmp, input), "utf8");
+      await fs.writeFile(resolvePath(tmp, input), `${original}\n`);
+      expect(git("status", "--porcelain", "--", input)).not.toBe("");
+      const stamp = scope === "build" ? writeBuildStamp : writeRuntimePostBuildStamp;
+      stamp({ cwd: tmp, spawnSync: realSpawnSync });
+      await fs.writeFile(resolvePath(tmp, input), original);
+      expect(git("status", "--porcelain", "--", input)).toBe("");
+
+      expect(needsRefresh()).toBe(true);
+    },
+  );
 
   it("ignores newer tracked config mtimes when Git proves the checkout is clean", async ({
     tmp,
@@ -1925,7 +1664,7 @@ describe("run-node script", () => {
     tmp,
   }) => {
     await setupStampedProject(tmp, {
-      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
+      files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n' },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
     });
 
@@ -1949,7 +1688,7 @@ describe("run-node script", () => {
         [DIST_EXTENSION_RUNTIME_SRC]: "export default {};\n",
         [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
         [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
     await fs.rm(resolvePath(tmp, DIST_EXTENSION_PACKAGE));
@@ -1973,7 +1712,7 @@ describe("run-node script", () => {
         [DIST_RUNTIME_EXTENSION_INDEX]: "export default {};\n",
         [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
         [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
     await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
@@ -2005,7 +1744,7 @@ describe("run-node script", () => {
         [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
         [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
         [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
     await fs.rm(path.join(tmp, "dist", "extensions"), { recursive: true, force: true });
@@ -2030,7 +1769,7 @@ describe("run-node script", () => {
         [DIST_OPENCLAW_ALIAS_PACKAGE]:
           '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
         [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]: "export * from '../../../../plugin-sdk/core.js';\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
       buildPaths: [
         ROOT_SRC,
@@ -2073,7 +1812,7 @@ describe("run-node script", () => {
           '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
         [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE]:
           "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
 
@@ -2103,7 +1842,7 @@ describe("run-node script", () => {
           [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
           [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
           [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
-          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
         },
       });
       await fs.rm(resolvePath(tmp, missingPath));
@@ -2124,7 +1863,7 @@ describe("run-node script", () => {
           '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
         [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
         [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
 
@@ -2145,7 +1884,7 @@ describe("run-node script", () => {
       files: {
         [DIFFS_PACKAGE]:
           '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
 
@@ -2166,7 +1905,7 @@ describe("run-node script", () => {
         [DIST_STABLE_ROOT_RUNTIME_ALIAS]: "export * from './model-catalog.runtime-AbCd1234.js';\n",
         [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
         [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
 
@@ -2199,7 +1938,7 @@ describe("run-node script", () => {
       files: {
         [BUNDLED_HOOK_METADATA]: "# Demo hook\n",
         [DIST_BUNDLED_HOOK_METADATA]: "# Demo hook\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
 
@@ -2224,7 +1963,7 @@ describe("run-node script", () => {
       files: {
         [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
         [DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT]: "export const value = 2;\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
 
@@ -2248,7 +1987,7 @@ describe("run-node script", () => {
         [DIST_RUNTIME_EXTENSION_INDEX]: "export default {};\n",
         [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","skills":["./skills/SKILL.md"]}\n',
         [DIST_RUNTIME_EXTENSION_SKILL]: "# Demo\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
       },
     });
     await fs.rm(resolvePath(tmp, DIST_RUNTIME_EXTENSION_SKILL));
@@ -2266,7 +2005,7 @@ describe("run-node script", () => {
       files: {
         [EXTENSION_INDEX]: "export default {};\n",
         [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
         [DIST_EXTENSION_INDEX]: "export default {};\n",
       },
       trackConfig: true,
@@ -2291,7 +2030,7 @@ describe("run-node script", () => {
         await setupStampedProject(tmp, {
           files: {
             [implementationPath]: "export {};\n",
-            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
           },
           trackConfig: true,
         });

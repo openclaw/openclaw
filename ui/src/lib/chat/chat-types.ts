@@ -4,9 +4,11 @@ import type { MediaKind } from "@openclaw/media-core/constants";
  * Chat message types for the UI layer.
  */
 import type {
+  AgentActivityItem,
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
@@ -22,24 +24,42 @@ export type BrowserAnnotationAttachment = {
   inspectedElement: boolean;
 };
 
+export type ChatSelectionSource = {
+  text: string;
+  messageId?: string;
+  entryId?: string;
+  /** UTF-16 offsets in the source bubble’s concatenated DOM text nodes. */
+  start: number;
+  end: number;
+};
+
+export type ChatSelectionAnnotation = ChatSelectionSource & {
+  comment: string;
+  sessionKey: string;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
   previewUrl?: string;
   mimeType: string;
+  origin?: "paste" | "file";
   fileName?: string;
   sizeBytes?: number;
   /** UI-local context that must remain coupled to its annotated screenshot. */
   browserAnnotation?: BrowserAnnotationAttachment;
+  selectionAnnotation?: ChatSelectionAnnotation;
 };
 
 // Shared payload contract: draft and outbox storage must not import each other's runtime.
 export type DurableComposerDraftAttachment = {
   blob: Blob;
   mimeType: string;
+  origin?: "paste" | "file";
   fileName?: string;
   sizeBytes?: number;
   browserAnnotation?: BrowserAnnotationAttachment;
+  selectionAnnotation?: ChatSelectionAnnotation;
 };
 
 export type ChatComposerDraftRetry = {
@@ -119,6 +139,8 @@ export type ChatQueueItem = {
   sessionId?: string;
   expectedLeafEntryId?: string | null;
   sendState?:
+    // Process-local submission handoff; durable custody remains waiting-idle.
+    | "submitting"
     | "waiting-model"
     | "waiting-idle"
     | "executing-command"
@@ -251,8 +273,9 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
-  senderSession?: { sessionKey?: string; agentId?: string } | null;
+  senderSession?: { sessionKey?: string; agentId?: string; label?: string } | null;
   sender?: SenderIdentity;
+  sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
   messages: Array<{
     message: unknown;
@@ -267,9 +290,30 @@ export type MessageGroup = {
   runId?: string;
 };
 
+export type MessageImageSource = {
+  url?: string;
+  dataUrl?: string;
+  preferData?: true;
+  mimeType?: string;
+  artifactId?: string;
+  fileName?: string;
+  openUrl?: string;
+  alt?: string;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+};
+
 /** Content item types in a normalized message */
 export type MessageContentItem =
   | ClawHubRecommendation
+  | {
+      type: "image";
+      sources: MessageImageSource[];
+      /** Canonical image blocks consume a persisted inline-layout slot, even if empty. */
+      inlineSlot?: true;
+      expiresAtMs?: number;
+    }
   | {
       type: "text" | "tool_call" | "tool_result";
       text?: string;
@@ -294,6 +338,7 @@ export type MessageContentItem =
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
+        origin?: "paste" | "file";
         isVoiceNote?: boolean;
         artifactId?: string;
         playback?: "native" | "transcode";
@@ -325,8 +370,9 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
-  senderSession?: { sessionKey?: string; agentId?: string } | null;
+  senderSession?: { sessionKey?: string; agentId?: string; label?: string } | null;
   sender?: SenderIdentity;
+  sourceClients?: MessageClientSource[];
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };
   replyTarget?:
@@ -357,6 +403,8 @@ export type ToolCard = {
   /** Producer-reported process exit code, when the result supplies one. */
   exitCode?: number;
   isError?: boolean;
+  /** Prepared presentation facts; never replace the raw execution fields above. */
+  activity?: AgentActivityItem;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;
   /** True once a result landed, including historical results with empty output. */
@@ -388,7 +436,13 @@ export type ToolCard = {
           originSessionKey?: string;
         };
       }
-    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
+    | (BrowserTabTarget & { kind: "browser-tab"; url: string; title?: string });
 };
 
-export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";
+export type ToolCardOutcome =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "blocked"
+  | "skipped"
+  | "unknown";

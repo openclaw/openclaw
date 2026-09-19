@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "./environments.js";
+import { pairedNodeDevice } from "./environments.test-support.js";
 
 const registries: NodeRegistry[] = [];
 
@@ -15,13 +15,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-vi.mock("../../infra/device-pairing.js", () => ({
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-  resolveNodePairingState: vi.fn(),
-}));
-
-vi.mock("../../infra/device-pairing-node.js", () => ({
-  listNodePairing: vi.fn(),
 }));
 
 vi.mock("../worker-environments/placement-capabilities.js", () => ({
@@ -39,8 +35,7 @@ vi.mock("../worker-environments/placement-capabilities.js", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
-  vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
+  vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [] });
 });
 
 describe("node environment command authority", () => {
@@ -112,6 +107,25 @@ describe("node environment command authority", () => {
     },
   ])("projects $name", async (testCase) => {
     const { declared, approved, allow, deny, expected, state } = testCase;
+    vi.mocked(listDevicePairing).mockResolvedValue({
+      pending: [],
+      paired: [
+        pairedNodeDevice(
+          "node-exec",
+          {
+            displayName: "Execution Node",
+            caps: ["session.host"],
+            commands: approved,
+          },
+          {
+            platform: "linux",
+            deviceFamily: "Linux",
+            clientId: "node-host",
+            clientMode: "node",
+          },
+        ),
+      ],
+    });
     const commandPolicy = { allow, deny };
     const initialPolicy = "initialPolicy" in testCase ? testCase.initialPolicy : undefined;
     let config = { gateway: { nodes: { commands: initialPolicy ?? commandPolicy } } };
@@ -192,32 +206,35 @@ describe("node environment command authority", () => {
     expect(statusPayload?.invocableCommands ?? []).toEqual(expected);
   });
 
-  it("requires write scope only for runtime-specific command state", async () => {
-    const context = {
-      logGateway: { warn: vi.fn() },
-      getRuntimeConfig: () => ({}),
-      nodeRegistry: { listConnectedForPairingStates: () => [] },
-    };
-    const readOnlyRespond = vi.fn();
-    await environmentsHandlers["environments.list"]?.({
-      params: { runtimeId: "codex" },
-      respond: readOnlyRespond,
-      client: { connect: { scopes: ["operator.read"] } },
-      context,
-    } as never);
-    expect(readOnlyRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
-    );
+  it.each([{}, { projection: "profiles" }])(
+    "preserves runtime write scope for %j",
+    async (params) => {
+      const context = {
+        logGateway: { warn: vi.fn() },
+        getRuntimeConfig: () => ({}),
+        nodeRegistry: { listConnectedForPairingStates: () => [] },
+      };
+      const readOnlyRespond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params: { ...params, runtimeId: "codex" },
+        respond: readOnlyRespond,
+        client: { connect: { scopes: ["operator.read"] } },
+        context,
+      } as never);
+      expect(readOnlyRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+      );
 
-    const inventoryRespond = vi.fn();
-    await environmentsHandlers["environments.list"]?.({
-      params: {},
-      respond: inventoryRespond,
-      client: { connect: { scopes: ["operator.read"] } },
-      context,
-    } as never);
-    expect(inventoryRespond.mock.calls.at(0)?.[0]).toBe(true);
-  });
+      const inventoryRespond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params,
+        respond: inventoryRespond,
+        client: { connect: { scopes: ["operator.read"] } },
+        context,
+      } as never);
+      expect(inventoryRespond.mock.calls.at(0)?.[0]).toBe(true);
+    },
+  );
 });

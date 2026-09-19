@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements status reaction behavior.
 import {
   createStatusReactionController,
   type StatusReactionController,

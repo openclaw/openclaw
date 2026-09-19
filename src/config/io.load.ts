@@ -1,8 +1,13 @@
+import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
-import { maybeRecoverSuspiciousConfigReadSync } from "./io.observe-recovery.js";
+import {
+  maybeRecoverSuspiciousConfigRead,
+  maybeRecoverSuspiciousConfigReadSync,
+} from "./io.observe-recovery.js";
 import {
   coerceConfig,
   containsConfigIncludeDirective,
@@ -23,18 +28,96 @@ import {
 import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import {
+  validateConfigObjectWithPlugins,
+  validateConfigObjectWithPluginsAsync,
+} from "./validation.js";
+
+type ConfigLoadEffect = {
+  sync: () => void;
+  async: () => Promise<void>;
+};
+
+type ConfigLoadOperation<T> = Generator<ConfigLoadEffect, T, void>;
+
+function* resolveConfigLoadEffect<T>(effect: {
+  sync: () => T;
+  async: () => Promise<T>;
+}): ConfigLoadOperation<T> {
+  // Each driver completes the yielded effect before resuming this continuation.
+  let result!: T;
+  yield {
+    sync: () => {
+      result = effect.sync();
+    },
+    async: async () => {
+      result = await effect.async();
+    },
+  };
+  return result;
+}
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
   options: { skipSuspiciousRecovery?: boolean } = {},
 ): OpenClawConfig {
+  const operation = loadConfigWithEffects(context, options);
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      step.value.sync();
+      step = operation.next();
+    } catch (error) {
+      step = operation.throw(error);
+    }
+  }
+  return step.value;
+}
+
+export async function loadConfigFromContextAsync(
+  context: ConfigIoContext,
+  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void } = {},
+): Promise<OpenClawConfig> {
+  const operation = loadConfigWithEffects(context, options);
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      options.assertCurrent?.();
+      await step.value.async();
+      options.assertCurrent?.();
+      step = operation.next();
+    } catch (error) {
+      step = operation.throw(error);
+    }
+  }
+  return step.value;
+}
+
+function* loadConfigWithEffects(
+  context: ConfigIoContext,
+  options: { skipSuspiciousRecovery?: boolean; assertCurrent?: () => void },
+): ConfigLoadOperation<OpenClawConfig> {
   const { deps, configPath, pathResolution } = context;
   let envBeforeRead: Record<string, string | undefined> | undefined;
   try {
-    maybeLoadDotEnvForConfig(deps.env);
+    yield* resolveConfigLoadEffect({
+      sync: () => maybeLoadDotEnvForConfig(deps.env),
+      async: async () => {
+        if (deps.env === process.env) {
+          await loadDotEnvAsync({ env: deps.env, quiet: true });
+        }
+      },
+    });
     envBeforeRead = snapshotEnv(deps.env);
-    if (!deps.fs.existsSync(configPath)) {
+    const exists = yield* resolveConfigLoadEffect({
+      sync: () => deps.fs.existsSync(configPath),
+      async: () =>
+        deps.fs.promises.access(configPath).then(
+          () => true,
+          () => false,
+        ),
+    });
+    if (!exists) {
       loggedConfigWarningFingerprints.delete(configPath);
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
@@ -44,16 +127,33 @@ export function loadConfigFromContext(
         effectiveConfigRaw: config,
         env: deps.env,
       });
-      return context.finalizeLoadedRuntimeConfig(
-        materializeRuntimeConfig(config, {
-          ...pathResolution,
-          ...(context.options.pluginValidation === "core-only"
-            ? { manifestRegistry: { plugins: [] } }
-            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
-        }),
-      );
+      const materialized = yield* resolveConfigLoadEffect({
+        sync: () =>
+          materializeRuntimeConfig(config, {
+            ...pathResolution,
+            ...(context.options.pluginValidation === "core-only"
+              ? { manifestRegistry: { plugins: [] } }
+              : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
+          }),
+        async: async () =>
+          materializeRuntimeConfig(config, {
+            ...pathResolution,
+            manifestRegistry:
+              context.options.pluginValidation === "core-only"
+                ? { plugins: [] }
+                : (await metadata.loadAsync(config)).manifestRegistry,
+          }),
+      });
+      return yield* resolveConfigLoadEffect({
+        sync: () => context.finalizeLoadedRuntimeConfig(materialized),
+        async: () =>
+          context.finalizeLoadedRuntimeConfigAsync(materialized, metadata, options.assertCurrent),
+      });
     }
-    const raw = deps.fs.readFileSync(configPath, "utf-8");
+    const raw = yield* resolveConfigLoadEffect({
+      sync: () => deps.fs.readFileSync(configPath, "utf-8"),
+      async: () => deps.fs.promises.readFile(configPath, "utf-8"),
+    });
     const parsed = deps.json5.parse(raw);
     const readResolution = resolveConfigForRead(
       resolveConfigIncludesForRead(parsed, configPath, deps),
@@ -101,30 +201,57 @@ export function loadConfigFromContext(
       effectiveConfigRaw,
       env: deps.env,
     });
-    const validated = validateConfigObjectWithPlugins(validationConfigRaw, {
+    const validationParams = {
       ...pathResolution,
       pluginValidation: context.options.pluginValidation,
-      loadPluginMetadataSnapshot: pluginMetadata.load,
       sourceRaw: snapshotParsed,
       preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+    };
+    const { deferredPluginMigrations, validated } = yield* resolveConfigLoadEffect({
+      sync: () =>
+        withSynchronousArtifactPreservingStateSnapshot(() => {
+          const pending = context.resolveDeferredPluginMigrations();
+          return {
+            deferredPluginMigrations: pending,
+            validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+              ...validationParams,
+              deferredPluginMigrations: pending,
+              loadPluginMetadataSnapshot: pluginMetadata.load,
+            }),
+          };
+        }),
+      async: async () => {
+        const pending = await context.resolveDeferredPluginMigrationsAsync();
+        return {
+          deferredPluginMigrations: pending,
+          validated: await validateConfigObjectWithPluginsAsync(validationConfigRaw, {
+            ...validationParams,
+            deferredPluginMigrations: pending,
+            loadPluginMetadataSnapshotAsync: pluginMetadata.loadAsync,
+          }),
+        };
+      },
     });
     if (!validated.ok) {
-      context.observeLoadConfigSnapshot(
-        createConfigFileSnapshot({
-          path: configPath,
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          sourceConfig: coerceConfig(effectiveConfigRaw),
-          valid: false,
-          runtimeConfig: coerceConfig(effectiveConfigRaw),
-          hash,
-          issues: validated.issues,
-          warnings: validated.warnings,
-          resolutionFacts: readResolution.resolutionFacts,
-          legacyIssues: [],
-        }),
-      );
+      const invalidSnapshot = createConfigFileSnapshot({
+        path: configPath,
+        exists: true,
+        raw: snapshotRaw,
+        parsed: snapshotParsed,
+        sourceConfig: coerceConfig(effectiveConfigRaw),
+        valid: false,
+        runtimeConfig: coerceConfig(effectiveConfigRaw),
+        hash,
+        issues: validated.issues,
+        deferredPluginMigrations,
+        warnings: validated.warnings,
+        resolutionFacts: readResolution.resolutionFacts,
+        legacyIssues: [],
+      });
+      yield* resolveConfigLoadEffect({
+        sync: () => context.observeLoadConfigSnapshot(invalidSnapshot),
+        async: () => context.observeLoadConfigSnapshotAsync(invalidSnapshot, options.assertCurrent),
+      });
       throwInvalidConfig({
         configPath,
         issues: validated.issues,
@@ -143,12 +270,21 @@ export function loadConfigFromContext(
       !options.skipSuspiciousRecovery &&
       !containsConfigIncludeDirective(parsed)
     ) {
-      const recovery = maybeRecoverSuspiciousConfigReadSync({
+      const recoveryParams = {
         deps,
         configPath,
         raw,
         parsed,
         prepareBackup: context.prepareRecoveryBackupCandidate,
+      };
+      const recovery = yield* resolveConfigLoadEffect({
+        sync: () => maybeRecoverSuspiciousConfigReadSync(recoveryParams),
+        async: () =>
+          maybeRecoverSuspiciousConfigRead({
+            ...recoveryParams,
+            prepareBackupAsync: context.prepareRecoveryBackupCandidateAsync,
+            assertCurrent: options.assertCurrent,
+          }),
       });
       if (recovery.raw !== raw) {
         restoreEnvChangesIfUnchanged({
@@ -156,30 +292,40 @@ export function loadConfigFromContext(
           before: envBeforeRead,
           after: snapshotEnv(deps.env),
         });
-        return loadConfigFromContext(context, { skipSuspiciousRecovery: true });
+        return yield* loadConfigWithEffects(context, { ...options, skipSuspiciousRecovery: true });
       }
     }
     const cfg = materializeRuntimeConfig(validated.config, {
       ...pathResolution,
-      manifestRegistry: pluginMetadata.getManifestRegistry(),
+      manifestRegistry:
+        context.options.pluginValidation === "core-only"
+          ? { plugins: [] }
+          : pluginMetadata.getManifestRegistry(),
     });
-    context.observeLoadConfigSnapshot(
-      createConfigFileSnapshot({
-        path: configPath,
-        exists: true,
-        raw: snapshotRaw,
-        parsed: snapshotParsed,
-        sourceConfig: coerceConfig(effectiveConfigRaw),
-        valid: true,
-        runtimeConfig: cfg,
-        hash,
-        issues: [],
-        warnings: validated.warnings,
-        resolutionFacts: readResolution.resolutionFacts,
-        legacyIssues: [],
-      }),
-    );
-    return context.finalizeLoadedRuntimeConfig(cfg);
+    const snapshot = createConfigFileSnapshot({
+      path: configPath,
+      exists: true,
+      raw: snapshotRaw,
+      parsed: snapshotParsed,
+      sourceConfig: coerceConfig(effectiveConfigRaw),
+      valid: true,
+      runtimeConfig: cfg,
+      deferredPluginMigrations,
+      hash,
+      issues: [],
+      warnings: validated.warnings,
+      resolutionFacts: readResolution.resolutionFacts,
+      legacyIssues: [],
+    });
+    yield* resolveConfigLoadEffect({
+      sync: () => context.observeLoadConfigSnapshot(snapshot),
+      async: () => context.observeLoadConfigSnapshotAsync(snapshot, options.assertCurrent),
+    });
+    return yield* resolveConfigLoadEffect({
+      sync: () => context.finalizeLoadedRuntimeConfig(cfg),
+      async: () =>
+        context.finalizeLoadedRuntimeConfigAsync(cfg, pluginMetadata, options.assertCurrent),
+    });
   } catch (error) {
     // Failed reads must not publish env.vars. The snapshot stays undefined only
     // when dotenv loading fails before config-owned environment mutation begins.

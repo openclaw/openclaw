@@ -31,6 +31,7 @@ openclaw-lobster-pet .lobster-pet {
 }
 
 .lobster-pet__motion--hop .lobster-pet .lobster-pet__body {
+  transform-origin: 50% 100%;
   animation: lobster-pet-landing var(--lob-travel-ms) ease-in-out both;
   animation-delay: var(--lob-act-delay, 0s);
 }
@@ -69,19 +70,19 @@ openclaw-lobster-pet .lobster-pet {
     transform: scale(1);
   }
   14% {
-    transform: scale(1.12, 0.82);
+    transform: scale(1.03, 0.96);
   }
   38% {
-    transform: scale(0.92, 1.1) rotate(-4deg);
+    transform: scale(0.98, 1.03) rotate(-4deg);
   }
   70% {
-    transform: scale(0.96, 1.05) rotate(3deg);
+    transform: scale(0.99, 1.02) rotate(3deg);
   }
   86% {
-    transform: scale(1.16, 0.78);
+    transform: scale(1.04, 0.94);
   }
   94% {
-    transform: scale(0.98, 1.04);
+    transform: scale(0.99, 1.02);
   }
 }
 
@@ -100,8 +101,8 @@ openclaw-lobster-pet .lobster-pet--away {
   position: absolute;
   bottom: 0;
   left: var(--lob-x, 80%);
-  /* Build multipliers stretch the sprite box; the svg renders with
-     preserveAspectRatio="none", so the silhouette follows the box. */
+  /* Lobsters keep the artwork's proportions; other species supply their
+     own fixed sprite dimensions through --lob-w and --lob-h. */
   width: calc(16px * var(--lob-scale, 2) * var(--lob-w, 1));
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);

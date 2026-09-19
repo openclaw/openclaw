@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_MAX_LOG_BYTES = 120_000;
+// Clack redraws long interactive menus in-place. Keep a bounded window, but large
+// enough that the prompt preceding a full terminal redraw burst remains visible.
+const DEFAULT_MAX_LOG_BYTES = 1_048_576;
 
 const normalizeScriptOutput = (value) => value.replace(/\r?\n/g, "").replace(/\r/g, "");
 const oscPattern = new RegExp(String.raw`\u001b\][^\u0007]*(?:\u0007|\u001b\\)`, "g");

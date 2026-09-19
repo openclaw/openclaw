@@ -274,6 +274,7 @@ export function createDiscordGatewayCaptureFixture(params: {
 
   return {
     register(api: OpenClawPluginApi) {
+      runtimeStore.setRuntime(api.runtime);
       // Same probe-type erasure used by defineBundledChannelEntry at registration.
       api.registerChannel({ plugin: discordPlugin as ChannelPlugin });
       registerDiscordTranscriptSourceProvider(api);

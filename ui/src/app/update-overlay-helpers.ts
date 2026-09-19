@@ -1,11 +1,14 @@
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
-import { formatUiExternalText } from "../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
 export type ApplicationStatusBanner = {
@@ -53,6 +56,7 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "global-install-failed": "updates.failureReasons.globalInstallFailed",
   "restart-disabled": "updates.failureReasons.restartDisabled",
   "restart-unavailable": "updates.failureReasons.restartUnavailable",
+  "external-supervisor-update-required": "updates.failureReasons.externalSupervisorUpdateRequired",
   "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
   "restart-revision-mismatch": "updates.failureReasons.restartRevisionMismatch",
   "restart-revision-unavailable": "updates.failureReasons.restartRevisionUnavailable",
@@ -109,7 +113,6 @@ function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]):
   return id && id.length <= 256 ? id : null;
 }
 
-/** One projection owns the recorded display facts and the typed triage transition. */
 export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
   attempt: RecordedUpdateAttempt | null;
   banner: ApplicationStatusBanner | null;
@@ -172,11 +175,6 @@ function lastLogLine(tail: string | null | undefined): string | null {
   return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
-/**
- * The updater records why it stopped — the failing step plus its captured
- * output — in the restart sentinel. Read that recorded fact instead of making
- * the operator reconstruct a disk-full or build failure from a reason slug.
- */
 function readUpdateFailureCause(
   sentinel: UpdateRestartStatusResponse["sentinel"],
 ): UpdateFailureCause | null {
@@ -216,7 +214,7 @@ export function createUpdateStatusRefresher(params: {
 }) {
   let generation = 0;
   let manualIsCurrent: (() => boolean) | null = null;
-  return async (mode: "manual" | "background" | "completion" = "manual") => {
+  return async (mode: "manual" | "background" | "completion" = "manual"): Promise<boolean> => {
     const client = params.getClient();
     const epoch = params.getEpoch();
     if (
@@ -225,7 +223,7 @@ export function createUpdateStatusRefresher(params: {
       !params.isCurrent(client, epoch) ||
       (mode === "background" && manualIsCurrent?.())
     ) {
-      return;
+      return false;
     }
     const refreshCheckout = mode === "manual";
     const operationGeneration = ++generation;
@@ -252,7 +250,9 @@ export function createUpdateStatusRefresher(params: {
         });
       if (response && isCurrent()) {
         params.onStatus(response);
+        return true;
       }
+      return false;
     } finally {
       if (ownsRequest()) {
         manualIsCurrent = null;
@@ -295,7 +295,10 @@ export function projectUpdateStatusResponse(
 }
 
 export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTriage | null {
-  if (run.status !== "failed" && run.status !== "rolled-back") {
+  if (
+    isAcknowledgedAbandonedUpdateRun(run) ||
+    (run.status !== "failed" && run.status !== "rolled-back")
+  ) {
     return null;
   }
   const step = run.steps.findLast((entry) => entry.status === "failed");
@@ -318,6 +321,13 @@ export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTria
       afterSha: run.after.sha ?? null,
       failure: step ? { step: step.step, detail: step.detail ?? "" } : null,
     },
+  };
+}
+
+export function resolveUpdateStatusCheckBanner(error: unknown): ApplicationStatusBanner {
+  return {
+    tone: "warn",
+    text: t("updates.checkError", { error: formatUiError(error) }),
   };
 }
 

@@ -1,6 +1,7 @@
 import path from "node:path";
 // Control UI E2E tests cover visible browser dictation state through a real composer.
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -67,6 +68,21 @@ suite.define(() => {
         text: "please",
       });
       await expect.poll(() => textarea.inputValue()).toBe(expected);
+      await page.mouse.move(0, 0);
+      const dictationStop = page.getByRole("button", { name: "Stop and keep text" });
+      await dictationStop.evaluate(finishElementAnimations);
+      const dictationAppearance = await dictationStop.evaluate((element) => {
+        const textColor = document.createElement("span");
+        textColor.style.color = "var(--text-strong)";
+        element.append(textColor);
+        const appearance = {
+          color: getComputedStyle(element).color,
+          textStrong: getComputedStyle(textColor).color,
+        };
+        textColor.remove();
+        return appearance;
+      });
+      expect(dictationAppearance.color).toBe(dictationAppearance.textStrong);
       if (cancel) {
         await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
         await page.keyboard.press("Escape");

@@ -9,7 +9,6 @@ import {
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
 import {
   normalizeDownloadedArtifactLock,
   normalizeOptionalStringValue,
@@ -24,6 +23,7 @@ import {
   type ClawHubSkillFileLock,
   type ClawHubSkillsLockfileStatusRead,
 } from "./clawhub-store.js";
+import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 
 const LOCAL_SKILL_CARD_FILENAME = "skill-card.md";
 const LOCAL_SKILL_CARD_MAX_BYTES = 256 * 1024;

@@ -343,6 +343,16 @@ suite.define(() => {
         await errorBanner.scrollIntoViewIfNeeded();
         await captureProof(page, "05-malformed-trigger-rejected");
 
+        // A rejected save must release the fieldset's inherited disabled state.
+        const once = page.locator('[data-test-id="cron-schedule-kind-at"]');
+        await once.scrollIntoViewIfNeeded();
+        await captureProof(page, "06-repeat-after-rejection");
+        await expect.poll(() => once.getAttribute("aria-disabled")).toBe("false");
+        await once.click();
+        await page.locator("#cron-schedule-at").waitFor();
+        expect(await page.locator("#cron-name").inputValue()).toBe("Malformed condition");
+        expect(await gateway.getRequests("cron.add")).toHaveLength(1);
+
         await page.locator('[data-test-id="cron-back"]').click();
         await existingRow.waitFor();
         expect(await gateway.getRequests("cron.list")).toHaveLength(listsBeforeSave);

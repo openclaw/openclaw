@@ -115,6 +115,23 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     const insertedActive = await expectControlledSelection(container, "b");
     expect(insertedActive).toBe(initialActive);
     expect(container.activeElement).toBe(initialActive);
+
+    const unrelated = document.createElement("button");
+    unrelated.textContent = "Unrelated action";
+    document.body.append(unrelated);
+    unrelated.focus();
+    renderControlledStrip({
+      container,
+      tabs: [tabs[0]!, tabs[1]!, tabs[2]!],
+      activeId: "b",
+      onSelect: vi.fn(),
+    });
+    expect(await expectControlledSelection(container, "b")).toBe(initialActive);
+    await container.querySelector<RenderedTabGroup & { updateComplete: Promise<boolean> }>(
+      "wa-tab-group",
+    )?.updateComplete;
+    await new Promise(requestAnimationFrame);
+    expect(document.activeElement).toBe(unrelated);
   });
 
   it("keeps arrow and mouse activation controlled and the selected overflow tab visible", async () => {

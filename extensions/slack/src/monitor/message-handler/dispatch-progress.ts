@@ -129,6 +129,11 @@ export function createSlackProgressRuntime(runtimeParams: {
   const progressWorkCounter = createChannelProgressWorkCounter();
   const progressSeed = `${account.accountId}:${message.channel}`;
   const slackProgressStyle = resolveSlackProgressStyle(account.config);
+  // Compact quiet Slack is the latest model preamble, not the shared progress
+  // card's summary. Keep reasoning and tool telemetry (including failures and
+  // edit counters) out of this lane when refactoring channel presentation.
+  const preambleOnlyProgress =
+    isProgressMode && slackProgressStyle === "compact" && !previewToolProgressEnabled;
   // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
   // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
   const useDraftProgressCard =
@@ -343,13 +348,17 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
 
   const progressDraft = createChannelProgressDraftCompositor({
+    preparedItems: true,
     entry: account.config,
     mode: slackStreaming.mode,
     active: progressDraftActive,
     seed: progressSeed,
     formatLine: formatSlackProgressDraftLine,
     reasoningLinePrefix: "🧠 ",
-    updateOnLineChange: useNativeProgressStreaming || useDraftProgressCard,
+    reasoningGate: !preambleOnlyProgress,
+    // A completed preamble may have the same text as its final delta. Its
+    // completion still has to reach the transport after a human boundary.
+    updateOnLineChange: useNativeProgressStreaming || useDraftProgressCard || preambleOnlyProgress,
     update: async (previewText, options) => {
       if (useNativeProgressStreaming) {
         const priorSnapshot = nativeStreamSnapshot;
@@ -368,16 +377,30 @@ export function createSlackProgressRuntime(runtimeParams: {
         return false;
       }
       const snapshot = options.snapshot;
+      const latestLine = snapshot.lines.at(-1);
+      if (preambleOnlyProgress && typeof latestLine === "object" && latestLine.complete === false) {
+        // Keep the last complete preamble visible. A human reply can rotate this
+        // draft between deltas, leaving a word fragment visible until cleanup.
+        return false;
+      }
       progressCard.setFallbackText(previewText);
       draftStream.update(
-        useDraftProgressCard
+        preambleOnlyProgress
           ? {
               text: previewText,
-              blocks: progressCard.resolvePresentation(snapshot, "working"),
+              allowNewMessage: typeof latestLine !== "object" || latestLine.complete !== false,
+              ...(snapshot.preparedBlocks
+                ? { blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
+                : {}),
             }
-          : snapshot.preparedBlocks
-            ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
-            : previewText,
+          : useDraftProgressCard
+            ? {
+                text: previewText,
+                blocks: progressCard.resolvePresentation(snapshot, "working"),
+              }
+            : snapshot.preparedBlocks
+              ? { text: previewText, blocks: buildSlackProgressTextBlocks(snapshot.preparedBlocks) }
+              : previewText,
       );
       if (options?.flush) {
         await draftStream.flush();
@@ -633,9 +656,10 @@ export function createSlackProgressRuntime(runtimeParams: {
           progressDraft.reset();
         };
   // A queued turn can drain after its dispatch returned, so dispatch closeout is
-  // no longer available to settle the card it published. Leave none in Working.
+  // no longer available to settle its presentation. Quiet preambles are also
+  // temporary: leaving one behind falsely suggests the completed run is working.
   const onQueuedFollowupSettled =
-    !useDraftProgressCard && !useNativeProgressStreaming
+    !useDraftProgressCard && !useNativeProgressStreaming && !preambleOnlyProgress
       ? undefined
       : async () => {
           if (useNativeProgressStreaming) {
@@ -646,6 +670,13 @@ export function createSlackProgressRuntime(runtimeParams: {
                 ? undefined
                 : buildNativeProgressCompletionChunks(nativeProgressTerminalStatus),
             );
+            progressDraft.markFinalReplyDelivered();
+            return;
+          }
+          if (preambleOnlyProgress) {
+            progressDraft.markFinalReplyStarted();
+            await draftStream?.clear();
+            await draftStream?.dropDetachedMessages();
             progressDraft.markFinalReplyDelivered();
             return;
           }
@@ -662,6 +693,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     useNativeProgressStreaming,
     progressDraftActive,
     previewToolProgressEnabled,
+    preambleOnlyProgress,
     suppressDefaultToolProgressMessages,
     progressDraft,
     progressWorkCounter,

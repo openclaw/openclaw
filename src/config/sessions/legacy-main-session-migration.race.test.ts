@@ -194,7 +194,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         migration = migrateLegacyMainSessionKeys({
           cfg,
           env: state.env,
-          mode: "automatic",
+          mode: "doctor-fix",
           beforePersistentApply,
         }).then(
           (result) => ({ result }),
@@ -235,7 +235,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         const recovered = await migrateLegacyMainSessionKeys({
           cfg,
           env: state.env,
-          mode: "automatic",
+          mode: "doctor-fix",
         });
         expect(recovered.complete).toBe(true);
         expect(readClaim(sourceAgentId, sourcePath, "agent:main:chat")).toBeUndefined();
@@ -253,7 +253,10 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
   },
 );
 
-async function runCleanupRace(mutateSource: (mainPath: string) => void) {
+async function runCleanupRace(
+  mutateSource: (mainPath: string) => void,
+  boundary: "copy" | "cleanup" = "cleanup",
+) {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-legacy-main-race-"));
   const stateDir = path.join(root, "state");
   fs.mkdirSync(stateDir, { recursive: true });
@@ -261,42 +264,76 @@ async function runCleanupRace(mutateSource: (mainPath: string) => void) {
   const opsPath = databasePath(stateDir, "ops");
   const env = { ...process.env, OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir };
   seedClaim("main", mainPath, "agent:main:chat");
-  race.beforeDelete = () => mutateSource(mainPath);
+  const resume = createDeferred();
+  let blocker: Promise<void> | undefined;
+  if (boundary === "cleanup") {
+    race.beforeDelete = () => mutateSource(mainPath);
+  } else {
+    const entered = createDeferred();
+    blocker = runExclusiveSqliteSessionWrite(
+      { agentId: "ops", path: opsPath, env },
+      async () => {
+        entered.resolve();
+        await resume.promise;
+      },
+      "session.import.batch",
+    );
+    await entered.promise;
+    race.queued = (pathname) => {
+      if (pathname === opsPath) {
+        race.queued = undefined;
+        mutateSource(mainPath);
+        resume.resolve();
+      }
+    };
+  }
 
-  const result = await migrateLegacyMainSessionKeys({
-    cfg: { agents: { entries: { ops: {} } } },
-    env,
-    mode: "automatic",
-  });
-
-  return { mainPath, opsPath, result };
+  try {
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: { agents: { entries: { ops: {} } } },
+      env,
+      mode: "doctor-fix",
+    });
+    return { mainPath, opsPath, result };
+  } finally {
+    resume.resolve();
+    await blocker;
+  }
 }
 
-it("preserves both claims when the source transcript changes before atomic cleanup", async () => {
-  const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        appendTranscriptEventInTransaction(
-          database,
-          {
-            agentId: "main",
-            path: sourcePath,
-            sessionId: "race-session",
-            sessionKey: "agent:main:chat",
-          },
-          { id: "event-2", type: "message" },
-          { allowStoredAlias: true },
-        );
-      },
-      { agentId: "main", path: sourcePath },
-    );
-  });
+it.each(["copy", "cleanup"] as const)(
+  "preserves changed source history before %s",
+  async (boundary) => {
+    const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          appendTranscriptEventInTransaction(
+            database,
+            {
+              agentId: "main",
+              path: sourcePath,
+              sessionId: "race-session",
+              sessionKey: "agent:main:chat",
+            },
+            { id: "event-2", type: "message" },
+            { allowStoredAlias: true },
+          );
+        },
+        { agentId: "main", path: sourcePath },
+      );
+    }, boundary);
 
-  expect(result.complete).toBe(false);
-  expect(result.outcomes.map((outcome) => outcome.kind)).toContain("divergent-canonical");
-  expect(readClaim("main", mainPath, "agent:main:chat")?.events).toHaveLength(2);
-  expect(readClaim("ops", opsPath, "agent:ops:chat")?.events).toHaveLength(1);
-});
+    expect(result.complete).toBe(false);
+    expect(result.outcomes.map((outcome) => outcome.kind)).toContain("divergent-canonical");
+    expect(readClaim("main", mainPath, "agent:main:chat")?.events).toHaveLength(2);
+    const destination = readClaim("ops", opsPath, "agent:ops:chat");
+    if (boundary === "copy") {
+      expect(destination).toBeUndefined();
+    } else {
+      expect(destination?.events).toHaveLength(1);
+    }
+  },
+);
 
 it("preserves both claims when the source entry becomes locked before cleanup", async () => {
   const { mainPath, opsPath, result } = await runCleanupRace((sourcePath) => {

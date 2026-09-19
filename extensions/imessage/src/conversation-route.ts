@@ -1,4 +1,3 @@
-// Imessage plugin module implements conversation route behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,

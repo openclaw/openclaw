@@ -8,6 +8,31 @@ import WebKit
 @MainActor
 struct DashboardSandboxNavigationTests {
     @Test(arguments: [
+        ("openclaw://dashboard", "/control/chat", true, 1, true),
+        ("openclaw://agent?message=Hello", "/control/chat", true, 1, true),
+        ("openclaw://dashboard", "/control/chat", true, 0, false),
+        ("openclaw://dashboard", "/control/chat", false, 1, false),
+        ("openclaw://dashboard", "/login", true, 1, false),
+        ("openclaw://dashboard", "https://other.example/control/chat", true, 1, false),
+        ("openclaw://unknown", "/control/chat", true, 1, false),
+        ("file:///tmp/example", "/control/chat", true, 1, false),
+        ("https://other.example", "/control/chat", true, 1, false),
+    ])
+    func `app actions require a real click from the trusted dashboard main frame`(
+        address: String, source: String, mainFrame: Bool, button: Int, allowed: Bool) throws
+    {
+        let dashboardURL = try #require(URL(string: "https://gateway.example/control/"))
+        let url = try #require(URL(string: address))
+        let sourceURL = try #require(URL(string: source, relativeTo: dashboardURL)?.absoluteURL)
+        #expect(DashboardWindowController.shouldHandleAppLinkNavigation(
+            url, navigationType: .linkActivated, buttonNumber: button,
+            sourceURL: sourceURL, sourceIsMainFrame: mainFrame, dashboardURL: dashboardURL) == allowed)
+        #expect(!DashboardWindowController.shouldHandleAppLinkNavigation(
+            url, navigationType: .other, buttonNumber: button,
+            sourceURL: sourceURL, sourceIsMainFrame: mainFrame, dashboardURL: dashboardURL))
+    }
+
+    @Test(arguments: [
         ("http://[fd12:3456:789a::1]:18789/control/", "http://[fd12:3456:789a::1]:18789"),
         ("https://Gateway.Example:443/control/", "https://gateway.example"),
         ("http://Gateway.Example:80/control/", "http://gateway.example"),

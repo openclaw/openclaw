@@ -9,6 +9,9 @@ import {
   type QaParitySuiteSummary,
   type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
+import { runRuntimeParityScenario } from "./runtime-parity.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 
 type QaParityReportScenario = QaParitySuiteSummary["scenarios"][number];
 
@@ -795,14 +798,18 @@ status=done`,
     expect(markdown).toContain("- Faster runtime: N/A");
   });
 
-  it("fails runtime parity reports when a runtime cell has a hard failure", () => {
+  it.each([
+    { description: "hard runtime error", cell: { runtimeErrorClass: "auth" } },
+    { description: "transport error", cell: { transportErrorClass: "timeout" } },
+    { description: "failed execution", cell: { status: "fail" as const } },
+  ])("fails runtime parity reports with $description", ({ cell }) => {
     const summary = makeRuntimeParitySummary();
     const scenario = summary.scenarios[1];
     if (!scenario?.runtimeParity) {
       throw new Error("runtime parity fixture missing");
     }
     scenario.status = "fail";
-    scenario.runtimeParity.cells.codex.runtimeErrorClass = "auth";
+    Object.assign(scenario.runtimeParity.cells.codex, cell);
 
     const report = buildQaRuntimeParityReport({
       summary,
@@ -811,10 +818,62 @@ status=done`,
 
     expect(report.pass).toBe(false);
     expect(report.failedScenarios).toBe(1);
+    expect(report.scenarios[1]?.codexStatus).toBe("fail");
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: fail (");
     expect(report.failures).toContain(
       "Compaction retry after mutating tool drift=tool-call-shape (tool call 1 differs).",
     );
   });
+
+  it.each([
+    { description: "known harness gap", knownGap: true, bothSkipped: false, pass: true },
+    { description: "unexpected skip", knownGap: false, bothSkipped: false, pass: false },
+    { description: "both runtimes skipped", knownGap: true, bothSkipped: true, pass: false },
+  ])(
+    "preserves $description in runtime parity evidence",
+    async ({ knownGap, bothSkipped, pass }) => {
+      const summary = makeRuntimeParitySummary();
+      const catalogScenario = readQaScenarioById("compaction-retry-mutating-tool");
+      const captured = summary.scenarios[1]?.runtimeParity;
+      if (!captured) {
+        throw new Error("runtime parity fixture missing");
+      }
+      const result = await runRuntimeParityScenario({
+        scenarioId: catalogScenario.id,
+        runCell: async (runtime) => ({
+          status: runtime === "codex" || bothSkipped ? "skip" : "pass",
+          ...(runtime === "codex"
+            ? {
+                details: knownGap
+                  ? "known-harness-gap compaction-retry-mutating-tool: native compaction"
+                  : "implementation unavailable",
+              }
+            : {}),
+          cell: captured.cells[runtime],
+        }),
+      });
+      summary.scenarios[1] = buildRuntimeParityScenarioResult({
+        scenarioName: catalogScenario.title,
+        result,
+      });
+
+      const report = buildQaRuntimeParityReport({ summary });
+
+      expect(report.pass).toBe(pass);
+      expect(report.scenarios[1]).toMatchObject({
+        status: pass ? "pass" : "fail",
+        openclawStatus: bothSkipped ? "skip" : "pass",
+        codexStatus: "skip",
+        drift: pass ? "structural" : "failure-mode",
+      });
+      expect(summary.scenarios[1]?.steps?.map((step) => step.status)).toEqual([
+        bothSkipped ? "skip" : "pass",
+        "skip",
+        pass ? "pass" : "skip",
+      ]);
+      expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: skip (");
+    },
+  );
 
   it("passes runtime parity reports with controlled tool-error cells and advisory drift", () => {
     const summary = makeRuntimeParitySummary();
@@ -823,6 +882,10 @@ status=done`,
       throw new Error("runtime parity fixture missing");
     }
     scenario.runtimeParity.cells.codex.runtimeErrorClass = "tool-error";
+    summary.scenarios[1] = buildRuntimeParityScenarioResult({
+      scenarioName: scenario.name,
+      result: scenario.runtimeParity,
+    });
 
     const report = buildQaRuntimeParityReport({
       summary,
@@ -832,6 +895,13 @@ status=done`,
     expect(report.pass).toBe(true);
     expect(report.failedScenarios).toBe(0);
     expect(report.failures).toEqual([]);
+    expect(report.scenarios[1]?.codexStatus).toBe("pass");
+    expect(summary.scenarios[1]?.steps?.map((step) => step.status)).toEqual([
+      "pass",
+      "pass",
+      "pass",
+    ]);
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: pass (1 tool calls");
   });
 
   it("fails live runtime parity reports when assistant-message usage is missing", () => {

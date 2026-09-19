@@ -1,10 +1,8 @@
-// Qa Lab plugin module implements confidence report behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asBoolean as readBoolean,
-  asFiniteNumber as readNumber,
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -13,24 +11,9 @@ import {
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
 import {
-  buildHarnessParityCell,
-  buildHarnessParityResult,
-  type HarnessParityDrift,
-  type HarnessRuntimeParityCell,
-  type RuntimeParitySystemPromptReport,
-} from "./harness-parity.js";
-import {
-  runRuntimeParityScenario,
-  type RuntimeParityCell,
-  type RuntimeParityDrift,
-  type RuntimeParityResult,
-  type RuntimeParityToolCall,
-} from "./runtime-parity.js";
-import {
   findQaSuiteSummaryAccountingError,
   findQaSuiteSummaryCompletionError,
 } from "./suite-summary.js";
-import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
 const QA_CONFIDENCE_VERDICTS = [
   "pass",
@@ -42,7 +25,7 @@ const QA_CONFIDENCE_VERDICTS = [
   "environment-blocked",
 ] as const;
 
-type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
+export type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
 
 type QaConfidenceLaneKind =
   | "qa-suite-summary"
@@ -117,27 +100,6 @@ type QaConfidenceReport = {
   };
   failures: string[];
   lanes: QaConfidenceLaneResult[];
-};
-
-type QaConfidenceSelfTestCanary = {
-  id: string;
-  category:
-    | "prompt"
-    | "tool-schema"
-    | "tool-call"
-    | "tool-result"
-    | "failure-mode"
-    | "token-efficiency"
-    | "jsonl-replay";
-  detected: boolean;
-  expectedVerdict: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
-  details: string;
-};
-
-type QaConfidenceSelfTestSummary = {
-  generatedAt: string;
-  pass: boolean;
-  canaries: QaConfidenceSelfTestCanary[];
 };
 
 const QA_CONFIDENCE_SELF_TEST_CANARY_IDS = [
@@ -360,29 +322,22 @@ type QaConfidenceLaneEvaluation = {
   verdict?: QaConfidenceVerdict;
 };
 
+// Explicit unknown evidence bypasses failureVerdict; status-less failures are classified separately.
+function unknownLaneEvaluation(details: string): QaConfidenceLaneEvaluation {
+  return { passed: false, status: "unknown", details };
+}
+
 function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary payload was not an object",
-    };
+    return unknownLaneEvaluation("qa-suite-summary payload was not an object");
   }
   const completionError = findQaSuiteSummaryCompletionError(payload);
   if (completionError) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary ${completionError}`,
-    };
+    return unknownLaneEvaluation(`qa-suite-summary ${completionError}`);
   }
   const accountingError = findQaSuiteSummaryAccountingError(payload);
   if (accountingError) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary ${accountingError}`,
-    };
+    return unknownLaneEvaluation(`qa-suite-summary ${accountingError}`);
   }
   const counts = isRecord(payload.counts) ? payload.counts : undefined;
   const totalCount = readCount(counts?.total);
@@ -420,13 +375,11 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     );
     const suiteHasFailures = (failedCount ?? 0) > 0 || failedScenarioCount > 0;
     if (allEnvironmentBlocked && suiteHasFailures) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(
+      return unknownLaneEvaluation(
+        `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(
           gatewayLogSentinels,
         )}; suite also reports failures`,
-      };
+      );
     }
     const firstBlockingSentinel =
       gatewayLogSentinels.find((finding) => finding.verdict !== "environment-blocked") ??
@@ -445,35 +398,23 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
     scenarios !== undefined &&
     Math.floor(failedCount) !== failedScenarioCount
   ) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
+    return unknownLaneEvaluation(
+      `qa-suite-summary count/scenario mismatch: counts.failed=${Math.max(
         0,
         Math.floor(failedCount),
       )}, failed scenarios=${failedScenarioCount}`,
-    };
+    );
   }
   if (unknownBlockingScenarioCount > 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
-    };
+    return unknownLaneEvaluation(
+      `qa-suite-summary has ${unknownBlockingScenarioCount} scenario row(s) with unsupported non-pass status`,
+    );
   }
   if (failedCount === undefined && scenarios === undefined) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary missing counts.failed and scenarios[]",
-    };
+    return unknownLaneEvaluation("qa-suite-summary missing counts.failed and scenarios[]");
   }
   if (!hasExecutedScenarios) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "qa-suite-summary has no executed scenarios",
-    };
+    return unknownLaneEvaluation("qa-suite-summary has no executed scenarios");
   }
   if (failedCount !== undefined) {
     const inferredSkippedCount =
@@ -531,17 +472,9 @@ function evaluatePassSummary(payload: unknown): QaConfidenceLaneEvaluation {
     if (status === "fail" || status === "failed" || status === "error") {
       return { passed: false, details: `summary status=${status}` };
     }
-    return {
-      passed: false,
-      status: "unknown",
-      details: `summary status=${status}`,
-    };
+    return unknownLaneEvaluation(`summary status=${status}`);
   }
-  return {
-    passed: false,
-    status: "unknown",
-    details: "summary did not expose an explicit pass signal",
-  };
+  return unknownLaneEvaluation("summary did not expose an explicit pass signal");
 }
 
 function evaluateTokenEfficiencySummary(
@@ -576,49 +509,42 @@ function evaluateTokenEfficiencySummary(
   };
 }
 
-function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluation {
+export function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload) || !Array.isArray(payload.transcripts)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary missing transcripts array",
-    };
+    return unknownLaneEvaluation("jsonl replay summary missing transcripts array");
   }
   if (payload.transcripts.length === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary has no transcripts",
-    };
+    return unknownLaneEvaluation("jsonl replay summary has no transcripts");
   }
   let drifted = 0;
   let replayedUserTurns = 0;
   for (const transcript of payload.transcripts) {
     if (!isRecord(transcript)) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay summary has an invalid transcript row",
-      };
+      return unknownLaneEvaluation("jsonl replay summary has an invalid transcript row");
     }
-    const userTurnCount = readNumber(transcript.userTurnCount);
-    if (userTurnCount !== undefined && userTurnCount > 0) {
-      replayedUserTurns += userTurnCount;
+    const userTurnCount = readCount(transcript.userTurnCount);
+    if (userTurnCount === undefined) {
+      return unknownLaneEvaluation("jsonl replay transcript has invalid userTurnCount");
     }
+    replayedUserTurns += userTurnCount;
     const hasFirstDrift = transcript.firstDriftAtTurn !== undefined;
     if (!Array.isArray(transcript.drift)) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay transcript missing drift array",
-      };
+      return unknownLaneEvaluation("jsonl replay transcript missing drift array");
     }
-    if (userTurnCount !== undefined && transcript.drift.length !== userTurnCount) {
-      return {
-        passed: false,
-        status: "unknown",
-        details: "jsonl replay transcript drift count does not match userTurnCount",
-      };
+    if (transcript.drift.length !== userTurnCount) {
+      return unknownLaneEvaluation(
+        "jsonl replay transcript drift count does not match userTurnCount",
+      );
+    }
+    const runtimeCells = isRecord(transcript.cells) ? transcript.cells : undefined;
+    if (
+      [runtimeCells?.openclaw, runtimeCells?.codex].some(
+        (cells) => !Array.isArray(cells) || cells.length !== userTurnCount,
+      )
+    ) {
+      return unknownLaneEvaluation(
+        "jsonl replay transcript runtime cell counts do not match userTurnCount",
+      );
     }
     const drift = transcript.drift;
     const hasDrift = drift.some((entry) => entry !== "none");
@@ -627,11 +553,7 @@ function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluatio
     }
   }
   if (replayedUserTurns === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "jsonl replay summary has no replayed user turns",
-    };
+    return unknownLaneEvaluation("jsonl replay summary has no replayed user turns");
   }
   return {
     passed: drifted === 0,
@@ -641,18 +563,10 @@ function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluatio
 
 function evaluateSelfTestSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload) || !Array.isArray(payload.canaries)) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "confidence self-test summary missing canaries array",
-    };
+    return unknownLaneEvaluation("confidence self-test summary missing canaries array");
   }
   if (payload.canaries.length === 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: "confidence self-test summary has no canaries",
-    };
+    return unknownLaneEvaluation("confidence self-test summary has no canaries");
   }
   const canariesById = new Map(
     payload.canaries
@@ -663,11 +577,9 @@ function evaluateSelfTestSummary(payload: unknown): QaConfidenceLaneEvaluation {
     (canaryId) => !canariesById.has(canaryId),
   );
   if (missingExpected.length > 0) {
-    return {
-      passed: false,
-      status: "unknown",
-      details: `confidence self-test missing expected canaries: ${missingExpected.join(", ")}`,
-    };
+    return unknownLaneEvaluation(
+      `confidence self-test missing expected canaries: ${missingExpected.join(", ")}`,
+    );
   }
   const missed = QA_CONFIDENCE_SELF_TEST_CANARY_IDS.filter(
     (canaryId) => canariesById.get(canaryId)?.detected !== true,
@@ -918,7 +830,7 @@ function formatVerdict(lane: QaConfidenceLaneResult): string {
   return lane.verdict ?? "unclassified";
 }
 
-function escapeTableCell(value: string): string {
+export function escapeTableCell(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }
 
@@ -955,317 +867,4 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   return `${lines.join("\n")}\n`;
 }
 
-function syntheticRuntimeCell(
-  runtime: RuntimeParityCell["runtime"],
-  overrides: Partial<HarnessRuntimeParityCell> = {},
-): HarnessRuntimeParityCell {
-  return {
-    runtime,
-    transcriptBytes: JSON.stringify({ message: { role: "assistant", content: "ok" } }),
-    toolCalls: [],
-    finalText: "ok",
-    usage: {
-      inputTokens: 10,
-      outputTokens: 5,
-      totalTokens: 15,
-    },
-    wallClockMs: 10,
-    bootStateLines: [],
-    ...overrides,
-  };
-}
-
-function syntheticToolCall(overrides: Partial<RuntimeParityToolCall> = {}): RuntimeParityToolCall {
-  return {
-    tool: "openclaw.synthetic",
-    argsHash: "args-a",
-    resultHash: "result-a",
-    ...overrides,
-  };
-}
-
-async function detectRuntimeDrift(params: {
-  scenarioId: string;
-  openclaw: RuntimeParityCell;
-  codex: RuntimeParityCell;
-  expectedDrift: RuntimeParityDrift;
-}): Promise<boolean> {
-  const result = await runRuntimeParityScenario({
-    scenarioId: params.scenarioId,
-    runCell: async (runtime) => ({
-      status: "pass",
-      cell: runtime === "openclaw" ? params.openclaw : params.codex,
-    }),
-  });
-  return result.drift === params.expectedDrift;
-}
-
-function syntheticPromptReport(
-  overrides: Partial<RuntimeParitySystemPromptReport> = {},
-): RuntimeParitySystemPromptReport {
-  return {
-    systemPrompt: {
-      chars: 100,
-      projectContextChars: 10,
-      nonProjectContextChars: 90,
-      hash: "system-prompt-a",
-    },
-    skills: {
-      promptChars: 20,
-      hash: "skills-a",
-    },
-    tools: {
-      listChars: 30,
-      schemaChars: 40,
-      entries: [
-        {
-          name: "openclaw.synthetic",
-          summaryChars: 12,
-          summaryHash: "summary-a",
-          schemaChars: 18,
-          schemaHash: "schema-a",
-          propertiesCount: 2,
-        },
-      ],
-    },
-    ...overrides,
-  };
-}
-
-function detectHarnessDrift(params: {
-  leftReport: RuntimeParitySystemPromptReport;
-  rightReport: RuntimeParitySystemPromptReport;
-  expectedDrift: HarnessParityDrift;
-}): boolean {
-  const left = buildHarnessParityCell({
-    variant: { id: "left", label: "Left" },
-    cell: syntheticRuntimeCell("openclaw", { systemPromptReport: params.leftReport }),
-    tokenUsageSource: "mock-estimate",
-  });
-  const right = buildHarnessParityCell({
-    variant: { id: "right", label: "Right" },
-    cell: syntheticRuntimeCell("codex", { systemPromptReport: params.rightReport }),
-    tokenUsageSource: "mock-estimate",
-  });
-  return (
-    buildHarnessParityResult({
-      scenarioId: "confidence-self-test",
-      left,
-      right,
-    }).drift === params.expectedDrift
-  );
-}
-
-function detectTokenEfficiencyRegression(): boolean {
-  const openclaw = syntheticRuntimeCell("openclaw", {
-    usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
-  });
-  const codex = syntheticRuntimeCell("codex", {
-    usage: { inputTokens: 200, outputTokens: 40, totalTokens: 240 },
-  });
-  const runtimeParity: RuntimeParityResult = {
-    scenarioId: "token-efficiency-regression",
-    cells: {
-      openclaw: { ...openclaw, status: "pass" },
-      codex: { ...codex, status: "pass" },
-    },
-    drift: "none",
-  };
-  const report = buildTokenEfficiencyReport({
-    summary: {
-      run: {
-        providerMode: "live-frontier",
-        runtimePair: ["openclaw", "codex"],
-      },
-      scenarios: [
-        {
-          name: "token-efficiency-regression",
-          status: "pass",
-          runtimeParity,
-        },
-      ],
-    },
-    thresholdPercent: 15,
-    generatedAt: "2026-05-12T00:00:00.000Z",
-  });
-  return !report.pass && report.failures.length === 1;
-}
-
-function detectJsonlReplayDrift(): boolean {
-  return !evaluateJsonlReplaySummary({
-    transcripts: [
-      {
-        transcriptPath: "synthetic.jsonl",
-        userTurnCount: 2,
-        drift: ["none", "tool-result-shape"],
-        firstDriftAtTurn: 2,
-      },
-    ],
-  }).passed;
-}
-
-async function buildQaConfidenceSelfTestSummary(
-  generatedAt = new Date().toISOString(),
-): Promise<QaConfidenceSelfTestSummary> {
-  const promptDriftDetected = detectHarnessDrift({
-    leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      systemPrompt: {
-        chars: 100,
-        projectContextChars: 10,
-        nonProjectContextChars: 90,
-        hash: "system-prompt-b",
-      },
-    }),
-    expectedDrift: "system-prompt",
-  });
-  const toolDescriptionDetected = detectHarnessDrift({
-    leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      tools: {
-        listChars: 30,
-        schemaChars: 40,
-        entries: [
-          {
-            name: "openclaw.synthetic",
-            summaryChars: 12,
-            summaryHash: "summary-b",
-            schemaChars: 18,
-            schemaHash: "schema-a",
-            propertiesCount: 2,
-          },
-        ],
-      },
-    }),
-    expectedDrift: "tool-description",
-  });
-  const toolSchemaDetected = detectHarnessDrift({
-    leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      tools: {
-        listChars: 30,
-        schemaChars: 40,
-        entries: [
-          {
-            name: "openclaw.synthetic",
-            summaryChars: 12,
-            summaryHash: "summary-a",
-            schemaChars: 18,
-            schemaHash: "schema-b",
-            propertiesCount: 2,
-          },
-        ],
-      },
-    }),
-    expectedDrift: "tool-schema",
-  });
-  const runtimeToolCallDropDetected = await detectRuntimeDrift({
-    scenarioId: "runtime-tool-call-drop",
-    openclaw: syntheticRuntimeCell("openclaw", { toolCalls: [syntheticToolCall()] }),
-    codex: syntheticRuntimeCell("codex", { toolCalls: [] }),
-    expectedDrift: "tool-call-shape",
-  });
-  const toolResultMismatchDetected = await detectRuntimeDrift({
-    scenarioId: "tool-result-mismatch",
-    openclaw: syntheticRuntimeCell("openclaw", { toolCalls: [syntheticToolCall()] }),
-    codex: syntheticRuntimeCell("codex", {
-      toolCalls: [syntheticToolCall({ resultHash: "result-b" })],
-    }),
-    expectedDrift: "tool-result-shape",
-  });
-  const failureModeDriftDetected = await detectRuntimeDrift({
-    scenarioId: "failure-mode-drift",
-    openclaw: syntheticRuntimeCell("openclaw"),
-    codex: syntheticRuntimeCell("codex", { transportErrorClass: "synthetic-transport" }),
-    expectedDrift: "failure-mode",
-  });
-  const canaries: QaConfidenceSelfTestCanary[] = [
-    {
-      id: "prompt-drift",
-      category: "prompt",
-      detected: promptDriftDetected,
-      expectedVerdict: "qa-harness-bug",
-      details: "synthetic harness prompt hash changed",
-    },
-    {
-      id: "tool-description-schema-drift",
-      category: "tool-schema",
-      detected: toolDescriptionDetected && toolSchemaDetected,
-      expectedVerdict: "qa-harness-bug",
-      details: "synthetic tool description/schema hash changed",
-    },
-    {
-      id: "runtime-tool-call-drop",
-      category: "tool-call",
-      detected: runtimeToolCallDropDetected,
-      expectedVerdict: "product-bug",
-      details: "synthetic runtime transcript omitted a required tool call",
-    },
-    {
-      id: "tool-result-mismatch",
-      category: "tool-result",
-      detected: toolResultMismatchDetected,
-      expectedVerdict: "product-bug",
-      details: "synthetic runtime transcript returned a mismatched tool result",
-    },
-    {
-      id: "failure-mode-drift",
-      category: "failure-mode",
-      detected: failureModeDriftDetected,
-      expectedVerdict: "product-bug",
-      details: "synthetic runtime failed with a different failure mode",
-    },
-    {
-      id: "token-efficiency-regression",
-      category: "token-efficiency",
-      detected: detectTokenEfficiencyRegression(),
-      expectedVerdict: "qa-harness-bug",
-      details: "synthetic token row exceeded the configured efficiency threshold",
-    },
-    {
-      id: "jsonl-replay-ordering-drift",
-      category: "jsonl-replay",
-      detected: detectJsonlReplayDrift(),
-      expectedVerdict: "fixture-bug",
-      details: "synthetic JSONL replay drifted after turn ordering changed",
-    },
-  ];
-  return {
-    generatedAt,
-    pass: canaries.every((canary) => canary.detected),
-    canaries,
-  };
-}
-
-function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestSummary): string {
-  const lines = [
-    "# OpenClaw QA Confidence Self-Test",
-    "",
-    `- Generated at: ${summary.generatedAt}`,
-    `- Verdict: ${summary.pass ? "pass" : "fail"}`,
-    "",
-    "| Canary | Category | Detected | Expected verdict | Details |",
-    "| --- | --- | --- | --- | --- |",
-  ];
-  for (const canary of summary.canaries) {
-    lines.push(
-      `| ${canary.id} | ${canary.category} | ${canary.detected ? "yes" : "no"} | ${canary.expectedVerdict} | ${escapeTableCell(canary.details)} |`,
-    );
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-export async function writeQaConfidenceSelfTestArtifacts(params: {
-  outputDir: string;
-  generatedAt?: string;
-}): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
-  await fs.mkdir(params.outputDir, { recursive: true });
-  const summary = await buildQaConfidenceSelfTestSummary(params.generatedAt);
-  const report = renderQaConfidenceSelfTestMarkdownReport(summary);
-  const reportPath = path.join(params.outputDir, "qa-confidence-self-test-report.md");
-  const summaryPath = path.join(params.outputDir, "qa-confidence-self-test-summary.json");
-  await fs.writeFile(reportPath, report, "utf8");
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-  return { reportPath, summaryPath, summary };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

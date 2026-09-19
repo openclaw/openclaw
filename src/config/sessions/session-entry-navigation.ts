@@ -1,9 +1,17 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionEntry,
   SessionEntryBase,
 } from "../../agents/sessions/session-manager-types.js";
-import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-entry-codec.js";
-import { isSessionTranscriptSideAppendEntry } from "./transcript-tree.js";
+import {
+  isIndexedSessionEntry,
+  parseOpaqueLeafEntry,
+  parseParentLinkedOpaqueEntry,
+} from "./session-entry-codec.js";
+import {
+  isSessionTranscriptSideAppendEntry,
+  type SessionTranscriptTreeNode,
+} from "./transcript-tree.js";
 
 export type SessionNavigationEntry = Pick<
   SessionEntryBase,
@@ -13,6 +21,119 @@ export type SessionNavigationEntry = Pick<
     | { type: "label"; targetId: string; label?: string }
     | { type: Exclude<SessionEntry["type"], "label"> }
   );
+
+type SessionParentEntry = Pick<SessionEntryBase, "id" | "parentId">;
+
+function resolveSessionCanonicalParentId(
+  parentId: string | null,
+  byId: ReadonlyMap<string, SessionParentEntry>,
+  opaqueParentsById: ReadonlyMap<string, string | null>,
+): string | null {
+  let seen: Set<string> | undefined;
+  let currentId = parentId;
+  while (currentId && !byId.has(currentId)) {
+    if (seen?.has(currentId)) {
+      return null;
+    }
+    (seen ??= new Set()).add(currentId);
+    currentId = opaqueParentsById.get(currentId) ?? null;
+  }
+  return currentId;
+}
+
+/** Opaque keep markers retain the same canonical ancestry as session replay. */
+export function resolveOpaqueSessionFirstKeptEntryId(params: {
+  firstKeptEntryId: string;
+  parentId: string | null;
+  fallbackParentId: string | null;
+  byId: ReadonlyMap<string, SessionParentEntry>;
+  opaqueParentsById: ReadonlyMap<string, string | null>;
+  entries: () => Iterable<SessionParentEntry>;
+}): string | undefined {
+  const { firstKeptEntryId, byId, opaqueParentsById } = params;
+  const parent = resolveSessionCanonicalParentId(firstKeptEntryId, byId, opaqueParentsById);
+  if (parent !== null) {
+    return parent;
+  }
+  const seen = new Set<string>();
+  let currentId = params.parentId;
+  let firstCanonicalDescendant: string | undefined;
+  while (currentId && !seen.has(currentId)) {
+    if (currentId === firstKeptEntryId) {
+      if (firstCanonicalDescendant) {
+        return firstCanonicalDescendant;
+      }
+      break;
+    }
+    seen.add(currentId);
+    const entry = byId.get(currentId);
+    if (entry) {
+      firstCanonicalDescendant = entry.id;
+      currentId = entry.parentId;
+    } else {
+      currentId = opaqueParentsById.get(currentId) ?? null;
+    }
+  }
+  for (const entry of params.entries()) {
+    const ancestors = new Set<string>();
+    let parentId = entry.parentId;
+    while (parentId && opaqueParentsById.has(parentId) && !ancestors.has(parentId)) {
+      if (parentId === firstKeptEntryId) {
+        return entry.id;
+      }
+      ancestors.add(parentId);
+      parentId = opaqueParentsById.get(parentId) ?? null;
+    }
+  }
+  return params.fallbackParentId ?? undefined;
+}
+
+/** Normalize selected branch boundaries before choosing or hydrating model context. */
+export function normalizeSessionContextEntryBoundaries<T>(
+  entries: readonly T[],
+  navigation: readonly SessionTranscriptTreeNode<unknown>[],
+): T[] {
+  if (
+    !entries.some(
+      (entry) =>
+        isRecord(entry) &&
+        (entry.type === "compaction" || entry.type === "reset") &&
+        typeof entry.firstKeptEntryId === "string",
+    )
+  ) {
+    return entries.slice();
+  }
+  const byId = new Map<string, SessionParentEntry>();
+  const opaqueParentsById = new Map<string, string | null>();
+  for (const node of navigation) {
+    if (isIndexedSessionEntry(node.entry)) {
+      byId.set(node.id, { id: node.id, parentId: node.parentId });
+    } else {
+      opaqueParentsById.set(node.id, node.parentId);
+    }
+  }
+  return entries.map((entry) => {
+    if (
+      !isIndexedSessionEntry(entry) ||
+      (entry.type !== "compaction" && entry.type !== "reset") ||
+      entry.firstKeptEntryId === undefined ||
+      byId.has(entry.firstKeptEntryId) ||
+      !opaqueParentsById.has(entry.firstKeptEntryId)
+    ) {
+      return entry;
+    }
+    const parentId = resolveSessionCanonicalParentId(entry.parentId, byId, opaqueParentsById);
+    const firstKeptEntryId = resolveOpaqueSessionFirstKeptEntryId({
+      firstKeptEntryId: entry.firstKeptEntryId,
+      parentId,
+      fallbackParentId: parentId,
+      byId,
+      opaqueParentsById,
+      entries: () => byId.values(),
+    });
+    return firstKeptEntryId ? { ...entry, firstKeptEntryId } : entry;
+  });
+}
 
 /** One navigation owner for runtime sessions and streaming transcript operations. */
 export class SessionEntryNavigation<T extends SessionNavigationEntry> {
@@ -191,16 +312,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   }
 
   protected resolveCanonicalParentId(parentId: string | null): string | null {
-    let seen: Set<string> | undefined;
-    let currentId = parentId;
-    while (currentId && !this.byId.has(currentId)) {
-      if (seen?.has(currentId)) {
-        return null;
-      }
-      (seen ??= new Set()).add(currentId);
-      currentId = this.opaqueParentsById.get(currentId) ?? null;
-    }
-    return currentId;
+    return resolveSessionCanonicalParentId(parentId, this.byId, this.opaqueParentsById);
   }
 
   protected resolveEntryParentId(entry: T): string | null {

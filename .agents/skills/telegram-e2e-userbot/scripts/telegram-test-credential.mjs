@@ -139,17 +139,17 @@ export function restoreTelegramTestCredential(payloadValue, stateRoot) {
   const credentialsPath = path.join(root, "credentials.local.json");
   fs.writeFileSync(
     credentialsPath,
-    `${JSON.stringify({ groupId: payload.groupId, sutBotToken: payload.sutToken }, null, 2)}\n`,
+    `${JSON.stringify({ groupId: payload.groupId, sutBotToken: payload.sutToken, sutBotId: payload.sutBotId, sutUsername: payload.sutUsername, testerUserId: payload.testerUserId, tdlibVersion: payload.tdlibVersion }, null, 2)}\n`,
     { mode: 0o600 },
   );
   return {
     ...payload,
     stateRoot: root,
+    credentialsPath,
     userDriverDir,
     driverEnv: {
       TELEGRAM_E2E_STATE_DIR: root,
       TELEGRAM_USER_DRIVER_STATE_DIR: userDriverDir,
-      TELEGRAM_E2E_SUT_BOT_TOKEN: payload.sutToken,
       TELEGRAM_USER_DRIVER_SUT_ID: payload.sutBotId,
       TELEGRAM_USER_DRIVER_SUT_USERNAME: payload.sutUsername,
     },
@@ -157,24 +157,13 @@ export function restoreTelegramTestCredential(payloadValue, stateRoot) {
 }
 
 async function cleanupTemporaryCredential(leaseDir, upstreamRelease) {
-  const errors = [];
-  try {
-    fs.rmSync(leaseDir, { recursive: true, force: true });
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    await upstreamRelease();
-  } catch (error) {
-    errors.push(error);
-  }
-  if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Telegram credential cleanup failed.");
-  }
+  fs.rmSync(path.join(leaseDir, "state"), { recursive: true, force: true });
+  await upstreamRelease();
+  fs.rmSync(leaseDir, { recursive: true, force: true });
 }
 
-async function restoreTemporaryCredential(payload, upstreamRelease = async () => {}) {
+async function restoreTemporaryCredential(payload, lease) {
+  const upstreamRelease = lease.release;
   let leaseDir;
   try {
     leaseDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tg-test-credential-"));
@@ -184,14 +173,17 @@ async function restoreTemporaryCredential(payload, upstreamRelease = async () =>
   }
   const stateRoot = path.join(leaseDir, "state");
   try {
+    // A failed fixture cleanup must leave a recoverable broker owner after exit.
+    fs.writeFileSync(path.join(leaseDir, "lease.json"), JSON.stringify(lease.recovery), {
+      mode: 0o600,
+    });
     const credential = restoreTelegramTestCredential(payload, stateRoot);
-    let released = false;
+    let releasing;
     return {
       ...credential,
-      release: async () => {
-        if (released) return;
-        released = true;
-        await cleanupTemporaryCredential(leaseDir, upstreamRelease);
+      release: () => {
+        releasing ??= cleanupTemporaryCredential(leaseDir, upstreamRelease);
+        return releasing;
       },
     };
   } catch (error) {
@@ -207,9 +199,9 @@ async function restoreTemporaryCredential(payload, upstreamRelease = async () =>
   }
 }
 
-export async function acquireTelegramTestCredential({ env = process.env } = {}) {
-  const lease = await acquireQaLease({ kind: TELEGRAM_TEST_CREDENTIAL_KIND, env });
-  const credential = await restoreTemporaryCredential(lease.payload, lease.release);
+export async function acquireTelegramTestCredential({ env = process.env, signal } = {}) {
+  const lease = await acquireQaLease({ kind: TELEGRAM_TEST_CREDENTIAL_KIND, env, signal });
+  const credential = await restoreTemporaryCredential(lease.payload, lease);
   return {
     ...credential,
     credentialSource: "convex",

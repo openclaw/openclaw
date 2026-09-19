@@ -262,6 +262,15 @@ Register each capability inside `register(api)` alongside your existing
     a promise, repeated closes return the same pending completion. Reentrant
     close calls during the provider invocation are no-ops; terminal callbacks
     must not wait for their own disposal.
+
+    Bundled lazy providers use `createLazyRealtimeVoiceBridgeLifecycle` from
+    the private-local `openclaw/plugin-sdk/realtime-voice-provider` surface
+    to own loading, callback fencing, and awaited disposal. It claims a
+    generation before calling the provider factory, so synchronous callbacks
+    can close or replace a bridge before the factory returns it. Provider
+    modules retain their input queues, readiness policy, authentication, and
+    reconnect behavior; module caching stays with the lazy-runtime helpers.
+
     Set `supportsToolResultSuppression: false` when the provider cannot
     honor `options.suppressResponse`. OpenClaw then avoids suppression for
     internal forced-consult and cancellation results, and rejects direct

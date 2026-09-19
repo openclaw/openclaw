@@ -102,6 +102,29 @@ describe("GitHub release-note rendering", () => {
         );
       const legacyBody = render(legacy);
       const splitBody = render(split);
+      const bodyPath = join(rootDir, "release-body.md");
+      writeFileSync(bodyPath, splitBody);
+      const verify = () =>
+        execFileSync(
+          process.execPath,
+          [
+            resolve("scripts/render-github-release-notes.mts"),
+            "--root",
+            rootDir,
+            "--ref",
+            split,
+            "--tag",
+            tag,
+            "--repository",
+            repository,
+            "--verify-body",
+            bodyPath,
+          ],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        );
+      expect(verify()).toBe("");
+      writeFileSync(bodyPath, `${splitBody}\nUnapproved appended prose.\n`);
+      expect(verify).toThrow("Release body does not match canonical release notes.");
       expect(legacyBody).not.toContain("Uncommitted drift");
       expect(splitBody).not.toContain("Uncommitted drift");
       if (compact) {

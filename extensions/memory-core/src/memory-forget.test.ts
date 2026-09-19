@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { StatementSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -66,35 +66,48 @@ describe("memory forget", () => {
       "## Session ID: target\nForget this.",
     );
     insert.run("memory-keep", "MEMORY.md", "memory", "Keep this memory.\0🚀");
-    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
-    const originalPrepare = DatabaseSync.prototype.prepare;
+    // Observe cached executions too: Kysely retains a statement after its second use.
+    for (let pass = 0; pass < 2; pass += 1) {
+      await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"], dryRun: true });
+    }
+    // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native statement receiver.
+    const { all: originalAll, iterate: originalIterate } = StatementSync.prototype;
     let fetchedBytes = 0;
     let fetchedRows = 0;
-    const prepareSpy = vi
-      .spyOn(DatabaseSync.prototype, "prepare")
-      .mockImplementation(function (this: DatabaseSync, sql) {
-        const statement = originalPrepare.call(this, sql);
-        if (sql.includes('left join "memory_index_chunk_provenance"')) {
-          statement.iterate = new Proxy(statement.iterate.bind(statement), {
-            apply(iterate, _receiver, args) {
-              const rows = iterate(...args);
-              return (function* () {
-                for (const row of rows) {
-                  fetchedRows += 1;
-                  for (const value of Object.values(row)) {
-                    if (typeof value === "string") {
-                      fetchedBytes += Buffer.byteLength(value);
-                    }
-                  }
-                  yield row;
-                }
-                return undefined;
-              })();
-            },
-          });
+    const observeRow = (row: Record<string, unknown>) => {
+      fetchedRows += 1;
+      for (const value of Object.values(row)) {
+        if (typeof value === "string") {
+          fetchedBytes += Buffer.byteLength(value);
         }
-        return statement;
-      });
+      }
+    };
+    const allSpy = vi.spyOn(StatementSync.prototype, "all").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      const rows = originalAll.apply(this, args);
+      if (this.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
+        rows.forEach(observeRow);
+      }
+      return rows;
+    });
+    const iterateSpy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
+      this: StatementSync,
+      ...args
+    ) {
+      const rows = originalIterate.apply(this, args);
+      if (!this.sourceSQL.includes('left join "memory_index_chunk_provenance"')) {
+        return rows;
+      }
+      return (function* () {
+        for (const row of rows) {
+          observeRow(row);
+          yield row;
+        }
+        return undefined;
+      })();
+    });
     try {
       const preview = await forgetMemoryEntries({
         cfg,
@@ -119,7 +132,8 @@ describe("memory forget", () => {
       expect(fetchedRows).toBe(68);
       expect(fetchedBytes).toBeLessThan(16_384);
     } finally {
-      prepareSpy.mockRestore();
+      allSpy.mockRestore();
+      iterateSpy.mockRestore();
     }
   });
 
@@ -835,11 +849,10 @@ describe("memory forget", () => {
                 : failure === "sources"
                   ? "BEFORE DELETE ON memory_index_sources WHEN OLD.source = 'sessions'"
                   : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
-          // Attach the fault to the actual purge connection after schema validation,
-          // so an unexpected persistent trigger cannot fail database admission first.
+          // KV writes use the admitted worker; agent writes retain this native connection.
           const faultDb = failure === "backup" ? openOpenClawStateDatabase().db : agentDatabase.db;
           faultDb.exec(
-            `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
+            `CREATE ${failure === "backup" ? "" : "TEMP "}TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
           );
           try {
             await expect(

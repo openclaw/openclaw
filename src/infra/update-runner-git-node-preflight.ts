@@ -25,18 +25,39 @@ export async function checkGitCandidateNodeRuntime(
   shortSha: string,
 ): Promise<UpdateStepResult | null> {
   const startedAt = Date.now();
-  // Bun exposes an emulated process.versions.node, which is not proof that Node can run the target.
-  if (process.versions.bun) {
-    return null;
-  }
   const engine = await readCandidateNodeEngine(root);
-  const currentVersion = process.versions.node;
-  const capabilityError = nodeRuntimeFailure(currentVersion, detectCurrentSqliteCapabilities());
+  let currentVersion = process.versions.node;
+  let currentPath = process.execPath;
+  let capabilityError: string | null;
+  let systemNode: Awaited<ReturnType<typeof resolveSystemNodeInfo>> | null = null;
+
+  if (process.versions.bun) {
+    // Candidate package tooling runs under the installed system Node. Bun's
+    // emulated process.versions.node does not prove that runtime can load it.
+    systemNode = await resolveSystemNodeInfo({
+      acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) !== false,
+    });
+    currentPath = systemNode?.path ?? "system Node";
+    currentVersion =
+      systemNode?.status === "supported" || systemNode?.status === "unsupported"
+        ? (systemNode.version ?? "unknown")
+        : "unavailable";
+    capabilityError =
+      systemNode === null
+        ? "No system Node was found."
+        : systemNode.status === "probe-failed"
+          ? systemNode.error.message
+          : systemNode.status === "unsupported"
+            ? nodeRuntimeFailure(systemNode.version, systemNode.sqliteProbe)
+            : null;
+  } else {
+    capabilityError = nodeRuntimeFailure(currentVersion, await detectCurrentSqliteCapabilities());
+  }
   if (!capabilityError && nodeVersionSatisfiesEngine(currentVersion, engine) !== false) {
     return null;
   }
 
-  const systemNode = await resolveSystemNodeInfo({
+  systemNode ??= await resolveSystemNodeInfo({
     acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) !== false,
   });
   let systemDiagnostic: string;
@@ -59,7 +80,7 @@ export async function checkGitCandidateNodeRuntime(
     cwd: root,
     durationMs: Date.now() - startedAt,
     exitCode: 1,
-    stdoutTail: `Node ${currentVersion} (${process.execPath}); requires engines.node ${engine}`,
+    stdoutTail: `Node ${currentVersion} (${currentPath}); requires engines.node ${engine}`,
     stderrTail: `${capabilityError ? `${capabilityError}\n` : ""}Activate a compatible Node for the CLI, then retry. ${systemDiagnostic}`,
   };
 }

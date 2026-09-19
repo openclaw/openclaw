@@ -1,3 +1,11 @@
+import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
+const pinSnapshotMock = vi.hoisted(() =>
+  vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
+);
+vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
+  readDaemonRuntimePinForInstall: pinSnapshotMock,
+}));
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { SecretInput } from "../../config/types.secrets.js";
@@ -120,8 +128,8 @@ vi.mock("./shared.js", async (importOriginal) => ({
     };
   },
 }));
-vi.mock("../../commands/daemon-runtime.js", () => ({
-  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+vi.mock("../../commands/daemon-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/daemon-runtime.js")>()),
   isGatewayDaemonRuntime: isGatewayDaemonRuntimeMock,
 }));
 
@@ -203,6 +211,7 @@ const envSnapshot = captureFullEnv();
 
 export function setupInstallTests() {
   beforeEach(() => {
+    pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     runExecMock.mockReset();
     runExecMock.mockResolvedValue(nodeProbeOutput("26.8.1"));
     resolveNodeStartupTlsEnvironmentMock.mockReset();
@@ -290,3 +299,5 @@ export {
   runExecMock,
   service,
 };
+
+export { pinSnapshotMock };

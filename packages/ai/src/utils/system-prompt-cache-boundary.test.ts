@@ -5,7 +5,6 @@ import {
   ensureSystemPromptCacheBoundary,
   prependSystemPromptAdditionAfterCacheBoundary,
   splitSystemPromptCacheBoundary,
-  splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
@@ -108,42 +107,6 @@ describe("ensureSystemPromptCacheBoundary", () => {
 describe("relocatable region splitting", () => {
   const marked = (facts: string) =>
     `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}${facts}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
-
-  it("cuts the marked region out of the prompt", () => {
-    expect(
-      splitSystemPromptRelocatableBoundary(
-        `Behavioral guidance${marked("Runtime: session=alpha")}`,
-      ),
-    ).toEqual({
-      remainingPrompt: "Behavioral guidance",
-      relocatable: "Runtime: session=alpha",
-    });
-  });
-
-  it("keeps text appended after the region in the prompt", () => {
-    // Hook context and permission notices are appended once the prompt is
-    // built. They must not travel with the runtime facts.
-    expect(
-      splitSystemPromptRelocatableBoundary(
-        `Behavioral guidance${marked("Runtime: session=alpha")}Hook instruction`,
-      ),
-    ).toEqual({
-      remainingPrompt: "Behavioral guidance\nHook instruction",
-      relocatable: "Runtime: session=alpha",
-    });
-  });
-
-  it("returns undefined when the region is never closed", () => {
-    expect(
-      splitSystemPromptRelocatableBoundary(
-        `Behavioral guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha`,
-      ),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined for an unmarked prompt", () => {
-    expect(splitSystemPromptRelocatableBoundary("Behavioral guidance")).toBeUndefined();
-  });
 
   it("strips both markers from prompt text", () => {
     const stripped = stripSystemPromptCacheBoundary(

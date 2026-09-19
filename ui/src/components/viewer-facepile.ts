@@ -31,7 +31,7 @@ function renderViewerAvatar(view: IdentityAvatarView) {
   const fallback = html`<span
     class=${view.imageUrl ? "viewer-avatar__fallback" : nothing}
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
-    >${view.fallback.initials}</span
+    ><span class="viewer-avatar__initials">${view.fallback.initials}</span></span
   >`;
   if (!view.imageUrl) {
     return fallback;

@@ -5,11 +5,8 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
-import {
-  detectGlobalInstallManagerForRoot,
-  resolveGlobalInstallTarget,
-  type CommandRunner,
-} from "./update-global.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
+import { detectGlobalInstallManagerForRoot, resolveGlobalInstallTarget } from "./update-global.js";
 
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

@@ -10,11 +10,13 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "reply-admission-module-")));
   const repo = process.cwd();
   const dist = path.join(root, "dist");
+  const deferredModules = new Set<string>();
+  const nativeRuntime = path.join(dist, "node_modules/admission-native-runtime");
   const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
   const ownerExports = `
     export { admitReplyTurn } from ${source("src/auto-reply/reply/reply-turn-admission.ts")};
     export { replyRunRegistry } from ${source("src/auto-reply/reply/reply-run-registry.ts")};
-    export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.ts")};
+    export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.sqlite-entry.ts")};
     export { closeOpenClawAgentDatabases } from ${source("src/state/openclaw-agent-db.ts")};
     export { closeOpenClawStateDatabase } from ${source("src/state/openclaw-state-db.ts")};
   `;
@@ -33,8 +35,26 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/admission-fixture";\n',
     );
-    // Model the packaged host/SDK graph, then load a plugin through its supported transform path.
+    // Keep lazy recovery/archival graphs out of this admission fixture. The child
+    // rejects and records any attempt to enter them, including caught import errors.
     await build({
+      plugins: [
+        {
+          name: "defer-unexercised-runtime",
+          async resolveId(id, importer, options) {
+            if (options.kind !== "dynamic-import") {
+              return null;
+            }
+            const resolved = await this.resolve(id, importer, { skipSelf: true });
+            if (!resolved || resolved.external) {
+              return resolved;
+            }
+            const url = pathToFileURL(resolved.id).href;
+            deferredModules.add(url);
+            return { id: url, external: true };
+          },
+        },
+      ],
       config: false,
       cwd: repo,
       entry: {
@@ -45,11 +65,28 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       envPrefix: [],
       clean: false,
       deps: {
-        // Match compiled workers: workspace packages bring their private dependencies.
-        alwaysBundle: (id) =>
-          (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
-          id !== "@openclaw/fs-safe" &&
-          !id.startsWith("@openclaw/fs-safe/"),
+        // Bundle dependencies once; only the admission owner needs a second module graph.
+        alwaysBundle: (id) => id !== "@openclaw/fs-safe" && !id.startsWith("@openclaw/fs-safe/"),
+      },
+      // Duplicate the real admission/registry owners while their unchanged
+      // dependencies stay native, as external packages do in the installed SDK.
+      outputOptions: {
+        codeSplitting: {
+          includeDependenciesRecursively: false,
+          groups: [
+            {
+              name: "native-runtime",
+              test: (id) =>
+                id.replaceAll("\\", "/").startsWith(repo.replaceAll("\\", "/")) &&
+                !/[/\\]auto-reply[/\\]reply[/\\]reply-(?:run-|turn-admission)/.test(id),
+              priority: 10,
+            },
+          ],
+        },
+        chunkFileNames: (chunk) =>
+          chunk.name === "native-runtime"
+            ? "node_modules/admission-native-runtime/index.js"
+            : "[name]-[hash].js",
       },
       platform: "node",
       format: "esm",
@@ -58,14 +95,27 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       tsconfig: path.join(repo, "tsconfig.json"),
       logLevel: "silent",
     });
+    fs.writeFileSync(path.join(nativeRuntime, "package.json"), '{"type":"module"}');
     for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
-      fs.copyFileSync(path.join(repo, "src/state", schema), path.join(dist, schema));
+      fs.copyFileSync(path.join(repo, "src/state", schema), path.join(nativeRuntime, schema));
     }
     const result = spawnNodeEvalSync(
       String.raw`
         import assert from "node:assert/strict";
         import path from "node:path";
+        import { registerHooks } from "node:module";
         const root = ${JSON.stringify(root)};
+        const deferredModules = new Set(${JSON.stringify([...deferredModules])});
+        const unexpectedImports = [];
+        const hooks = registerHooks({
+          resolve(specifier, context, nextResolve) {
+            if (deferredModules.has(specifier)) {
+              unexpectedImports.push(specifier);
+              throw new Error("Admission fixture entered deferred runtime: " + specifier);
+            }
+            return nextResolve(specifier, context);
+          },
+        });
         const operations = new Set();
         const outcomes = [];
         let host;
@@ -103,7 +153,8 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
             const sessionKey = "global";
             const sessionId = "before-" + scenario.name;
             const successorId = "after-" + scenario.name;
-            const caseRoot = path.join(root, "state", scenario.name);
+            // Reuse the target database; each scenario still owns a distinct operation and UUID.
+            const caseRoot = path.join(root, "state");
             const targetStore = path.join(caseRoot, "target", "sessions.json");
             const parentStore = scenario.foreign
               ? path.join(caseRoot, "foreign", "sessions.json") : targetStore;
@@ -172,7 +223,9 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
           host?.closeOpenClawAgentDatabases();
           transformed?.closeOpenClawStateDatabase();
           host?.closeOpenClawStateDatabase();
+          hooks.deregister();
         }
+        assert.deepEqual(unexpectedImports, [], "all exercised runtime must stay in the fixture graph");
       `,
       {
         timeout: 45_000,
@@ -184,6 +237,7 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
           OPENCLAW_STATE_DIR: path.join(root, "state"),
           OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
           XDG_CACHE_HOME: path.join(root, "cache"),
+          JITI_NATIVE_MODULES: JSON.stringify(["admission-native-runtime"]),
           JITI_FS_CACHE: "0",
         },
       },

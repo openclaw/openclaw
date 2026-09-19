@@ -50,7 +50,7 @@ export default definePluginEntry({
   `openclaw/plugin-sdk/session-catalog` and register a
   `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
   provider fields are `id`, `label`, `list`, and `read`; optional hooks are
-  `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
+  `createListOperation`, `resolveCreateSession`, `continueSession`, `copyToGatewaySession`,
   `checkUpstreamActivity`, `archive`, `openTerminal`, and `startTerminalSession`.
   Core owns the
   `sessions.catalog.*` Gateway methods; providers return host, session,
@@ -79,8 +79,43 @@ export default definePluginEntry({
 
   Keep `onHost`, `waitUntil`, and `signal` separate from validated catalog query
   objects and node command payloads. The request-owned `sessionEntries` snapshot
-  and `listNodes` hook still must not be retained past `list`; prepare any facts
-  needed by late host mapping before returning.
+  and `listNodes` hook must be released when `list` settles, or when the optional
+  list operation below closes. Prepare the facts needed by late host mapping
+  before that boundary.
+
+  Providers with a multi-step fill can implement the optional
+  `SessionCatalogProvider.createListOperation(params)` hook. Its synchronous
+  factory returns `{ next, close }` without starting source work. The Gateway
+  calls the factory once inside the first admission and calls `next()` serially:
+
+  - `{ done: false }` means the step has settled and only inert continuation
+    state remains. The same request rejoins the existing provider FIFO behind
+    waiting callers; no partial result is sent to the client.
+  - `{ done: true, hosts }` supplies the complete filled result that `list`
+    would return. Providers without this hook continue using `list` once.
+
+  `sessions.catalog.list` checks its original Gateway and catalog registration
+  owner before each step and after it settles. A stale owner ends the stepped
+  list and closes its operation without starting further source work.
+
+  Each `next()` returns a promise and must join all foreground work it starts
+  before settling. A handoff cannot leave a source page, classification, or
+  required projection running. Preserve the source's existing limits, shared
+  producer ownership, ordering, and failure behavior. One logical request keeps
+  the same `sessionEntries`, `listNodes`, `onHost`, `waitUntil`, and `signal`
+  lifetime across every step. Register publication work before the logical list
+  settles, using `publishSessionCatalogHost` as above; an asynchronous publication
+  callback remains separately accounted work, not a foreground step.
+
+  The Gateway calls synchronous `close()` once after completion, failure, or
+  cancellation while queued. Active cancellation still waits for the actual
+  `next()` promise before closing. Mark the operation closed first, reject any
+  unfinished logical host results, and release only operation-owned references.
+  Close starts no source work or asynchronous cleanup and must not cancel shared
+  producers. Later `next()` calls must fail before I/O; repeated close is inert.
+  Native-discovery consent is checked before factory construction and before
+  and after each step. Initial disablement returns an empty result without
+  constructing the source; later revocation rejects the logical list.
 
   Transcript items may include a `sender` with a qualified `SessionParticipant`
   identity and optional display label or avatar. Supply only source-known

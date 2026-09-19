@@ -1,13 +1,20 @@
+import { finished } from "node:stream/promises";
 import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-authority.js";
 
-export function writeGatewayServiceUpdateCapability(): void {
+export async function writeGatewayServiceUpdateCapability(): Promise<void> {
   process.stdout.write(
-    JSON.stringify({ updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT, targetRootBinding: true }),
+    JSON.stringify({
+      updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
+      targetRootBinding: true,
+      definitionBackup: true,
+    }),
   );
+  // The parent closes stdin only after binding this child's PID and start identity.
+  await finished(process.stdin.resume(), { cleanup: true });
 }
 
 /** The updater's machine probe must return before capture or config can open live state. */
-export function tryRunGatewayServiceUpdateCapabilityProbe(argv: string[]): boolean {
+export async function tryRunGatewayServiceUpdateCapabilityProbe(argv: string[]): Promise<boolean> {
   const [primary, action, ...options] = argv.slice(2);
   if (
     (primary !== "gateway" && primary !== "daemon") ||
@@ -28,6 +35,6 @@ export function tryRunGatewayServiceUpdateCapabilityProbe(argv: string[]): boole
   ) {
     return false;
   }
-  writeGatewayServiceUpdateCapability();
+  await writeGatewayServiceUpdateCapability();
   return true;
 }

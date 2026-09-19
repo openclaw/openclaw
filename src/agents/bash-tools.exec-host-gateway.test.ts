@@ -2151,25 +2151,16 @@ Command: ${command}`;
 
     const command = "sh -c 'git status'";
     const env = { PATH: "/usr/bin:/bin" };
-    const authorizationPlan = await planShellAuthorization({ command, env });
-    expect(authorizationPlan.ok).toBe(true);
-    if (!authorizationPlan.ok) {
-      throw new Error(authorizationPlan.reason);
-    }
-    requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: false,
-      segments: authorizationPlan.groups.flatMap((group) =>
-        group.candidates.map((candidate) => candidate.sourceSegment),
-      ),
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [null],
-      authorizationPlan,
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue(createAllowlistOnMissContext());
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+    const secretEgressBindings = [
+      {
+        name: "SERVICE_KEY",
+        sentinel: "synthetic-approval-sentinel",
+        allowedHosts: ["api.example.com"],
+      },
+    ];
+    await configurePlanBackedCommand({ command, env });
+    const approval = createDeferredCore<"allow-always">();
+    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(approval.promise);
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
       approvedByAsk: true,
@@ -2190,6 +2181,7 @@ Command: ${command}`;
       command,
       ask: "on-miss",
       env,
+      secretEgressBindings,
       autoReview: false,
     });
     const expectedGitArgPattern = buildCwdBoundHashedArgPattern(
@@ -2211,9 +2203,14 @@ Command: ${command}`;
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    approval.resolve("allow-always");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
+    expect(runExecProcessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ env, secretEgressBindings }),
+    );
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
         authorization: expect.objectContaining({ source: "explicit-approval" }),

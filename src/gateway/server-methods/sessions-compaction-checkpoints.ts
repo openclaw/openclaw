@@ -16,8 +16,9 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
-  createFileBackedCompactionCheckpointStore,
+  branchCheckpointSessionFromStoredBoundary,
   getSessionCompactionCheckpoint,
+  restoreCheckpointSessionFromStoredBoundary,
 } from "../session-compaction-checkpoints.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -32,12 +33,11 @@ import {
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
   "Checkpoint branch and restore are unavailable while model selection is locked.";
 type CheckpointAction = "branch" | "restore";
 type CheckpointMutationResult = Awaited<
-  ReturnType<typeof compactionCheckpointStore.branchCheckpointSession>
+  ReturnType<typeof branchCheckpointSessionFromStoredBoundary>
 >;
 
 function checkpointConflict(key: string, action: CheckpointAction): ErrorShape {
@@ -148,7 +148,7 @@ function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandle
         creation.actor?.id === GATEWAY_OWNER_PROFILE_ID
           ? entry.sandbox
           : resolveCreatorSandbox(cfg, creation);
-      const result = await compactionCheckpointStore.branchCheckpointSession({
+      const result = await branchCheckpointSessionFromStoredBoundary({
         agentId: target.agentId,
         expectedState: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
         storePath,
@@ -217,12 +217,6 @@ function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandle
           preparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
           return;
         }
-        clearSessionQueues([
-          key,
-          current.canonicalKey,
-          current.sessionStoreKey,
-          current.entry.sessionId,
-        ]);
         const released = await interruptSessionWorkAdmissions({
           scope: storePath,
           identities: lifecycleIdentities,
@@ -266,7 +260,7 @@ function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandle
         if (interruptResult.error) {
           return fail(interruptResult.error);
         }
-        const result = await compactionCheckpointStore.restoreCheckpointSession({
+        const result = await restoreCheckpointSessionFromStoredBoundary({
           agentId: requestedAgent.agentId,
           expectedState: {
             sessionId: current.entry.sessionId,
@@ -277,6 +271,15 @@ function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandle
           sessionStoreKey: current.sessionStoreKey,
           checkpointId,
         });
+        // Queue retirement is irreversible; failed restores must leave accepted work usable.
+        if (result.status === "created") {
+          clearSessionQueues([
+            key,
+            current.canonicalKey,
+            current.sessionStoreKey,
+            current.entry.sessionId,
+          ]);
+        }
         complete(result, current.canonicalKey);
       },
     });

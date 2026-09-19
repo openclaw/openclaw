@@ -54,6 +54,7 @@ type EnsureCodexPluginActivationParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  appInventoryCacheKey?: string;
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   installEvenIfActive?: boolean;
@@ -171,9 +172,6 @@ export async function ensureCodexPluginActivation(
       ],
     };
   }
-  if (params.metadataCache && params.appCacheKey) {
-    params.metadataCache.invalidate(params.appCacheKey);
-  }
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
@@ -181,6 +179,7 @@ export async function ensureCodexPluginActivation(
       request: params.request,
       appCache: params.appCache,
       appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: params.appInventoryCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       deferAppInventoryRefresh: params.deferAppInventoryRefresh,
@@ -216,39 +215,29 @@ export async function ensureCodexPluginActivation(
   };
 }
 
-/** Forces Codex plugin, skill, hook, MCP, and app inventory refreshes after activation. */
+/** Refreshes OpenClaw inventories after Codex installs a plugin. */
 export async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  appInventoryCacheKey?: string;
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   deferAppInventoryRefresh?: boolean;
   targetAppIds?: readonly string[];
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
-  await listCuratedCodexPluginMetadata(params, { forceRefetch: true });
-  await (params.request("skills/list", {
-    cwds: params.configCwd ? [params.configCwd] : [],
-    forceReload: true,
-  } satisfies v2.SkillsListParams) as Promise<v2.SkillsListResponse>);
-  try {
-    await (params.request("hooks/list", {
-      cwds: params.configCwd ? [params.configCwd] : [],
-    } satisfies v2.HooksListParams) as Promise<v2.HooksListResponse>);
-  } catch (error) {
-    diagnostics.push({
-      message: `Codex hooks refresh skipped: ${coerceErrorMessage(error)}`,
-    });
+  if (params.appCacheKey) {
+    params.metadataCache?.invalidate(params.appCacheKey);
   }
-  await params.request("config/mcpServer/reload", undefined);
+  await listCuratedCodexPluginMetadata(params, { forceRefetch: true });
 
   if (params.appCache && params.appCacheKey) {
     try {
       await refreshCodexAppRuntimeState({
         ...params,
         appCache: params.appCache,
-        appCacheKey: params.appCacheKey,
+        appCacheKey: params.appInventoryCacheKey ?? params.appCacheKey,
       });
     } catch (error) {
       diagnostics.push({

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
@@ -16,6 +16,7 @@ import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   clearPluginRegistryLoadCache();
   clearPluginMetadataLifecycleCaches();
   resetAutoMigrateLegacyStateDirForTest();
@@ -116,6 +117,41 @@ describe("installed channel legacy session surfaces", () => {
     const stateDir = path.join(rootDir, "state");
     const bundledDir = path.join(rootDir, "bundled-disabled");
     fs.mkdirSync(bundledDir, { recursive: true });
+    const unrelatedDir = path.join(bundledDir, "unrelated-channel");
+    const authProbeMarker = path.join(rootDir, "unrelated-auth-probe.marker");
+    fs.mkdirSync(unrelatedDir);
+    fs.writeFileSync(
+      path.join(unrelatedDir, "package.json"),
+      JSON.stringify({
+        name: "@fixture/unrelated-channel",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "unrelated-channel",
+            persistedAuthState: { specifier: "./auth-presence.js", exportName: "hasAuth" },
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(unrelatedDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "unrelated-channel",
+        channels: ["unrelated-channel"],
+        configSchema: { type: "object" },
+      }),
+    );
+    fs.writeFileSync(path.join(unrelatedDir, "index.js"), "export default { register() {} };\n");
+    fs.writeFileSync(
+      path.join(unrelatedDir, "auth-presence.js"),
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(authProbeMarker)}, "loaded");
+export function hasAuth() { return false; }
+`,
+    );
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "");
     const selected = writeSessionSurfacePlugin({
       stateDir,
       rootDir,
@@ -189,6 +225,7 @@ describe("installed channel legacy session surfaces", () => {
       packageManifest: { setupFeatures: { legacySessionSurfaces: true } },
     });
     const prepared = prepareLegacySessionSurfaces({ config, env });
+    expect(fs.existsSync(authProbeMarker)).toBe(false);
     expect(prepared.failures).toEqual([]);
     expect(prepared.surfaces).toHaveLength(1);
     expect(Object.isFrozen(prepared)).toBe(true);

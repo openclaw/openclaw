@@ -38,10 +38,10 @@ const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMock } =
   slackTestState;
 
-beforeEach(() => {
+beforeEach(async () => {
   mediaFetchMock.mockReset().mockRejectedValue(new Error("Unexpected Slack media test request"));
   resetInboundDedupe();
-  resetSlackTestState(defaultSlackTestConfig());
+  await resetSlackTestState(defaultSlackTestConfig());
 });
 
 describe("monitorSlackProvider tool results", () => {

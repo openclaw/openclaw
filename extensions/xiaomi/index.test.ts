@@ -1,5 +1,6 @@
 // Xiaomi tests cover index plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
@@ -13,7 +14,6 @@ import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import xiaomiPlugin from "./index.js";
-import { createMiMoThinkingWrapper } from "./stream.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
@@ -130,20 +130,38 @@ function mimoReasoningToolReplayContext(provider = "xiaomi") {
   );
 }
 
-function createPayloadCapturingStream(capture: PayloadCapture, model: OpenAICompletionsModel) {
-  return (
-    _streamModel: OpenAICompletionsModel,
-    streamContext: Context,
-    options?: { onPayload?: (payload: unknown, m: unknown) => unknown },
-  ) => {
+function createPayloadCapturingStream(
+  capture: PayloadCapture,
+  model: OpenAICompletionsModel,
+): StreamFn {
+  return (_streamModel, streamContext, options) => {
     capture.payload = buildOpenAICompletionsParams(model, streamContext, {
       reasoning: "high",
-    } as never);
+    });
     options?.onPayload?.(capture.payload, model);
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => stream.end());
     return stream;
   };
+}
+
+async function createRegisteredThinkingStream(
+  capture: PayloadCapture,
+  model: OpenAICompletionsModel,
+  thinkingLevel: "off" | "high",
+) {
+  const { providers } = await registerXiaomiPlugin();
+  const provider = requireRegisteredProvider(providers, model.provider);
+  return expectDefined(
+    provider.wrapStreamFn?.({
+      provider: model.provider,
+      modelId: model.id,
+      model,
+      streamFn: createPayloadCapturingStream(capture, model),
+      thinkingLevel,
+    }),
+    "Registered MiMo thinking stream",
+  );
 }
 
 function readThinking(payload: Record<string, unknown> | undefined): ThinkingPayload | undefined {
@@ -492,12 +510,7 @@ describe("xiaomi provider plugin", () => {
         stopReason: "toolUse",
       }),
     );
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingHigh = expectDefined(
-      createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "MiMo thinking wrapper for high",
-    );
+    const wrapThinkingHigh = await createRegisteredThinkingStream(capture, model, "high");
     await wrapThinkingHigh(model, context, {});
 
     const assistantMessage = readPayloadMessage(capture, 1);
@@ -514,12 +527,7 @@ describe("xiaomi provider plugin", () => {
     const capture: PayloadCapture = {};
     const model = mimoReasoningModel("mimo-v2.5-pro", "xiaomi-token-plan");
     const context = mimoReasoningToolReplayContext("xiaomi-token-plan");
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingHigh = expectDefined(
-      createMiMoThinkingWrapper(baseStreamFn as never, "high"),
-      "MiMo thinking wrapper for high",
-    );
+    const wrapThinkingHigh = await createRegisteredThinkingStream(capture, model, "high");
     await wrapThinkingHigh(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("enabled");
@@ -536,13 +544,8 @@ describe("xiaomi provider plugin", () => {
     const capture: PayloadCapture = {};
     const model = mimoReasoningModel("mimo-v2.5");
     const context = mimoReasoningToolReplayContext();
-    const baseStreamFn = createPayloadCapturingStream(capture, model);
-
-    const wrapThinkingNone = expectDefined(
-      createMiMoThinkingWrapper(baseStreamFn as never, "none" as never),
-      "MiMo thinking wrapper for none",
-    );
-    await wrapThinkingNone(model, context, {});
+    const wrapThinkingOff = await createRegisteredThinkingStream(capture, model, "off");
+    await wrapThinkingOff(model, context, {});
 
     expect(readThinking(capture.payload)?.type).toBe("disabled");
     expect((capture.payload!.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(

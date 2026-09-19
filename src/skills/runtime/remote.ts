@@ -3,10 +3,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry, NodeSession } from "../../gateway/node-registry.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEligibilityContext } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -421,7 +421,7 @@ export function removeRemoteNodeInfoForConnection(nodeId: string, connId: string
   return true;
 }
 
-export async function refreshRemoteNodeBins(params: {
+type RemoteNodeBinRefreshParams = {
   nodeId: string;
   platform?: string;
   deviceFamily?: string;
@@ -429,7 +429,10 @@ export async function refreshRemoteNodeBins(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
   readinessDelayMs?: number;
-}): Promise<void> {
+  readinessSignal?: AbortSignal;
+};
+
+export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams): Promise<void> {
   for (;;) {
     const session = remoteRegistry?.get(params.nodeId);
     if (!session?.pairingGeneration) {
@@ -465,28 +468,29 @@ export async function refreshRemoteNodeBins(params: {
   }
 }
 
-async function refreshRemoteNodeBinsUncoalesced(params: {
-  nodeId: string;
-  platform?: string;
-  deviceFamily?: string;
-  commands?: string[];
-  cfg: OpenClawConfig;
-  timeoutMs?: number;
-  readinessDelayMs?: number;
-}) {
+async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshParams) {
   const readinessDelayMs = params.readinessDelayMs ?? 0;
   if (readinessDelayMs > 0) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, readinessDelayMs);
-    });
+    try {
+      await sleepWithAbort(readinessDelayMs, params.readinessSignal);
+    } catch (error) {
+      if (!params.readinessSignal?.aborted) {
+        throw error;
+      }
+    }
+  }
+  // Retire an idle connect probe on shutdown; started probes still finish below.
+  if (params.readinessSignal?.aborted) {
+    return;
   }
   if (!remoteRegistry) {
     return;
   }
+  const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
   // Pairing can replace the command surface while the connect-time readiness
-  // delay is pending. Probe the live session so that approval refresh is not lost.
-  const liveSession = remoteRegistry.get(params.nodeId);
-  if (!liveSession?.pairingGeneration) {
+  // delay or loader import is pending. Probe the live session after both settle.
+  const liveSession = remoteRegistry?.get(params.nodeId);
+  if (params.readinessSignal?.aborted || !liveSession?.pairingGeneration) {
     return;
   }
   const probeOwner: RemoteNodeOwner = {

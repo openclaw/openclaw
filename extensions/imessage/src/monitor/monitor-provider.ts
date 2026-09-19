@@ -55,7 +55,6 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
@@ -67,6 +66,7 @@ import { pollPendingIMessageApprovalReactions } from "../approval-reaction-polle
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
+import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -214,30 +214,6 @@ function resolveIMessageWatchSourceDbPath(params: {
   remoteHost?: string;
 }): string | undefined {
   return resolveIMessageChatDbLookupPath(params);
-}
-
-async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
-  let database:
-    | {
-        close: () => void;
-        prepare: (sql: string) => { get: () => unknown };
-      }
-    | undefined;
-  try {
-    database = openNodeSqliteDatabase(dbPath, { readOnly: true });
-    const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
-      | { maxRowid?: unknown }
-      | undefined;
-    if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
-      return row.maxRowid;
-    }
-    return row?.maxRowid === null ? 0 : null;
-  } catch (err) {
-    logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
-    return null;
-  } finally {
-    database?.close();
-  }
 }
 
 const warnIfImsgUpgradeNeeded = (() => {
@@ -469,7 +445,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     dbPath,
     remoteHost,
   });
-  const recoveryCursorRowid = loadIMessageRecoveryCursor(
+  const recoveryCursorRowid = await loadIMessageRecoveryCursor(
     accountInfo.accountId,
     recoveryCursorDbIdentity,
     { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
@@ -497,7 +473,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return min;
   }
 
-  function advanceRecoveryCursorAfterDurableEnqueue(rowid: number): void {
+  async function advanceRecoveryCursorAfterDurableEnqueue(rowid: number): Promise<void> {
     if (catchupCfg.enabled) {
       return;
     }
@@ -509,7 +485,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       holdFloor !== null && maxDurableRowid >= holdFloor ? holdFloor - 1 : maxDurableRowid;
 
     if (nextCursorRowid >= 0 && nextCursorRowid > latestAdvancedRecoveryCursorRowid) {
-      advanceIMessageRecoveryCursor(
+      await advanceIMessageRecoveryCursor(
         accountInfo.accountId,
         recoveryCursorDbIdentity,
         nextCursorRowid,
@@ -1488,7 +1464,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return { kind: "deferred" };
     },
     onDurableEnqueue: async (facts) => {
-      advanceRecoveryCursorAfterDurableEnqueue(facts.rowid);
+      await advanceRecoveryCursorAfterDurableEnqueue(facts.rowid);
       await maybeAdvanceLiveCatchupCursor({ id: facts.rowid, created_at: facts.createdAt });
     },
     onDurableEnqueueFailure: (rowid) => {

@@ -8,29 +8,23 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { catalog, pluginId, pluginModule } from "./native-plugin-ui.test-support.ts";
+import {
+  catalog,
+  expectComposerFooterLayout,
+  pluginId,
+  pluginModule,
+  waitForPendingPluginInitializer,
+  type NativePluginWindow,
+} from "./native-plugin-ui.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native plugin UI ownership" });
-type NativePluginWindow = Window & {
-  nativePluginProof?: { release?: () => void };
-  nativeActionProof?: {
-    runs: number;
-    current?: {
-      signal: AbortSignal;
-      release: () => void;
-      withdraw: () => void;
-      done: boolean;
-      outcome: string;
-    };
-  };
-};
-
 const hungPluginModule = `export default { id:"hung-ui", async activate(host) {
   await host.request("fixture.peerStarted");
   await new Promise(resolve => { globalThis.nativePluginProof.release = resolve; });
@@ -457,21 +451,13 @@ suite.define(() => {
               manager: Boolean(customElements.get("openclaw-plugin-manager")),
             })),
           ).toEqual({ contributions: false, manager: true });
-          expect(
-            await page
-              .locator("openclaw-plugin-contributions")
-              .first()
-              .evaluate((element) => getComputedStyle(element).display),
-          ).toBe("contents");
           await gateway.resolveDeferred("plugins.controlUi.list");
           await bootstrapRequested.promise;
           await expectLoading();
           bootstrapGate.resolve();
           await gateway.waitForRequest("fixture.activationStarted");
           await gateway.waitForRequest("fixture.peerStarted");
-          await page.waitForFunction(
-            () => typeof (window as NativePluginWindow).nativePluginProof?.release === "function",
-          );
+          await waitForPendingPluginInitializer(page);
           await expectLoading();
           await page.screenshot({ path: path.join(suite.artifactDir, "startup-loading.png") });
           await page.evaluate(() => {
@@ -482,7 +468,14 @@ suite.define(() => {
             release();
           });
           await page.getByRole("heading", { name: "Fixture revision pending" }).waitFor();
-          await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
+          const navigationEntry = page.locator('[data-sidebar-entry="plugin:ui-fixture/proof"]');
+          await navigationEntry.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
+          expect(await navigationEntry.getAttribute("draggable")).toBe("true");
+          expect(
+            await navigationEntry
+              .locator("openclaw-plugin-contributions")
+              .evaluate((element) => getComputedStyle(element).display),
+          ).toBe("contents");
           expect(
             await pluginPage.getByRole("status", { name: "Loading…", exact: true }).count(),
           ).toBe(0);
@@ -608,33 +601,7 @@ suite.define(() => {
           if (replacement === "ui-fixture/failing-composer") {
             await page.getByRole("alert").filter({ hasText: "Fixture composer failed" }).waitFor();
           }
-          for (const width of [1280, 640]) {
-            await page.setViewportSize({ width, height: 900 });
-            const fade = await composer.evaluate((element) => {
-              const thread = element
-                .closest(".chat-main__conversation")
-                ?.querySelector(".chat-thread");
-              if (!thread) {
-                throw new Error("Expected the built-in conversation beside its composer.");
-              }
-              const shellBounds = element.getBoundingClientRect();
-              const threadBounds = thread.getBoundingClientRect();
-              const style = getComputedStyle(element, "::before");
-              return {
-                content: style.content,
-                background: style.backgroundImage,
-                left: shellBounds.left + Number.parseFloat(style.left) - threadBounds.left,
-                right: threadBounds.right - (shellBounds.right - Number.parseFloat(style.right)),
-                scrollbar: (threadBounds.width - thread.clientWidth) / 2,
-              };
-            });
-            const description = `${replacement || "Built-in"} at ${width}px`;
-            expect.soft(fade.content, description).toBe('""');
-            expect.soft(fade.background, description).toContain("linear-gradient");
-            expect.soft(fade.left, description).toBeGreaterThanOrEqual(fade.scrollbar);
-            expect.soft(fade.right, description).toBeGreaterThanOrEqual(fade.scrollbar);
-          }
-          await page.setViewportSize({ width: 1280, height: 900 });
+          await expectComposerFooterLayout(page, composer, replacement || "Built-in");
         }
         await selectView(page, "Composer", "ui-fixture/composer");
         await page
@@ -664,6 +631,19 @@ suite.define(() => {
           sessionKey: "agent:main:main",
         });
         await expect.poll(() => page.getByLabel("Send outcome").textContent()).toBe("accepted");
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey,
+          runId: requireString(requireRecord(sent.params).idempotencyKey, "sent run ID"),
+          state: "error",
+          errorMessage: "The fixture run failed. Please try again.",
+        });
+        const notice = page.locator(".chat-footer__context .chat-error");
+        await notice.waitFor();
+        expect(
+          await notice.evaluate((element) =>
+            Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
+          ),
+        ).toBeGreaterThan(0);
         await page.screenshot({
           path: path.join(suite.artifactDir, "composer-sent.png"),
           fullPage: true,
@@ -848,6 +828,7 @@ suite.define(() => {
         }
         await reload("pending");
         await gateway.waitForRequest("fixture.activationStarted");
+        await waitForPendingPluginInitializer(page);
         await reload("three");
         await page.getByRole("heading", { name: "Fixture revision three" }).waitFor();
         await page.screenshot({
@@ -985,6 +966,7 @@ suite.define(() => {
             expect.objectContaining({ pluginId, revision: "two", status: "activated" }),
           );
         expect(await reload.isDisabled()).toBe(true);
+        await waitForPendingPluginInitializer(page);
         await page.clock.fastForward(15_000);
         await page
           .getByText("Plugin UI initialization timed out. Check the plugin and reload its UI.", {

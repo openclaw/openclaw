@@ -77,6 +77,20 @@ export function createMatrixReplyDispatcher(config: {
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   // Tool, block, and final payloads are delivered separately but share one first-reply slot.
   const hasRepliedRef = { value: false };
+  const deliverPayload = (reply: ReplyPayload) =>
+    deliverMatrixReplies({
+      cfg,
+      replies: [reply],
+      roomId,
+      client,
+      runtime,
+      replyToMode,
+      hasRepliedRef,
+      threadId: threadTarget,
+      replyToId: threadTarget ?? replyToEventId ?? undefined,
+      accountId,
+      mediaLocalRoots,
+    });
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
   const beginNextBlockDraft = () => {
@@ -162,37 +176,10 @@ export function createMatrixReplyDispatcher(config: {
 
         if (draftController.draftDisposition() !== "active") {
           await draftStream.discardPending();
-          return await completeDelivery(
-            await deliverMatrixReplies({
-              cfg,
-              replies: [fallbackPayload],
-              roomId,
-              client,
-              runtime,
-              replyToMode,
-              hasRepliedRef,
-              threadId: threadTarget,
-              replyToId: threadTarget ?? replyToEventId ?? undefined,
-              accountId,
-              mediaLocalRoots,
-            }),
-          );
+          return await completeDelivery(await deliverPayload(fallbackPayload));
         }
 
-        const deliverFallback = async () =>
-          await deliverMatrixReplies({
-            cfg,
-            replies: [fallbackPayload],
-            roomId,
-            client,
-            runtime,
-            replyToMode,
-            hasRepliedRef,
-            threadId: threadTarget,
-            replyToId: threadTarget ?? replyToEventId ?? undefined,
-            accountId,
-            mediaLocalRoots,
-          });
+        const deliverFallback = async () => await deliverPayload(fallbackPayload);
         const payloadReplyMismatch =
           ((!threadTarget && replyToMode !== "off") ||
             payload.replyToTag ||
@@ -392,20 +379,7 @@ export function createMatrixReplyDispatcher(config: {
               : draftContent
                 ? createDraftDeliveryResult(draftEventId, draftContent)
                 : mergeMatrixReplyDeliveryResults([]);
-          const deliverMedia = async () =>
-            await deliverMatrixReplies({
-              cfg,
-              replies: [mediaPayload],
-              roomId,
-              client,
-              runtime,
-              replyToMode,
-              hasRepliedRef,
-              threadId: threadTarget,
-              replyToId: threadTarget ?? replyToEventId ?? undefined,
-              accountId,
-              mediaLocalRoots,
-            });
+          const deliverMedia = async () => await deliverPayload(mediaPayload);
           if (reusesDraftAsFinalText) {
             draftController.markDraftConsumed();
             let mediaDelivery: MatrixReplyDeliveryResult;
@@ -447,21 +421,7 @@ export function createMatrixReplyDispatcher(config: {
         }
         return await completeDelivery(await deliverFallback());
       }
-      return await completeDelivery(
-        await deliverMatrixReplies({
-          cfg,
-          replies: [payload],
-          roomId,
-          client,
-          runtime,
-          replyToMode,
-          hasRepliedRef,
-          threadId: threadTarget,
-          replyToId: threadTarget ?? replyToEventId ?? undefined,
-          accountId,
-          mediaLocalRoots,
-        }),
-      );
+      return await completeDelivery(await deliverPayload(payload));
     },
     onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {

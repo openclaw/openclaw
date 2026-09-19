@@ -26,7 +26,6 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
 }));
 
 vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
-  SUBAGENT_RUNS_READ_CACHE_TTL_MS: 500,
   onSubagentRegistryPersisted: (listener: () => void) => {
     registryEvents.listeners.add(listener);
     return () => registryEvents.listeners.delete(listener);
@@ -220,6 +219,9 @@ describe("agents_wait", () => {
         status: "done",
         structured: { winner: 2 },
       };
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
     }, 5);
 
     const result = await tool.execute("call", { ids: ["one", "two"], timeoutSeconds: 1 });
@@ -237,12 +239,13 @@ describe("agents_wait", () => {
     });
   });
 
-  it("wakes from a local completion without waiting for the next poll", async () => {
+  it("parks without reading until a registry mutation wakes it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const entry = collectorRun("local-wake", "agent:main:main");
     records.set(entry.runId, entry);
     const controller = new AbortController();
     const tool = createMainSessionWaitTool();
+    const reads = vi.spyOn(records, "get");
     let result: unknown;
     const waiting = tool
       .execute("call", { ids: [entry.runId], timeoutSeconds: 1 }, controller.signal)
@@ -250,7 +253,9 @@ describe("agents_wait", () => {
         result = value.details;
       });
     try {
-      await vi.advanceTimersByTimeAsync(10);
+      const initialReads = reads.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(750);
+      expect(reads).toHaveBeenCalledTimes(initialReads);
       entry.collectorCompletion = { status: "done" };
       for (const listener of registryEvents.listeners) {
         listener();
@@ -260,6 +265,7 @@ describe("agents_wait", () => {
       expect(registryEvents.listeners.size).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      reads.mockRestore();
       controller.abort();
       await waiting.catch(() => {});
       vi.useRealTimers();
@@ -455,6 +461,9 @@ describe("agents_wait", () => {
       const completed = collectorRun("new-gateway-run", "agent:main:main", { status: "done" });
       completed.swarmRunId = "collector-run";
       records.set(completed.runId, completed);
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
     }, 5);
 
     const result = await tool.execute("call", { ids: ["collector-run"], timeoutSeconds: 1 });
@@ -597,7 +606,7 @@ describe("agents_wait", () => {
   });
 
   it.each(["before", "during", "registration"] as const)(
-    "rejects when the wait is aborted %s collector polling",
+    "rejects when the wait is aborted %s collector waiting",
     async (abortTiming) => {
       records.set("pending", collectorRun("pending", "agent:main:main"));
       const tool = createMainSessionWaitTool();
@@ -629,7 +638,7 @@ describe("agents_wait", () => {
     },
   );
 
-  it("rejects oversized wait batches before polling", async () => {
+  it("rejects oversized wait batches before waiting", async () => {
     const tool = createMainSessionWaitTool();
 
     await expect(

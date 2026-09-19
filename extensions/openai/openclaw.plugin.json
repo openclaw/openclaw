@@ -258,11 +258,10 @@
       "credentialOnly": true,
       "choiceLabel": "ChatGPT Login",
       "choiceHint": "Sign in with your ChatGPT or Codex subscription",
-      "assistantPriority": -40,
+      "assistantPriority": -10,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key",
-      "onboardingFeatured": true
+      "groupHint": "ChatGPT/Codex sign-in or API key"
     },
     {
       "provider": "openai",
@@ -276,10 +275,11 @@
       },
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
-      "assistantPriority": -10,
+      "assistantPriority": -40,
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "ChatGPT/Codex sign-in or API key"
+      "groupHint": "ChatGPT/Codex sign-in or API key",
+      "onboardingFeatured": true
     },
     {
       "provider": "openai",
@@ -341,6 +341,14 @@
       }
     }
   },
+  "configGroups": [
+    {
+      "id": "response-style",
+      "title": "Response style",
+      "order": 10,
+      "properties": ["personality"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

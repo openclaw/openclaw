@@ -5,13 +5,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { WizardNextResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { observeCatalogWorkerTasks } from "./models-auth-catalog.test-support.js";
 
-it.each([0, 7_000])(
+it.for([0, 7_000])(
   "models.authLogin publishes account rows to passive models.list (endpoint delay %i ms)",
-  async (catalogDelay) => {
+  { timeout: 120_000 },
+  async (catalogDelay, { signal }) => {
     const state = await createOpenClawTestState({
       label: "login-discovery",
       layout: "state-only",
@@ -25,9 +28,12 @@ it.each([0, 7_000])(
       },
     });
     const provider = "login-discovery-fixture";
+    const catalogWork = observeCatalogWorkerTasks();
     const trace: Array<{ path: string; time: number; method: string; authenticated: boolean }> = [];
     let responseDelay = catalogDelay;
     let holdNextCatalogResponse = false;
+    const automaticRequestStarted = createDeferred();
+    const releaseEarlyResponse = createDeferred();
     const refreshRequestStarted = createDeferred<ServerResponse>();
     const releaseRefreshResponse = createDeferred();
     const endpoint = createServer((request, response) => {
@@ -46,13 +52,14 @@ it.each([0, 7_000])(
         request.url === "/models" &&
         request.headers.authorization === "Bearer fixture-access"
       ) {
+        automaticRequestStarted.resolve();
         let responseReady: Promise<void>;
         if (holdNextCatalogResponse) {
           holdNextCatalogResponse = false;
           responseReady = releaseRefreshResponse.promise;
           refreshRequestStarted.resolve(response);
         } else {
-          responseReady = delay(responseDelay);
+          responseReady = delay(responseDelay).then(() => releaseEarlyResponse.promise);
         }
         void responseReady.then(() =>
           response.end(JSON.stringify([{ id: "account-exclusive", name: "Account exclusive" }])),
@@ -146,6 +153,7 @@ it.each([0, 7_000])(
           };
         };
         expect((await list()).ids).not.toContain("account-exclusive");
+        const beforeLoginWork = catalogWork.read();
         await client.request("models.authLogin", {
           sessionId: "fixture-login",
           agentId: "main",
@@ -177,18 +185,48 @@ it.each([0, 7_000])(
             reads,
           };
         };
-        await delay(Math.max(0, loginCompleted + 1_000 - performance.now()));
+        await withTestTimeout(
+          automaticRequestStarted.promise,
+          10_000,
+          "Login did not start automatic catalog discovery",
+        );
         const observations = [await observePassiveReads("early")];
-        const publicationDeadline = loginCompleted + 10_000;
-        while (performance.now() < publicationDeadline) {
-          const publishedIds = (await list()).ids;
-          if (publishedIds.includes("account-exclusive")) {
-            break;
+        const accountPublished = createDeferred();
+        const abortPublication = () => accountPublished.reject(signal.reason);
+        signal.throwIfAborted();
+        signal.addEventListener("abort", abortPublication, { once: true });
+        const unregisterPublication = registerPreparedModelRuntimePublicationListener((event) => {
+          if (event.phase === "catalog-published") {
+            void list().then(({ ids }) => {
+              if (ids.includes("account-exclusive")) {
+                accountPublished.resolve();
+              }
+            }, accountPublished.reject);
+          } else if (event.phase === "catalog-failed" || event.phase === "failed") {
+            accountPublished.reject(event.error);
           }
-          await delay(Math.min(200, Math.max(0, publicationDeadline - performance.now())));
+        });
+        try {
+          releaseEarlyResponse.resolve();
+          await accountPublished.promise;
+        } finally {
+          unregisterPublication();
+          signal.removeEventListener("abort", abortPublication);
         }
         observations.push(await observePassiveReads("final"));
         const automaticTrace = trace.map((row) => ({ ...row, time: row.time - loginCompleted }));
+        console.log("LOGIN_POOL_PROOF", {
+          beforeLoginWork,
+          after: catalogWork.read(),
+          automaticTrace,
+        });
+        expect(automaticTrace.filter((row) => row.path === "/models")).toHaveLength(1);
+        expect(catalogWork.read()).toMatchObject({
+          maxWorkers: 1,
+          workersCreated: 1,
+          pendingTasks: 0,
+          completedTasks: beforeLoginWork.completedTasks + 1,
+        });
         responseDelay = 0;
         const manualRefresh = await list(true);
         if (catalogDelay === 7_000) {
@@ -239,10 +277,7 @@ it.each([0, 7_000])(
           expect.soft(observation.after).toBe(observation.before);
           for (const read of observation.reads) {
             expect.soft(read.elapsedMs).toBeLessThan(1_000);
-            if (
-              observation.stage === "early" &&
-              (catalogDelay === 7_000 || !read.ids.includes("account-exclusive"))
-            ) {
+            if (observation.stage === "early") {
               expect.soft(read.result.pendingProviders).toContain(provider);
             }
             if (observation.stage === "final") {
@@ -251,10 +286,12 @@ it.each([0, 7_000])(
           }
         }
       } finally {
+        releaseEarlyResponse.resolve();
         await disconnectGatewayClient(client);
         await server.close();
       }
     } finally {
+      catalogWork.close();
       endpoint.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         endpoint.close((error) => (error ? reject(error) : resolve()));
@@ -262,5 +299,4 @@ it.each([0, 7_000])(
       await state.cleanup();
     }
   },
-  120_000,
 );

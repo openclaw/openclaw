@@ -421,14 +421,15 @@ describe("createSessionCapability", () => {
     const rejectedKey = "agent:main:rejected";
     const keptKey = "agent:main:kept";
     const deletedKey = "agent:main:deleted";
+    const error = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: `Session ${rejectedKey} changed before deletion. Retry.`,
+    });
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.delete") {
         const key = (params as { key?: string } | undefined)?.key;
         if (key === rejectedKey) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: `Session ${key} changed before deletion. Retry.`,
-          });
+          throw error;
         }
         return { ok: true, deleted: key === deletedKey };
       }
@@ -453,7 +454,7 @@ describe("createSessionCapability", () => {
       ]),
     ).resolves.toEqual({
       deleted: [deletedKey],
-      errors: [`Session ${rejectedKey} changed before deletion. Retry.`],
+      errors: [{ target: { key: rejectedKey }, error }],
       preservedWorktrees: [],
     });
     expect(deletedSnapshots.some((keys) => keys.includes(deletedKey))).toBe(true);

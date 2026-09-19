@@ -24,6 +24,7 @@ import {
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import { createBoundedOpenAIResponsesCompactionFetch } from "./openai-responses-compaction-window.js";
+import { recordResponsesContextUsage } from "./openai-responses-context-usage.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   type ResponsesContinuationRequest,
@@ -47,6 +48,7 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
+import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-policy.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   recordResponsesReasoningState,
@@ -61,6 +63,7 @@ import {
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
+import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
@@ -332,15 +335,18 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           return;
         }
         const sessionId = options?.sessionId;
+        // Custom routes require an explicit capability; native routes retain
+        // their existing eligibility and final request storage checks below.
         const httpContinuationEligible =
           config.httpContinuation &&
           !websocketMode &&
           !getAiTransportHost().requiresManagedTransport(model) &&
-          supportsNativeOpenAIResponsesEndpoint({
+          (supportsNativeOpenAIResponsesEndpoint({
             provider: model.provider,
             api: model.api,
             baseUrl: model.baseUrl,
-          });
+          }) ||
+            resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
           sessionId &&
@@ -393,6 +399,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         );
         const responseModelTracker = createResponseModelTracker(isOpenAICodexResponsesModel(model));
         let continuationBaseline: ResponsesContinuationRequest | undefined;
+        let contextUsageEligible = true;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
@@ -411,6 +418,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               suppressOpenAIResponsesCompaction(output, model, responsesOptions, checkpoint),
             canRetryStream: () => output.content.length === 0,
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
+              contextUsageEligible &&= attempt.kind === "initial";
               continuationBaseline = attempt.request.previous_response_id
                 ? (params as ResponsesContinuationRequest)
                 : (attempt.request as ResponsesContinuationRequest);
@@ -467,17 +475,20 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 nativeAstra && params.model === "gpt-6-astra"
                   ? options?.onActiveResponse
                   : undefined,
-              steeringInput: (messages) =>
-                projectResponsesSteeringInput(params, () =>
+              steeringInput: (messages) => {
+                contextUsageEligible = false;
+                return projectResponsesSteeringInput(params, () =>
                   buildRequest("checkpoint", {
                     ...context,
                     messages: [...context.messages, ...messages],
                   }),
-                ),
+                );
+              },
             });
             finishWebSocket = websocket.finish;
             websocketBaseline = websocket.fullRequest;
             recordResponsesInputReplay(output, websocket.inputReplay);
+            contextUsageEligible &&= websocket.inputReplay === undefined;
             observePrompt?.(websocket.request, {
               egress: "responses-websocket",
               payloadVariant: "initial",
@@ -560,6 +571,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         }
         try {
           const terminal = await processResponsesStream(responseStream, output, stream, model, {
+            canRetryIdentityConflict: () =>
+              hasOnlyResponsesFunctionTools(
+                transport === "websocket" ? websocketBaseline : continuationBaseline,
+              ),
             ...config.pricingOptions?.(responsesOptions, model),
             firstEventTimeoutMs:
               getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,
@@ -593,6 +608,16 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           }
           if (continuationClaim && continuationBaseline && terminal) {
             continuationClaim.commit(continuationBaseline, terminal);
+          }
+          if (terminal && admitted && contextUsageEligible) {
+            recordResponsesContextUsage(
+              output,
+              model,
+              responsesOptions,
+              admitted,
+              terminal.output,
+              "transport",
+            );
           }
         } catch (error) {
           finishWebSocket?.({ keep: false });
@@ -648,15 +673,13 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
     outputApi: "azure-openai-responses",
     firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
     createClient: createAzureOpenAIClient,
-    buildRequest: (model, context, options, metadata, replayMode) =>
-      buildAzureOpenAIResponsesParams(
-        model,
-        context,
-        options,
-        resolveAzureDeploymentName(model),
-        metadata,
-        replayMode,
-      ),
+    buildRequest: (model, context, options, metadata, replayMode) => {
+      const deploymentName = resolveAzureDeploymentName(model);
+      const params = buildOpenAIResponsesParams(model, context, options, metadata, replayMode);
+      params.model = deploymentName;
+      delete params.store;
+      return params;
+    },
   });
 }
 
@@ -691,18 +714,4 @@ function createAzureOpenAIClient(
     ...clientOptions,
     apiVersion: resolveAzureOpenAIApiVersion(),
   });
-}
-
-function buildAzureOpenAIResponsesParams(
-  model: Model,
-  context: Context,
-  options: OpenAIResponsesOptions | undefined,
-  deploymentName: string,
-  metadata?: Record<string, string>,
-  replayMode: OpenAIResponsesReplayMode = "checkpoint",
-) {
-  const params = buildOpenAIResponsesParams(model, context, options, metadata, replayMode);
-  params.model = deploymentName;
-  delete params.store;
-  return params;
 }

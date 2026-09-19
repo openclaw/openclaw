@@ -15,7 +15,7 @@ const wsMockState = vi.hoisted(() => ({
   constructorOptions: [] as Array<{ agent?: unknown } | undefined>,
 }));
 
-vi.mock("ws", () => {
+vi.mock("openclaw/plugin-sdk/websocket-runtime", () => {
   class MockWebSocket {
     static OPEN = 1;
 
@@ -46,7 +46,7 @@ vi.mock("ws", () => {
     send() {}
   }
 
-  return { default: MockWebSocket };
+  return { WebSocket: MockWebSocket };
 });
 
 vi.mock(

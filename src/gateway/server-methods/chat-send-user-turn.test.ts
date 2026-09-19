@@ -472,6 +472,7 @@ describe("prepareChatSendUserTurn", () => {
           updatedAt: 1,
         },
         connect: {
+          client: createClientInfo({ id: GATEWAY_CLIENT_IDS.CONTROL_UI }),
           device: { id: "device-1" },
           scopes: ["operator.admin"],
           caps: ["tool-events"],
@@ -500,6 +501,7 @@ describe("prepareChatSendUserTurn", () => {
       ],
       GatewayClientScopes: ["operator.admin"],
       GatewayClientCaps: ["tool-events"],
+      GatewayUiCommandTarget: { connId: "conn-1", profileId: "profile-ada" },
       SessionCreation: {
         via: "operator",
         actor: { type: "human", id: "profile-ada" },
@@ -510,16 +512,17 @@ describe("prepareChatSendUserTurn", () => {
     await expect(readInput()).resolves.toEqual(controller.baseInput);
   });
 
-  it("carries retained image claim-check facts without changing the trailing prompt line", async () => {
-    const { controller, readInput } = createUserTurnInputController();
+  it("preserves source receipts and image hints when approval changes the user text", async () => {
+    const { controller, readInput } = createUserTurnInputController("inspect");
     const mediaRef = "media://inbound/image-1.png";
+    const receipt = "[Source Receipt]\nbridge=fixture\n[/Source Receipt]";
     const prepared = prepareChatSendUserTurn({
       request: {
         inboundMessage: "inspect",
         clientInfo: createClientInfo(),
         suppressCommandInterpretation: false,
         systemInputProvenance: undefined,
-        systemProvenanceReceipt: undefined,
+        systemProvenanceReceipt: receipt,
       },
       session: {
         agentId: "main",
@@ -553,7 +556,15 @@ describe("prepareChatSendUserTurn", () => {
       userTurn: controller,
     });
 
-    expect(prepared.ctx.Body).toBe(`inspect\n[media attached: ${mediaRef}]`);
+    expect(prepared.ctx.Body).toBe(`${receipt}\n\ninspect\n[media attached: ${mediaRef}]`);
+    prepared.applyApprovedText("Approved inspect");
+    expect(prepared.ctx).toMatchObject({
+      Body: `${receipt}\n\nApproved inspect\n[media attached: ${mediaRef}]`,
+      BodyForAgent: `${receipt}\n\nApproved inspect\n[media attached: ${mediaRef}]`,
+      RawBody: `Approved inspect\n[media attached: ${mediaRef}]`,
+      BodyForCommands: "Approved inspect",
+      CommandBody: "Approved inspect",
+    });
     expect(prepared.replyOptionMedia).toEqual([
       {
         path: "/media/inbound/image-1.png",

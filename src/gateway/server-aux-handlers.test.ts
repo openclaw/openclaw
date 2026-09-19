@@ -228,6 +228,7 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
   const respond = params.respond ?? vi.fn();
   const gatewayAux = createGatewayAuxHandlers({
     log: {},
+    getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: params.activateRuntimeSecrets,
     buildReloadPlan: params.buildReloadPlan,
     sharedGatewaySessionGenerationState: params.sharedGatewaySessionGenerationState ?? {

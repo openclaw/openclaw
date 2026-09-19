@@ -4,20 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 // Simulates a built dist tree: externalized provider metadata comes from the
 // catalog, while one installed manifest proves first-match precedence.
 vi.mock("../plugins/plugin-metadata-snapshot-required.js", async (importOriginal) => {
-  const { buildPluginMetadataProviderFacts } =
-    await import("../plugins/plugin-metadata-provider-facts.js");
+  const { createPluginMetadataSnapshotFixture } =
+    await import("../plugins/plugin-metadata.test-support.js");
   return {
     ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot-required.js")>()),
-    getCurrentPluginMetadataSnapshotRequiredRuntime: () => ({
-      owners: buildPluginMetadataProviderFacts([
-        {
-          id: "installed-conflict-fixture",
-          providerEndpoints: [
-            { endpointClass: "openai-public", hosts: ["coding.dashscope.aliyuncs.com"] },
-          ],
-        } as never,
-      ]),
-    }),
+    getCurrentPluginMetadataSnapshotRequiredRuntime: () =>
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "installed-conflict-fixture",
+            providerEndpoints: [
+              { endpointClass: "openai-public", hosts: ["coding.dashscope.aliyuncs.com"] },
+            ],
+          },
+        ],
+      }),
   };
 });
 

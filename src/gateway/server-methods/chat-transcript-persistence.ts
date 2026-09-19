@@ -20,7 +20,14 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  readAssistantDisplayContent,
+} from "../../shared/assistant-display-content.js";
+import {
+  extractAssistantPhaseText,
+  readAssistantTextBlocksForPhase,
+} from "../../shared/chat-message-content.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
   sanitizeAssistantDisplayText,
@@ -78,11 +85,12 @@ export type SourceReplyContentState = {
 function mergeAssistantDisplayContent(
   modelContent: AssistantDisplayContentBlock[],
   preparedDisplayContent: AssistantDisplayContentBlock[],
+  retainedCommentary: ReadonlySet<unknown>,
 ): AssistantDisplayContentBlock[] {
   const remainingDisplayContent = [...preparedDisplayContent];
   const content: AssistantDisplayContentBlock[] = [];
   for (const block of modelContent) {
-    if (block.type !== "text" || typeof block.text !== "string") {
+    if (block.type !== "text" || typeof block.text !== "string" || retainedCommentary.has(block)) {
       content.push(block);
       continue;
     }
@@ -110,19 +118,47 @@ function buildAssistantDisplayRewrite(params: {
   managedMediaUrls?: readonly string[];
   retainOriginalText?: true;
 }): Record<string, unknown> {
+  const previousDisplay = Array.isArray(params.message[ASSISTANT_DISPLAY_CONTENT_FIELD])
+    ? readAssistantDisplayContent(params.message)
+    : undefined;
+  const previousMedia = transcriptEventRecord(params.message.openclawDelivery)?.mediaUrls;
+  const managedMediaUrls = previousDisplay
+    ? [
+        ...(Array.isArray(previousMedia)
+          ? previousMedia.filter((value): value is string => typeof value === "string")
+          : []),
+        ...(params.managedMediaUrls ?? []),
+      ]
+    : params.managedMediaUrls;
   const prepared = applyAssistantDeliveryDirectives(
     {
       ...params.message,
       content: params.displayContent.map((block) => Object.assign({}, block)),
     },
-    { managedMediaUrls: params.managedMediaUrls },
+    { managedMediaUrls },
   );
-  const original = Array.isArray(params.message.content)
-    ? (params.message.content as AssistantDisplayContentBlock[])
-    : [];
+  const original =
+    previousDisplay ??
+    (Array.isArray(params.message.content)
+      ? (params.message.content as AssistantDisplayContentBlock[])
+      : []);
+  const retainedCommentary = new Set<unknown>(
+    previousDisplay
+      ? readAssistantTextBlocksForPhase({ ...params.message, content: original }, "commentary")
+      : [],
+  );
+  // Final delivery replaces its own media while retaining prepared progress segments.
+  let inCommentary = false;
   const content: AssistantDisplayContentBlock[] = [];
   const seenText = new Set<string>();
   for (const block of original) {
+    if (block.type === "text") {
+      inCommentary = retainedCommentary.has(block);
+    }
+    if (inCommentary) {
+      content.push(block);
+      continue;
+    }
     if (block.type === "thinking" || block.type === "toolCall") {
       content.push(block);
       continue;
@@ -145,13 +181,15 @@ function buildAssistantDisplayRewrite(params: {
       preserveBoundaries: true,
     });
     if (text) {
-      if (text === block.text) {
-        content.push(block);
+      if (text === block.text || previousDisplay) {
+        content.push(text === block.text ? block : { ...block, text });
       } else {
         const { textSignature: _textSignature, ...rest } = block;
         content.push({ ...rest, text });
       }
       seenText.add(text);
+    } else if (previousDisplay) {
+      content.push({ ...block, text: "" });
     }
   }
   for (const block of prepared.content) {
@@ -161,8 +199,12 @@ function buildAssistantDisplayRewrite(params: {
   }
   return {
     ...prepared,
-    content,
-    [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(content, prepared.content),
+    content: previousDisplay ? params.message.content : content,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: mergeAssistantDisplayContent(
+      content,
+      prepared.content,
+      retainedCommentary,
+    ),
   };
 }
 
@@ -234,7 +276,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   ];
   const message = target ? transcriptEventMessage(target) : undefined;
   const messageId = target ? transcriptEventId(target) : undefined;
-  const text = message ? extractAssistantTranscriptText(message) : undefined;
+  const text = message ? extractAssistantPhaseText(message) : undefined;
   if (!messageId || !message || !text) {
     return null;
   }
@@ -350,6 +392,7 @@ export async function appendAssistantTranscriptMessage(params: {
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const scope = assistantTranscriptScope(params);
@@ -373,6 +416,7 @@ export async function appendAssistantTranscriptMessage(params: {
     stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
+    ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
     config: params.cfg,
   });
   return appended;

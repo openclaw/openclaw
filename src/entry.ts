@@ -32,6 +32,11 @@ import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
+import {
+  getManagedNodeHostStatePath,
+  isNodeHostLauncherChild,
+  requestNodeHostLauncherBootstrap,
+} from "./node-host/launcher-client.js";
 import { defaultRuntime } from "./runtime.js";
 
 // Recovery must not select executables from workspace/global dotenv values.
@@ -135,25 +140,33 @@ if (
   const startupEnv = { ...process.env };
   const { assertSupportedRuntime, isCurrentRuntimeSupported } =
     await import("./infra/runtime-guard.js");
-  if (!isCurrentRuntimeSupported()) {
+  if (!(await isCurrentRuntimeSupported())) {
     const { loadCliDotEnv } = await import("./cli/dotenv.js");
     loadCliDotEnv({ quiet: true });
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
   await assertSupportedRuntime(undefined, undefined, process.argv, false, inheritedRuntimeEnv);
+  const { runNodeHostLauncher } = await import(
+    new URL("../node-host-launcher.mjs", import.meta.url).href
+  );
+  if (await runNodeHostLauncher({ entryPath: entryFile, packageRoot: installRoot })) {
+    process.exit(process.exitCode ?? 0);
+  }
   gatewayEntryStartupTrace.mark("bootstrap");
 
-  const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
-    currentFile: entryFile,
-    installRoot,
-    env: startupEnv,
-    prepareWriteError: async () => {
-      // The child environment was already snapshotted. Load dotenv only to format
-      // the parent trace; command-specific dotenv ordering remains child-owned.
-      const writeError = await prepareCliDiagnosticBlockWriter();
-      return (message) => writeError(message);
-    },
-  });
+  const waitingForCompileCacheRespawn =
+    !isNodeHostLauncherChild() &&
+    (await respawnWithoutOpenClawCompileCacheIfNeeded({
+      currentFile: entryFile,
+      installRoot,
+      env: startupEnv,
+      prepareWriteError: async () => {
+        // The child environment was already snapshotted. Load dotenv only to format
+        // the parent trace; command-specific dotenv ordering remains child-owned.
+        const writeError = await prepareCliDiagnosticBlockWriter();
+        return (message) => writeError(message);
+      },
+    }));
   if (!waitingForCompileCacheRespawn) {
     enableOpenClawCompileCache({
       installRoot,
@@ -172,6 +185,13 @@ if (
       const plan = buildCliRespawnPlan({ env: startupEnv });
       if (!plan) {
         return false;
+      }
+      if (isNodeHostLauncherChild()) {
+        await requestNodeHostLauncherBootstrap({
+          execArgv: plan.argv.slice(0, plan.argv.length - process.argv.length + 1),
+          env: plan.env,
+        });
+        process.exit(0);
       }
 
       // The child environment was already snapshotted. Load dotenv only to format
@@ -211,7 +231,23 @@ if (
       gatewayEntryStartupTrace.mark("argv");
 
       if (!tryHandleRootVersionFastPath(process.argv)) {
-        await withCliProcessScope(() => runMainOrRootHelp(process.argv));
+        const run = (finalize?: () => Promise<void>) =>
+          withCliProcessScope(() => runMainOrRootHelp(process.argv, { finalize }));
+        const managedNodeStatePath = getManagedNodeHostStatePath();
+        if (managedNodeStatePath) {
+          const { withExistingOpenClawStateSchema } =
+            await import("./state/openclaw-state-db-schema-policy.js");
+          await withExistingOpenClawStateSchema({ path: managedNodeStatePath }, async () => {
+            const { openOpenClawStateDatabase, closeOpenClawStateDatabaseByPathAsync } =
+              await import("./state/openclaw-state-db.js");
+            openOpenClawStateDatabase({ path: managedNodeStatePath });
+            await run(async () => {
+              await closeOpenClawStateDatabaseByPathAsync(managedNodeStatePath);
+            });
+          });
+        } else {
+          await run();
+        }
       }
     }
   }
@@ -294,6 +330,7 @@ export async function runMainOrRootHelp(
   // mode so the envelope is written here. Only failures before runCli are startup failures.
   let commandStarted = false;
   await runCliWithExitFinalization({
+    finalize: deps.finalize,
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
         const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
@@ -347,4 +384,5 @@ export async function runMainOrRootHelp(
 
 type RunMainOrRootHelpDeps = {
   loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
+  finalize?: () => Promise<void>;
 };

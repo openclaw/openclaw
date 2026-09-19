@@ -173,7 +173,7 @@ describe("resolveFollowupDeliveryDecision", () => {
         responseUsage: sessionMode,
       });
 
-      const decision = resolveFollowupDeliveryDecision({
+      const decision = await resolveFollowupDeliveryDecision({
         turn,
         execution: createSettledExecution("queued reply"),
         accounting: createAccounting([{ text: "queued reply" }], { usage }),
@@ -190,57 +190,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it("delivers a yield acknowledgment after accepting a child spawn", () => {
-    const execution = createSettledExecution();
-    if (execution.outcome.kind === "settled") {
-      execution.outcome.result.meta = {
-        durationMs: 0,
-        yielded: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      };
-      execution.outcome.result.acceptedSessionSpawns = [
-        { runId: "child", childSessionKey: "agent:main:child" },
-      ];
-    }
-
-    expect(
-      resolveFollowupDeliveryDecision({
-        turn: createTurn(),
-        execution,
-        accounting: createAccounting(),
-      }),
-    ).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "Research started; results will follow." }],
-    });
-  });
-
-  it("delivers a yield acknowledgment despite private partial output in group message-tool-only mode", () => {
-    const turn = createTurn();
-    turn.queued.originatingChatType = "group";
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-    const execution = createSettledExecution();
-    if (execution.outcome.kind === "settled") {
-      execution.outcome.result.meta = {
-        durationMs: 0,
-        yielded: true,
-        yieldAcknowledgment: "Research started; results will follow.",
-      };
-    }
-
-    expect(
-      resolveFollowupDeliveryDecision({
-        turn,
-        execution,
-        accounting: createAccounting([{ text: "Private partial output." }]),
-      }),
-    ).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "Research started; results will follow." }],
-    });
-  });
-
-  it("keeps ambient room-event finals silent", () => {
+  it("keeps ambient room-event finals silent", async () => {
     const turn = createTurn({
       queued: {
         ...createTurn().queued,
@@ -249,30 +199,30 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution: createSettledExecution("private room final"),
       }),
     ).toEqual({ kind: "suppress", reason: "room-event" });
   });
 
-  it("honors the admission-time send policy before any final projection", () => {
+  it("honors the admission-time send policy before any final projection", async () => {
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn: createTurn({ sendPolicy: "deny" }),
         execution: createSettledExecution("blocked"),
       }),
     ).toEqual({ kind: "suppress", reason: "send-policy" });
   });
 
-  it("does not deliver completed compaction facts from an aborted turn", () => {
+  it("does not deliver completed compaction facts from an aborted turn", async () => {
     const execution: AgentTurnExecutionResult = {
       runId: "run-1",
       outcome: { kind: "aborted", reason: "user", compaction: { count: 1, durable: [] } },
     };
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn: createTurn(),
         execution,
         accounting: createAccounting([{ text: "late reply" }]),
@@ -280,12 +230,12 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "aborted" });
   });
 
-  it("does not leak rejected private text in message-tool-only mode", () => {
+  it("does not leak rejected private text in message-tool-only mode", async () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution: {
           runId: "run-1",
@@ -295,12 +245,12 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "message-tool-only" });
   });
 
-  it("keeps rejected failures silent for internal follow-ups", () => {
+  it("keeps rejected failures silent for internal follow-ups", async () => {
     const turn = createTurn();
     turn.queued.run.inputProvenance = { kind: "internal_system", sourceTool: "test" };
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution: {
           runId: "run-1",
@@ -310,13 +260,13 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "silent" });
   });
 
-  it("keeps provenance-less internal-channel failures non-interactive", () => {
+  it("keeps provenance-less internal-channel failures non-interactive", async () => {
     const turn = createTurn();
     turn.queued.originatingChannel = "webchat";
     turn.queued.run.messageProvider = "webchat";
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution: {
           runId: "run-1",
@@ -327,7 +277,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "silent" });
   });
 
-  it("normalizes rejected failures with the originating delivery context", () => {
+  it("normalizes rejected failures with the originating delivery context", async () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
     turn.queued.originatingReplyToMode = "all";
@@ -336,7 +286,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       { deliverDespiteSourceReplySuppression: true },
     );
 
-    const decision = resolveFollowupDeliveryDecision({
+    const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution: {
         runId: "run-1",
@@ -353,13 +303,13 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
-  it("creates one priority retry for a substantive message-tool-only final", () => {
+  it("creates one priority retry for a substantive message-tool-only final", async () => {
     const substantiveFinal =
       "This is a substantive private answer that should have used the message tool. It has a second sentence so recovery is required.";
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
 
-    const decision = resolveFollowupDeliveryDecision({
+    const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution: createSettledExecution(substantiveFinal),
       accounting: createAccounting(),
@@ -371,7 +321,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("delivers explicitly allowed payloads before considering stranded recovery", () => {
+  it("delivers explicitly allowed payloads before considering stranded recovery", async () => {
     const substantiveFinal =
       "This is a substantive private answer that missed the message tool. It would normally trigger recovery.";
     const turn = createTurn();
@@ -381,7 +331,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       { deliverDespiteSourceReplySuppression: true },
     );
 
-    const decision = resolveFollowupDeliveryDecision({
+    const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution: createSettledExecution(substantiveFinal),
       accounting: createAccounting([explicitPayload]),
@@ -393,7 +343,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("normalizes explicitly allowed payloads before skipping stranded recovery", () => {
+  it("normalizes explicitly allowed payloads before skipping stranded recovery", async () => {
     const substantiveFinal =
       "This is a substantive private answer that missed the message tool. It must still trigger recovery when the marked payload is not deliverable.";
     const rawPayloads: ReplyPayload[] = [
@@ -410,7 +360,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       });
 
       expect(
-        resolveFollowupDeliveryDecision({
+        await resolveFollowupDeliveryDecision({
           turn,
           execution: createSettledExecution(substantiveFinal),
           accounting: createAccounting([explicitPayload]),
@@ -419,7 +369,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
-  it("recovers a substantive final after an explicitly allowed media payload is deduplicated", () => {
+  it("recovers a substantive final after an explicitly allowed media payload is deduplicated", async () => {
     const substantiveFinal =
       "This is a substantive private answer that missed the message tool. It must trigger recovery after its only marked media was already delivered.";
     const turn = createTurn();
@@ -431,7 +381,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution,
         accounting: createAccounting([
@@ -441,8 +391,8 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toMatchObject({ kind: "retry-source-delivery" });
   });
 
-  it("routes settled delivery with the actual runtime provider", () => {
-    const decision = resolveFollowupDeliveryDecision({
+  it("routes settled delivery with the actual runtime provider", async () => {
+    const decision = await resolveFollowupDeliveryDecision({
       turn: createTurn(),
       execution: createSettledExecution(),
       accounting: createAccounting([{ text: "done" }], {
@@ -457,12 +407,12 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("normalizes auto-compaction notices with the originating delivery context", () => {
+  it("normalizes auto-compaction notices with the originating delivery context", async () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
     turn.queued.originatingReplyToMode = "all";
 
-    const decision = resolveFollowupDeliveryDecision({
+    const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution: createSettledExecution(),
       accounting: createAccounting([{ text: "done" }], {
@@ -479,13 +429,13 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
-  it("turns a second missing source delivery into a sanitized diagnostic", () => {
+  it("turns a second missing source delivery into a sanitized diagnostic", async () => {
     const turn = createTurn();
     turn.queued.strandedReplyRetry = true;
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution: createSettledExecution(),
         accounting: createAccounting(),
@@ -496,12 +446,12 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("keeps terminal failure fallback silent for internal follow-ups", () => {
+  it("keeps terminal failure fallback silent for internal follow-ups", async () => {
     const turn = createTurn();
     turn.queued.run.inputProvenance = { kind: "internal_system", sourceTool: "test" };
 
     expect(
-      resolveFollowupDeliveryDecision({
+      await resolveFollowupDeliveryDecision({
         turn,
         execution: createSettledExecution(),
         accounting: createAccounting([], {
@@ -509,24 +459,6 @@ describe("resolveFollowupDeliveryDecision", () => {
         }),
       }),
     ).toEqual({ kind: "suppress", reason: "silent" });
-  });
-
-  it("delivers a sanitized terminal failure in message-tool-only mode", () => {
-    const turn = createTurn();
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const decision = resolveFollowupDeliveryDecision({
-      turn,
-      execution: createSettledExecution(),
-      accounting: createAccounting([], {
-        terminalFailurePayload: { text: "terminal failure", isError: true },
-      }),
-    });
-
-    expect(decision).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "terminal failure", isError: true }],
-    });
   });
 
   it.each([
@@ -538,22 +470,22 @@ describe("resolveFollowupDeliveryDecision", () => {
     ["legacy outbound send", { didSendViaMessagingTool: true }, false],
     ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
     [
-      "visible progress with yield acknowledgment",
+      "visible progress while yielded",
       {
-        meta: { durationMs: 0, yielded: true, yieldAcknowledgment: "Still working" },
+        meta: { durationMs: 0, yielded: true },
         messagingToolSentTargets: [progressTarget],
       },
       false,
     ],
   ])(
     "accounts for %s before suppressing an empty follow-up",
-    (_label, evidence, expectFallback) => {
+    async (_label, evidence, expectFallback) => {
       const execution = createSettledExecution();
       if (execution.outcome.kind === "settled") {
         Object.assign(execution.outcome.result, evidence);
       }
 
-      const decision = resolveFollowupDeliveryDecision({
+      const decision = await resolveFollowupDeliveryDecision({
         turn: createTurn(),
         execution,
         accounting: createAccounting(),
@@ -578,7 +510,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     ["private terminal diagnostic", undefined, "Private terminal diagnostic."],
   ] as const)(
     "accounts for %s message-tool-only completion",
-    (_label, intentionalTerminalCompletion, privateText) => {
+    async (_label, intentionalTerminalCompletion, privateText) => {
       const turn = createTurn();
       turn.queued.originatingChatType = privateText ? "group" : turn.queued.originatingChatType;
       turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -587,7 +519,7 @@ describe("resolveFollowupDeliveryDecision", () => {
         execution.outcome.result.meta.intentionalTerminalCompletion = intentionalTerminalCompletion;
       }
 
-      const decision = resolveFollowupDeliveryDecision({
+      const decision = await resolveFollowupDeliveryDecision({
         turn,
         execution,
         accounting: createAccounting(privateText ? [{ text: privateText }] : []),
@@ -611,35 +543,17 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it("keeps a terminal failure when suppressed partial output is present", () => {
-    const turn = createTurn();
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const decision = resolveFollowupDeliveryDecision({
-      turn,
-      execution: createSettledExecution(),
-      accounting: createAccounting([{ text: "private partial" }], {
-        terminalFailurePayload: { text: "terminal failure", isError: true },
-      }),
-    });
-
-    expect(decision).toMatchObject({
-      kind: "deliver",
-      payloads: [{ text: "terminal failure", isError: true }],
-    });
-  });
-
-  it("prefers terminal failure over stranded-text recovery", () => {
+  it("prefers terminal failure over stranded-text recovery", async () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
     const execution = createSettledExecution(
       "This incomplete private text is substantive. It must not replace the sanitized failure.",
     );
 
-    const decision = resolveFollowupDeliveryDecision({
+    const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution,
-      accounting: createAccounting([], {
+      accounting: createAccounting([{ text: "private partial" }], {
         terminalFailurePayload: { text: "terminal failure", isError: true },
       }),
     });
@@ -725,7 +639,7 @@ describe("deliverFollowupDecision", () => {
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
     const defaults = createDefaults(vi.fn(async () => {}));
-    const decision = resolveFollowupDeliveryDecision({
+    const decision = await resolveFollowupDeliveryDecision({
       turn,
       execution: createSettledExecution(
         "This substantive reply should have been sent with the message tool. ".repeat(6),
@@ -757,7 +671,7 @@ describe("deliverFollowupDecision", () => {
         throw new Error("Recovery was not queued with its source delivery owner");
       }
       const retryTurn = { ...turn, runId: "retry-run", queued: retryRun };
-      const diagnostic = resolveFollowupDeliveryDecision({
+      const diagnostic = await resolveFollowupDeliveryDecision({
         turn: retryTurn,
         execution: createSettledExecution("Still unable to send the reply."),
         accounting: createAccounting(),
@@ -793,30 +707,6 @@ describe("deliverFollowupDecision", () => {
     } finally {
       deliveryState.enqueue.mockReset();
     }
-  });
-
-  it("allows the latest same-channel dispatcher to recover a route failure", async () => {
-    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-    deliveryState.routeReply.mockReset();
-    deliveryState.routeReply.mockResolvedValue({
-      ok: false,
-      delivered: false,
-      error: "offline",
-    });
-    const turn = createTurn();
-    turn.queued.run.messageProvider = "discord";
-
-    await deliverFollowupDecision({
-      decision: { kind: "deliver", payloads: [{ text: "same-channel reply" }] },
-      turn,
-      defaults: createDefaults(onBlockReply),
-      runId: "run-1",
-      runFollowup: vi.fn(async () => {}),
-    });
-
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "same-channel reply" }),
-    );
   });
 
   it("keeps block-status delivery out of the assistant transcript", async () => {

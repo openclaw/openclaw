@@ -217,6 +217,9 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
     const warning = describeHeartbeatSessionTargetIssues(cfg)[0];
     expect(warning).toContain('reason="no-route"');
-    expect(warning).toContain("set commands.ownerAllowFrom or a channel allowFrom");
+    expect(warning).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(warning).toContain('heartbeat.target="telegram"');
+    expect(warning).toContain('heartbeat.to="123456789"');
+    expect(warning).toContain('heartbeat.target="none"');
   });
 });

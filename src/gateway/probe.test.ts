@@ -207,7 +207,8 @@ vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   }),
 }));
 
-const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
+const { clampProbeTimeoutMs, getDeviceRequiredProbeCacheSizeForTest, probeGateway } =
+  await import("./probe.js");
 
 type ProbeGatewayParams = Parameters<typeof probeGateway>[0];
 
@@ -866,6 +867,14 @@ describe("probeGateway", () => {
     } finally {
       dateNowSpy.mockRestore();
     }
+  });
+
+  it("evicts the oldest device-required cache entries once the cap is reached", async () => {
+    setDeviceRequiredProbeMode();
+    for (let i = 0; i <= 500; i += 1) {
+      await runLightweightProbe(nextProbeUrl(`cache-evict-${i}`));
+    }
+    expect(getDeviceRequiredProbeCacheSizeForTest()).toBeLessThanOrEqual(500);
   });
 
   it("lets paired probes clear prior device-required failures", async () => {

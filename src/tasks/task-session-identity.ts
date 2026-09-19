@@ -20,3 +20,20 @@ export function resolveTaskSessionAgentId(
     return undefined;
   }
 }
+
+export async function resolveTaskSessionAgentIdAsync(
+  sessionKey: string | undefined,
+  agentId: string | undefined,
+  readConfig: () => Promise<OpenClawConfig>,
+): Promise<string | undefined> {
+  const knownAgentId = resolveTaskSessionAgentId(sessionKey, agentId);
+  if (knownAgentId || !sessionKey) {
+    return knownAgentId;
+  }
+  try {
+    const config = await readConfig();
+    return resolveTaskSessionAgentId(sessionKey, agentId, config);
+  } catch {
+    return undefined;
+  }
+}

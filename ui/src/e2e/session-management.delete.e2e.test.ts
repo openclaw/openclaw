@@ -7,6 +7,7 @@ import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
+  activateSelfRemovingControl,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
@@ -18,6 +19,94 @@ const suite = createSessionManagementE2eSuite(true);
 type DraftDeletionTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
+  it.each(["delete", "archive"] as const)(
+    "recovers an offline workspace for sidebar %s only after loss consent",
+    async (action) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const main = sessionRow("agent:main:main", "Main", 2);
+      const target = sessionRow("agent:main:offline-workspace", "Offline workspace", 1);
+      const method = action === "delete" ? "sessions.delete" : "sessions.patch";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.move"],
+        methodResponses: {
+          "sessions.delete": { ok: true, deleted: true },
+          "sessions.list": sessionsListResponse([main, target]),
+        },
+        sessionArchiveFiltering: true,
+        sessionKey: main.key,
+      });
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+      const openRecovery = async (after: number) => {
+        await gateway.deferNext(method, { key: target.key });
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        await row.getByRole("button", { name: "Open session menu" }).click();
+        await activateSelfRemovingControl(
+          page.locator("openclaw-session-menu").getByRole("menuitem", {
+            name: action === "delete" ? "Delete…" : "Archive session",
+          }),
+        );
+        if (action === "delete") {
+          const confirmation = await waitForConfirmModal(page);
+          await confirmation.getByRole("button", { name: "Delete", exact: true }).click();
+        }
+        await gateway.waitForRequest(method, { after, match: { key: target.key } });
+        await gateway.rejectDeferred(method, {
+          code: "UNAVAILABLE",
+          message: "Reconnect the device to preserve its workspace.",
+          details: {
+            code: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+            cause: "device_offline",
+            recoveryAction: "continue_on_gateway",
+            sessionId: target.sessionId,
+            source: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+          },
+        });
+        const recovery = await waitForConfirmModal(page);
+        await recovery.getByRole("button", { name: `Discard changes and ${action}` }).waitFor();
+        await expect
+          .poll(() => recovery.textContent())
+          .toContain("Reconnect it to keep those changes");
+        return recovery;
+      };
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const cancelled = await openRecovery(0);
+        await cancelled.getByRole("button", { name: "Cancel", exact: true }).click();
+        await cancelled.waitFor({ state: "detached" });
+        await row.waitFor({ state: "visible" });
+        expect(await gateway.getRequests("sessions.move")).toEqual([]);
+        await expectRequestCountStable(gateway, method, 1, undefined, { key: target.key });
+
+        const confirmed = await openRecovery(1);
+        await gateway.deferNext("sessions.move");
+        await confirmed.getByRole("button", { name: `Discard changes and ${action}` }).click();
+        expect(await gateway.waitForRequest("sessions.move")).toMatchObject({
+          params: {
+            key: target.key,
+            agentId: "main",
+            expected: { generation: 5, environmentId: "offline-device", ownerEpoch: 70 },
+            target: { kind: "gateway" },
+            abandonSource: true,
+          },
+        });
+        await expectRequestCountStable(gateway, method, 2, undefined, { key: target.key });
+        if (action === "delete") {
+          await gateway.setSessionsListResponse(sessionsListResponse([main]));
+        }
+        await gateway.resolveDeferred("sessions.move", { ok: true });
+        await gateway.waitForRequest(method, { after: 2, match: { key: target.key } });
+        await row.waitFor({ state: "detached" });
+        await expectRequestCountStable(gateway, method, 3, undefined, { key: target.key });
+        expect(await gateway.getRequests("sessions.move")).toHaveLength(1);
+        expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("retires confirmed single and batch drafts in both stores without touching siblings or no-ops", async () => {
     const retired = [
       "agent:main:single",

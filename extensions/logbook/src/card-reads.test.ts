@@ -4,11 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 
 afterEach(() => {
   vi.restoreAllMocks();

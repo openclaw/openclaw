@@ -1,14 +1,17 @@
+import { randomUUID } from "node:crypto";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
-import { isDeepStrictEqual } from "node:util";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
-import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import {
+  runAuthProfileMigration,
+  runAuthProfileDiagnostics as runAuthProfileHealth,
+} from "./doctor-auth-health.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -27,6 +30,7 @@ import {
 import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
+import { admitDoctorUpdateInspection, resolveDoctorUpdateBudget } from "./doctor-update-budget.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
@@ -34,7 +38,6 @@ import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 const loadCommandFormatModule = async () => await import("../cli/command-format.js");
-const loadDoctorCoreChecksModule = async () => await import("./doctor-core-checks.js");
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
 const loadSecretTypesModule = async () => await import("../config/types.secrets.js");
@@ -112,127 +115,107 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
   }
 }
 
-async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
-  const { maybeRepairLegacyOAuthProfileIds } =
-    await import("../commands/doctor-auth-legacy-oauth.js");
-  const { maybeRepairLegacyOAuthSidecarProfiles } =
-    await import("../commands/doctor-auth-oauth-sidecar.js");
-  const { maybeMigrateLegacyPluginModelCatalogs } =
-    await import("../commands/doctor-plugin-model-catalog.js");
-  const {
-    noteAuthProfileHealth,
-    noteCopilotAmbientToken,
-    noteLegacyCodexProviderOverride,
-    noteSharedAuthStoreStatus,
-  } = await import("../commands/doctor-auth.js");
-  const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
-  const { note } = await loadNoteModule();
-  await maybeRepairLegacyOAuthSidecarProfiles({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
-  if (ctx.configResult.openAICodexAuthProfileIdMap === undefined) {
-    const authRepair = await repairAuthProfileMigration({
-      cfg: ctx.cfg,
-      env: ctx.env,
-      prompter: ctx.prompter,
-    });
-    emitDoctorNotes({
-      note,
-      changeNotes: authRepair.storeChanges,
-      warningNotes: authRepair.warnings,
-    });
-    ctx.cfg = authRepair.config;
-    ctx.configResult.openAICodexAuthProfileIdMap = authRepair.profileIdMap;
-    if (authRepair.changes.length > 0) {
-      ctx.configResult.pendingChangePanels = [
-        ...(ctx.configResult.pendingChangePanels ?? []),
-        authRepair.changes.join("\n"),
-      ];
-    }
-  }
-  await maybeMigrateLegacyPluginModelCatalogs({
-    cfg: ctx.cfg,
-    ...(ctx.env ? { env: ctx.env } : {}),
-    prompter: ctx.prompter,
-    runtime: ctx.runtime,
-  });
-  const modelsBeforeRepair = ctx.cfg.agents?.defaults?.models;
-  const legacyOAuthRepair = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
-  ctx.cfg = legacyOAuthRepair.config;
-  if (legacyOAuthRepair.retiredProfileCleanupPlans.length > 0) {
-    ctx.configResult.retiredAuthProfileCleanupPlans = [
-      ...(ctx.configResult.retiredAuthProfileCleanupPlans ?? []),
-      ...legacyOAuthRepair.retiredProfileCleanupPlans,
-    ];
-  }
-  if (!isDeepStrictEqual(modelsBeforeRepair, ctx.cfg.agents?.defaults?.models)) {
-    ctx.configResult.explicitSetPaths = [
-      ...(ctx.configResult.explicitSetPaths ?? []),
-      ["agents", "defaults", "models"],
-    ];
-  }
-  const { maybeMigrateModelCatalogCredentials } =
-    await import("../commands/doctor-model-catalog-credentials.js");
-  await maybeMigrateModelCatalogCredentials({
-    cfg: ctx.cfg,
-    ...(ctx.env ? { env: ctx.env } : {}),
-    prompter: ctx.prompter,
-    runtime: ctx.runtime,
-  });
-  let authProfileHealthReady = true;
-  if (
-    ctx.configResult.retiredAuthProfileCleanupPlans?.length ||
-    ctx.configResult.openAICodexAuthProfileIdMap?.size
-  ) {
-    const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
-      await import("./doctor-health-contribution-runners.config.js");
-    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-    authProfileHealthReady =
-      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
-    if (authProfileHealthReady) {
-      await runRetiredAuthProfileCleanup(ctx);
-    }
-  }
-  if (authProfileHealthReady) {
-    await noteAuthProfileHealth({
-      cfg: ctx.cfg,
-      prompter: ctx.prompter,
-      allowKeychainPrompt: ctx.options.nonInteractive !== true && process.stdin.isTTY,
-    });
-  }
-  noteLegacyCodexProviderOverride(ctx.cfg);
-  noteSharedAuthStoreStatus(ctx.env);
-  noteCopilotAmbientToken(ctx.cfg, ctx.env);
-  ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
-  if (ctx.gatewayDetails.remoteFallbackNote) {
-    note(ctx.gatewayDetails.remoteFallbackNote, "Gateway");
-  }
-}
-
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!ctx.sourceConfigValid) {
     return;
   }
-  const { detectGatewayAuthHealth } = await loadDoctorCoreChecksModule();
+  const { detectGatewayAuthHealth } = await import("./doctor-gateway-auth.js");
   const [finding] = await detectGatewayAuthHealth({
     cfg: ctx.cfg,
     env: ctx.env,
     allowExecSecretRefs: ctx.options.allowExec,
   });
-  if (!finding) {
-    return;
-  }
   const { resolveSecretInputRef } = await loadSecretTypesModule();
   const { note } = await loadNoteModule();
   const gatewayTokenRef = resolveSecretInputRef({
     value: ctx.cfg.gateway?.auth?.token,
     defaults: ctx.cfg.secrets?.defaults,
   }).ref;
+  if (!finding) {
+    if (gatewayTokenRef && ctx.options.generateGatewayToken === true) {
+      note(
+        `Gateway token generation skipped because gateway.auth.token is managed by SecretRef ${gatewayTokenRef.source}:${gatewayTokenRef.provider}:${gatewayTokenRef.id}. The referenced credential was left unchanged.`,
+        "Gateway auth",
+      );
+    }
+    return;
+  }
   note([finding.message, finding.fixHint].filter(Boolean).join("\n"), "Gateway auth");
+  if (finding.path !== "gateway.auth.token") {
+    recordDoctorHealthWarnings(ctx, [finding]);
+    return;
+  }
   if (gatewayTokenRef) {
-    note("Doctor will not overwrite gateway.auth.token with a plaintext value.", "Gateway auth");
+    if (
+      gatewayTokenRef.source === "store" &&
+      finding.requirement === "SECRET_REF_REDACTED_VALUE" &&
+      (ctx.options.generateGatewayToken === true ||
+        ctx.options.repair === true ||
+        ctx.options.yes === true)
+    ) {
+      const { isRedactedSecretValue } = await import("../config/redact-sentinel.js");
+      const { readSecretStoreValue, writeSecretStoreEntryWithRollback } =
+        await import("../secrets/store/secret-store.js");
+      const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../state/openclaw-state-db.paths.js");
+      const { randomToken } = await loadOnboardHelpersModule();
+      const database = { env: ctx.env ?? process.env };
+      const entry = { scope: { kind: "team" as const }, name: gatewayTokenRef.id, database };
+      let rollback: (() => boolean) | undefined;
+      try {
+        const current = readSecretStoreValue(entry);
+        if (!current.ok || !isRedactedSecretValue(current.value)) {
+          note(
+            `Secret store entry "${entry.name}" changed; rerun Doctor to inspect it.`,
+            "Gateway auth",
+          );
+          return;
+        }
+        const databasePath = resolveOpenClawStateSqlitePath(database.env);
+        const backup = await createVerifiedSqliteSnapshot({
+          sourcePath: databasePath,
+          targetPath: `${databasePath}.doctor-gateway-token.${randomUUID()}.bak`,
+          preserveRowIds: true,
+        });
+        const nextToken = randomToken();
+        ({ rollback } = writeSecretStoreEntryWithRollback({
+          ...entry,
+          value: nextToken,
+          expectedValue: current.value,
+          kind: "secret",
+          updatedBy: "doctor",
+        }));
+        const repaired = readSecretStoreValue(entry);
+        if (!repaired.ok || repaired.value !== nextToken) {
+          throw new Error("the replacement token could not be verified");
+        }
+        rollback = undefined;
+        note(
+          `Regenerated Gateway token in secret store entry "${entry.name}"; gateway.auth.token remains a SecretRef. Backup: ${backup.path}\nRestart the Gateway, then reconnect or re-pair devices with the new token.`,
+          "Gateway auth",
+        );
+      } catch (error) {
+        let recovery = "";
+        try {
+          if (rollback) {
+            recovery = rollback()
+              ? " The previous entry was restored."
+              : " The entry changed again and was left untouched.";
+          }
+        } catch (rollbackError) {
+          recovery = ` Rollback failed: ${scrubDoctorErrorMessage(rollbackError)}.`;
+        }
+        const warning = `Could not repair Gateway token in secret store entry "${entry.name}": ${scrubDoctorErrorMessage(error)}.${recovery} Rerun \`openclaw doctor --fix\` after resolving the reported problem.`;
+        note(warning, "Gateway auth");
+        recordDoctorHealthWarnings(ctx, [], [warning]);
+      }
+      return;
+    }
+    note(
+      `${ctx.options.generateGatewayToken === true ? "Gateway token generation skipped because a SecretRef is configured. " : ""}Doctor will not overwrite gateway.auth.token with a plaintext value.`,
+      "Gateway auth",
+    );
     return;
   }
   const shouldSetToken =
@@ -453,10 +436,11 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
+  const timeoutMs = ctx.options.nonInteractive === true ? 3000 : 10_000;
   const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
-    timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+    timeoutMs,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
@@ -465,7 +449,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
-        timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+        timeoutMs,
       })
     : { checked: false, ready: false, skipped: healthOk };
 }
@@ -476,6 +460,7 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       runStructuredHealthRepairs: (ctx) =>
         runStructuredHealthRepairs(ctx, resolveDoctorContributionHealthChecks),
       runGatewayConfigHealth,
+      runAuthProfileMigration,
       runAuthProfileHealth,
       runGatewayAuthHealth,
       runLegacyStateHealth,
@@ -519,9 +504,15 @@ async function runDoctorHealthContributionList(
 ): Promise<void> {
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
-  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  const env = ctx.env ?? process.env;
+  ctx.updateBudget ??= await resolveDoctorUpdateBudget({
+    cfg: ctx.cfg,
+    env,
+    preparedAgentCount: ctx.preparedAgentCount,
+  });
+  const updateDoctorRun = isUpdateDoctorRun(env);
   const deferred = updateDoctorRun
-    ? contributions.filter((contribution) => contribution.updatePolicy === "standalone")
+    ? contributions.filter((contribution) => contribution.updateWork?.kind === "standalone")
     : [];
   if (deferred.length > 0) {
     const { note } = await loadNoteModule();
@@ -530,48 +521,87 @@ async function runDoctorHealthContributionList(
       "Update Doctor scope",
     );
   }
-  for (const contribution of contributions) {
-    // Skip before opening a plugin snapshot; these diagnostics cannot establish
-    // required migration readiness and have their own standalone invocation.
-    if (updateDoctorRun && contribution.updatePolicy === "standalone") {
-      continue;
-    }
-    try {
-      const run = async () => {
-        try {
-          await contribution.run(ctx);
-        } finally {
-          // Deferred session writers settle here. An optional diagnostic cannot
-          // turn their recorded refusal into permission for later repairs.
-          throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+  const ordered = ctx.updateBudget
+    ? [
+        ...contributions.filter(
+          (entry) =>
+            entry.updateWork === undefined ||
+            entry.updateWork.kind === "startup" ||
+            entry.updateWork.kind === "standalone",
+        ),
+        ...contributions.filter((entry) => entry.updateWork?.kind === "inspection"),
+        ...contributions.filter((entry) => entry.updateWork?.kind === "finalize"),
+      ]
+    : contributions;
+  try {
+    for (const contribution of ordered) {
+      // Skip before opening a plugin snapshot; these diagnostics cannot establish
+      // required migration readiness and have their own standalone invocation.
+      if (updateDoctorRun && contribution.updateWork?.kind === "standalone") {
+        continue;
+      }
+      if (
+        contribution.updateWork?.kind === "inspection" &&
+        !admitDoctorUpdateInspection(
+          ctx.updateBudget,
+          contribution.updateWork.scope,
+          (contribution.healthCheckIds.length
+            ? contribution.healthCheckIds
+            : [`core/doctor/${contribution.id.replace(/^doctor:/, "")}`]
+          ).map((id) => ({ id, label: contribution.option.label })),
+        )
+      ) {
+        continue;
+      }
+      try {
+        const run = async () => {
+          try {
+            await contribution.run(ctx);
+          } finally {
+            // Deferred session writers settle here. An optional diagnostic cannot
+            // turn their recorded refusal into permission for later repairs.
+            throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
+          }
+          if (ctx.configWriteRefusal) {
+            await reportDeferredLegacyState(ctx);
+          }
+        };
+        if (!runWithPluginMetadataSnapshot) {
+          await run();
+        } else {
+          const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+          await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
         }
         if (ctx.configWriteRefusal) {
-          await reportDeferredLegacyState(ctx);
+          // Later repairs consume the candidate. Stop before they persist state
+          // derived from config that the writer deliberately left non-durable.
+          return;
         }
-      };
-      if (!runWithPluginMetadataSnapshot) {
-        await run();
-      } else {
-        const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-        await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, run);
+      } catch (error) {
+        if (
+          contribution.required ||
+          error instanceof DoctorStateMigrationRefusalError ||
+          error instanceof ConfigWritePostCommitError
+        ) {
+          throw error;
+        }
+        const { note } = await loadNoteModule();
+        const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
+        note(message, "Doctor warnings");
+        recordDoctorHealthWarnings(ctx, [], [message]);
       }
-      if (ctx.configWriteRefusal) {
-        // Later repairs consume the candidate. Stop before they persist state
-        // derived from config that the writer deliberately left non-durable.
-        return;
-      }
-    } catch (error) {
-      if (
-        contribution.required ||
-        error instanceof DoctorStateMigrationRefusalError ||
-        error instanceof ConfigWritePostCommitError
-      ) {
-        throw error;
-      }
-      const { note } = await loadNoteModule();
-      const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
-      note(message, "Doctor warnings");
-      recordDoctorHealthWarnings(ctx, [], [message]);
+    }
+  } finally {
+    const findings = [...(ctx.updateBudget?.deferred.values() ?? [])];
+    // Preserve the deferred set before the existing bounded advisory digest.
+    recordDoctorHealthWarnings(ctx, findings, [], { prepend: true });
+    for (const finding of findings) {
+      ctx.runtime.log(`[warning] ${finding.checkId} [${finding.errorCode}]: ${finding.message}`);
+    }
+    if (findings.length > 0) {
+      ctx.runtime.log(
+        "Run `openclaw doctor --fix` after activation to complete deferred checks and repairs.",
+      );
     }
   }
 }

@@ -131,6 +131,36 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it.each([
+    { name: "an unqualified conversation", context: { currentChannelId: "C123" } },
+    {
+      name: "conflicting current workspaces",
+      context: {
+        currentChannelId: "team:T123:channel:C123",
+        currentMessagingTarget: "team:T999:channel:C123",
+      },
+    },
+  ])("rejects Enterprise metadata reads with $name", async ({ context }) => {
+    const cfg = slackConfig();
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      for (const action of ["memberInfo", "emojiList"]) {
+        await expect(
+          handleSlackAction({ action, userId: "U123" }, cfg, {
+            ...context,
+            currentChannelProvider: "slack",
+            requesterAccountId: "default",
+            requesterSenderId: "U123",
+          }),
+        ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      }
+      expect(getSlackMemberInfo).not.toHaveBeenCalled();
+      expect(listSlackEmojis).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
+  });
+
   it("scopes every message and pin write to the trusted current workspace", async () => {
     const cfg = slackConfig();
     const context = {

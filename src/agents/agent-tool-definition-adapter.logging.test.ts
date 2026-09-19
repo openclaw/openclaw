@@ -347,8 +347,8 @@ describe("agent tool definition adapter logging", () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toBe(controller.signal.reason);
     expect((thrown as Error).name).toBe("AbortError");
-    expect((thrown as Error).message).toBe("This operation was aborted");
     expect(logError).not.toHaveBeenCalled();
   });
 

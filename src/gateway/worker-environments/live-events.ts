@@ -4,8 +4,10 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import {
   emitAgentEventIfCurrent,
   emitAgentEventForOwner,
@@ -17,7 +19,6 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
   registerAgentRunContext,
-  releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -35,13 +36,17 @@ import {
   type WorkerLiveSessionBinding,
 } from "./live-event-session-binding.js";
 import {
+  fenceReleasedWorkerLiveRun,
+  hasReachableBufferedTerminal,
+  releaseWorkerLiveRun,
   rotateWorkerLiveEventCredential,
   type LiveEventWindow,
   type OwnedLiveRun,
   type PendingLiveEvent,
   type WorkerLiveCredentialRotation,
 } from "./live-event-window.js";
-import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
+import { captureWorkerTurnFinishing } from "./placement-turn-claim-events.js";
+import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -128,26 +133,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
     rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
 
-  const releaseRun = (window: LiveEventWindow, runId: string): void => {
-    const owned = window.activeRuns.get(runId);
-    if (!owned) {
-      return;
-    }
-    window.activeRuns.delete(runId);
-    releaseAgentRunContext(runId, owned.claimId);
-  };
-
-  const fenceReleasedRun = (window: LiveEventWindow, runId: string): void => {
-    if (!window.terminalRuns.has(runId)) {
-      window.terminalRuns.set(runId, window.ackedSeq);
-    }
-    releaseRun(window, runId);
-  };
-
   const clearWindow = (window: LiveEventWindow): void => {
     windows.delete(window.sessionId);
     for (const runId of window.activeRuns.keys()) {
-      releaseRun(window, runId);
+      releaseWorkerLiveRun(window, runId);
     }
     window.pending.clear();
     window.pendingBytes = 0;
@@ -359,37 +348,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (ownerStatus !== "active") {
-        fenceReleasedRun(window, runId);
+        fenceReleasedWorkerLiveRun(window, runId);
       }
     }
     return undefined;
-  };
-
-  const hasReachableBufferedTerminal = (
-    window: LiveEventWindow,
-    admittedRunId: string,
-    countedRunIds: ReadonlySet<string>,
-  ): boolean => {
-    // Borrow one source-ended slot only when this ordered drain can reach that
-    // active run's terminal without claiming another new run first.
-    for (let seq = window.ackedSeq + 2; seq <= window.ackedSeq + windowSize; seq += 1) {
-      const pending = window.pending.get(seq);
-      if (!pending) {
-        return false;
-      }
-      const pendingRunId = pending.request.runId;
-      if (countedRunIds.has(pendingRunId)) {
-        if (isDefinitiveWorkerTerminalEvent(pending.request.event)) {
-          return true;
-        }
-        continue;
-      }
-      if (pendingRunId !== admittedRunId) {
-        // Another new run would consume the borrowed slot before the terminal.
-        return false;
-      }
-    }
-    return false;
   };
 
   const claimRun = (
@@ -421,7 +383,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         context.lifecycleGeneration !== owned.lifecycleGeneration ||
         context.isControlUiVisible !== owned.controlUiVisible
       ) {
-        fenceReleasedRun(window, runId);
+        fenceReleasedWorkerLiveRun(window, runId);
         return invalidEvent();
       }
       return owned;
@@ -439,7 +401,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (
       countedRunIds.size >= maxActiveRuns &&
-      !(allowBufferedTerminalCapacity && hasReachableBufferedTerminal(window, runId, countedRunIds))
+      !(
+        allowBufferedTerminalCapacity &&
+        hasReachableBufferedTerminal(window, runId, countedRunIds, windowSize)
+      )
     ) {
       return capacityExceeded();
     }
@@ -475,7 +440,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         exclusive: existingContext === undefined,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
-            fenceReleasedRun(window, runId);
+            fenceReleasedWorkerLiveRun(window, runId);
           }
         },
         ownsContext: !hasExistingTrackedOwner,
@@ -491,6 +456,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       emissionMode,
       lifecycleGeneration,
       trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
+      toolArgsByCallId: new Map<string, unknown>(),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -500,8 +466,23 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
-    recordDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    recordApplied: PendingLiveEvent["recordApplied"],
+    runOwner: PendingLiveEvent["runOwner"],
   ): WorkerLiveEventFailure | undefined => {
+    if (runOwner?.isCancelled()) {
+      if (
+        request.event.kind !== "lifecycle" ||
+        request.event.payload.phase !== "finishing" ||
+        request.event.payload.aborted !== true
+      ) {
+        return invalidEvent();
+      }
+      // Cancellation retires live publication before the worker finishes.
+      // Its exact owner can still settle the ACK without recreating a run claim.
+      window.terminalRuns.set(request.runId, request.seq);
+      releaseWorkerLiveRun(window, request.runId);
+      return undefined;
+    }
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
       return owned;
@@ -517,22 +498,57 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       stream: request.event.kind,
       data: prepareWorkerLiveEventData(request.event),
     };
-    if (owned.emissionMode === "shared") {
-      if (!emitAgentEventIfCurrent(event)) {
-        if (definitiveTerminal) {
-          window.terminalRuns.delete(request.runId);
-        }
+    let activity;
+    if (request.event.kind === "tool") {
+      const tool = request.event.payload;
+      if (tool.phase === "start") {
+        owned.toolArgsByCallId.set(tool.toolCallId, tool.args);
+      }
+      activity = projectAgentToolActivity({
+        ...tool,
+        name: normalizeToolPolicyName(tool.name),
+        args: owned.toolArgsByCallId.get(tool.toolCallId),
+      });
+      if (tool.phase === "result") {
+        owned.toolArgsByCallId.delete(tool.toolCallId);
+      }
+    }
+    const itemEvent = activity
+      ? { runId: request.runId, stream: "item", data: activity }
+      : undefined;
+    const emissions = itemEvent
+      ? activity?.phase === "start"
+        ? [itemEvent, event]
+        : [event, itemEvent]
+      : [event];
+    const ownsPublication = () =>
+      window.activeRuns.get(request.runId) === owned &&
+      getAgentRunContextOwnerStatus(request.runId, owned.claimId, owned.lifecycleGeneration) ===
+        "active";
+    for (const emission of emissions) {
+      if (!ownsPublication()) {
         return invalidEvent();
       }
-    } else {
-      emitAgentEventForOwner(event, owned.claimId);
+      if (owned.emissionMode === "shared") {
+        if (!emitAgentEventIfCurrent(emission)) {
+          if (definitiveTerminal) {
+            window.terminalRuns.delete(request.runId);
+          }
+          return invalidEvent();
+        }
+      } else {
+        emitAgentEventForOwner(emission, owned.claimId);
+      }
+    }
+    if (activity && !ownsPublication()) {
+      return invalidEvent();
     }
     const write = recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     if (write) {
       window.trajectoryWrites.add(write);
       void write.then(() => window.trajectoryWrites.delete(write));
     }
-    recordDiagnostic?.(request.event);
+    recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -540,15 +556,17 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const drain = (
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
-    firstDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    firstApplied: PendingLiveEvent["recordApplied"],
+    firstOwner: PendingLiveEvent["runOwner"],
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
-    let recordDiagnostic = firstPending ? firstPending.recordDiagnostic : firstDiagnostic;
+    let recordApplied = firstPending ? firstPending.recordApplied : firstApplied;
+    let runOwner = firstPending ? firstPending.runOwner : firstOwner;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined, recordDiagnostic);
+      const failed = publish(window, request, buffered !== undefined, recordApplied, runOwner);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -588,7 +606,8 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       request = next.request;
       buffered = next;
-      recordDiagnostic = next.recordDiagnostic;
+      recordApplied = next.recordApplied;
+      runOwner = next.runOwner;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -603,7 +622,12 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (params.request.lastAckedSeq > window.ackedSeq) {
       return resyncWindow(window);
     }
-    const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
+    const runOwner = captureWorkerTurnLiveEventOwner(params.identity);
+    const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
+    const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
+      runOwner?.record(event);
+      recordFinishing?.();
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -611,7 +635,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, recordDiagnostic, pending);
+      return drain(window, pending?.request ?? params.request, recordApplied, runOwner, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -620,7 +644,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes, recordDiagnostic });
+    window.pending.set(seq, { request: params.request, sizeBytes, recordApplied, runOwner });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

@@ -33,6 +33,7 @@ export function createTuiPtyVitestConfig(env?: Record<string, string | undefined
       ...baseTest,
       env,
       name: "tui-pty",
+      pool: "forks",
       dir: resolveRepoRootPath("src"),
       include: includeFromEnv ?? includeFromArgv ?? include,
       exclude,

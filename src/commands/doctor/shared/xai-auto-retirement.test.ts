@@ -10,8 +10,8 @@ import {
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredConfigModelRefs,
-  repairRetiredSessionModelRef,
 } from "./retired-model-ref-repair.js";
+import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -103,7 +103,7 @@ it("preserves a custom endpoint's explicit auto model", async () => {
   expect(repairRetiredConfigModelRefs(cfg, resolve).config).toBe(cfg);
 });
 
-it("repairs an unpinned config on its declared subscription route without credentials", async () => {
+it("repairs an unpinned config for its declared owner without credentials", async () => {
   const cfg = configForRoute("https://cli-chat-proxy.grok.com/v1");
   await state.writeConfig(cfg);
   await state.writeAuthProfiles({ version: 1, profiles: {} });
@@ -113,7 +113,7 @@ it("repairs an unpinned config on its declared subscription route without creden
     kind: "replace",
     modelRef: "xai/grok-4.6",
     reason: "retirement",
-    retirementScope: "route",
+    retirementScope: "owner",
   });
   expect(warnings).toEqual([]);
 });

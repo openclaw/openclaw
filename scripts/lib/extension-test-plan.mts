@@ -289,6 +289,32 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
   return chunks;
 }
 
+const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
+// The 185-file native worker envelope was still running after 58 minutes in
+// run 35176277297. Bound jobs separately from the existing process lifetimes.
+export const NATIVE_DATABASE_WORKER_TEST_JOB_FILE_LIMIT = 20;
+
+function splitWorkerTargetsByOriginalConfig(
+  targets: string[],
+  split: (config: string, files: string[]) => string[][],
+  nativeFileLimit?: number,
+) {
+  const groups = new Map<string, string[]>();
+  for (const target of uniqueSortedTargets(targets)) {
+    const config = resolveExtensionTestConfig(target.split("/").slice(0, 2).join("/"));
+    const group = groups.get(config) ?? [];
+    group.push(target);
+    groups.set(config, group);
+  }
+  return [...groups].flatMap(([config, files]) =>
+    config === DATABASE_WORKER_CONFIG
+      ? nativeFileLimit
+        ? splitTargetsByFileLimit(files, nativeFileLimit)
+        : [files]
+      : split(config, files),
+  );
+}
+
 function resolveExtensionTestJobFileLimit(config: string) {
   return (
     EXTENSION_TEST_JOB_FILE_LIMITS.get(config) ?? EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config)
@@ -297,6 +323,9 @@ function resolveExtensionTestJobFileLimit(config: string) {
 
 /** Split an extension config's test files across bounded process lifetimes when required. */
 export function splitExtensionTestProcessTargets(config: string, targets: string[]) {
+  if (config === DATABASE_WORKER_CONFIG) {
+    return splitWorkerTargetsByOriginalConfig(targets, splitExtensionTestProcessTargets);
+  }
   const maxFilesPerProcess = EXTENSION_TEST_PROCESS_FILE_LIMITS.get(config);
   return maxFilesPerProcess
     ? splitTargetsByFileLimit(targets, maxFilesPerProcess)
@@ -305,6 +334,13 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
 
 /** Split an extension config's test files into CI envelopes without changing process lifetime. */
 export function splitExtensionTestJobTargets(config: string, targets: string[]) {
+  if (config === DATABASE_WORKER_CONFIG) {
+    return splitWorkerTargetsByOriginalConfig(
+      targets,
+      splitExtensionTestJobTargets,
+      NATIVE_DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
+    );
+  }
   const maxFilesPerJob = resolveExtensionTestJobFileLimit(config);
   return maxFilesPerJob
     ? splitTargetsByFileLimit(targets, maxFilesPerJob)
@@ -313,7 +349,7 @@ export function splitExtensionTestJobTargets(config: string, targets: string[]) 
 
 /** Whether a Vitest invocation can safely be split into independent one-shot processes. */
 export function shouldSplitExtensionTestProcesses(config: string, vitestArgs: string[] = []) {
-  if (!EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config)) {
+  if (config !== DATABASE_WORKER_CONFIG && !EXTENSION_TEST_PROCESS_FILE_LIMITS.has(config)) {
     return false;
   }
   // Per-test retries and exact file exclusions preserve independent process scopes.
@@ -345,7 +381,9 @@ export function createExtensionTestProcessTargetChunks(
   }
   // Explicit file targets replace Vitest's root discovery, so inventory the working tree.
   // Otherwise a newly authored untracked test would silently disappear from a broad run.
-  const testFiles = listExtensionTestFilesForRoots(roots);
+  const testFiles = listExtensionTestFilesForRoots(roots).filter(
+    (file) => config === DATABASE_WORKER_CONFIG || !databaseWorkerExtensionTestFiles.includes(file),
+  );
   return testFiles.length > 0 ? splitExtensionTestProcessTargets(config, testFiles) : [roots];
 }
 
@@ -363,11 +401,12 @@ export function estimateExtensionTestCost(config: string, testFileCount: number)
   return Math.max(1, Math.ceil(testFileCount * multiplier));
 }
 
-/** Resolve the dedicated Vitest config for an extension root. */
-export function resolveExtensionTestConfig(root: string) {
-  if (databaseWorkerExtensionTestFiles.includes(root)) {
+/** Resolve the dedicated Vitest config for an extension root or test file. */
+export function resolveExtensionTestConfig(target: string) {
+  if (databaseWorkerExtensionTestFiles.includes(target)) {
     return "test/vitest/vitest.extension-database-workers.config.ts";
   }
+  const root = target.split("/").slice(0, 2).join("/");
   const splitChannelShard = resolveSplitChannelExtensionShard(root);
   if (splitChannelShard) {
     return splitChannelShard.config;

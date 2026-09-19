@@ -1,27 +1,17 @@
 // Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
-import * as browserCliSharedModule from "./browser-cli-shared.js";
+import { mockBrowserGateway } from "./browser-cli.test-support.js";
 import * as cliCoreApiModule from "./core-api.js";
 
 const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
 }));
 
 const runActualBrowserResizeWithOutput = browserCliResizeModule.runBrowserResizeWithOutput;
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+const gatewayMock = mockBrowserGateway();
 vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
   mocks.runBrowserResizeWithOutput,
-);
-vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
-  async (_runtime, action, onError) => {
-    try {
-      await action();
-    } catch (err) {
-      onError?.(err);
-    }
-  },
 );
 const {
   createBrowserProgram: createBrowserProgramShared,
@@ -50,11 +40,11 @@ describe("browser state option collisions", () => {
   };
 
   const getLastRequest = () => {
-    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    const call = gatewayMock.mock.calls.at(-1);
     if (!call) {
       throw new Error("expected browser request call");
     }
-    return call[1] as { body?: Record<string, unknown> };
+    return call[2];
   };
 
   const runBrowserCommand = async (argv: string[]) => {
@@ -75,7 +65,7 @@ describe("browser state option collisions", () => {
   };
 
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
+    gatewayMock.mockClear();
     mocks.runBrowserResizeWithOutput.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
@@ -105,9 +95,11 @@ describe("browser state option collisions", () => {
   ])("inherits parent timeout for $path", async ({ args, path }) => {
     await runBrowserCommand(["--timeout", "60000", "--json", ...args]);
 
-    expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+    expect(gatewayMock).toHaveBeenLastCalledWith(
+      "browser.request",
       expect.objectContaining({ timeout: "60000" }),
-      expect.objectContaining({ path }),
+      expect.objectContaining({ path, timeoutMs: 60000 }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });
 
@@ -134,13 +126,16 @@ describe("browser state option collisions", () => {
       successMessage: "unused",
     });
 
-    expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+    expect(gatewayMock).toHaveBeenLastCalledWith(
+      "browser.request",
       expect.objectContaining({ timeout: "60000" }),
       expect.objectContaining({
         path: "/act",
         query: { profile: "work" },
         body: { kind: "resize", width: 1024, height: 768, targetId: "tab-1" },
+        timeoutMs: 60000,
       }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });
 
@@ -156,7 +151,7 @@ describe("browser state option collisions", () => {
       "tab-1",
     ]);
 
-    expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
+    expect(request.body?.targetId).toBe("tab-1");
   });
 
   it("does not inherit the parent Gateway URL as the cookie scope", async () => {
@@ -166,39 +161,35 @@ describe("browser state option collisions", () => {
       { from: "user" },
     );
 
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Missing required --url option for cookies set");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {
-    const request = (await runBrowserCommandAndGetRequest([
+    const request = await runBrowserCommandAndGetRequest([
       "set",
       "headers",
       "--json",
       '{"x-auth":"ok"}',
-    ])) as {
-      body?: { headers?: Record<string, string> };
-    };
+    ]);
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
   });
 
   it("filters non-string header values from JSON payload", async () => {
-    const request = (await runBrowserCommandAndGetRequest([
+    const request = await runBrowserCommandAndGetRequest([
       "set",
       "headers",
       "--json",
       '{"x-auth":"ok","retry":3,"enabled":true}',
-    ])) as {
-      body?: { headers?: Record<string, string> };
-    };
+    ]);
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
   });
 
   it("errors when set offline receives an invalid value", async () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Expected on|off");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -222,7 +213,7 @@ describe("browser state option collisions", () => {
   it("errors when set media receives an invalid value", async () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Expected dark|light|no-preference|none");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -236,7 +227,7 @@ describe("browser state option collisions", () => {
   it("rejects invalid geolocation numbers before dispatch", async () => {
     await runBrowserCommand(["set", "geo", "48.208", "16.373", "--accuracy", "fast"]);
 
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Invalid --accuracy: must be a finite number");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -261,7 +252,7 @@ describe("browser state option collisions", () => {
   it("errors when headers JSON is missing", async () => {
     await runBrowserCommand(["set", "headers"]);
 
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage(
       "Error: Missing headers JSON (pass --headers-json or positional JSON argument)",
     );
@@ -271,7 +262,7 @@ describe("browser state option collisions", () => {
   it("errors when headers JSON is not an object", async () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Error: Headers JSON must be a JSON object");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });

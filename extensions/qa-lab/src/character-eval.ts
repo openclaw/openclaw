@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements character eval behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";

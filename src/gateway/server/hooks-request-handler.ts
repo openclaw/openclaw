@@ -34,97 +34,28 @@ import {
   resolveHookPathBodyLimit,
   resolveHookSessionKey,
 } from "../hooks.js";
-import type {
-  HookAgentCompletion,
-  HookAgentDispatchResult,
-  HookAgentDispatchSuccess,
-} from "../hooks.types.js";
+import type { HookAgentDispatchResult, HookAgentDispatchSuccess } from "../hooks.types.js";
 import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
+import {
+  HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
+  sendAgentResult,
+  sendFanOutResult,
+  settleFanOutDispatches,
+  type WakeResult,
+} from "./hooks-request-handler-response.js";
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
-// gog's hook HTTP client aborts after 10 seconds (gogcli
-// internal/cmd/gmail_watch_types.go defaultHookRequestTimeoutSec) and treats
-// the abort as delivery failure, rewinding its history cursor. A fan-out batch
-// must answer inside that window; items still admitting at the deadline are
-// reported as pending (non-2xx) and finish in the background, where the replay
-// cache reconciles them with the producer's redelivery.
-const HOOK_FAN_OUT_RESPONSE_DEADLINE_MS = 8_000;
 // Marker for replay keys derived from item content when the producer supplies
 // no idempotency key; item identity lives in the dispatch-scope fingerprint.
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
+const HOOK_CONFIG_CHANGED_ERROR = "hook configuration changed; retry request";
 
 const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
-
-const FAN_OUT_PENDING = Symbol("hook-fanout-pending");
-type FanOutSettled = HookAgentDispatchResult | typeof FAN_OUT_PENDING;
-
-async function settleFanOutDispatches(
-  dispatches: Array<Promise<HookAgentDispatchResult>>,
-  deadlineMs: number,
-): Promise<FanOutSettled[]> {
-  // Rejections must settle to failures even when the race already resolved
-  // pending, or the detached dispatch promise rejects unhandled later.
-  const guarded = dispatches.map((dispatch) =>
-    dispatch.catch((err: unknown): HookAgentDispatchResult => ({
-      ok: false,
-      statusCode: 502,
-      error: String(err),
-    })),
-  );
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<typeof FAN_OUT_PENDING>((resolve) => {
-    deadlineTimer = setTimeout(() => resolve(FAN_OUT_PENDING), deadlineMs);
-    deadlineTimer.unref?.();
-  });
-  try {
-    return await Promise.all(guarded.map((dispatch) => Promise.race([dispatch, deadline])));
-  } finally {
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-    }
-  }
-}
-
-function sendFanOutResult(res: ServerResponse, settled: FanOutSettled[], wake?: WakeResult) {
-  const first = settled[0];
-  if (settled.length === 1 && first !== undefined && first !== FAN_OUT_PENDING) {
-    // Single-item batches keep the exact single-dispatch response shape.
-    void sendAgentResult(res, first, wake);
-    return;
-  }
-  const runIds: string[] = [];
-  const failures: Array<Extract<HookAgentDispatchResult, { ok: false }>> = [];
-  let pending = 0;
-  for (const result of settled) {
-    if (result === FAN_OUT_PENDING) {
-      pending += 1;
-    } else if (result.ok) {
-      runIds.push(result.runId);
-    } else {
-      failures.push(result);
-    }
-  }
-  if (failures.length === 0 && pending === 0) {
-    const result = { ok: true, runId: runIds[0], runIds, dispatched: runIds.length };
-    sendJson(res, 200, { ...result, ...wake });
-    return;
-  }
-  // A non-2xx makes the producer redeliver the batch; already-dispatched items
-  // then replay from the cache instead of running twice.
-  const failure = failures[0];
-  sendJson(res, failure ? failure.statusCode : 503, {
-    ok: false,
-    error: `hook fan-out incomplete: ${runIds.length}/${settled.length} dispatched, ${failures.length} failed, ${pending} pending`,
-    runIds,
-    ...(failures.length > 0 ? { errors: failures.slice(0, 5).map((entry) => entry.error) } : {}),
-    ...wake,
-  });
-}
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -132,8 +63,6 @@ export type HookClientIpConfig = Readonly<{
 }>;
 
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-
-type WakeResult = { eventOutcome: "queued" | "coalesced" };
 
 type HookDispatchers = {
   dispatchWakeHook: (
@@ -144,27 +73,6 @@ type HookDispatchers = {
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
 };
-
-function sendAgentResult(
-  res: ServerResponse,
-  result: HookAgentDispatchResult,
-  extra?: Partial<WakeResult>,
-  waitForCompletion = false,
-): void | Promise<void> {
-  if (!result.ok) {
-    const { statusCode, ...body } = result;
-    sendJson(res, statusCode, { ...body, ...extra });
-    return;
-  }
-  const send = (completion?: HookAgentCompletion) =>
-    sendJson(res, 200, {
-      ok: true,
-      runId: result.runId,
-      ...extra,
-      ...(completion ? { completion } : {}),
-    });
-  return waitForCompletion ? result.completion.then(send) : send();
-}
 
 type HookReplayEntry =
   | { state: "pending"; dispatch: Promise<HookAgentDispatchResult> }
@@ -187,6 +95,7 @@ function resolveMappedHookExternalContentSource(params: { subPath: string; sessi
 
 export function createHooksRequestHandler(
   opts: {
+    /** Returns the stable resolved object for the current hooks-config generation. */
     getHooksConfig: () => HooksConfigResolved | null;
     bindHost: string;
     port: number;
@@ -360,6 +269,23 @@ export function createHooksRequestHandler(
     }
     hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
 
+    // The runtime state owns one resolved object per published hooks generation.
+    // Object identity therefore acts as the generation token without re-running
+    // mappings or comparing secret-bearing config values.
+    const isHooksConfigCurrent = () => getHooksConfig() === hooksConfig;
+    const rejectChangedHooksConfig = (): boolean => {
+      if (isHooksConfigCurrent()) {
+        return false;
+      }
+      sendJson(res, 409, { ok: false, error: HOOK_CONFIG_CHANGED_ERROR });
+      return true;
+    };
+    const changedHooksConfigDispatchResult = (): HookAgentDispatchResult => ({
+      ok: false,
+      statusCode: 409,
+      error: HOOK_CONFIG_CHANGED_ERROR,
+    });
+
     const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {
       res.statusCode = 404;
@@ -384,6 +310,9 @@ export function createHooksRequestHandler(
       } else {
         sendJson(res, 400, error);
       }
+      return true;
+    }
+    if (rejectChangedHooksConfig()) {
       return true;
     }
 
@@ -451,6 +380,9 @@ export function createHooksRequestHandler(
         dispatchSessionKey = resolvedSessionKey;
       }
       const dispatchValue = { ...value, sessionKey: dispatchSessionKey };
+      if (rejectChangedHooksConfig()) {
+        return null;
+      }
       return dispatchWakeHook(dispatchValue, targetAgentId);
     };
 
@@ -547,8 +479,11 @@ export function createHooksRequestHandler(
       if (dispatchSessionKey === null) {
         return true;
       }
-      const dispatched = await dispatchAgentHookWithReplay(replayKey, () =>
-        dispatchAgentHook({
+      const dispatched = await dispatchAgentHookWithReplay(replayKey, () => {
+        if (!isHooksConfigCurrent()) {
+          return changedHooksConfigDispatchResult();
+        }
+        return dispatchAgentHook({
           ...normalized.value,
           effectiveAgentId: target.effectiveAgentId,
           idempotencyKey,
@@ -556,8 +491,8 @@ export function createHooksRequestHandler(
           sourcePath: `${basePath}/agent`,
           agentId: target.selectedAgentId,
           externalContentSource: "webhook",
-        }),
-      );
+        });
+      });
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
       return true;
     }
@@ -570,6 +505,9 @@ export function createHooksRequestHandler(
           url,
           path: subPath,
         });
+        if (rejectChangedHooksConfig()) {
+          return true;
+        }
         if (mapped) {
           if (!mapped.ok) {
             sendJson(res, 400, { ok: false, error: mapped.error });
@@ -670,8 +608,11 @@ export function createHooksRequestHandler(
               dispatchScope,
             });
             return () =>
-              dispatchAgentHookWithReplay(replayKey, () =>
-                dispatchAgentHook({
+              dispatchAgentHookWithReplay(replayKey, () => {
+                if (!isHooksConfigCurrent()) {
+                  return changedHooksConfigDispatchResult();
+                }
+                return dispatchAgentHook({
                   message: action.message,
                   name: action.name ?? "Hook",
                   idempotencyKey,
@@ -695,8 +636,8 @@ export function createHooksRequestHandler(
                     subPath,
                     sessionKey: sessionKey.value,
                   }),
-                }),
-              );
+                });
+              });
           };
 
           // One pass over every action so a per-item transform emitting mixed

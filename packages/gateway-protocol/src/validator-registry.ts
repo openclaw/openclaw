@@ -196,6 +196,16 @@ export const validateNodeListParams = compile(S.NodeListParamsSchema);
 export const validateNodePluginToolsUpdateParams = compile(S.NodePluginToolsUpdateParamsSchema);
 export const validateNodeSkillsUpdateParams = compile(S.NodeSkillsUpdateParamsSchema);
 export const validateEnvironmentsCreateParams = compile(S.EnvironmentsCreateParamsSchema);
+export const validateEnvironmentsSessionCreateParams = compile(
+  S.EnvironmentsSessionCreateParamsSchema,
+);
+export const validateEnvironmentsSessionStatusParams = compile(
+  S.EnvironmentsSessionStatusParamsSchema,
+);
+export const validateEnvironmentsSessionDestroyParams = compile(
+  S.EnvironmentsSessionDestroyParamsSchema,
+);
+export const validateEnvironmentsSessionExecParams = compile(S.EnvironmentsSessionExecParamsSchema);
 export const validateEnvironmentsPrepareParams = compile(S.EnvironmentsPrepareParamsSchema);
 export const validateEnvironmentsPrepareResult = compile(S.EnvironmentsPrepareResultSchema);
 export const validateEnvironmentsDestroyParams = compile(S.EnvironmentsDestroyParamsSchema);
@@ -211,6 +221,8 @@ export const validateWorkerDesktopLaunchResult = compile(S.WorkerDesktopLaunchRe
 export const validateDesktopObserveParams = compile(S.DesktopObserveParamsSchema);
 export const validateDesktopObserveResult = compile(S.DesktopObserveResultSchema);
 export const validateDesktopLaunchParams = compile(S.DesktopLaunchParamsSchema);
+export const validateDesktopReleaseParams = compile(S.DesktopReleaseParamsSchema);
+export const validateDesktopReleaseResult = compile(S.DesktopReleaseResultSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);
@@ -312,6 +324,7 @@ export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchPa
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = compile(S.SessionsDeleteParamsSchema);
 export const validateSessionsAssignOwnerParams = compile(S.SessionsAssignOwnerParamsSchema);
+export const validateSessionsSetInvolvementParams = compile(S.SessionsSetInvolvementParamsSchema);
 export const validateSessionsGroupsListParams = compile(S.SessionsGroupsListParamsSchema);
 export const validateSessionsGroupsListResult = compile(S.SessionsGroupsListResultSchema);
 export const validateSessionsGroupsDefaultsParams = compile(S.SessionsGroupsDefaultsParamsSchema);
@@ -370,11 +383,16 @@ export const validateSystemAgentSetupAuthStartParams = compile(
   S.SystemAgentSetupAuthStartParamsSchema,
 );
 export const validateWizardStartParams = compile(S.WizardStartParamsSchema);
+export const validateMcpAuthLoginParams = compile(S.McpAuthLoginParamsSchema);
 export const validateWizardNextParams = compile(S.WizardNextParamsSchema);
 export const validateWizardCancelParams = compile(S.WizardCancelParamsSchema);
 export const validateWizardStatusParams = compile(S.WizardStatusParamsSchema);
 export const validateTalkModeParams = compile(S.TalkModeParamsSchema);
 export const validateTalkCatalogParams = compile(S.TalkCatalogParamsSchema);
+export const validateTalkVoiceGetParams = compile(S.TalkVoiceGetParamsSchema);
+export const validateTalkVoiceSetParams = compile(S.TalkVoiceSetParamsSchema);
+export const validateTalkVoiceCompleteParams = compile(S.TalkVoiceCompleteParamsSchema);
+export const validateTalkVoiceChangeEvent = compile(S.TalkVoiceChangeEventSchema);
 export const validateTalkConfigParams = compile(S.TalkConfigParamsSchema);
 export const validateTalkConfigResult = compile(S.TalkConfigResultSchema);
 export const validateTalkClientCreateParams = compile(S.TalkClientCreateParamsSchema);
@@ -406,6 +424,8 @@ export const validateChannelsPairingDismissParams = compile(S.ChannelsPairingDis
 export const validateChannelsStartParams = compile(S.ChannelsStartParamsSchema);
 export const validateChannelsStopParams = compile(S.ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = compile(S.ChannelsLogoutParamsSchema);
+export const validateModelsAuthSetApiKeyParams = compile(S.ModelsAuthSetApiKeyParamsSchema);
+export const validateModelsAuthSetApiKeyResult = compile(S.ModelsAuthSetApiKeyResultSchema);
 export const validateModelsAuthLogoutParams = compile(S.ModelsAuthLogoutParamsSchema);
 export const validateModelsAuthOrderSetParams = compile(S.ModelsAuthOrderSetParamsSchema);
 export const validateModelsAuthRefreshParams = compile(S.ModelsAuthRefreshParamsSchema);
@@ -559,10 +579,15 @@ export const validateUpdateRunChangedEvent = compile(S.UpdateRunChangedEventSche
 export const validateUpdateReportParams = compile(S.UpdateReportParamsSchema);
 export const validateUpdateReportResult = compile(S.UpdateReportResultSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
+export const validateThemesListParams = compile(S.ThemesListParamsSchema);
+export const validateThemesGetParams = compile(S.ThemesGetParamsSchema);
+export const validateThemesSetParams = compile(S.ThemesSetParamsSchema);
+export const validateThemesImportParams = compile(S.ThemesImportParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);
 
 export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSchema);
+export const validateTranscriptsSummarizeParams = compile(S.TranscriptsSummarizeParamsSchema);
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
 export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
 export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);

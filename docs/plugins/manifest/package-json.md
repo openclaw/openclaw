@@ -92,6 +92,8 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 
 Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth probe before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
 
+A `persistedAuthState` checker whose data comes exclusively from the host's keyed plugin-state store may declare `"backingStore": "plugin-state"`. Before loading that checker, OpenClaw asks the existing state-read owner whether the backing database is definitely absent. An active retained snapshot, cached open handle, existing file or symlink, or uncertain filesystem result keeps the normal checker path. The absence result is not cached, so state created later in the same process is still discovered. This fact does not establish authentication or grant state access; the checker still validates existing records. Omit it for checkers that can find persisted auth in other stores or files. Older hosts ignore the optional fact and run the checker normally.
+
 `openclaw.channel.configuredState` supports cheap configured checks. Prefer declarative env metadata when environment variables are sufficient:
 
 ```json

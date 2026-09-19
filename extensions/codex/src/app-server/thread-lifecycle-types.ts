@@ -135,6 +135,7 @@ export type CodexThreadResumePreparation = {
   assertConfigured: () => void;
   assertCurrent: () => void;
   dispose: () => void;
+  settledSystemError: boolean;
 };
 
 export type CodexResumeThreadContext = CodexThreadRequestContext & {

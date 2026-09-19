@@ -346,6 +346,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
 -- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
+  watcher_store_path TEXT,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
@@ -974,6 +975,13 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   container_json TEXT
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  cleanup_mode TEXT NOT NULL CHECK (cleanup_mode IN ('process-group', 'owned-anchor')),
+  lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
+) STRICT;
+
 -- Turn receipts have a shorter lifetime than their physical worker owner.
 -- Keeping the launch running preserves capacity and predecessor cleanup semantics.
 CREATE TABLE IF NOT EXISTS node_worker_turns (
@@ -1587,6 +1595,9 @@ CREATE TABLE IF NOT EXISTS task_runs (
   agent_id TEXT,
   requester_agent_id TEXT,
   run_id TEXT,
+  execution_owner_host TEXT,
+  execution_owner_pid INTEGER,
+  execution_owner_start_identity INTEGER,
   label TEXT,
   task TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -1623,7 +1634,9 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
   child_session_key TEXT NOT NULL,
   controller_session_key TEXT,
+  controller_store_path TEXT,
   requester_session_key TEXT NOT NULL,
+  requester_store_path TEXT,
   created_at INTEGER NOT NULL,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
@@ -2292,6 +2305,30 @@ CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
   PRIMARY KEY (source_session_id, source_claim_id, tool_call_id),
   FOREIGN KEY (source_session_id)
     REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+) STRICT;
+
+-- Local sandbox execution is a projection of a session-owned managed worktree.
+-- No cascade: an older binary must not discard pending edits with a session row.
+CREATE TABLE IF NOT EXISTS local_workspace_projections (
+  worktree_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  projection_path TEXT NOT NULL UNIQUE,
+  base_commit TEXT NOT NULL,
+  source_paths_json TEXT NOT NULL,
+  baseline_json TEXT,
+  baseline_ref TEXT,
+  pending_ref TEXT,
+  pending_target TEXT CHECK (pending_target IN ('canonical', 'projection')),
+  paused_runtimes_json TEXT,
+  journal_json TEXT,
+  journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at_ms INTEGER NOT NULL,
+  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
 ) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The

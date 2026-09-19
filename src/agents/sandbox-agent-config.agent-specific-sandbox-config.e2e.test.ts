@@ -2,6 +2,8 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
+import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type SpawnCall = {
@@ -10,6 +12,76 @@ type SpawnCall = {
 };
 
 const spawnCalls = vi.hoisted(() => [] as SpawnCall[]);
+const mountInspectFormat = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}';
+
+function inspectCreatedDockerMounts(containerName: string | undefined) {
+  const create = spawnCalls.findLast(
+    (call) =>
+      call.command === "docker" &&
+      call.args[0] === "create" &&
+      call.args[call.args.indexOf("--name") + 1] === containerName,
+  );
+  if (!create) {
+    throw new Error(`No recorded Docker create for ${containerName}`);
+  }
+  const mounts: { Type: "bind"; Source: string; Destination: string; RW: boolean }[] = [];
+  const tmpfs: Record<string, string> = {};
+  for (let index = 0; index < create.args.length; index += 1) {
+    const flag = create.args[index];
+    const value = create.args[index + 1];
+    if (flag === "-v") {
+      const bind = value && splitSandboxBindSpec(value);
+      if (!bind) {
+        throw new Error(`Invalid recorded Docker bind: ${value}`);
+      }
+      mounts.push({
+        Type: "bind",
+        Source: bind.host,
+        Destination: bind.container,
+        RW: !sandboxMountOptionsReadOnly(bind.options),
+      });
+    } else if (flag === "--tmpfs" && value) {
+      const separator = value.indexOf(":");
+      tmpfs[separator < 0 ? value : value.slice(0, separator)] =
+        separator < 0 ? "" : value.slice(separator + 1);
+    }
+  }
+  const entries = [
+    ...mounts.map((mount) => ({
+      destination: mount.Destination,
+      writable: mount.RW,
+      type: "bind",
+    })),
+    ...Object.entries(tmpfs).map(([destination, options]) => ({
+      destination,
+      writable: !sandboxMountOptionsReadOnly(options),
+      type: "tmpfs",
+    })),
+  ].map(({ destination, writable, type }, index) => ({
+    destination,
+    writable,
+    type,
+    id: index + 2,
+  }));
+  const escapePath = (value: string) =>
+    value.replace(/[\\ \t\n]/g, (char) => `\\${char.charCodeAt(0).toString(8).padStart(3, "0")}`);
+  const rootMode = create.args.includes("--read-only") ? "ro" : "rw";
+  // Model this fixture's ordinary, unstacked mounts from the actual create
+  // arguments so the real backend snapshot keeps the workspace visible.
+  const mountinfo = [
+    `1 1 0:1 / / ${rootMode} - overlay overlay ${rootMode}`,
+    ...entries.map((entry) => {
+      const parent = entries
+        .filter((other) => entry.destination.startsWith(`${other.destination}/`))
+        .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+      const mode = entry.writable ? "rw" : "ro";
+      const backing = entry.type === "bind" ? `8:1 /bind-${entry.id}` : `0:${entry.id} /`;
+      const filesystem = entry.type === "bind" ? "ext4 /dev/test rw" : `tmpfs tmpfs ${mode}`;
+      return `${entry.id} ${parent?.id ?? 1} ${backing} ${escapePath(entry.destination)} ${mode} - ${filesystem}`;
+    }),
+  ].join("\n");
+  return { mounts, tmpfs, mountinfo };
+}
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
   const [command = "", ...args] = commandAndArgs;
@@ -20,11 +92,28 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[1] === "-f" &&
     args[2] === "{{.State.Running}}";
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
+  let stdout = "";
+  if (
+    command === "docker" &&
+    args[0] === "inspect" &&
+    args[1] === "--format" &&
+    args[2] === mountInspectFormat
+  ) {
+    const { mounts, tmpfs } = inspectCreatedDockerMounts(args[3]);
+    stdout = JSON.stringify({ Mounts: mounts, Tmpfs: tmpfs });
+  } else if (
+    command === "docker" &&
+    args[0] === "exec" &&
+    args[2] === "cat" &&
+    args[3] === "/proc/self/mountinfo"
+  ) {
+    stdout = inspectCreatedDockerMounts(args[1]).mountinfo;
+  }
   return {
     failed: code !== 0,
     isCanceled: false,
     exitCode: code,
-    stdout: Buffer.alloc(0),
+    stdout: Buffer.from(stdout),
     stderr: Buffer.from(code === 0 ? "" : "No such container"),
   };
 }
@@ -44,11 +133,30 @@ let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").re
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
   // Convenience wrapper keeps session-key specific sandbox context assertions compact.
-  return resolveSandboxContext({
+  const context = await resolveSandboxContext({
     config,
     sessionKey,
     workspaceDir,
   });
+  if (context) {
+    expect(
+      spawnCalls.filter(
+        (call) =>
+          call.command === "docker" &&
+          (call.args[2] === mountInspectFormat || call.args[3] === "/proc/self/mountinfo"),
+      ),
+    ).toEqual([
+      {
+        command: "docker",
+        args: ["inspect", "--format", mountInspectFormat, context.containerName],
+      },
+      { command: "docker", args: ["exec", context.containerName, "cat", "/proc/self/mountinfo"] },
+    ]);
+    expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
+      path.join(context.workspaceDir, "marker.txt"),
+    );
+  }
+  return context;
 }
 
 function expectDockerSetupCommand(command: string) {

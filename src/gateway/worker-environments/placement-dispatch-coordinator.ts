@@ -53,6 +53,7 @@ export function coordinateWorkerPlacementDispatch(
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
 ): WorkerPlacementDispatchService & {
   isPlacementOperationInFlight(sessionId: string): boolean;
+  getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
   waitForInitialPlacement(
     this: void,
     placement: WorkerDispatchPlacement,
@@ -295,6 +296,24 @@ export function coordinateWorkerPlacementDispatch(
   };
   return {
     isPlacementOperationInFlight: (sessionId) => operationsInFlight.has(sessionId),
+    getPendingDeviceDispatchCount(deviceId, excludeSessionId) {
+      let count = 0;
+      for (const [sessionId, operations] of operationsInFlight) {
+        if (sessionId === excludeSessionId) {
+          continue;
+        }
+        for (const operation of operations) {
+          if (
+            operation.kind === "dispatch" &&
+            operation.request.executionMode === "worker-turn" &&
+            operation.request.deviceId === deviceId
+          ) {
+            count += 1;
+          }
+        }
+      }
+      return count;
+    },
     async waitForInitialPlacement(placement, signal) {
       signal?.throwIfAborted();
       const pending = pendingOperations(placement.sessionId);

@@ -11,13 +11,18 @@ import {
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  resolveTestNodeExecPath,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findCrabboxBinary, resolveCrabboxBinary } from "./crabbox-binary.js";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
+import { crabboxState } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId, parseCrabboxProfile } from "./crabbox-worker-profile.js";
-import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
+import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
+import { classProfile, mappedCatalog } from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
@@ -66,6 +71,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await Promise.all([...providers].map((provider) => provider.dispose()));
     } finally {
       providers.clear();
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       vi.unstubAllEnvs();
       cleanup();
@@ -100,31 +106,6 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
   };
 }
 
-function classProfile(
-  machineClass: string,
-  primary: Record<string, unknown> = {},
-  selectors: Record<string, unknown> = {},
-) {
-  return {
-    class: machineClass,
-    target: "linux",
-    architecture: "amd64",
-    primary: {
-      type: "native-8vcpu-16gb",
-      architecture: "amd64",
-      vcpu: null,
-      memory: null,
-      ...primary,
-    },
-    fallbacks: [],
-    ...selectors,
-  };
-}
-
-function mappedCatalog(profiles: unknown[]) {
-  return { disposition: "mapped", profiles };
-}
-
 function inspectJson(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     id: LEASE_ID,
@@ -150,6 +131,7 @@ function providerWithRawRunner(
   sleep: (milliseconds: number) => Promise<void> = async () => {},
 ): WorkerProvider {
   const provider = createCrabboxWorkerProvider({
+    state: crabboxState,
     runCommand,
     openclawRoot: OPENCLAW_ROOT,
     pathEnv: "",
@@ -163,6 +145,7 @@ function providerWithRawRunner(
     ...provider,
     provision: (profile, operationId, options) =>
       provider.provision(profile, operationId, {
+        assertCurrent: () => {},
         nodeRuntimeIdentity: {
           nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
           executionMode: options?.executionMode ?? "worker-turn",
@@ -559,23 +542,73 @@ describe("Crabbox worker provider", () => {
     },
   );
 
-  it.each(
-    ["desktop", "warmImage"].flatMap((setting) => [
-      { setting, target: "windows/wsl2" },
-      { setting, target: "windows/normal" },
-      { setting, target: "macos" },
-    ]),
-  )("keeps $setting Linux only for $target settings and overrides", async ({ setting, target }) => {
+  it.each(["windows/wsl2", "windows/normal", "macos"])(
+    "keeps %s cold with Linux warm images enabled",
+    async (target) => {
+      const runCommand = vi.fn(async () => commandResult());
+      const provider = providerWithRunner(runCommand);
+      for (const [profile, options] of [
+        [{ ...PROFILE, warmImage: true, target }, undefined],
+        [{ ...PROFILE, warmImage: true }, { os: target }],
+      ] as const) {
+        expect(provider.supportsProjectPreparation?.(profile, "standard", options?.os)).toBe(false);
+      }
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["macos", "windows/normal"] as const)(
+    "provisions a native %s desktop from configured and placement OS choices",
+    async (target) => {
+      for (const requested of [false, true]) {
+        const calls: string[][] = [];
+        const provider = providerWithRunner(async (argv) => {
+          calls.push(argv);
+          return commandResult({
+            stdout: argv[1] === "inspect" ? inspectJson({ sshUser: "desktop-user" }) : "",
+          });
+        });
+        const profile = {
+          ...PROFILE,
+          warmImage: true,
+          desktop: true,
+          ...(requested ? {} : { target }),
+        };
+        expect(provider.supportsProjectPreparation?.(profile, "standard", target)).toBe(false);
+        const lease = await provider.provision(
+          profile,
+          OPERATION_ID,
+          requested ? { os: target } : undefined,
+        );
+        expect(lease.node).toEqual({ deviceId: "device-1" });
+        expect(lease.desktop).toEqual({
+          protocol: "rfb",
+          port: 5900,
+          allowsResize: false,
+          ...(target === "macos"
+            ? {
+                username: "desktop-user",
+                passwordFilePath: "/var/db/crabbox/openclaw-vnc.password",
+              }
+            : { passwordFilePath: String.raw`C:\ProgramData\crabbox\vnc.password` }),
+        });
+        const warmup = calls.find((argv) => argv[1] === "warmup")!;
+        expect(warmup).toContain("--desktop");
+        expect(warmup).not.toContain("--browser");
+        expect(warmup).not.toContain("--desktop-env");
+        await provider.destroy({ ...lease, profile });
+        expect(calls.some((argv) => argv[1] === "stop")).toBe(true);
+      }
+    },
+  );
+
+  it("explains the upstream WSL2 desktop limitation before allocating", async () => {
     const runCommand = vi.fn(async () => commandResult());
-    const provider = providerWithRunner(runCommand);
-    for (const [profile, options] of [
-      [{ ...PROFILE, [setting]: true, target }, undefined],
-      [{ ...PROFILE, [setting]: true }, { os: target }],
-    ] as const) {
-      await expect(provider.provision(profile, OPERATION_ID, options)).rejects.toThrow(
-        "Linux only",
-      );
-    }
+    await expect(
+      providerWithRunner(runCommand).provision({ ...PROFILE, desktop: true }, OPERATION_ID, {
+        os: "windows/wsl2",
+      }),
+    ).rejects.toThrow("select native Windows for a desktop viewer");
     expect(runCommand).not.toHaveBeenCalled();
   });
 
@@ -1128,7 +1161,9 @@ describe("Crabbox worker provider", () => {
     const tempDir = tempDirs.make("openclaw-crabbox-wallpaper-");
     const wallpaperPath = path.join(tempDir, "wallpaper.png");
     fs.writeFileSync(wallpaperPath, bytes);
-    expect(() => createCrabboxWorkerProvider({ wallpaperPath })).toThrow(message);
+    expect(() => createCrabboxWorkerProvider({ state: crabboxState, wallpaperPath })).toThrow(
+      message,
+    );
   });
 
   it.each([
@@ -1230,7 +1265,9 @@ describe("Crabbox worker provider", () => {
       (call) =>
         call.argv[1] === "run" && String(call.options.input).includes("openclaw-worker-browser"),
     )?.options.input;
-    const desktopSetupText = String(desktopSetup);
+    const desktopSetupText: string = JSON.parse(
+      String(desktopSetup).match(/^const desktopSetup = (.+);$/m)![1]!,
+    );
     expect(desktopSetupText).toContain("worker_user=$(id -un)");
     expect(desktopSetupText).toContain('worker_home=$(getent passwd "$worker_uid"');
     expect(desktopSetupText).toContain(`worker-browser/${LEASE_ID}`);
@@ -1765,8 +1802,7 @@ describe("Crabbox worker provider", () => {
 
   it.each([
     { phase: "profile setup", setupAttempt: 1 },
-    { phase: "desktop setup", setupAttempt: 2 },
-    { phase: "node enrollment setup", setupAttempt: 3 },
+    { phase: "node enrollment setup", setupAttempt: 2 },
   ])("identifies the failed $phase phase", async ({ phase, setupAttempt }) => {
     let attempts = 0;
     const provider = providerWithRunner(async (argv) => {
@@ -1794,7 +1830,7 @@ describe("Crabbox worker provider", () => {
       const home = tempDirs.make("crabbox-enrollment-");
       const bin = path.join(home, "bin");
       fs.mkdirSync(bin);
-      fs.symlinkSync(process.execPath, path.join(bin, "node"));
+      fs.symlinkSync(resolveTestNodeExecPath(), path.join(bin, "node"));
       const calls: string[][] = [];
       const provider = providerWithRunner(async (argv, options) => {
         calls.push(argv);
@@ -1881,7 +1917,9 @@ describe("Crabbox worker provider", () => {
         });
       });
       await expect(
-        provider.prepareProvision!({ ...PROFILE, provider: backend }, OPERATION_ID),
+        provider.prepareProvision!({ ...PROFILE, provider: backend }, OPERATION_ID, {
+          assertCurrent: () => {},
+        }),
       ).rejects.toMatchObject({
         code: "invalid_profile",
         message: "Crabbox AWS instance profile must be empty for cloud workers",
@@ -1894,6 +1932,7 @@ describe("Crabbox worker provider", () => {
     const calls: string[][] = [];
     let warmed = false;
     const provider = createCrabboxWorkerProvider({
+      state: crabboxState,
       runCommand: async (argv) => {
         calls.push(argv);
         if (argv[1] === "config") {
@@ -1926,7 +1965,9 @@ describe("Crabbox worker provider", () => {
     });
     providers.add(provider);
 
-    await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
+    await expect(
+      provider.provision(PROFILE, OPERATION_ID, { assertCurrent: () => {} }),
+    ).rejects.toMatchObject({
       code: "cleanup_complete",
       message: "Crabbox AWS inspect must attest that no instance profile is attached",
     });
@@ -2202,6 +2243,8 @@ describe("Crabbox worker provider", () => {
   ])("provisions a node-carried desktop through $name", async ({ config, providerId }) => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const setupOrder: string[] = [];
+    const setupStarted = createDeferred<void>();
+    const setupComplete = createDeferred<void>();
     const provider = providerWithRawRunner(async (argv, options) => {
       calls.push({ argv, options });
       if (argv[1] === "config" && argv[2] === "show") {
@@ -2212,12 +2255,15 @@ describe("Crabbox worker provider", () => {
       }
       if (argv[1] === "run" && String(options.input).includes("openclaw-worker-browser")) {
         setupOrder.push("desktop");
+        setupStarted.resolve();
+        await setupComplete.promise;
       }
       return commandResult();
     });
 
-    await expect(
-      provider.provision({ ...PROFILE, provider: providerId, desktop: true }, OPERATION_ID, {
+    let completed = false;
+    const provision = provider
+      .provision({ ...PROFILE, provider: providerId, desktop: true }, OPERATION_ID, {
         beginNodeEnrollment: async () => {
           setupOrder.push("enrollment");
           return {
@@ -2230,8 +2276,18 @@ describe("Crabbox worker provider", () => {
             waitForDeviceId: async () => "device-1",
           };
         },
-      }),
-    ).resolves.toEqual({
+      })
+      .finally(() => {
+        completed = true;
+      });
+    await setupStarted.promise;
+    try {
+      expect(completed).toBe(false);
+      expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
+    } finally {
+      setupComplete.resolve();
+    }
+    await expect(provision).resolves.toEqual({
       leaseId: LEASE_ID,
       node: { deviceId: "device-1" },
       sharedHost: false,
@@ -2271,7 +2327,9 @@ describe("Crabbox worker provider", () => {
         desktop: true,
       }),
     ).toBe(149 * 60_000 + 15_000);
-    expect(setupOrder).toEqual(["desktop", "enrollment"]);
+    expect(calls.filter(({ argv }) => argv[1] === "run")).toHaveLength(1);
+    expect(calls.find(({ argv }) => argv[1] === "run")?.options.timeoutMs).toBe(30 * 60_000);
+    expect(setupOrder).toEqual(["enrollment", "desktop"]);
     expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
   });
 
@@ -2330,6 +2388,7 @@ describe("Crabbox worker provider", () => {
       expect(failure.cause).toBe(failure.provisionError);
       expect(WorkerProviderError.isCleanupIndeterminate(failure)).toBe(false);
       expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+      expect(calls.filter((argv) => argv[1] === "stop")).toHaveLength(1);
     },
   );
 
@@ -3062,6 +3121,7 @@ describe("Crabbox worker provider", () => {
     let inspections = 0;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const provider = createCrabboxWorkerProvider({
+      state: crabboxState,
       runCommand: async (argv) => {
         calls.push(argv);
         if (argv[1] === "config") {
@@ -3087,7 +3147,9 @@ describe("Crabbox worker provider", () => {
 
     try {
       await expect(
-        provider.provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID),
+        provider.provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID, {
+          assertCurrent: () => {},
+        }),
       ).rejects.toThrow("exceeded its provider deadline");
     } finally {
       now.mockRestore();
@@ -3178,6 +3240,7 @@ describe("Crabbox worker provider", () => {
     const binary = path.resolve(path.sep, "custom", "crabbox");
     const calls: string[][] = [];
     const provider = createCrabboxWorkerProvider({
+      state: crabboxState,
       runCommand: async (argv) => {
         calls.push(argv);
         return argv[1] === "inspect" ? commandResult({ stdout: inspectJson() }) : commandResult();
@@ -3682,124 +3745,3 @@ describe("Crabbox worker provider", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-describe("Crabbox binary resolution", () => {
-  it("prefers explicit, then sibling, then PATH, then the bare command", () => {
-    const toolsDir = path.resolve(path.sep, "tools");
-    const pathBinary = path.join(toolsDir, "crabbox");
-    const relativePathBinary = path.resolve("relative-tools", "crabbox");
-    const explicitBinary = path.resolve(path.sep, "custom", "crabbox");
-
-    expect(
-      resolveCrabboxBinary({
-        explicit: explicitBinary,
-        openclawRoot: OPENCLAW_ROOT,
-        isExecutable: () => false,
-      }),
-    ).toBe(explicitBinary);
-    expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: toolsDir,
-        isExecutable: (candidate) => candidate === SIBLING_BINARY || candidate === pathBinary,
-      }),
-    ).toBe(SIBLING_BINARY);
-    expect(
-      resolveCrabboxBinary({
-        pathEnv: toolsDir,
-        isExecutable: (candidate) => candidate === SIBLING_BINARY || candidate === pathBinary,
-      }),
-    ).toBe(pathBinary);
-    expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: [path.resolve(path.sep, "not-executable"), toolsDir].join(path.delimiter),
-        isExecutable: (candidate) => candidate === pathBinary,
-      }),
-    ).toBe(pathBinary);
-    expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: "relative-tools",
-        isExecutable: (candidate) => candidate === relativePathBinary,
-      }),
-    ).toBe(relativePathBinary);
-    expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: path.resolve(path.sep, "not-executable"),
-        isExecutable: () => false,
-      }),
-    ).toBe("crabbox");
-  });
-
-  it.each([
-    { extensions: ["", ".com", ".bat", ".cmd", ".exe"], preferred: ".exe" },
-    { extensions: ["", ".com", ".bat", ".cmd"], preferred: ".cmd" },
-    { extensions: ["", ".com", ".bat"], preferred: ".bat" },
-    { extensions: ["", ".com"], preferred: ".com" },
-    { extensions: [""], preferred: "" },
-  ])("selects the preferred Windows executable suffix $preferred", ({ extensions, preferred }) => {
-    const toolsDir = path.resolve(path.sep, "tools");
-    const pathBinary = path.join(toolsDir, "crabbox");
-    const executables = new Set(
-      [SIBLING_BINARY, pathBinary].flatMap((binary) =>
-        extensions.map((extension) => `${binary}${extension}`),
-      ),
-    );
-    const discovery = {
-      platform: "win32" as const,
-      pathEnv: toolsDir,
-      isExecutable: (candidate: string) => executables.has(candidate),
-    };
-
-    expect(resolveCrabboxBinary(discovery)).toBe(`${pathBinary}${preferred}`);
-    expect(resolveCrabboxBinary({ ...discovery, openclawRoot: OPENCLAW_ROOT })).toBe(
-      `${SIBLING_BINARY}${preferred}`,
-    );
-  });
-
-  it("preserves Windows PATH directory order ahead of executable suffix preference", () => {
-    const first = path.resolve(path.sep, "first-tools");
-    const second = path.resolve(path.sep, "second-tools");
-    const firstBinary = path.join(first, "crabbox.cmd");
-    const secondBinary = path.join(second, "crabbox.exe");
-    const executables = new Set([firstBinary, secondBinary]);
-
-    expect(
-      resolveCrabboxBinary({
-        platform: "win32",
-        pathEnv: `${first};${second}`,
-        isExecutable: (candidate) => executables.has(candidate),
-      }),
-    ).toBe(firstBinary);
-  });
-
-  it("distinguishes executable discovery from the dispatch fallback", () => {
-    const explicitBinary = path.resolve(path.sep, "custom", "crabbox");
-
-    expect(
-      findCrabboxBinary({
-        explicit: explicitBinary,
-        openclawRoot: OPENCLAW_ROOT,
-        isExecutable: () => false,
-      }),
-    ).toBeUndefined();
-    expect(
-      findCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: path.resolve(path.sep, "not-executable"),
-        isExecutable: () => false,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("derives the package root from source and bundled plugin roots", () => {
-    expect(resolveOpenClawRoot(path.join(OPENCLAW_ROOT, "extensions", "crabbox"))).toBe(
-      OPENCLAW_ROOT,
-    );
-    expect(resolveOpenClawRoot(path.join(OPENCLAW_ROOT, "dist", "extensions", "crabbox"))).toBe(
-      OPENCLAW_ROOT,
-    );
-  });
-});

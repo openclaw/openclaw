@@ -6,8 +6,12 @@
   "include": [
     "../../src/agents/*/**/*.test.ts",
     "../../src/agents/*/**/*.test.tsx",
+    "../../src/agents/bootstrap-files.remote.test.ts",
     "../../src/agents/model-catalog.test.ts",
-    "../../src/agents/model-catalog.planning.test.ts"
+    "../../src/agents/model-catalog.planning.test.ts",
+    "../../src/agents/prepared-model-runtime*.test.ts",
+    "../../src/agents/prepared-model-runtime*.test.tsx",
+    "../../src/agents/workspace-access.test.ts"
   ],
   "exclude": [
     "../../node_modules",
@@ -15,8 +19,12 @@
     "../../**/dist/**",
     "../../src/agents/command/**/*.test.ts",
     "../../src/agents/command/**/*.test.tsx",
+    "../../src/agents/harness/**/*.test.ts",
+    "../../src/agents/harness/**/*.test.tsx",
     "../../src/agents/sandbox/**/*.test.ts",
     "../../src/agents/sandbox/**/*.test.tsx",
+    "../../src/agents/sessions/**/*.test.ts",
+    "../../src/agents/sessions/**/*.test.tsx",
     "../../src/agents/tools/**/*.test.ts",
     "../../src/agents/tools/**/*.test.tsx",
     "../../src/agents/worktrees/**/*.test.ts",

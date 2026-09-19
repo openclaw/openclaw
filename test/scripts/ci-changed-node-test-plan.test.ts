@@ -1,21 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
-import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import * as changedExtensions from "../../scripts/lib/changed-extensions.mts";
 import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
+  hasControlUiPerformanceAffectingChange,
   hasCoreExtensionImpact,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
   hasUiE2eAffectingChange,
-  resolveChangedDockerSeedLanes,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -27,15 +29,65 @@ import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
+import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import {
   buildVitestRunPlans,
   hasImportGraphImpactOnTargets,
   resolveChangedTestTargetPlan,
 } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  databaseWorkerExtensionTestFiles,
+  databaseWorkerExtensionTestRoots,
+} from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  ["test/vitest/vitest.extensions.config.ts", "extensions/copilot/index.ts"],
+  ["test/vitest/vitest.extension-qa.config.ts", "extensions/qa-lab/src/cli.runtime.ts"],
+  ["test/vitest/vitest.extension-providers.config.ts", "extensions/anthropic/index.ts"],
+])("emits the changed-extension partition exactly once for %s", async (config, changedPath) => {
+  const partitions = createChangedExtensionFallbackShards([changedPath]).filter((shard) =>
+    shard.configs.includes(config),
+  );
+  expect(partitions.length).toBeGreaterThan(1);
+  const shard = expectDefined(partitions[0], "first native extension partition");
+  const env = {
+    OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(shard.configs),
+    OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(shard.env),
+    OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(shard.planConcurrency),
+    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--hookTimeout=600000"]',
+    OPENCLAW_VITEST_SHARD_NAME: shard.shardName,
+  };
+  const argv: string[][] = [];
+  expect(
+    await runShardPlans(resolveShardPlans(env), {
+      env,
+      scratchDir: argvTempDirs.make("changed-extension-argv-"),
+      runChild: async (args) => {
+        argv.push(args);
+        return 0;
+      },
+    }),
+  ).toBe(0);
+  expect(argv).toEqual([[config, "--", "--hookTimeout=600000", `--shard=1/${partitions.length}`]]);
+});
+
+it("keeps precise first-signin targets under exclusive Gateway admission", () => {
+  const target = "src/gateway/setup-inference.first-signin.integration.test.ts";
+  const jobs = createChangedNodeTestShards([target], { runnerBackend: "hybrid" });
+  expect(jobs).not.toBeNull();
+  const owner = jobs?.find((job) =>
+    job.groups?.some((group) => group.includePatterns?.includes(target)),
+  );
+  expect(owner).toMatchObject({ planConcurrency: 1 });
+  expect(jobs?.flatMap((job) => job.targets ?? [])).not.toContain(target);
+});
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
 const gitToolingTargets = [
   "ci-git-owner",
@@ -142,7 +194,10 @@ function expectBoundedCodexFallback(
   expect(
     groups.every(
       (shard) =>
-        shard.configs[0] === "test/vitest/vitest.extension-codex.config.ts" &&
+        shard.configs[0] ===
+          (shard.includePatterns?.every((file) => databaseWorkerExtensionTestFiles.includes(file))
+            ? "test/vitest/vitest.extension-database-workers.config.ts"
+            : "test/vitest/vitest.extension-codex.config.ts") &&
         (shard.includePatterns?.length ?? 0) > 0 &&
         (shard.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT,
     ),
@@ -170,94 +225,143 @@ function expectAllExtensionConfigs(
   expect(configs).toContain("test/vitest/vitest.extension-codex.config.ts");
 }
 
-const allDockerSeedLanes = ["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway"];
-it.each([
-  [["scripts/e2e/mcp-channels-seed.ts"], ["mcp-channels"]],
-  [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
-  [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
-  [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
-  [["scripts/e2e/lib/mcp-code-mode/scenario.sh"], ["mcp-code-mode-gateway"]],
-  [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
-  [["scripts/e2e/fleet-cache-docker.sh"], ["fleet-cache"]],
-  [["scripts/e2e/lib/fleet-cache/assert-cell.mjs"], ["fleet-cache"]],
-  [["scripts/e2e/lib/fleet-cache/podman-control.sh"], ["fleet-cache"]],
-  [["scripts/e2e/lib/fleet-cache/prepare-podman-storage.mjs"], ["fleet-cache"]],
-  [["scripts\\e2e\\lib\\fleet-cache\\probe-podman-cell.mjs"], ["fleet-cache"]],
-  [["scripts/e2e/lib/fleet-cache-unrelated/probe.mjs"], []],
-  [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
-  [
-    [
-      "scripts/e2e/update-channel-switch-docker.sh",
-      "scripts/e2e/lib/update-channel-switch/assertions.mjs",
-      "scripts/e2e/mcp-channels-seed.ts",
-    ],
-    ["mcp-channels", "update-channel-switch"],
-  ],
-  [["scripts/e2e/docker-openai-seed.ts"], allDockerSeedLanes],
-  [
-    [
-      "scripts/e2e/mcp-code-mode-gateway-seed.ts",
-      "scripts/e2e/mcp-channels-seed.ts",
-      "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
-      "scripts/e2e/cron-mcp-cleanup-seed.ts",
-    ],
-    allDockerSeedLanes,
-  ],
-  [[".github/workflows/ci.yml"], [...allDockerSeedLanes, "published-upgrade-survivor"]],
-  [
-    ["scripts/lib/ci-changed-node-test-plan.mts"],
-    [...allDockerSeedLanes, "published-upgrade-survivor"],
-  ],
-  [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
-  [["scripts\\e2e\\lib\\mcp-code-mode\\scenario.sh"], ["mcp-code-mode-gateway"]],
-  [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
-  [["src/commands/doctor-config-preflight.admission.process.test.ts"], []],
-  [["src/commands/doctor-config-runtime.test-support.ts"], []],
-  [["src\\commands\\doctor-config-runtime.test-support.ts"], []],
-  [["src/state/openclaw-state-db-contract.test.ts"], []],
-  [
-    ["src/commands/doctor-config-runtime.test-support.ts", "src/commands/doctor.ts"],
-    ["published-upgrade-survivor"],
-  ],
-  [["src\\state\\openclaw-state-db-contract.ts"], ["published-upgrade-survivor"]],
-  [["scripts/e2e/lib/upgrade-survivor/test-support.ts"], ["published-upgrade-survivor"]],
-  ...[
-    "src/cli/update-cli/run-update.ts",
-    "src/infra/update-runner.ts",
-    "src/infra/package-update-global.ts",
-    "src/plugins/update.ts",
-    "src/plugins/update-internal.ts",
-    "src/commands/doctor.ts",
-    "src/commands/doctor-state.ts",
-    "src/commands/doctor/migrations/example.ts",
-    "src/state/new-state-migration.ts",
-    "scripts/e2e/upgrade-survivor-docker.sh",
-    "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-    "scripts/lib/docker-e2e-plan.mts",
-    "scripts/lib/docker-e2e-scenarios.mts",
-    "scripts/resolve-upgrade-survivor-baselines.mts",
-    "package.json",
-  ].map((owner) => [[owner], ["published-upgrade-survivor"]]),
-])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
-  expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
-});
-
-it.each([
-  ["src/state/openclaw-state-db-contract.ts", "OPENCLAW_STATE_SCHEMA_VERSION"],
-  ["src/state/openclaw-agent-db-contract.ts", "OPENCLAW_AGENT_SCHEMA_VERSION"],
-])("always gates schema-version changes in %s with a published upgrade", (owner, constant) => {
-  // A moved constant must update this independent owner guarantee, not silently lose the gate.
-  expect(readFileSync(owner, "utf8")).toMatch(new RegExp(`export const ${constant} = \\d+;`));
-  expect(resolveChangedDockerSeedLanes([owner])).toEqual(["published-upgrade-survivor"]);
-});
-
 describe("CI changed Node test plan", () => {
+  it("retains the paired tooling group for direct Docker helper selection", () => {
+    const shards = createSelectedNodeTestShardBundles(["test/scripts/docker-build-helper.test.ts"]);
+    expect(shards).not.toBeNull();
+    expect(shards?.flatMap((shard) => shard.groups).map((group) => group.shard_name)).toEqual([
+      "core-tooling-isolated",
+    ]);
+  });
+
+  it("avoids full-suite fallback for the ClawHub fixture's four changed paths", () => {
+    const shards = createChangedNodeTestShards([
+      "scripts/e2e/lib/skills/clawhub-install-proof.sh",
+      "scripts/e2e/skill-install-docker.sh",
+      "test/scripts/e2e-shell-tempfiles.test.ts",
+      "docs/help/testing/docker.md",
+    ]);
+    expect(shards).not.toBeNull();
+    expect(
+      shards
+        ?.flatMap((shard) => shard.groups ?? [])
+        .filter((group) => group.shard_name === "core-tooling-isolated"),
+    ).toHaveLength(1);
+  });
+
+  it.each(["blacksmith", "github", "hybrid"])(
+    "retains the complete paired tooling descriptor and job metadata (%s)",
+    (runnerBackend) => {
+      const docker = "test/scripts/docker-build-helper.test.ts";
+      const isolated = "test/plugins/bundled-provider-auth-literal-parity.test.ts";
+      const full = createNodeTestShardBundles({
+        compactMode: "pull-request",
+        runnerBackend,
+        includeReleaseOnlyPluginShards: false,
+      });
+      const ownerJob = expectDefined(
+        full.find((job) =>
+          job.groups.some((group) => group.shard_name === "core-tooling-isolated"),
+        ),
+        "canonical paired tooling job",
+      );
+      const owner = expectDefined(
+        ownerJob.groups.find((group) => group.shard_name === "core-tooling-isolated"),
+        "canonical paired tooling group",
+      );
+      expect(owner.configs).toEqual([
+        "test/vitest/vitest.tooling-docker.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
+      ]);
+      expect(owner.includePatterns).toBeUndefined();
+      expect(owner.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+      expect(ownerJob.planConcurrency).toBe(1);
+
+      for (const targets of [
+        [docker],
+        [isolated],
+        [docker, isolated, "test/scripts/docker-e2e-update-suppression.test.ts", docker, isolated],
+        [isolated, "test/scripts/ci-linux-git.test.ts"],
+        [docker, "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts"],
+      ]) {
+        const selected = expectDefined(
+          createSelectedNodeTestShardBundles(targets, { runnerBackend }),
+          "selected paired tooling plan",
+        );
+        const pairs = selected.flatMap((job) =>
+          job.groups.filter((group) => group.shard_name === "core-tooling-isolated"),
+        );
+        expect(pairs).toEqual([owner]);
+        const selectedJob = expectDefined(
+          selected.find((job) => job.groups.includes(pairs[0]!)),
+          "selected paired tooling job",
+        );
+        expect(selectedJob).toEqual({
+          ...ownerJob,
+          checkName: `checks-node-changed-${ownerJob.shardName}`,
+          shardName: `changed-${ownerJob.shardName}`,
+          groups: [owner],
+        });
+        const encodedGroups = selectedJob.groups.map(
+          ({ configs, env, includePatterns, shard_name, timing_key }) => ({
+            configs,
+            env,
+            includePatterns,
+            shard_name,
+            timing_key,
+          }),
+        );
+        expect(
+          resolveShardPlans({
+            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(encodedGroups),
+          }),
+        ).toEqual(
+          encodedGroups.map((plan) => ({
+            kind: "group",
+            name: plan.shard_name,
+            timingKey: plan.timing_key ?? plan.shard_name,
+            plan,
+          })),
+        );
+        expect(resolveTestGitCommits(selectedJob)).toEqual(
+          resolveTestGitCommits({ groups: [owner] }),
+        );
+        for (const target of targets.filter((file) => file !== docker && file !== isolated)) {
+          expect(
+            selected.some((job) =>
+              job.groups.some(
+                (group) =>
+                  group.includePatterns?.includes(target) ||
+                  (!group.includePatterns &&
+                    group.configs.includes(buildVitestRunPlans([target])[0]!.config)),
+              ),
+            ),
+          ).toBe(true);
+        }
+      }
+    },
+  );
+
+  it.each([
+    "test/scripts/docker-build-helper.test.ts",
+    "test/plugins/bundled-provider-auth-literal-parity.test.ts",
+  ])("does not borrow paired tooling ownership for another checkout: %s", (target) => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-paired-tooling-owner-"));
+    try {
+      mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+      writeFileSync(path.join(cwd, target), "export {};\n");
+      expect(createChangedNodeTestShards([target], { cwd })).toBeNull();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it.each(["blacksmith", "github", "hybrid"])(
     "retains precise embedded files with their canonical owners (%s)",
     (runnerBackend) => {
       const yieldTest = "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts";
       const siblings = [
-        "src/agents/embedded-agent-runner/model.test.ts",
+        "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
         "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
         "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
       ];
@@ -329,12 +433,13 @@ describe("CI changed Node test plan", () => {
     "keeps the complete Git tooling family in canonical serial owners (%s)",
     (runnerBackend) => {
       const changedPaths = ["test/scripts/ci-linux-git.test.ts"];
+      const expectedTargets = [...gitToolingTargets, "test/scripts/test-projects.test.ts"];
       const shards = createChangedNodeTestShards(changedPaths, { runnerBackend });
       expect(shards).not.toBeNull();
       const groups = shards?.flatMap((shard) => shard.groups ?? []) ?? [];
       const tooling = groups.filter((group) => !group.requiresDist);
       expect(tooling.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-        gitToolingTargets.toSorted(),
+        expectedTargets.toSorted(),
       );
       expect(shards?.every((shard) => shard.planConcurrency === 1)).toBe(true);
       const full = createNodeTestShardBundles({
@@ -396,7 +501,7 @@ describe("CI changed Node test plan", () => {
       }
       expect(new Set((shards ?? []).flatMap(resolveTestGitCommits))).toEqual(
         new Set([
-          ...gitToolingTargets.flatMap((target) => resolveTestGitCommits({ targets: [target] })),
+          ...expectedTargets.flatMap((target) => resolveTestGitCommits({ targets: [target] })),
           ...full.filter((shard) => shard.requiresDist).flatMap(resolveTestGitCommits),
         ]),
       );
@@ -434,12 +539,10 @@ describe("CI changed Node test plan", () => {
       ["test/scripts/unknown-tooling.test.ts"],
       ["src/agents/embedded-agent-runner/run/unknown-owner.test.ts"],
       ["src/tui/tui-pty-harness.e2e.test.ts"],
-      ["test/plugins/bundled-provider-auth-literal-parity.test.ts"],
       ["test/vitest/vitest.tooling.config.ts"],
-      [
-        "test/scripts/ci-linux-git.test.ts",
-        "test/plugins/bundled-provider-auth-literal-parity.test.ts",
-      ],
+      ["test/vitest/vitest.tooling-isolated.config.ts"],
+      ["test/scripts/docker-build-helper.test.ts", "test/scripts/unknown-tooling.test.ts"],
+      ["test/scripts/docker-build-helper.test.ts", "src/tui/tui-pty-harness.e2e.test.ts"],
     ].map((targets) => ({ targets })),
   )("refuses incomplete or unsupported canonical selection $targets", ({ targets }) => {
     expect(createSelectedNodeTestShardBundles(targets)).toBeNull();
@@ -499,7 +602,10 @@ describe("CI changed Node test plan", () => {
     expect(shards?.filter((shard) => shard.targets)).toHaveLength(1);
     expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
     expect(new Set(fallbackGroups(shards ?? []).flatMap((group) => group.configs))).toEqual(
-      new Set(["test/vitest/vitest.extensions.config.ts"]),
+      new Set([
+        "test/vitest/vitest.extensions.config.ts",
+        "test/vitest/vitest.extension-database-workers.config.ts",
+      ]),
     );
     expect(buildVitestRunPlans([hostTest])).toEqual([
       {
@@ -516,9 +622,15 @@ describe("CI changed Node test plan", () => {
       ]),
     ).toEqual([
       {
+        config: "test/vitest/vitest.extension-database-workers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/copilot/harness.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.extensions.config.ts",
         forwardedArgs: [],
-        includePatterns: ["extensions/copilot/index.test.ts", "extensions/copilot/harness.test.ts"],
+        includePatterns: ["extensions/copilot/index.test.ts"],
         watchMode: false,
       },
     ]);
@@ -543,11 +655,37 @@ describe("CI changed Node test plan", () => {
       source: "extensions/anthropic/openclaw.plugin.json",
       targets: ["src/agents/model-ref-shared.test.ts"],
     },
+    {
+      source: "src/test-utils/symlink-rebind-race.ts",
+      targets: expect.arrayContaining(["src/infra/fs-safe-import-boundary.test.ts"]),
+    },
   ])("routes $source through source-scanning policy tests", ({ source, targets: expected }) => {
     const shards = createChangedNodeTestShards([source]);
     const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
 
     expect(targets).toEqual(expected);
+  });
+
+  it.each([
+    {
+      source: "test/scripts/openclaw-npm-plugin-recovery-workflow.test.ts",
+      targets: [
+        "test/scripts/openclaw-npm-plugin-recovery-workflow.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ],
+    },
+    ...[
+      "extensions/codex/src/app-server/run-attempt.native-config.test.ts",
+      "extensions/codex/src/app-server/run-attempt.subscription.test.ts",
+    ].map((source) => ({
+      source,
+      targets: expect.arrayContaining([source, "test/vitest-projects-config.test.ts"]),
+    })),
+  ])("selects inventory guards alongside $source", ({ source, targets: expected }) => {
+    const shards = createChangedNodeTestShards([source]);
+    expect(shards).not.toBeNull();
+    const targets = fallbackGroups(shards ?? []).flatMap((group) => group.includePatterns ?? []);
+    expect(targets.toSorted()).toEqual(expected);
   });
 
   it("routes cron alert sanitization changes through alert policy suites", () => {
@@ -795,26 +933,79 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it("keeps boundary coverage on test-only diffs without the build-artifacts lane", () => {
-    // Test-only diffs skip build-artifacts (which hosts the full boundary
-    // gate), so the plan carries its own nondist boundary shard instead.
-    expect(createChangedNodeTestShards(["test/extension-import-boundaries.test.ts"])).toEqual([
-      {
-        checkName: "checks-node-changed",
-        configs: [],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed",
-        targets: ["test/extension-import-boundaries.test.ts"],
-      },
-      {
-        checkName: "checks-node-changed-boundary",
-        configs: ["test/vitest/vitest.boundary.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed-boundary",
-      },
-    ]);
+  it.each(
+    (["blacksmith", "hybrid", "github"] as const).flatMap((runnerBackend) =>
+      boundaryTestFiles.map((target) => ({ runnerBackend, target })),
+    ),
+  )(
+    "runs $target once through the local boundary owner on $runnerBackend",
+    ({ runnerBackend, target }) => {
+      expect(createChangedNodeTestShards([target], { runnerBackend })).toEqual([
+        {
+          checkName: "checks-node-changed-boundary",
+          configs: ["test/vitest/vitest.boundary.config.ts"],
+          requiresDist: false,
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          shardName: "changed-boundary",
+        },
+      ]);
+      // Local explicit selection still runs only the requested file.
+      expect(buildVitestRunPlans([target])).toMatchObject([
+        {
+          config: "test/vitest/vitest.boundary.config.ts",
+          includePatterns: [target],
+          forwardedArgs: [],
+          watchMode: false,
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    "src/tasks/task-registry.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts",
+  ])("retains the other test owner alongside a boundary target: %s", (companion) => {
+    expect(
+      createChangedNodeTestShards(["test/extension-import-boundaries.test.ts", companion]),
+    ).toEqual(createChangedNodeTestShards([companion]));
+  });
+
+  it.each(["src/agents/live-provider-owner.ts", "test/scripts/ci-linux-git.test.ts"])(
+    "keeps an explicit boundary target when no local full owner is emitted: %s",
+    (companion) => {
+      const target = "test/extension-import-boundaries.test.ts";
+      const shards = createChangedNodeTestShards([target, companion]);
+      expect(shards).not.toBeNull();
+      expect(shards?.flatMap((shard) => shard.targets ?? [])).toContain(target);
+      expect(shards?.map((shard) => shard.checkName)).not.toContain("checks-node-changed-boundary");
+      if (companion.endsWith(".test.ts")) {
+        expect(shards?.some((shard) => shard.requiresDist)).toBe(true);
+        expect(shards?.filter((shard) => shard.groups)).toEqual(
+          createChangedNodeTestShards([companion])?.filter((shard) => shard.groups),
+        );
+      }
+    },
+  );
+
+  it.each(["docs/help/index.md", "src/infra/deleted-boundary.test.ts"])(
+    "retains the local boundary owner with an ignored companion: %s",
+    (companion) => {
+      const target = "test/extension-import-boundaries.test.ts";
+      expect(createChangedNodeTestShards([target, companion])).toEqual(
+        createChangedNodeTestShards([target]),
+      );
+    },
+  );
+
+  it.each([
+    "src/infra/deleted-boundary.ts",
+    "tsconfig.json",
+    "test/vitest/vitest.boundary.config.ts",
+    "scripts/lib/ci-changed-node-test-plan.mts",
+  ])("validates an unresolved companion before crediting boundary coverage: %s", (companion) => {
+    expect(
+      createChangedNodeTestShards(["test/extension-import-boundaries.test.ts", companion]),
+    ).toBeNull();
   });
 
   it("classifies build-artifact and QA smoke impact by changed surface", () => {
@@ -856,8 +1047,8 @@ describe("CI changed Node test plan", () => {
     // Smoke drives matrix + telegram; other channel plugins are invisible to it.
     expect(hasQaSmokeAffectingChange(["extensions/telegram/src/index.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
-    // Broad runtime changes ride the main-push smoke run instead of taxing
-    // every PR with the six-part matrix; only QA-owned surfaces select it.
+    // Broad runtime changes wait for release validation; only QA owners
+    // select smoke on automatic PR and main runs.
     expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["packages/llm-core/src/index.ts"])).toBe(false);
@@ -869,6 +1060,26 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
+  });
+
+  it.each([
+    ["ui/src/main.ts", true],
+    ["ui/vite.config.ts", true],
+    ["ui/src/pages/chat/chat-gateway.test.ts", false],
+    ["packages/gateway-client/src/index.ts", true],
+    ["pnpm-lock.yaml", true],
+    ["patches/@awesome.me__webawesome@3.12.0.patch", true],
+    [".npmrc", true],
+    ["scripts/check-control-ui-performance-base.mts", true],
+    ["scripts/lib/control-ui-i18n-config.ts", true],
+    ["src/gateway/control-ui-asset-manifest.ts", true],
+    ["src/infra/retry.ts", true],
+    ["src/commands/doctor.ts", true],
+    ["src/cli/cron-cli/shared.ts", false],
+    ["extensions/telegram/src/index.ts", false],
+    ["docs/ci.md", false],
+  ] as const)("selects UI performance for %s: %s", (file, expected) => {
+    expect(hasControlUiPerformanceAffectingChange([file])).toBe(expected);
   });
 
   it.each([
@@ -952,8 +1163,21 @@ describe("CI changed Node test plan", () => {
     ).toBe(true);
   });
 
-  it("fails safe to the full plan for broad changes", () => {
-    expect(createChangedNodeTestShards(["package.json"])).toBeNull();
+  it.each([
+    ["package.json", "blacksmith", true],
+    ["test/scripts/ci-node-test-plan.test.ts", "blacksmith", true],
+    ["test/scripts/ci-node-test-plan.test.ts", "hybrid", true],
+    ["test/scripts/ci-node-test-plan.test.ts", "github", false],
+  ] as const)("resolves full-plan coverage for %s on %s", (changedPath, runnerBackend, full) => {
+    const shards = createChangedNodeTestShards([changedPath], { runnerBackend });
+    if (full) {
+      expect(shards).toBeNull();
+    } else {
+      expect(shards).not.toBeNull();
+      expect(
+        fallbackGroups(shards ?? []).flatMap((group) => group.includePatterns ?? []),
+      ).toContain(changedPath);
+    }
   });
 
   it("fails safe for raw Git paths that resemble normalized script paths", () => {
@@ -979,6 +1203,82 @@ describe("CI changed Node test plan", () => {
         process.cwd(),
       ),
     ).toBe(true);
+  });
+
+  describe("documentation targeting", () => {
+    it("keeps the complete two-job corpus plan beside a documentation page", () => {
+      const targets = [
+        "src/config/config-startup-corpus.test.ts",
+        "src/config/state-startup-corpus.test.ts",
+      ];
+      const before = createChangedNodeTestShards(targets);
+      expect(before).toHaveLength(2);
+      expect(before?.flatMap((shard) => shard.targets ?? [])).toEqual(targets);
+      expect(before?.some((shard) => shard.pretestBuildMode === "runtime")).toBe(true);
+      expect(createChangedNodeTestShards([...targets, "docs/ci/pipeline.md"])).toEqual(before);
+    });
+
+    it.each([
+      [["docs/guide.md"], "file", true],
+      [["docs/guide.mdx"], "file", true],
+      [["README.md"], "file", true],
+      [["docs/deleted.md"], "missing", true],
+      [["docs/old.md", "docs/new.md"], "rename", true],
+      [["docs/reference/templates/AGENTS.md"], "file", false],
+      [["docs/reference/templates/AGENTS.md"], "missing", false],
+      [["src/runtime.md"], "file", false],
+      [["test/fixtures/payload.md"], "file", false],
+      [["docs/script.ts"], "file", false],
+      [["src/deleted.ts", "docs/new.md"], "rename", false],
+      [["docs/reference/templates/old.md", "docs/new.md"], "rename", false],
+      [["docs/old.md", "docs/reference/templates/new.md"], "rename", false],
+      [["docs/guide.md"], "directory", false],
+      [["docs/guide.md"], "symlink", false],
+      [["docs/guide.md"], "dangling", false],
+      [["docs/../guide.md"], "file", false],
+    ] as const)("preserves Node ownership for %j (%s): %s", (paths, kind, precise) => {
+      const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-docs-targeting-"));
+      const target = "src/channels/plugins/unowned.test.ts";
+      try {
+        mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+        writeFileSync(path.join(cwd, target), "export {};\n");
+        for (const file of kind === "missing" ? [] : kind === "rename" ? paths.slice(1) : paths) {
+          const absolute = path.join(cwd, file);
+          mkdirSync(path.dirname(absolute), { recursive: true });
+          if (kind === "directory") {
+            mkdirSync(absolute);
+          } else if (kind === "symlink" || kind === "dangling") {
+            if (kind === "symlink") {
+              writeFileSync(path.join(path.dirname(absolute), "target.md"), "# Guide\n");
+            }
+            symlinkSync("target.md", absolute);
+          } else {
+            writeFileSync(absolute, "# Guide\n");
+          }
+        }
+        const before = createChangedNodeTestShards([target], { cwd });
+        expect(before?.flatMap((shard) => shard.targets ?? [])).toEqual([target]);
+        expect(createChangedNodeTestShards([target, ...paths], { cwd })).toEqual(
+          precise ? before : null,
+        );
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it("retains the mapped prompt Markdown owner beside documentation", () => {
+      const fixture =
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md";
+      const before = createChangedNodeTestShards([fixture]);
+      expect(before).not.toBeNull();
+      const ownedTargets = before?.flatMap((shard) => [
+        ...(shard.targets ?? []),
+        ...(shard.includePatterns ?? []),
+        ...(shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []),
+      ]);
+      expect(ownedTargets).toContain("test/scripts/prompt-snapshots.test.ts");
+      expect(createChangedNodeTestShards([fixture, "docs/ci/pipeline.md"])).toEqual(before);
+    });
   });
 
   it("fails safe whenever a diff deletes source files", () => {
@@ -1124,16 +1424,76 @@ describe("CI changed Node test plan", () => {
         true,
       );
     }
+    const nativeFiles = new Set(listExtensionTestFilesForRoots(databaseWorkerExtensionTestRoots));
     for (const [index, shard] of shards.entries()) {
       for (const other of shards.slice(index + 1)) {
+        const combinedNativeFiles = fallbackGroups([shard, other])
+          .flatMap((group) => group.includePatterns ?? [])
+          .filter((file) => nativeFiles.has(file));
         const canShareJob =
           !shard.pretestBuildMode &&
           !other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 240;
+          shard.predictedSeconds! + other.predictedSeconds! <= 240 &&
+          combinedNativeFiles.length <= 20;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
+    }
+  });
+
+  it.each([48, 49])("exchanges extension groups within the 240-second budget, tail %s", (tail) => {
+    const costs = [144, 120, 72, tail, 96];
+    const ids = costs.map((_, index) => `packing-fixture-${index}`);
+    const configs = ids.map((id) => `test/vitest/vitest.${id}.config.ts`);
+    const files = ids.map((id) => `extensions/${id}/index.test.ts`);
+    try {
+      vi.spyOn(changedExtensions, "listAvailableExtensionIds").mockReturnValue(ids);
+      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(files);
+      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) => {
+        return expectDefined(configs[ids.indexOf(target.split("/")[1] ?? "")], "fixture config");
+      });
+      vi.spyOn(extensionTestPlan, "estimateExtensionTestCost").mockImplementation((config) => {
+        return expectDefined(costs[configs.indexOf(config)], "fixture cost");
+      });
+      vi.spyOn(extensionTestPlan, "shouldSplitExtensionTestProcesses").mockReturnValue(false);
+      vi.spyOn(extensionTestPlan, "splitExtensionTestJobTargets").mockImplementation((config) => {
+        const file = expectDefined(files[configs.indexOf(config)], "fixture file");
+        return config === configs[4] ? [[file], [file]] : [[file]];
+      });
+
+      const shards = createChangedExtensionFallbackShards([
+        "scripts/lib/ci-changed-node-test-plan.mts",
+      ]);
+      const groups = fallbackGroups(shards);
+      // First-fit strands a third row for 144, 120, 72, 48, 48, 48.
+      // One extra second makes two rows impossible without exceeding the budget.
+      expect(shards).toHaveLength(tail === 48 ? 2 : 3);
+      expect(groups).toHaveLength(6);
+      expect(
+        groups
+          .map((group) => expectDefined(group.configs[0], "group config"))
+          .toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(
+        [...configs, expectDefined(configs[4], "sharded config")].toSorted((a, b) =>
+          a.localeCompare(b),
+        ),
+      );
+      expect(
+        groups.filter((group) => group.configs[0] === configs[4]).map((group) => group.env),
+      ).toEqual([
+        { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' },
+        { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=2/2"]' },
+      ]);
+      expect(groups.every((group) => !group.includePatterns && !group.pretestBuildMode)).toBe(true);
+      expect(new Set(groups.map((group) => group.shard_name)).size).toBe(6);
+      expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
+      expect(shards.every((shard) => shard.predictedSeconds! <= 240)).toBe(true);
+      expect(shards.reduce((seconds, shard) => seconds + shard.predictedSeconds!, 0)).toBe(
+        costs.reduce((sum, cost) => sum + cost, 0),
+      );
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 
@@ -1153,17 +1513,61 @@ describe("CI changed Node test plan", () => {
   });
 
   it("keeps extension-only fallbacks scoped to the changed extension config", () => {
-    expect(createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"])).toEqual([
-      {
-        checkName: "checks-node-changed-extensions-config",
+    const shards = createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"]);
+    for (const shard of shards) {
+      expect(shard).toMatchObject({ planConcurrency: 1, predictedSeconds: expect.any(Number) });
+    }
+    const groups = fallbackGroups(shards);
+    expect(groups).toHaveLength(2);
+    expect(groups).toContainEqual(
+      expect.objectContaining({
         configs: ["test/vitest/vitest.extension-discord.config.ts"],
-        planConcurrency: 1,
-        predictedSeconds: expect.any(Number),
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed-extensions-config",
-      },
+      }),
+    );
+    expect(groups).toContainEqual(
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+        includePatterns: databaseWorkerExtensionTestFiles
+          .filter((file) => file.startsWith("extensions/discord/"))
+          .toSorted(),
+      }),
+    );
+  });
+
+  it("partitions every database-worker file exactly once in a broad fallback", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "scripts/lib/ci-changed-node-test-plan.mts",
     ]);
+    const groups = fallbackGroups(shards);
+    const workerGroups = groups.filter((group) =>
+      group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
+    );
+    const expectedFiles = listExtensionTestFilesForRoots([
+      ...databaseWorkerExtensionTestRoots,
+      ...databaseWorkerExtensionTestFiles,
+    ]);
+    const nativeFiles = new Set(listExtensionTestFilesForRoots(databaseWorkerExtensionTestRoots));
+    for (const group of workerGroups) {
+      expect(
+        group.includePatterns?.filter((file) => nativeFiles.has(file)).length,
+      ).toBeLessThanOrEqual(20);
+    }
+    for (const shard of shards) {
+      const files = fallbackGroups([shard]).flatMap((group) => group.includePatterns ?? []);
+      expect(files.filter((file) => nativeFiles.has(file)).length).toBeLessThanOrEqual(20);
+    }
+    expect(workerGroups.length).toBeGreaterThan(1);
+    expect(workerGroups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      expectedFiles.toSorted(),
+    );
+    expect(
+      groups
+        .filter((group) => !workerGroups.includes(group))
+        .flatMap((group) => group.includePatterns ?? [])
+        .filter((file) => expectedFiles.includes(file)),
+    ).toEqual([]);
   });
 
   it("does not create extension fallback shards for docs-only diffs", () => {
@@ -1247,7 +1651,12 @@ describe("CI changed Node test plan", () => {
       expect(
         groups.every(
           (group) =>
-            group.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
+            group.configs[0] ===
+              (group.includePatterns?.every((file) =>
+                databaseWorkerExtensionTestFiles.includes(file),
+              )
+                ? "test/vitest/vitest.extension-database-workers.config.ts"
+                : "test/vitest/vitest.extension-telegram.config.ts") &&
             (group.includePatterns?.length ?? 0) > 0 &&
             (group.includePatterns?.length ?? 0) <= 10,
         ),
@@ -1255,7 +1664,12 @@ describe("CI changed Node test plan", () => {
       expect(targets.toSorted()).toEqual(
         listExtensionTestFilesForRoots(["extensions/telegram"]).toSorted(),
       );
-      expect(groups).toHaveLength(Math.ceil(targets.length / 10));
+      const workerCount = targets.filter((file) =>
+        databaseWorkerExtensionTestFiles.includes(file),
+      ).length;
+      expect(groups).toHaveLength(
+        Math.ceil(workerCount / 10) + Math.ceil((targets.length - workerCount) / 10),
+      );
     },
   );
 
@@ -1303,7 +1717,10 @@ describe("CI changed Node test plan", () => {
     expect(
       groups.every(
         (shard) =>
-          shard.configs[0] === "test/vitest/vitest.extension-matrix.config.ts" &&
+          shard.configs[0] ===
+            (shard.includePatterns?.every((file) => databaseWorkerExtensionTestFiles.includes(file))
+              ? "test/vitest/vitest.extension-database-workers.config.ts"
+              : "test/vitest/vitest.extension-matrix.config.ts") &&
           (shard.includePatterns?.length ?? 0) > 0 &&
           (shard.includePatterns?.length ?? 0) <= 40,
       ),
@@ -1336,20 +1753,38 @@ describe("CI changed Node test plan", () => {
     }
   });
 
-  it("serializes the Memory Core extension fallback config", () => {
-    expect(
-      createChangedExtensionFallbackShards(["extensions/memory-core/src/memory/mmr.ts"]),
-    ).toEqual([
-      {
-        checkName: "checks-node-changed-extensions-config",
-        configs: ["test/vitest/vitest.extension-memory.config.ts"],
+  it.each([
+    { name: "fallback", createShards: createChangedExtensionFallbackShards },
+    { name: "direct", createShards: createChangedNodeTestShards },
+  ])("serializes bounded Memory Core jobs for $name changes", ({ createShards }) => {
+    const shards = createShards([
+      "extensions/memory-core/src/memory/mmr.ts",
+      "extensions/memory-core/src/memory/mmr.test.ts",
+    ]);
+    expect(shards).not.toBeNull();
+    expect(shards!.length).toBeGreaterThan(1);
+    for (const shard of shards!) {
+      expect(shard).toMatchObject({
         planConcurrency: 1,
         predictedSeconds: expect.any(Number),
         requiresDist: false,
         runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed-extensions-config",
-      },
-    ]);
+      });
+      expect(
+        fallbackGroups([shard]).flatMap((group) => group.includePatterns ?? []).length,
+      ).toBeLessThanOrEqual(20);
+    }
+    const groups = fallbackGroups(shards!);
+    expect(
+      groups.every(
+        (group) =>
+          group.configs.length === 1 &&
+          group.configs[0] === "test/vitest/vitest.extension-database-workers.config.ts",
+      ),
+    ).toBe(true);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+      listExtensionTestFilesForRoots(["extensions/memory-core"]),
+    );
   });
 
   it.each([
@@ -1371,9 +1806,51 @@ describe("CI changed Node test plan", () => {
     });
   });
 
-  it("retains compact metadata for the ordinary tooling delivery-cache smoke", () => {
+  it("retains delivery-cache coverage and private QA preparation", () => {
     const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
-    expect(createChangedNodeTestShards([target])).toBeNull();
+    expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
+      target,
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/test-projects-build-admission.test.ts",
+    ]);
+    const shards = createChangedNodeTestShards([target]);
+    expect(shards).not.toBeNull();
+    const groups = fallbackGroups(shards ?? []);
+    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual([
+      target,
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan.test.ts",
+    ]);
+    const qaOwners = shards?.filter((shard) =>
+      shard.groups?.some((group) => group.includePatterns?.includes(target)),
+    );
+    expect(qaOwners).toHaveLength(1);
+    expect(qaOwners?.[0]).toMatchObject({
+      pretestBuildMode: "private-qa",
+      planConcurrency: 1,
+    });
+    expect(groups.find((group) => group.includePatterns?.includes(target))).toMatchObject({
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      pretestBuildMode: "private-qa",
+    });
+    // The third tooling consumer keeps its complete paired-config owner.
+    const paired = groups.filter((group) => group.shard_name === "core-tooling-isolated");
+    expect(paired).toHaveLength(1);
+    expect(paired[0]?.configs).toEqual([
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ]);
+    expect(paired[0]?.includePatterns).toBeUndefined();
+    expect(
+      buildVitestRunPlans(["test/scripts/test-projects-build-admission.test.ts"])[0]?.config,
+    ).toBe("test/vitest/vitest.tooling-isolated.config.ts");
+    expect(
+      groups
+        .filter((group) => group.requiresDist)
+        .map((group) => group.shard_name)
+        .toSorted(),
+    ).toEqual(["core-runtime-tui-pty", "core-support-boundary"]);
     expect(buildVitestRunPlans([target])).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.tooling.config.ts",
@@ -1384,13 +1861,28 @@ describe("CI changed Node test plan", () => {
 
   it("prebuilds private QA dist before the QA Lab extension fallback", () => {
     const shards = createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"]);
-    expect(shards.length).toBeGreaterThan(1);
-    for (const shard of shards) {
+    const qaShards = shards.filter((shard) =>
+      shard.configs?.includes("test/vitest/vitest.extension-qa.config.ts"),
+    );
+    expect(qaShards.length).toBeGreaterThan(1);
+    for (const shard of qaShards) {
       expect(shard).toMatchObject({
         configs: ["test/vitest/vitest.extension-qa.config.ts"],
         pretestBuildMode: "private-qa",
       });
     }
+    const workerShards = shards.filter((shard) => !qaShards.includes(shard));
+    expect(workerShards).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+        includePatterns: [
+          "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
+          "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+        ],
+        requiresDist: false,
+      }),
+    ]);
+    expect(workerShards[0]).not.toHaveProperty("pretestBuildMode");
   });
 
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
@@ -1406,6 +1898,14 @@ describe("CI changed Node test plan", () => {
       });
     }
     expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+        includePatterns: [
+          "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
+          "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+        ],
+        requiresDist: false,
+      }),
       expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
     ]);
   });
@@ -1467,22 +1967,5 @@ describe("CI changed Node test plan", () => {
     expect(targetShards.every((shard) => (shard.targets?.length ?? 0) <= 12)).toBe(true);
     const targets = targetShards.flatMap((shard) => shard.targets ?? []);
     expect(new Set(targets).size).toBe(targets.length);
-  });
-
-  it("serializes the owning Memory Core extension config for direct changes", () => {
-    const shards = createChangedNodeTestShards([
-      "extensions/memory-core/src/memory/mmr.ts",
-      "extensions/memory-core/src/memory/mmr.test.ts",
-    ]);
-    expect(shards).not.toBeNull();
-    expect(shards).toContainEqual({
-      checkName: "checks-node-changed-extensions-config",
-      configs: ["test/vitest/vitest.extension-memory.config.ts"],
-      planConcurrency: 1,
-      predictedSeconds: expect.any(Number),
-      requiresDist: false,
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      shardName: "changed-extensions-config",
-    });
   });
 });

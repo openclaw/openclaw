@@ -17,6 +17,7 @@ import {
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 
 type DefaultModelsViewProps = {
@@ -36,7 +37,7 @@ type DefaultModelsViewProps = {
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: Record<string, boolean>;
-  message?: { kind: "success" | "error"; text: string; warning?: string };
+  message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;

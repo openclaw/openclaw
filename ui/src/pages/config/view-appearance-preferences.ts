@@ -179,7 +179,7 @@ export function renderChatPreferencesSection(
   const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
   const followUpDescription = props.chatFollowUpMode
     ? t("chat.followUpModeOverriding", { mode: serverQueueMode })
-    : t("chat.followUpModeUsingServer", { mode: serverQueueMode });
+    : nothing;
   const messageWidthDefaultDescription = renderSettingsDefaultDescription(
     UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth,
     props.chatMessageMaxWidth !== undefined,
@@ -201,6 +201,10 @@ export function renderChatPreferencesSection(
     (props.composerHoldToRecord ?? UI_APPEARANCE_DEFAULTS.composerHoldToRecord) !==
       UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   );
+  const showTaskProgressDefaultDescription = renderSettingsDefaultDescription(
+    t("common.enabled"),
+    props.chatShowTaskProgress !== UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
+  );
   const collapseTaskProgressDefaultDescription = renderSettingsDefaultDescription(
     t("common.disabled"),
     props.chatCollapseTaskProgress !== UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
@@ -218,11 +222,19 @@ export function renderChatPreferencesSection(
           control: messageWidthInput,
         })}
         ${renderSettingsToggleRow({
+          title: t("configView.chatPrefs.showTaskProgress"),
+          description: html`${t("configView.chatPrefs.showTaskProgressHint")}<br />
+            ${showTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          checked: props.chatShowTaskProgress,
+          onChange: props.setChatShowTaskProgress,
+        })}
+        ${renderSettingsToggleRow({
           title: t("configView.chatPrefs.collapseTaskProgress"),
           description: html`${t("configView.chatPrefs.collapseTaskProgressHint")}<br />
             ${collapseTaskProgressDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: props.chatCollapseTaskProgress,
           onChange: props.setChatCollapseTaskProgress,
+          disabled: !props.chatShowTaskProgress,
         })}
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),

@@ -2,6 +2,7 @@ import Foundation
 
 public enum DashboardRouteMap {
     public static let settingsPath = "/settings"
+    public static let appearanceSettingsPath = "/settings/appearance"
     public static let deviceSettingsPath = "/settings/device"
     public static let devicePermissionsSettingsPath = "/settings/device/permissions"
     public static let channelsSettingsPath = "/settings/channels"
@@ -52,8 +53,10 @@ public enum DashboardRouteMap {
             guard self.isValidSameAppSearch(search) else { return nil }
             components.percentEncodedQuery = String(search.dropFirst())
         }
-        let basePath = components.path.hasSuffix("/") ? components.path : components.path + "/"
-        components.path = basePath + path.dropFirst()
+        let basePath = components.percentEncodedPath.hasSuffix("/")
+            ? components.percentEncodedPath : components.percentEncodedPath + "/"
+        guard let route = URLComponents(string: path) else { return nil }
+        components.percentEncodedPath = basePath + route.percentEncodedPath.dropFirst()
         return components.url
     }
 }

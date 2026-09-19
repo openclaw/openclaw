@@ -72,14 +72,19 @@ async function runSessionSweep(params: {
     readSessions,
     ...(now === undefined ? {} : { now: () => now }),
   });
-  await service.start({ logger: { warn: vi.fn() } } as never);
-  service.onGatewayStart();
-  await vi.waitFor(() => expect(readSessions).toHaveBeenCalledOnce());
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  service.onGatewayStop();
-  await service.stop?.({ logger: { warn: vi.fn() } } as never);
+  const runOperation = vi.spyOn(params.store, "runOperation");
+  try {
+    await service.start({ logger: { warn: vi.fn() } } as never);
+    service.onGatewayStart();
+    // The admitted operation spans the full sweep, including SQLite worker writes.
+    expect(runOperation).toHaveBeenCalled();
+    await runOperation.mock.results[0]?.value;
+    expect(readSessions).toHaveBeenCalledOnce();
+  } finally {
+    service.onGatewayStop();
+    await service.stop?.({ logger: { warn: vi.fn() } } as never);
+    runOperation.mockRestore();
+  }
 }
 
 describe("Workboard gateway lifecycle sync", () => {
@@ -926,10 +931,11 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it("runs the bounded session reconciliation from the lifecycle-owned service interval", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const runOperation = vi.spyOn(store, "runOperation");
     vi.useFakeTimers();
     let service: ReturnType<typeof createWorkboardLifecycleService> | undefined;
     try {
-      const store = createWorkboardSqliteTestStore();
       const sessionKey = "agent:main:dashboard:service";
       const card = await createLinkedCard(store, { status: "todo", sessionKey });
       const readSessions = vi
@@ -952,21 +958,25 @@ describe("Workboard gateway lifecycle sync", () => {
           complete: true,
         });
       service = createWorkboardLifecycleService({ store, readSessions });
+      runOperation.mockClear();
       await service.start({ logger: { warn: vi.fn() } } as never);
       service.onGatewayStart();
-      await vi.waitFor(async () => {
-        expect((await store.get(card.id))?.status).toBe("running");
-      });
+      expect(runOperation).toHaveBeenCalled();
+      // The next interval is armed only after the whole admitted sweep settles.
+      await runOperation.mock.results[0]?.value;
+      expect((await store.get(card.id))?.status).toBe("running");
 
+      runOperation.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
-      await vi.waitFor(async () => {
-        expect((await store.get(card.id))?.status).toBe("review");
-      });
+      expect(runOperation).toHaveBeenCalled();
+      await runOperation.mock.results[0]?.value;
+      expect((await store.get(card.id))?.status).toBe("review");
 
       expect(readSessions).toHaveBeenCalledTimes(2);
     } finally {
       service?.onGatewayStop();
       await service?.stop?.({ logger: { warn: vi.fn() } } as never);
+      runOperation.mockRestore();
       vi.useRealTimers();
     }
   });

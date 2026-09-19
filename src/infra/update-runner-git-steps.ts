@@ -15,6 +15,25 @@ import type {
   UpdateStepResult,
 } from "./update-runner-types.js";
 
+// A successful Git status command does not imply a clean checkout.
+export async function runGitCleanCheckStep(options: RunStepOptions) {
+  const result = await runStep({
+    ...options,
+    progress: { ...options.progress, onStepComplete: undefined },
+  });
+  const dirty = result.exitCode === 0 && Boolean(result.stdoutTail?.trim());
+  if (dirty) {
+    result.exitCode = 1;
+    result.stderrTail = "This checkout has local changes. Installation has not started.";
+  }
+  options.progress?.onStepComplete?.({
+    ...result,
+    index: options.stepIndex,
+    total: options.totalSteps,
+  });
+  return { result, dirty };
+}
+
 // Publish completion only after the owner classifies its recoverable result.
 export async function runGitUpstreamStep(options: RunStepOptions) {
   const upstreamStep = await runStep({
@@ -105,7 +124,12 @@ export async function runGitDoctorStep(params: {
     const doctorStep = await runStep({
       ...options,
       env: { ...options.env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath },
-      progress: { ...options.progress, onStepComplete: undefined },
+      // Doctor holds the state-lifecycle coordinator while repairing shared state.
+      // Keep its parent out of that database: the step receipt waits for the child
+      // to exit, and the heartbeat stays disarmed for the whole window. Recorded
+      // driver liveness still prevents abandonment, and the step start already
+      // recorded activity before the child spawned.
+      progress: { ...options.progress, onStepComplete: undefined, onHeartbeat: undefined },
     });
     const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
     const configWriteRefusal = doctorResult?.configWriteRefusal;

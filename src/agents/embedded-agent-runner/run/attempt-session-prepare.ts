@@ -654,6 +654,11 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       sessionManager,
+      // The admitted user turn is already persisted above. Fence bootstrap like
+      // assemble is fenced; otherwise the engine imports the pending turn from
+      // the transcript, the host appends it again, and the next run drops one
+      // copy so every later provider byte shifts and the prompt cache misses.
+      transcriptReadFence: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       runtimeContext: buildAfterTurnRuntimeContext({
         attempt,
         workspaceDir: input.effectiveWorkspace,

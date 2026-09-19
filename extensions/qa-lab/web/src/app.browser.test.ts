@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bootstrap, RunnerSelection } from "./ui-types.js";
+import type { Bootstrap, EvidenceEnvelope, RunnerSelection } from "./ui-types.js";
 
 const httpMock = vi.hoisted(() => {
   class QaLabHttpError extends Error {
@@ -113,9 +113,13 @@ async function mountRunner(
     messages: [],
     threads: [],
   },
+  evidence: EvidenceEnvelope["evidence"] = null,
 ) {
   let bootstrap = createBootstrap(selection);
   httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url.startsWith("/api/evidence?")) {
+      return { evidence };
+    }
     if (url === "/api/bootstrap") {
       return bootstrap;
     }
@@ -205,6 +209,86 @@ afterEach(() => {
 });
 
 describe("QA Lab runner browser interactions", () => {
+  it("selects duplicate evidence labels independently before and after filtering", async () => {
+    const originalUrl = window.location.href;
+    window.history.replaceState(null, "", "/evidence?path=fixture/qa-evidence.json");
+    try {
+      const evidence: EvidenceEnvelope["evidence"] = {
+        counts: { pass: 1, fail: 0, blocked: 0, skipped: 0 },
+        entries: (["fail", "pass"] as const).map((status, index) => ({
+          artifacts: [
+            {
+              exists: true,
+              error: null,
+              href: `/api/evidence/artifact?entryIndex=${index}&artifactIndex=0`,
+              kind: "log",
+              mediaKind: "text",
+              path: `attempt-${index}.log`,
+              preview: `observed attempt ${index}`,
+              source: "synthetic-runner",
+            },
+          ],
+          coverage: [],
+          failureReason: null,
+          key: String(index),
+          effective: index === 1,
+          id: "same-label",
+          kind: "script-test",
+          sourcePath: null,
+          status,
+          title: `Attempt ${index}`,
+        })),
+        evidenceMode: "full",
+        evidencePath: "fixture/qa-evidence.json",
+        generatedAt: "2026-06-17T12:00:00.000Z",
+        producerContext: null,
+        profile: null,
+        schemaVersion: 3,
+      };
+      const root = await mountRunner(
+        {
+          alternateModel: "mock-openai/gpt-5.6-luna-alt",
+          channel: null,
+          channelDriver: "qa-channel",
+          evidenceMode: "full",
+          fastMode: false,
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          profile: "all",
+          providerMode: "mock-openai",
+          runtimePair: null,
+          runtimePairLane: null,
+          scenarioIds: ["dm-chat-baseline"],
+        },
+        undefined,
+        evidence,
+      );
+      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
+        "observed attempt 0",
+      );
+      root.querySelector<HTMLButtonElement>('[data-evidence-entry-key="1"]')!.click();
+      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
+        "observed attempt 1",
+      );
+      expect(root.querySelector(".evidence-inspector")?.textContent).not.toContain(
+        "observed attempt 0",
+      );
+      expect(root.querySelectorAll(".evidence-entry-card.selected")).toHaveLength(1);
+      selectValue(root, "#evidence-status-filter", "fail");
+      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
+        "observed attempt 0",
+      );
+      expect(root.querySelector(".evidence-inspector")?.textContent).toContain("not counted");
+      selectValue(root, "#evidence-status-filter", "all");
+      root.querySelector<HTMLButtonElement>('[data-evidence-entry-key="1"]')!.click();
+      expect(root.querySelector(".evidence-inspector")?.textContent).toContain(
+        "observed attempt 1",
+      );
+      expect(evidence.entries.map((entry) => entry.id)).toEqual(["same-label", "same-label"]);
+    } finally {
+      window.history.replaceState(null, "", originalUrl);
+    }
+  });
+
   it("labels every execution configuration select", async () => {
     const root = await mountRunner({
       alternateModel: "mock-openai/gpt-5.6-luna-alt",

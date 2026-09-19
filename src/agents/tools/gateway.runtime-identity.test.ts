@@ -4,6 +4,7 @@ import { createExecutionIdentityAdmissionToken } from "../../audit/execution-ide
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
 import {
   createAgentRuntimeApprovalAuthorityValidator,
+  mintAgentRuntimeIdentityToken,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
@@ -107,6 +108,11 @@ describe("gateway tool runtime identity", () => {
     ["cron.remove", { id: "job-1" }, { id: "job-1" }],
     ["wake", { mode: "now", text: "ping" }, { ok: true }],
     ["question.request", { questions: [] }, { id: "question-1" }],
+    [
+      "ui.command",
+      { command: { kind: "navigate", sessionKey: "agent:ops:dashboard:selected" } },
+      { ok: true },
+    ],
   ] as const)(
     "dispatches hosted %s calls with trusted runtime identity and no socket",
     async (method, params, result) => {
@@ -117,6 +123,7 @@ describe("gateway tool runtime identity", () => {
         trackExecution: (run: () => Promise<void>) => run(),
       } as GatewayRequestContext;
       const operationalRunInstance = createOperationalRunInstanceRef("run-1");
+      const gatewayUiCommandTarget = { connId: "requesting-ui", profileId: "requester" };
 
       await expect(
         withActiveGatewayToolCallerIdentity(
@@ -124,6 +131,7 @@ describe("gateway tool runtime identity", () => {
             agentId: "ops",
             sessionKey: "agent:ops:telegram:direct:alice",
             operationalRunInstance,
+            gatewayUiCommandTarget,
             gatewayContextResolver: () => context,
           },
           async () => await callGatewayTool(method, {}, params),
@@ -135,14 +143,44 @@ describe("gateway tool runtime identity", () => {
       const call = mocks.handleGatewayRequest.mock.calls[0]?.[0];
       expect(call?.context).toBe(context);
       expect(call?.req).toMatchObject({ method, params });
+      expect(call?.req.params).toEqual(params);
       expect(call?.client?.internal?.agentRuntimeIdentity).toMatchObject({
         kind: "agentRuntime",
         agentId: "ops",
         sessionKey: "agent:ops:telegram:direct:alice",
         operationalRunInstance,
+        gatewayUiCommandTarget,
       });
     },
   );
+
+  it("uses the host-signed requesting UI for worker screen commands", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+    const operationalRunInstance = createOperationalRunInstanceRef("worker-ui-run");
+    const caller = { agentId: "ops", sessionKey: "agent:ops:main", operationalRunInstance };
+    const gatewayUiCommandTarget = { connId: "requesting-ui", profileId: "requester" };
+    const params = { command: { kind: "navigate", sessionKey: "agent:ops:dashboard:selected" } };
+
+    await withActiveGatewayToolCallerIdentity(caller, async () => {
+      const token = await mintAgentRuntimeIdentityToken({ ...caller, gatewayUiCommandTarget });
+      await withGatewayToolCallerIdentity(
+        {
+          ...caller,
+          signedAgentRuntimeIdentityToken: token,
+          gatewayUiCommandTarget: { connId: "other-ui", profileId: "other-profile" },
+        },
+        () => callGatewayTool("ui.command", {}, params),
+      );
+      const call = capturedGatewayCall();
+      expect(call.params).toEqual(params);
+      expect(call.agentRuntimeIdentityToken).toBe(token);
+      await expect(
+        verifyAgentRuntimeIdentityToken(call.agentRuntimeIdentityToken),
+      ).resolves.toMatchObject({
+        gatewayUiCommandTarget,
+      });
+    });
+  });
 
   it.each([{}, { gatewayToken: "synthetic-remote-override" }])(
     "keeps ordinary questions available without local authority: %j",
@@ -155,7 +193,7 @@ describe("gateway tool runtime identity", () => {
     },
   );
 
-  it.each(["question.request", "node.invoke"])(
+  it.each(["question.request", "node.invoke", "ui.command"])(
     "omits optional %s identity for independently admitted callers with only ambient context",
     async (method) => {
       mocks.callGateway.mockResolvedValueOnce({ ok: true });

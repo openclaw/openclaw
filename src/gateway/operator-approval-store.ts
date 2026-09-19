@@ -23,7 +23,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
@@ -1025,164 +1024,156 @@ function operatorApprovalExecutionLinkState(
 }
 
 /** Probe for an authoritative retained approval without scanning the full run history. */
-export function hasOperatorApprovalReceiptsForRun(params: {
-  runId: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "operator_approvals")) {
-        return false;
-      }
-      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
-      return Boolean(
-        executeSqliteQueryTakeFirstSync(
-          db,
-          terminalApprovalsForRunQuery(stateDb, params.runId, params.nowMs ?? Date.now())
-            .clearSelect()
-            .select("approval_id")
-            .limit(1),
-        ),
-      );
-    }, params.databaseOptions) ?? false
+export function hasOperatorApprovalReceiptsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    nowMs?: number;
+  },
+): boolean {
+  if (!tableExists(db, "operator_approvals")) {
+    return false;
+  }
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      db,
+      terminalApprovalsForRunQuery(stateDb, params.runId, params.nowMs ?? Date.now())
+        .clearSelect()
+        .select("approval_id")
+        .limit(1),
+    ),
   );
 }
 
 /** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
-export function summarizeOperatorApprovalReceiptsForRun(params: {
-  context: OperatorApprovalReceiptContext;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  exactCount?: boolean;
-}): {
+export function summarizeOperatorApprovalReceiptsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: OperatorApprovalReceiptContext;
+    nowMs?: number;
+    exactCount?: boolean;
+  },
+): {
   count: number;
   coverageState?: "enforced" | "unknown";
   missingEvidence: string[];
 } {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "operator_approvals")) {
-        return { count: 0, missingEvidence: [] };
-      }
-      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
-      const snapshotRows = terminalApprovalReceiptPageRows({
+  if (!tableExists(db, "operator_approvals")) {
+    return { count: 0, missingEvidence: [] };
+  }
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+  const snapshotRows = terminalApprovalReceiptPageRows({
+    db,
+    runId: params.context.runId,
+    nowMs: params.nowMs ?? Date.now(),
+    limit: OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS + 1,
+  });
+  const boundedCount = snapshotRows.length;
+  const count = params.exactCount
+    ? (executeSqliteQueryTakeFirstSync(
         db,
-        runId: params.context.runId,
-        nowMs: params.nowMs ?? Date.now(),
-        limit: OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS + 1,
-      });
-      const boundedCount = snapshotRows.length;
-      const count = params.exactCount
-        ? (executeSqliteQueryTakeFirstSync(
-            db,
-            terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now())
-              .clearSelect()
-              .select((eb) => eb.fn.countAll<number>().as("count")),
-          )?.count ?? 0)
-        : boundedCount;
-      if (boundedCount === 0) {
-        return { count: 0, missingEvidence: [] };
-      }
-      // Whole-set coverage stays conservative without decoding an unbounded
-      // collection on the Gateway event loop.
-      if (boundedCount > OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS) {
-        return {
-          count,
-          coverageState: "unknown" as const,
-          missingEvidence: ["operator_approval.summary_bounded"],
-        };
-      }
-      const hasOversizedRecord = snapshotRows.some(
-        (row) => row.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
-      );
-      const boundedSnapshotRows = snapshotRows.filter(
-        (row) => row.payload_bytes <= OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
-      );
-      const rows = boundedSnapshotRows.map(materializeBoundedOperatorApprovalRow);
-      const hasMissingBoundedRow = rows.some((row) => row === null);
-      const records = rows.map((row) => (row === null ? null : decodeOperatorApprovalRow(row)));
-      const hasCorruptRecord = records.some((record) => record === null);
-      const hasUnlinkedRecord = rows.some(
-        (row, index) =>
-          row !== null &&
-          records[index] !== null &&
-          operatorApprovalExecutionLinkState(row, params.context) !== "exact",
-      );
-      return {
-        count,
-        coverageState:
-          hasOversizedRecord || hasMissingBoundedRow || hasCorruptRecord || hasUnlinkedRecord
-            ? "unknown"
-            : "enforced",
-        missingEvidence: [
-          ...(hasUnlinkedRecord ? ["decision.execution_link"] : []),
-          ...(hasCorruptRecord ? ["operator_approval.valid"] : []),
-          ...(hasOversizedRecord || hasMissingBoundedRow
-            ? ["operator_approval.payload_bounded"]
-            : []),
-        ],
-      };
-    }, params.databaseOptions) ?? { count: 0, missingEvidence: [] }
+        terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now())
+          .clearSelect()
+          .select((eb) => eb.fn.countAll<number>().as("count")),
+      )?.count ?? 0)
+    : boundedCount;
+  if (boundedCount === 0) {
+    return { count: 0, missingEvidence: [] };
+  }
+  // Whole-set coverage stays conservative without decoding an unbounded
+  // collection on the Gateway event loop.
+  if (boundedCount > OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS) {
+    return {
+      count,
+      coverageState: "unknown" as const,
+      missingEvidence: ["operator_approval.summary_bounded"],
+    };
+  }
+  const hasOversizedRecord = snapshotRows.some(
+    (row) => row.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
   );
+  const boundedSnapshotRows = snapshotRows.filter(
+    (row) => row.payload_bytes <= OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
+  );
+  const rows = boundedSnapshotRows.map(materializeBoundedOperatorApprovalRow);
+  const hasMissingBoundedRow = rows.some((row) => row === null);
+  const records = rows.map((row) => (row === null ? null : decodeOperatorApprovalRow(row)));
+  const hasCorruptRecord = records.some((record) => record === null);
+  const hasUnlinkedRecord = rows.some(
+    (row, index) =>
+      row !== null &&
+      records[index] !== null &&
+      operatorApprovalExecutionLinkState(row, params.context) !== "exact",
+  );
+  return {
+    count,
+    coverageState:
+      hasOversizedRecord || hasMissingBoundedRow || hasCorruptRecord || hasUnlinkedRecord
+        ? "unknown"
+        : "enforced",
+    missingEvidence: [
+      ...(hasUnlinkedRecord ? ["decision.execution_link"] : []),
+      ...(hasCorruptRecord ? ["operator_approval.valid"] : []),
+      ...(hasOversizedRecord || hasMissingBoundedRow ? ["operator_approval.payload_bounded"] : []),
+    ],
+  };
 }
 
 /** Project authoritative approval rows directly; no generic decision fact is written. */
-export function pageOperatorApprovalReceiptsForRun(params: {
-  context: OperatorApprovalReceiptContext;
-  after?: OperatorApprovalReceiptCursor;
-  offset?: number;
-  limit: number;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): OperatorApprovalReceiptPage {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "operator_approvals")) {
-        return { entries: [] };
+export function pageOperatorApprovalReceiptsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: OperatorApprovalReceiptContext;
+    after?: OperatorApprovalReceiptCursor;
+    offset?: number;
+    limit: number;
+    nowMs?: number;
+  },
+): OperatorApprovalReceiptPage {
+  if (!tableExists(db, "operator_approvals")) {
+    return { entries: [] };
+  }
+  const snapshotRows = terminalApprovalReceiptPageRows({
+    db,
+    runId: params.context.runId,
+    nowMs: params.nowMs ?? Date.now(),
+    after: params.after,
+    offset: params.offset,
+    limit: params.limit + 1,
+  });
+  const pageRows = snapshotRows.slice(0, params.limit);
+  const entries = pageRows.map((snapshot) => {
+    let receipt: DecisionReceiptV1;
+    if (snapshot.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES) {
+      receipt = projectOversizedOperatorApprovalReceipt(snapshot, params.context);
+    } else {
+      const row = materializeBoundedOperatorApprovalRow(snapshot);
+      const record = row === null ? null : decodeOperatorApprovalRow(row);
+      if (row === null || record === null) {
+        receipt = projectCorruptOperatorApprovalReceipt(snapshot, params.context);
+      } else {
+        const linkState = operatorApprovalExecutionLinkState(row, params.context);
+        receipt =
+          linkState === "exact"
+            ? projectOperatorApprovalReceipt(record, params.context)
+            : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
       }
-      const snapshotRows = terminalApprovalReceiptPageRows({
-        db,
-        runId: params.context.runId,
-        nowMs: params.nowMs ?? Date.now(),
-        after: params.after,
-        offset: params.offset,
-        limit: params.limit + 1,
-      });
-      const pageRows = snapshotRows.slice(0, params.limit);
-      const entries = pageRows.map((snapshot) => {
-        let receipt: DecisionReceiptV1;
-        if (snapshot.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES) {
-          receipt = projectOversizedOperatorApprovalReceipt(snapshot, params.context);
-        } else {
-          const row = materializeBoundedOperatorApprovalRow(snapshot);
-          const record = row === null ? null : decodeOperatorApprovalRow(row);
-          if (row === null || record === null) {
-            receipt = projectCorruptOperatorApprovalReceipt(snapshot, params.context);
-          } else {
-            const linkState = operatorApprovalExecutionLinkState(row, params.context);
-            receipt =
-              linkState === "exact"
-                ? projectOperatorApprovalReceipt(record, params.context)
-                : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
-          }
+    }
+    return { receipt, selectorId: operatorApprovalSelectorId(snapshot) };
+  });
+  const last = pageRows.at(-1);
+  return {
+    entries,
+    ...(snapshotRows.length > params.limit && last && last.resolved_at_ms !== null
+      ? {
+          nextCursor: {
+            occurredAt: last.resolved_at_ms,
+            rowId: last.receipt_rowid,
+          },
         }
-        return { receipt, selectorId: operatorApprovalSelectorId(snapshot) };
-      });
-      const last = pageRows.at(-1);
-      return {
-        entries,
-        ...(snapshotRows.length > params.limit && last && last.resolved_at_ms !== null
-          ? {
-              nextCursor: {
-                occurredAt: last.resolved_at_ms,
-                rowId: last.receipt_rowid,
-              },
-            }
-          : {}),
-      };
-    }, params.databaseOptions) ?? { entries: [] }
-  );
+      : {}),
+  };
 }
 
 function selectOperatorApprovalRow(

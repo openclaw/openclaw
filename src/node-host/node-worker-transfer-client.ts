@@ -18,7 +18,7 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
+import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
@@ -235,7 +235,11 @@ async function downloadWorkspace(params: {
     },
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
-  const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
+  const manifest = await parseWorkspaceManifest(
+    raw.toString("utf8"),
+    params.transfer.manifestRef,
+    params.signal,
+  );
   const checkpointBaseRef = params.transfer.checkpointBaseManifestRef;
   const checkpointBase = checkpointBaseRef
     ? await readNodeRepositoryCheckpointBase({
@@ -245,7 +249,7 @@ async function downloadWorkspace(params: {
       })
     : undefined;
   const checkpointPaths = checkpointBase
-    ? new Set(workerWorkspaceTransferPaths(manifest, checkpointBase))
+    ? new Set(workerWorkspaceTransferPaths(manifest, checkpointBase, params.signal))
     : undefined;
 
   if (params.transfer.seedKey && (!manifest.baseCommit || params.transfer.attachments)) {
@@ -551,7 +555,11 @@ async function uploadWorkspace(params: {
     ),
     "utf8",
   );
-  const base = parseWorkerWorkspaceManifest(baseRaw, params.transfer.baseManifestRef);
+  const base = await parseWorkspaceManifest(
+    baseRaw,
+    params.transfer.baseManifestRef,
+    params.signal,
+  );
   params.setStage("capture");
   const currentRef = await captureManifest({
     workspaceDir: params.workspaceDir,
@@ -571,8 +579,8 @@ async function uploadWorkspace(params: {
     ),
     "utf8",
   );
-  const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
-  const changed = new Set(workerWorkspaceTransferPaths(current, base));
+  const current = await parseWorkspaceManifest(currentRaw, currentRef, params.signal);
+  const changed = new Set(workerWorkspaceTransferPaths(current, base, params.signal));
   const manifestBytes = Buffer.from(currentRaw);
   const baseBytes = Buffer.from(baseRaw);
   params.setStage("snapshot");

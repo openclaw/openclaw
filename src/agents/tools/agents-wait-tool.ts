@@ -5,10 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
-import {
-  onSubagentRegistryPersisted,
-  SUBAGENT_RUNS_READ_CACHE_TTL_MS,
-} from "../subagents/registry/subagent-registry-state.js";
+import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
@@ -280,15 +277,10 @@ async function waitForCollector(params: {
         resolve();
       };
       const onAbort = () => finish(createAbortError("agents_wait aborted."));
-      // Local writes wake immediately; polling still observes other processes at
-      // the registry's persisted-read cache cadence.
-      const timer = setTimeout(
-        finish,
-        Math.min(SUBAGENT_RUNS_READ_CACHE_TTL_MS, Math.max(0, deadline - performance.now())),
-      );
+      const timer = setTimeout(finish, Math.max(0, deadline - performance.now()));
       const unsubscribe = onSubagentRegistryPersisted(() => finish());
       params.signal?.addEventListener("abort", onAbort, { once: true });
-      // Abort can race listener registration; never turn that cancellation into a successful poll.
+      // Abort can race listener registration; never turn that cancellation into a successful wait.
       if (params.signal?.aborted) {
         onAbort();
       }

@@ -19,10 +19,10 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  resolveCodexAppServerSpawnIdentity,
   type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
 import {
   createClientHarness,
   createCodexTestModel,

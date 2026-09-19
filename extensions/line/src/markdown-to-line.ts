@@ -1,4 +1,3 @@
-// Line plugin module implements markdown to line behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import {
   markdownToIRWithMeta,

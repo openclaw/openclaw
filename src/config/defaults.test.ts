@@ -15,6 +15,7 @@ import {
   applyContextPruningDefaults,
   applyMessageDefaults,
 } from "./defaults.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -105,6 +106,45 @@ describe("config defaults", () => {
     );
     expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
+
+  it.each(["staged", "ambient"] as const)(
+    "materializes provider defaults from the supplied env when auth is %s",
+    (source) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", source === "ambient" ? "ambient-fixture" : "");
+      const env = { ANTHROPIC_API_KEY: source === "staged" ? "staged-fixture" : "" };
+      mocks.applyProviderConfigDefaultsForConfig.mockImplementation(
+        ({ config, env: providerEnv }: { config: OpenClawConfig; env: NodeJS.ProcessEnv }) => ({
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              ...(providerEnv.ANTHROPIC_API_KEY
+                ? { contextPruning: { mode: "cache-ttl", ttl: "1h" } }
+                : {}),
+            },
+          },
+        }),
+      );
+      const config = materializeRuntimeConfig(
+        { agents: { defaults: {} } },
+        {
+          env,
+          manifestRegistry: { plugins: [] },
+        },
+      );
+      if (source === "staged") {
+        expect(config.agents?.defaults?.contextPruning).toEqual({ mode: "cache-ttl", ttl: "1h" });
+        expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ env }),
+        );
+      } else {
+        expect(config.agents?.defaults?.contextPruning).toBeUndefined();
+        expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
+      }
+      expect(process.env.ANTHROPIC_API_KEY).toBe(source === "ambient" ? "ambient-fixture" : "");
+    },
+  );
 
   it("defaults ackReactionScope without deriving other message fields", () => {
     const next = applyMessageDefaults({

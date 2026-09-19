@@ -92,8 +92,7 @@ class ChatReaderScrollControllerTest {
   @Test
   fun removedOptimisticPromptPreservesPositionWithoutOfferingJump() {
     val active =
-      buildChatTimeline(
-        messages = listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")),
+      prepareChatHistory(listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 1,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -467,8 +466,7 @@ class ChatReaderScrollControllerTest {
     }
 
   private fun timeline(vararg messages: ChatMessage): ChatTimeline =
-    buildChatTimeline(
-      messages = messages.toList(),
+    prepareChatHistory(messages.toList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
@@ -477,8 +475,7 @@ class ChatReaderScrollControllerTest {
   private fun emptyTimeline(): ChatTimeline = timeline()
 
   private fun questionTimeline(question: ChatQuestionPrompt): ChatTimeline =
-    buildChatTimeline(
-      messages = emptyList(),
+    prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
@@ -489,8 +486,7 @@ class ChatReaderScrollControllerTest {
     message: ChatMessage,
     stream: String?,
   ): ChatTimeline =
-    buildChatTimeline(
-      messages = listOf(message),
+    prepareChatHistory(listOf(message), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 1,
       pendingToolCalls = emptyList(),
       streamingAssistantText = stream,

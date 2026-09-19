@@ -6,11 +6,13 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveCommandAuthorization as resolveNativeCommandAuthorization,
+  resolveStoredModelOverride as resolveNativeStoredModelOverride,
   type CommandAuthorization as NativeCommandAuthorization,
 } from "./command-auth-native.js";
 import {
   resolveCommandAuthorization,
   resolveSenderCommandAuthorization,
+  resolveStoredModelOverride,
   type CommandAuthorization,
 } from "./command-auth.js";
 import {
@@ -18,6 +20,8 @@ import {
   buildCommandsMessagePaginated,
   buildHelpMessage,
 } from "./command-status.js";
+import type { GatewayRequestHandlerOptions } from "./gateway-runtime.js";
+import { resolveSessionModelRef } from "./model-session-runtime.js";
 
 const baseCfg = {
   commands: { useAccessGroups: true },
@@ -48,6 +52,61 @@ async function resolveAuthorization(params: {
 }
 
 describe("plugin-sdk/command-auth", () => {
+  it("keeps prepared host metadata outside public model resolver inputs", () => {
+    type PublishedCatalog = NonNullable<
+      Awaited<
+        ReturnType<
+          NonNullable<GatewayRequestHandlerOptions["context"]["readPreparedGatewayModelCatalog"]>
+        >
+      >
+    >;
+    expectTypeOf<keyof PublishedCatalog>().toEqualTypeOf<
+      "entries" | "pluginRegistry" | "routeVariants"
+    >();
+    type StoredModelInput = Parameters<typeof resolveStoredModelOverride>[0];
+    expectTypeOf<keyof StoredModelInput>().toEqualTypeOf<
+      | "loadSessionEntry"
+      | "sessionEntry"
+      | "sessionStore"
+      | "sessionKey"
+      | "parentSessionKey"
+      | "defaultProvider"
+      | "allowPluginNormalization"
+    >();
+    expectTypeOf<
+      Parameters<typeof resolveNativeStoredModelOverride>[0]
+    >().toEqualTypeOf<StoredModelInput>();
+    expectTypeOf<NonNullable<Parameters<typeof resolveSessionModelRef>[3]>>().toEqualTypeOf<{
+      allowPluginNormalization?: boolean;
+    }>();
+    const options = {
+      allowPluginNormalization: false,
+      manifestPlugins: [
+        {
+          modelIdNormalization: {
+            providers: { example: { aliases: { raw: "injected" } } },
+          },
+        },
+      ],
+    };
+    const params = {
+      defaultProvider: "example",
+      sessionEntry: { sessionId: "sdk-model", updatedAt: 1, modelOverride: "raw" },
+      ...options,
+    };
+    for (const resolve of [resolveStoredModelOverride, resolveNativeStoredModelOverride]) {
+      expect(resolve(params)?.model).toBe("raw");
+    }
+    expect(
+      resolveSessionModelRef(
+        { agents: { defaults: { model: "example/raw" } } },
+        undefined,
+        undefined,
+        options,
+      ),
+    ).toEqual({ provider: "example", model: "raw" });
+  });
+
   it("keeps the published authorization object and resolver return types unchanged", () => {
     type PublishedAuthorization = {
       providerId?: ChannelId;

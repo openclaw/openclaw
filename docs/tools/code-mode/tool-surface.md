@@ -202,6 +202,10 @@ initial execution reserves a slot before dispatching host work and retains it
 through live execution and internal parking. A cell with no host work does not
 consume a slot.
 
+Snapshot TTL measures idle time while a cell is parked. An admitted `wait` keeps
+the cell alive under its call deadline while pending tools settle. If that call
+returns `waiting` again, parking starts a fresh snapshot TTL.
+
 `wait` fails (as a `failed` result) when:
 
 - `runId` is unknown or its snapshot already expired.

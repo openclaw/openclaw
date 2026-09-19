@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { Directive, directive, type ElementPart } from "lit/directive.js";
 import { scrollState } from "./scroll-state.ts";
 
 export function handleComposerMenuKeydown(
@@ -18,14 +19,18 @@ export function handleComposerMenuKeydown(
     return true;
   }
   if (
-    !["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key) ||
+    !["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Tab"].includes(event.key) ||
+    ((event.key === "Home" || event.key === "End") &&
+      (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey)) ||
     (menu.count === 0 && !menu.consumeEmpty)
   ) {
     return false;
   }
   event.preventDefault();
   if (menu.count > 0) {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (event.key === "Home" || event.key === "End") {
+      scrollActiveOptionIntoView(menu.move(event.key === "Home" ? 0 : menu.count - 1));
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       const offset = event.key === "ArrowDown" ? 1 : menu.count - 1;
       scrollActiveOptionIntoView(menu.move((menu.index + offset) % menu.count));
     } else if (event.key === "Enter" || event.key === "Tab") {
@@ -40,6 +45,7 @@ export function renderComposerMenu(options: {
   label: string;
   className?: string;
   trackScroll?: boolean;
+  activeId?: string | null;
   content: unknown;
 }) {
   return html`<div
@@ -47,6 +53,7 @@ export function renderComposerMenu(options: {
     class="slash-menu ${options.className ?? ""}"
     role="listbox"
     aria-label=${options.label}
+    ${revealActiveOption(options.activeId)}
   >
     <div class="slash-menu__scroll" ${scrollState(false, options.trackScroll)}>
       ${options.content}
@@ -72,7 +79,11 @@ export function renderComposerMenuOption(options: {
     aria-selected=${options.active}
     @mousedown=${options.preserveFocus === false ? nothing : (event: MouseEvent) => event.preventDefault()}
     @click=${options.select}
-    @mouseenter=${options.hover}
+    @pointermove=${(event: PointerEvent) => {
+      if (!options.active && event.pointerType !== "touch") {
+        options.hover();
+      }
+    }}
   >
     <span class="slash-menu-icon" aria-hidden=${options.iconHidden ? "true" : nothing}
       >${options.icon}</span
@@ -83,6 +94,24 @@ export function renderComposerMenuOption(options: {
     </span>
   </div>`;
 }
+
+class RevealActiveOptionDirective extends Directive {
+  private activeId?: string | null;
+
+  render(_activeId?: string | null) {
+    return nothing;
+  }
+
+  override update(_part: ElementPart, [activeId]: Parameters<this["render"]>) {
+    if (activeId !== this.activeId) {
+      this.activeId = activeId;
+      scrollActiveOptionIntoView(activeId ?? null);
+    }
+    return nothing;
+  }
+}
+
+const revealActiveOption = directive(RevealActiveOptionDirective);
 
 function scrollActiveOptionIntoView(activeId: string | null): void {
   if (!activeId) {

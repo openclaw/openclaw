@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,

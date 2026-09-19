@@ -103,6 +103,21 @@ async function prepareAttempt(input: {
 }
 
 describe("prepareEmbeddedRunTerminal", () => {
+  it("retains a saved receipt without claiming terminal transcript ownership", async () => {
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTranscriptOwned: false,
+        assistantTranscriptIdempotencyKey: "saved-partial",
+      }),
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+    expect(prepared.agentMeta.terminalReceipt?.assistantTranscriptIdempotencyKey).toBe(
+      "saved-partial",
+    );
+  });
   beforeEach(() => {
     payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
   });

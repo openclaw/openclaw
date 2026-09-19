@@ -136,12 +136,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           .poll(() =>
             settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),
           )
-          .toContain("Failed");
+          .toContain("Models unavailable");
         expect(
           await settings
             .locator('[data-provider-id="healthy"] .model-providers__head')
             .textContent(),
-        ).not.toContain("Failed");
+        ).not.toContain("Models unavailable");
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         await expect
           .poll(() => picker.locator('[role="option"][data-value="healthy/retired"]').count())
@@ -167,12 +167,14 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           expect(await utility.textContent()).toContain("Auto · Healthy current");
           await capture("returned");
           await gateway.setMethodResponse("config.get", snapshot(savedConfig, "saved"));
+          await gateway.deferNext("config.patch");
           await current.click();
           await gateway.waitForRequest("config.patch");
-          await expect
-            .poll(() => defaults.getByRole("status").textContent())
-            .toContain("Defaults saved.");
+          await expect.poll(() => trigger.isEnabled()).toBe(false);
+          await gateway.resolveDeferred("config.patch");
+          await expect.poll(() => trigger.isEnabled()).toBe(true);
           expect(await trigger.textContent()).toContain("Healthy current");
+          expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
         }
         const recovered: ModelCatalogResult = {
           models: [
@@ -202,7 +204,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await settings
             .locator('[data-provider-id="broken"] .model-providers__head')
             .textContent(),
-        ).not.toContain("Failed");
+        ).not.toContain("Models unavailable");
         expect(await utility.textContent()).toContain("Auto · Healthy recovered");
       } finally {
         await capture("settled");
@@ -282,10 +284,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         config: saved,
         hash: "saved-settings",
       });
-      await expect
-        .poll(() => defaults.getByRole("status").textContent())
-        .toContain("Defaults saved.");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
+      expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
       await gateway.resolveDeferred("models.authStatus");
       await waitForControlUiRoute(page, { routeId: "model-providers" });
       await page.evaluate(
@@ -382,10 +382,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
         config: saved,
         hash: "saved-settings",
       });
-      await expect
-        .poll(() => defaults.getByRole("status").textContent())
-        .toContain("Defaults saved.");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
+      expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
       await gateway.resolveDeferred("models.authStatus");
       await waitForControlUiRoute(page, { routeId: "model-providers" });
       await page.evaluate(
@@ -541,14 +539,10 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       });
       await gateway.waitForRequest("config.get", { after: savedConfigReads });
       await gateway.rejectDeferred("config.get", { message: "Saved config could not refresh." });
-      await expect
-        .poll(() =>
-          defaults.getByRole("status").filter({ hasText: "Defaults saved." }).textContent(),
-        )
-        .toContain("Defaults saved.");
       await expect.poll(() => defaults.textContent()).toContain("Saved config could not refresh.");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Chosen model");
+      expect(await defaults.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
       if (recordVisuals) {
         await writeFile(
           path.join(artifactDir, "config-save-warning-editable.png"),
@@ -784,6 +778,9 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await gateway.deferNext("models.authStatus");
           previousAuthLoads = (await gateway.getRequests("models.authStatus")).length;
+          if (moduleState === "cached") {
+            await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          }
           await page.evaluate(async () => {
             const app = document.querySelector<
               HTMLElement & { runtime: { router: ApplicationRouter } }

@@ -11,37 +11,52 @@ export async function acquireGatewayTestClient(
     timeoutMessage: string;
     closeMessage: string;
     unrefTimeout?: boolean;
+    signal?: AbortSignal;
+    verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
   },
 ): Promise<GatewayClient> {
+  const signal = wait.signal;
+  signal?.throwIfAborted();
   return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
+    let state: "pending" | "failed" | "handed-off" = "pending";
+    const onAbort = () => settle({ error: signal?.reason });
     const settle = (outcome: { client: GatewayClient } | { error: unknown }) => {
-      if (settled) {
+      if (state !== "pending") {
         return;
       }
-      settled = true;
+      const result = "client" in outcome && signal?.aborted ? { error: signal.reason } : outcome;
+      state = "error" in result ? "failed" : "handed-off";
       clearTimeout(timer);
-      if ("error" in outcome) {
+      signal?.removeEventListener("abort", onAbort);
+      if ("error" in result) {
         // Join the client's bounded stop contract before rejecting acquisition.
         // Its 250ms terminate fallback is not a guarantee of a raw WS close event.
         void (async () => {
           try {
-            await client.stopAndWait({ timeoutMs: 1_000 });
+            const cleanup = () => client.stopAndWait({ timeoutMs: 1_000 });
+            await (wait.verifyCleanup ? wait.verifyCleanup(cleanup) : cleanup());
           } catch (cleanupError) {
             throw new GatewayTestClientCleanupError(
-              [outcome.error, cleanupError],
+              [result.error, cleanupError],
               "QA gateway fixture failed",
             );
           }
-          throw outcome.error;
+          throw result.error;
         })().catch(reject);
       } else {
-        resolve(outcome.client);
+        resolve(result.client);
       }
     };
     const client = new GatewayClient({
       ...options,
       onHelloOk: (hello) => {
+        if (state === "failed") {
+          return;
+        }
+        if (state === "pending" && signal?.aborted) {
+          settle({ error: signal.reason });
+          return;
+        }
         options.onHelloOk?.(hello);
         settle({ client });
       },
@@ -56,7 +71,9 @@ export async function acquireGatewayTestClient(
     if (wait.unrefTimeout) {
       timer.unref();
     }
+    signal?.addEventListener("abort", onAbort, { once: true });
     try {
+      signal?.throwIfAborted();
       client.start();
     } catch (error) {
       settle({ error });

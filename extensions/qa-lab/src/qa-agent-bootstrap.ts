@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa agent bootstrap behavior.
 import {
   DEFAULT_QA_AGENT_IDENTITY_MARKDOWN,
   readQaBootstrapScenarioCatalog,

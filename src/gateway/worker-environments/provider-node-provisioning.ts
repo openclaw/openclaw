@@ -1,4 +1,5 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type {
   WorkerLease,
   WorkerNodeEnrollment,
@@ -154,6 +155,9 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     const controller = new AbortController();
     let runtime: WorkerNodeRuntimePreparation | undefined;
     let pendingRuntime: Promise<WorkerNodeRuntimePreparation> | undefined;
+    let pendingInstallation: ReturnType<typeof prepareBundle> | undefined;
+    const prepareInstallation = () =>
+      (pendingInstallation ??= prepareBundle(preparedInstallation, signal));
     let enrollment: WorkerNodeEnrollment | undefined;
     let pending: Promise<WorkerNodeEnrollment> | undefined;
     const close = () => {
@@ -212,11 +216,17 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       }
     };
     return {
+      get installation() {
+        return pendingInstallation ?? preparedInstallation;
+      },
       prepareRuntime: prepareNodeRuntime
         ? async () => {
             assertRuntimeCurrent();
             pendingRuntime ??= (async () => {
-              const artifact = await prepareBundle(preparedInstallation, controller.signal);
+              const artifact = await racePromiseWithAbortSignal(
+                prepareInstallation(),
+                controller.signal,
+              );
               assertRuntimeCurrent();
               const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
               try {
@@ -250,7 +260,11 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           enrollment = prepared;
           return prepared;
         });
-        return await pending;
+        const prepared = await pending;
+        assertCurrent();
+        // Enrollment overlaps process-owned packaging; failure stays with lease bootstrap.
+        void prepareInstallation().catch(() => undefined);
+        return prepared;
       },
       close,
     };
@@ -261,7 +275,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     lease: NodeLease,
     provider: WorkerProvider,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
-    preparedInstallation?: WorkerInstallationArtifact,
+    preparedInstallation?: WorkerInstallationArtifact | Promise<WorkerInstallationArtifact>,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
     preparedWorkspace?: ReturnType<
       ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
@@ -308,7 +322,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (!options.ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
-      const artifact = await prepareBundle(preparedInstallation, cancellation?.signal);
+      const artifact = await prepareBundle(await preparedInstallation, cancellation?.signal);
       assertCurrent();
       if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
         throw new Error("Worker bundle differs from its admitted preparation");
@@ -319,6 +333,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
         prewarm: record.profileSnapshot.executionMode !== "remote-exec",
         signal: cancellation?.signal,
+        assertCurrent,
       });
       assertCurrent();
       if (preparation) {

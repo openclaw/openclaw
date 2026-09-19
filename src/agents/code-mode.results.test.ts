@@ -16,6 +16,30 @@ import { jsonResult } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
 
+it.each([
+  { name: "BigInt", value: "12n" },
+  { name: "cycle", value: "(() => { const value = {}; value.self = value; return value; })()" },
+  {
+    name: "throwing serializer",
+    value: '({ toJSON() { throw new Error("synthetic input serialization failed"); } })',
+  },
+])("rejects $name save arguments without silently storing null", async ({ value }) => {
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+  const result = resultDetails(
+    await h.tools[0]!.execute("invalid-save", {
+      code: `let error;
+        try { await results.save(${value}); } catch (caught) { error = caught.message; }
+        const valid = await results.save({ toJSON() { return { ok: true }; } });
+        return { error, loaded: await results.load(valid.id) };`,
+    }),
+  );
+  expect(result).toMatchObject({
+    status: "completed",
+    value: { error: expect.any(String), loaded: { ok: true } },
+  });
+});
+
 it("retains a fetched result across cells without refetching or sharing mutable objects", async () => {
   const rows = Array.from({ length: 500 }, (_, id) => ({ id, paid: id % 2 === 0, amount: 4 }));
   const invoices = pluginToolWithExecute("invoices", "Read invoices", async () => jsonResult(rows));

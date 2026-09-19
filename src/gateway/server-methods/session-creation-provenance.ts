@@ -1,8 +1,10 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
 } from "../../config/sessions/session-entry-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { AgentRuntimeSpawnModelAutoSelection } from "../agent-runtime-session-spawn-context.js";
 
 export type TrustedSessionCreation = {
   skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
@@ -14,12 +16,16 @@ export type TrustedSessionCreation = {
   requesterSessionKey?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
+  /** Prepared parent selection; never accepted from public creation parameters. */
+  resolvedModel?: ProviderModelRef;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
   inheritedToolPolicy?: {
     version: 1;
     allow: string[];
     deny: string[];
   };
+  /** Config-selected model provenance from the trusted spawning tool. */
+  spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
 };
 
 /**
@@ -55,6 +61,15 @@ export function resolveOperatorSessionCreation(
           }
         : {}),
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
+      ...(agentRuntimeIdentity.sessionSpawnContext.resolvedModel
+        ? { resolvedModel: agentRuntimeIdentity.sessionSpawnContext.resolvedModel }
+        : {}),
+      ...(agentRuntimeIdentity.sessionSpawnContext.spawnModelAutoSelection
+        ? {
+            spawnModelAutoSelection:
+              agentRuntimeIdentity.sessionSpawnContext.spawnModelAutoSelection,
+          }
+        : {}),
     };
   }
   const profileId = client?.authenticatedUserProfile?.profileId;

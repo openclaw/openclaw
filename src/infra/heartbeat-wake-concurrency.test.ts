@@ -244,14 +244,8 @@ describe("heartbeat wake target concurrency", () => {
 
   it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
     vi.useFakeTimers();
-    let finishOldWake: (() => void) | undefined;
-    let finishNewWake: (() => void) | undefined;
-    const oldWakeFinished = new Promise<void>((resolve) => {
-      finishOldWake = resolve;
-    });
-    const newWakeFinished = new Promise<void>((resolve) => {
-      finishNewWake = resolve;
-    });
+    const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
+    const { promise: newWakeFinished, resolve: finishNewWake } = createDeferred();
     let oldSignal: AbortSignal | undefined;
     let newSignal: AbortSignal | undefined;
     const oldHandler = vi.fn(async () => {

@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, vi } from "vitest";
+import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
-import { createWorkerArtifactTest, workerProbe } from "./vitest-worker-artifacts.test-support.js";
+import {
+  createControlledWorkerCompiler,
+  createWorkerArtifactTest,
+} from "./vitest-worker-artifacts.test-support.js";
+import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-support.js";
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
-// Each sequence rebuilds all workers; avoid competing builds within one runner.
+// Each sequence owns its cache and two generations; keep their observations ordered.
+// Full SQLite/archive/TUI/setup/KNN execution stays in worker-artifacts source/borrower tests.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
     "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
@@ -15,11 +21,14 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
       workerArtifacts.fixtureLifetime.run(async () => {
         const { runtime, startBorrower } = workerArtifacts.createFixtureCommands();
         const directory = workerArtifacts.fixtureDirectory();
-        const { config, value, configuredValue, parent, cacheDirectory } = workerProbe(
+        const { config, value, configuredValue, parent, cacheDirectory } = workerTransformProbe(
           directory,
-          false,
-          "auto",
           layout,
+        );
+        const controlled = createControlledWorkerCompiler(
+          directory,
+          process.env,
+          process.versions.bun ? "bun" : "node",
         );
         const readLines = (name: string) =>
           fs.readFileSync(path.join(directory, name), "utf8").trim().split("\n");
@@ -32,7 +41,22 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           );
         };
         const generations = new Set<string>();
-        const owner = createVitestWorkerRun();
+        const owner = createVitestWorkerRun(controlled.env);
+        const runManaged = managedChild.runManagedCommand;
+        let redirectedCompilers = 0;
+        // The second owner lives in this process; its child env cannot intercept its spawn.
+        const compilerLaunch = vi
+          .spyOn(managedChild, "runManagedCommand")
+          .mockImplementation((options) => {
+            if (
+              options.args?.[0] === path.join(root, "scripts/lib/vitest-worker-compiler.mts") &&
+              options.args[1] === owner.descriptor.directory
+            ) {
+              redirectedCompilers += 1;
+              return runManaged({ ...options, args: controlled.args(owner.descriptor.directory) });
+            }
+            return runManaged(options);
+          });
         const preparationLog = vi.spyOn(console, "error");
         try {
           const launch = async (
@@ -44,14 +68,18 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             const reuse = mode === "compiled" && generations.size > 0;
             const result = reuse
               ? await startBorrower(owner, args).result
-              : await runtime([
-                  mode === "compiled"
-                    ? process.versions.bun
-                      ? "scripts/run-vitest-child.mts"
-                      : "scripts/run-vitest.mjs"
-                    : "node_modules/vitest/vitest.mjs",
-                  ...args,
-                ]);
+              : await runtime(
+                  [
+                    mode === "compiled"
+                      ? process.versions.bun
+                        ? "scripts/run-vitest-child.mts"
+                        : "scripts/run-vitest.mjs"
+                      : "node_modules/vitest/vitest.mjs",
+                    ...args,
+                  ],
+                  root,
+                  controlled.env,
+                );
             expect(result.code, result.stderr + result.stdout).toBe(0);
             const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
             const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);
@@ -70,16 +98,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                 path.join(root, ".artifacts", "vitest-workers"),
               );
               expect(fileURLToPath(generation)).toBe(
-                path.join(generationDirectory, "dist/infra/sqlite-readonly-location.worker.js"),
-              );
-              expect(observed.args[0]).toBe(
-                path.join(generationDirectory, "dist/infra/sqlite-readonly-location.worker.js"),
-              );
-              expect(fileURLToPath(observed.knn)).toBe(
-                path.join(
-                  generationDirectory,
-                  "dist/extensions/memory-core/memory-search-knn.child.js",
-                ),
+                path.join(generationDirectory, "dist/infra/runtime-process-entrypoints.js"),
               );
               // The direct invocation disposes immediately; shared borrowers retain
               // their owner's unchanged generation until the whole sequence finishes.
@@ -87,18 +106,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             } else {
               expect(result.stderr).not.toContain("[vitest-workers] prepared");
               expect(fileURLToPath(generation)).toBe(
-                path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
-              );
-              if (process.versions.bun) {
-                expect(observed.args[0]).toBe(
-                  path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
-                );
-              } else {
-                expect(observed.args[0]).toBe("--import");
-                expect(observed.args[1]).toMatch(/^file:\/\//);
-              }
-              expect(fileURLToPath(observed.knn)).toBe(
-                path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
+                path.join(root, "src/infra/runtime-process-entrypoints.ts"),
               );
             }
             console.log(
@@ -138,9 +146,28 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               String(line).startsWith("[vitest-workers] prepared"),
             ),
           ).toHaveLength(1);
+          const compilers = controlled.read();
+          expect(redirectedCompilers).toBe(1);
+          expect(compilers).toHaveLength(2);
+          expect(new Set(compilers.map(({ pid }) => pid)).size).toBe(2);
+          expect(new Set(compilers.map(({ directory }) => path.resolve(directory)))).toEqual(
+            new Set(
+              [...generations].map((generation) =>
+                path.resolve(fileURLToPath(new URL("../../", generation))),
+              ),
+            ),
+          );
+          for (const compiler of compilers) {
+            expect(compiler).toMatchObject({ inputs: 2, outputs: 2 });
+          }
+          console.log("Controlled compiler receipts", JSON.stringify(compilers));
         } finally {
-          preparationLog.mockRestore();
-          await owner.dispose();
+          try {
+            await owner.dispose();
+          } finally {
+            compilerLaunch.mockRestore();
+            preparationLog.mockRestore();
+          }
         }
         for (const generation of generations) {
           expect(fs.existsSync(new URL("../../", generation))).toBe(false);

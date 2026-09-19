@@ -645,6 +645,11 @@ describe("Doctor plugin persistence", () => {
               env: process.env,
               lease,
               snapshotRead,
+              expectedIdentity: resolveMigrationCheckpointIdentity({
+                snapshot: snapshotRead.snapshot,
+                baseConfig: snapshotRead.snapshot.sourceConfig,
+                pluginMigrationFingerprint: snapshotRead.pluginMigrationFingerprint,
+              }),
               measure: async (_name, operation) => await operation(),
               readPersistedSnapshot: async () => {
                 await writeVersion("2.0.0");

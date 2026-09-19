@@ -9,11 +9,13 @@ import {
   resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { copyInternalToolResultState } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -21,7 +23,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
-  withDynamicToolTerminalResolution,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
@@ -37,7 +38,7 @@ export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 
 /** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-/** Hard cap for per-call Codex dynamic tool timeout overrides. */
+/** Hard cap for ordinary per-call Codex dynamic tool timeout overrides. */
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
@@ -173,18 +174,29 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalResolution = params.observeToolTerminal?.({
       toolCallId: params.call.callId,
       toolName: params.call.tool,
-      result: response,
+      result: copyInternalToolResultState(response, {
+        ...response,
+        details: response.transcriptDetails,
+      }),
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
       ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
+      replaySafe: ownerKey ? false : response.replaySafe,
       ...(observedExecutionStarted !== undefined
         ? { executionStarted: observedExecutionStarted }
         : {}),
       outcome: response.success ? "success" : "failure",
       ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
     });
-    return withDynamicToolTerminalResolution(response, terminalResolution);
+    if (terminalResolution) {
+      response.terminalResolution = terminalResolution;
+      response.executionStarted = terminalResolution.executionStarted;
+      response.executedArguments =
+        terminalResolution.executedArguments ?? response.executedArguments;
+      response.sideEffectEvidence = terminalResolution.sideEffectEvidence || undefined;
+    }
+    return response;
   };
   // The host observer replaces these conservative facts with exact boundary evidence.
   // Direct/older callers without one must still treat a raced terminal as dispatched.
@@ -400,7 +412,7 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
 
 /** Returns true when a non-async result should block terminal-release shortcuts. */
 export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
-  response: CodexDynamicToolCallResponse,
+  response: CodexDynamicToolRuntimeResponse,
 ): boolean {
   return response.asyncStarted !== true;
 }
@@ -506,8 +518,21 @@ export function hasPendingDynamicToolTerminalDiagnostic(params: {
 export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
+  toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
 }): number {
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (params.call.tool === "node_exec") {
+    const executionTimeoutMs = params.toolBridge?.availableTools
+      .find((tool) => tool.name === params.call.tool)
+      ?.getExecutionTimeoutMs?.(params.call.arguments);
+    if (executionTimeoutMs !== undefined) {
+      // Foreground node execution owns its command and transport budgets.
+      return addSafeTimeoutDelayGraceMs(
+        executionTimeoutMs,
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      );
+    }
+  }
   if (
     params.call.tool === "openclaw" ||
     params.call.tool === "ask_user" ||
@@ -634,10 +659,6 @@ function readConfiguredDynamicToolTimeoutMs(
           CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
       ),
     );
-  }
-
-  if (toolName === "message") {
-    return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
 
   return undefined;

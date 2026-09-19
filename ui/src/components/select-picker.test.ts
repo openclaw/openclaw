@@ -263,6 +263,7 @@ describe("renderPicker", () => {
       onOpen,
     });
     const labels = p.rows().map((row) => row.querySelector<HTMLElement>(".picker-select__label")!);
+    expect(p.rows().map((row) => row.getAttribute("title"))).toEqual(["plain", "styled"]);
     expect(labels[0]?.hasAttribute("style")).toBe(false);
     expect(labels[1]?.style.fontFamily).toBe("Georgia");
     expect(onOpen).not.toHaveBeenCalled();

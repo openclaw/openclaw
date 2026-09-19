@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
 import {
@@ -344,6 +345,7 @@ describe("history descriptor observation order", () => {
     const first = h.begin(h.makeState());
     const current = { ...initial, updatedAt: 5, label: "Newer managed read" };
     await h.refreshManaged(current);
+    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
     const late = h.begin(h.makeState());
     expect(h.reads).toHaveLength(1);
     h.reads[0]!.pending.resolve(
@@ -351,10 +353,10 @@ describe("history descriptor observation order", () => {
     );
     await Promise.all([first, late]);
 
-    expect(h.managedRow()?.label).toBe(current.label);
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-      initial.label,
-    );
+    // Both projections must retain the accepted managed read, not the late history descriptor.
+    expect(h.managedRow()).toMatchObject(current);
+    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
+    expect(h.sessions.state.result?.sessions.map((row) => row.key)).toEqual([key, sibling.key]);
   });
 
   it.each(["chat.history", "chat.startup"] as const)(
@@ -453,7 +455,7 @@ describe("history descriptor observation order", () => {
     async (retried) => {
       const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
       const lifecycle = new AbortController();
-      const router = createRouter<"chat", ApplicationContext, null, ChatRouteData>({
+      const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
         routes: [
           definePage({
             id: "chat",

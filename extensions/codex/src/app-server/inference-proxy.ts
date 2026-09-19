@@ -9,7 +9,7 @@ import {
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import WebSocket, { WebSocketServer, type RawData } from "ws";
+import { type RawData, WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { createCodexInferenceContext } from "./inference-context.js";
 import { isJsonObject } from "./protocol.js";
 

@@ -1,255 +1,61 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
-import type { LegacyConfigIssue } from "../config/types.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
+  type DegradedPlugin,
 } from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import {
+  preflightStateMigrationMocks,
+  resetStateMigrationPreflightMocks,
+} from "./doctor-config-preflight.state-migration.test-harness.js";
 import {
   expectMigrationIdentity,
   getMaybeRepairPluginOpenClawHostLinksMock,
   makePreflightConfigSnapshot,
   makeStartupConvergenceResult,
   makeQuarantinedPluginRepairConvergence,
-  makeStateMigrationResult,
   queueConfigSnapshot,
+  registerStartupPluginConvergenceTests,
   stateCheckpointOptions,
   startupCheckpointOptions,
-  type StartupConvergenceResult,
-  type StartupSmokeFailure,
-  type StateMigrationResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
 
 const maybeRepairPluginOpenClawHostLinks = getMaybeRepairPluginOpenClawHostLinksMock();
-
-const autoMigrateLegacyStateDir = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult([], false)),
-);
-const autoMigrateLegacyState = vi.hoisted(() =>
-  vi.fn(
-    async (_params?: {
-      onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
-    }): Promise<StateMigrationResult> => makeStateMigrationResult(["imported"]),
-  ),
-);
-const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["plugin-imported"])),
-);
-const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["task-imported"])),
-);
-const migrateLegacyConfigMachineState = vi.hoisted(() =>
-  vi.fn(() => ({ changes: [], warnings: [] })),
-);
-const migrateLegacyMediaPersistence = vi.hoisted(() =>
-  vi.fn(() => ({ changes: [], warnings: [] })),
-);
-const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<{
-      changes: string[];
-      warnings: string[];
-      codexRuntimePolicyTargets?: Array<{ modelRef: string }>;
-    }> => ({ changes: ["cron-imported"], warnings: [] }),
-  ),
-);
-const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
-  vi.fn(async () => ({ targets: [] as Array<{ modelRef: string }>, warnings: [] as string[] })),
-);
-const readMigrationCheckpointStatus = vi.hoisted(() =>
-  vi.fn<() => "stale" | "state-current" | "startup-current">(() => "startup-current"),
-);
-const startupMigrationLeaseHeartbeat = vi.hoisted(() => vi.fn());
-const startupMigrationLeaseRelease = vi.hoisted(() => vi.fn());
-const startupMigrationLeaseAssertOwnedInTransaction = vi.hoisted(() => vi.fn());
-const startupMigrationLease = vi.hoisted(() => ({
-  assertOwnedInTransaction: startupMigrationLeaseAssertOwnedInTransaction,
-  heartbeat: startupMigrationLeaseHeartbeat,
-  owner: "startup-test-owner",
-  release: startupMigrationLeaseRelease,
-}));
-const acquireStartupMigrationLeaseWithWait = vi.hoisted(() =>
-  vi.fn(async (_params: { env: NodeJS.ProcessEnv }) => startupMigrationLease),
-);
-const recordSuccessfulStateMigrations = vi.hoisted(() => vi.fn());
-const recordSuccessfulStartupMigrations = vi.hoisted(() => vi.fn());
-const runPostCorePluginConvergence = vi.hoisted(() =>
-  vi.fn(async (): Promise<StartupConvergenceResult> => ({
-    changes: [],
-    notices: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: {},
-  })),
-);
-const runActivePluginPayloadSmokeCheck = vi.hoisted(() =>
-  vi.fn(async () => ({ checked: [] as string[], failures: [] as StartupSmokeFailure[] })),
-);
-const planStartupPluginConvergence = vi.hoisted(() =>
-  vi.fn(async () => ({ required: true, installRecords: {} })),
-);
-const planPristineStartupStateMigrations = vi.hoisted(() =>
-  vi.fn(() => ({
-    skipAllStateMigrations: false,
-    skipCoreStateMigrations: false,
-  })),
-);
-const readConfigFileSnapshot = vi.hoisted(() =>
-  vi.fn(async () => ({
-    exists: true,
-    valid: true,
-    config: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
-    sourceConfig: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
-    parsed: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
-    legacyIssues: [] as Array<{ path: string; message: string }>,
-    warnings: [] as Array<{ path: string; message: string }>,
-    issues: [] as Array<{ path: string; message: string }>,
-  })),
-);
-const pluginMigrationFingerprint = vi.hoisted(() =>
-  vi.fn((_allowCurrentPluginMetadata?: boolean) => "plugin-migrations"),
-);
-type ConfigSnapshotWithPluginMetadataFixture = {
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "configFingerprint" | "policyHash">;
-};
-const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
-  vi.fn<
-    (options?: {
-      allowCurrentPluginMetadata?: boolean;
-    }) => Promise<ConfigSnapshotWithPluginMetadataFixture>
-  >(async (options) => {
-    const snapshot = await readConfigFileSnapshot();
-    return {
-      snapshot,
-      pluginMetadataSnapshot: {
-        configFingerprint: pluginMigrationFingerprint(options?.allowCurrentPluginMetadata),
-        policyHash: resolveInstalledPluginIndexPolicyHash(snapshot.sourceConfig),
-      },
-    };
-  }),
-);
-const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
-const addDoctorLegacyIssues = vi.hoisted(() => vi.fn(<T>(snapshot: T): T => snapshot));
-const runWithPluginMetadataSnapshot = vi.hoisted(() =>
-  vi.fn((_scope: unknown, run: () => unknown) => run()),
-);
-const note = vi.hoisted(() => vi.fn());
-
-vi.mock("../infra/state-migrations.doctor.js", () => ({
-  autoMigrateLegacyState,
-}));
-
-vi.mock("../infra/state-migrations.state-dir.js", () => ({
+const {
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyTaskStateSidecars,
-}));
-
-vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
+  autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
-}));
-
-vi.mock("../infra/state-migrations.config-machine-state.js", () => ({
-  migrateLegacyConfigMachineState,
-}));
-
-vi.mock("../infra/state-migrations.media-persistence.js", () => ({
-  migrateLegacyMediaPersistence,
-}));
-
-vi.mock("./doctor/cron/legacy-repair.js", () => ({
-  collectCronCodexRuntimePolicyTargetsReadOnly,
+  autoMigrateLegacyTaskStateSidecars,
   repairLegacyCronStoreWithoutPrompt,
-}));
-
-vi.mock("../infra/startup-migration-checkpoint.js", () => ({
-  acquireStartupMigrationLeaseWithWait,
+  collectCronCodexRuntimePolicyTargetsReadOnly,
   readMigrationCheckpointStatus,
+  startupMigrationLeaseHeartbeat,
+  startupMigrationLeaseRelease,
+  startupMigrationLease,
+  acquireStartupMigrationLeaseWithWait,
   recordSuccessfulStateMigrations,
   recordSuccessfulStartupMigrations,
-}));
-
-vi.mock("../plugins/active-payload-verification.js", () => ({
-  runActivePluginPayloadSmokeCheck,
-}));
-
-vi.mock("./doctor/shared/post-core-plugin-convergence.js", () => ({
   runPostCorePluginConvergence,
-}));
-
-vi.mock("./doctor/shared/startup-plugin-convergence-plan.js", () => ({
+  runActivePluginPayloadSmokeCheck,
   planStartupPluginConvergence,
-}));
-
-vi.mock("./doctor/shared/pristine-startup-state.js", () => ({
   planPristineStartupStateMigrations,
-}));
-
-vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot,
+  pluginMigrationFingerprint,
   readConfigFileSnapshotWithPluginMetadata,
-  recoverConfigFromJsonRootSuffix: vi.fn(),
-  recoverConfigFromLastKnownGood: vi.fn(),
-}));
-
-vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
-  addDoctorLegacyIssues,
-  findDoctorLegacyConfigIssues,
-}));
-
-vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
-  createDoctorPluginMetadataSnapshotScope: (params: {
-    getBaseSnapshot: () => PluginMetadataSnapshot | undefined;
-  }) => ({
-    run: (_scope: unknown, operation: () => unknown) =>
-      runWithPluginMetadataSnapshot(params.getBaseSnapshot(), operation),
-    invalidate: vi.fn(),
-  }),
-}));
-
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
-
+  runWithPluginMetadataSnapshot,
+  note,
+  recordDeferredPluginMigrations,
+} = preflightStateMigrationMocks;
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 
 describe("runDoctorConfigPreflight state migration", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    acquireStartupMigrationLeaseWithWait.mockResolvedValue(startupMigrationLease);
-    pluginMigrationFingerprint.mockReset();
-    pluginMigrationFingerprint.mockReturnValue("plugin-migrations");
-    findDoctorLegacyConfigIssues.mockReset();
-    findDoctorLegacyConfigIssues.mockReturnValue([]);
-    setActiveDegradedPlugins([]);
-    readMigrationCheckpointStatus.mockReset();
-    readMigrationCheckpointStatus.mockReturnValue("startup-current");
-    runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
-    planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
-    planPristineStartupStateMigrations.mockReturnValue({
-      skipAllStateMigrations: false,
-      skipCoreStateMigrations: false,
-    });
-    autoMigrateLegacyStateDir.mockResolvedValue(makeStateMigrationResult([], false));
-    autoMigrateLegacyState.mockResolvedValue(makeStateMigrationResult(["imported"]));
-    autoMigrateLegacyPluginDoctorState.mockResolvedValue(
-      makeStateMigrationResult(["plugin-imported"]),
-    );
-    autoMigrateLegacyTaskStateSidecars.mockResolvedValue(
-      makeStateMigrationResult(["task-imported"]),
-    );
-    repairLegacyCronStoreWithoutPrompt.mockResolvedValue({
-      changes: ["cron-imported"],
-      warnings: [],
-    });
-    collectCronCodexRuntimePolicyTargetsReadOnly.mockReset();
-    collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValue({ targets: [], warnings: [] });
-  });
+  beforeEach(resetStateMigrationPreflightMocks);
 
   it("forwards config snapshot phase measurement", async () => {
     const measure: ConfigSnapshotReadMeasure = async (_name, run) => await run();
@@ -281,6 +87,11 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(measuredStages).toEqual([
       "doctor.config-preflight.state-migrations-import",
       "doctor.config-preflight.state-dir-migrations",
+      "doctor.config-preflight.config-snapshot",
+      "doctor.config-preflight.plugin-plan-import",
+      "doctor.config-preflight.plugin-plan",
+      "doctor.config-preflight.plugin-convergence-import",
+      "doctor.config-preflight.plugin-convergence",
       "doctor.config-preflight.config-snapshot",
       "doctor.config-preflight.cron-repair-import",
       "doctor.config-preflight.cron-repair",
@@ -333,7 +144,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     await expect(runDoctorConfigPreflight(stateCheckpointOptions)).resolves.toBeDefined();
 
     expect(autoMigrateLegacyState).toHaveBeenCalledTimes(needed ? 1 : 0);
-    expect(planStartupPluginConvergence).not.toHaveBeenCalled();
+    expect(planStartupPluginConvergence).toHaveBeenCalledTimes(needed ? 1 : 0);
     if (needed && warnings.length === 0) {
       expect(recordSuccessfulStateMigrations).toHaveBeenCalledWith({
         env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
@@ -375,14 +186,14 @@ describe("runDoctorConfigPreflight state migration", () => {
       beforeStateMigrations,
     });
 
-    expect(beforeStateMigrations).toHaveBeenCalledTimes(2);
+    expect(beforeStateMigrations).toHaveBeenCalledTimes(3);
     const guardOrder = beforeStateMigrations.mock.invocationCallOrder[0] ?? 0;
     const firstMutationOrder = autoMigrateLegacyStateDir.mock.invocationCallOrder[0] ?? 0;
     expect(firstMutationOrder).toBeGreaterThan(guardOrder);
-    const configGuardOrder = beforeStateMigrations.mock.invocationCallOrder[1] ?? 0;
+    const configGuardOrder = beforeStateMigrations.mock.invocationCallOrder[2] ?? 0;
     const configMutationOrder = repairLegacyCronStoreWithoutPrompt.mock.invocationCallOrder[0] ?? 0;
     expect(configMutationOrder).toBeGreaterThan(configGuardOrder);
-    expect(beforeStateMigrations.mock.calls[1]?.[0]).toMatchObject({
+    expect(beforeStateMigrations.mock.calls[2]?.[0]).toMatchObject({
       valid: true,
       sourceConfig: { gateway: { mode: "local", port: 19091 } },
     });
@@ -399,7 +210,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("does not touch the startup checkpoint before the startup guard accepts", async () => {
@@ -526,7 +337,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
-    expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
+    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(3);
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
       migrateCodexModelRefs: false,
@@ -580,26 +391,14 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("pins startup plugin convergence without re-persisting the installed record snapshot", async () => {
-    readMigrationCheckpointStatus.mockReturnValue("stale");
-    const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-    process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.7.2-beta.7";
-
-    try {
-      await runDoctorConfigPreflight(startupCheckpointOptions);
-    } finally {
-      if (previousHostVersion === undefined) {
-        delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-      } else {
-        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousHostVersion;
-      }
-    }
-
-    expect(runPostCorePluginConvergence).toHaveBeenCalledWith({
-      cfg: { gateway: { mode: "local", port: 19091 } },
-      env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
-      compatibilityHostVersion: "2026.7.2-beta.7",
-    });
+  registerStartupPluginConvergenceTests({
+    runDoctorConfigPreflight,
+    readMigrationCheckpointStatus,
+    runPostCorePluginConvergence,
+    runActivePluginPayloadSmokeCheck,
+    recordSuccessfulStartupMigrations,
+    note,
+    startupEnv: () => acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
   });
 
   it("repairs managed host links before plugin state migration", async () => {
@@ -833,42 +632,132 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
   });
 
-  it("keeps ownerless install-record failures blocking", async () => {
+  it.each([false, true])(
+    "starts degraded with a missing plugin (host-link warning=%s)",
+    async (hostLinkWarning) => {
+      readMigrationCheckpointStatus.mockReturnValue("stale");
+      const snapshot = makePreflightConfigSnapshot({
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      });
+      runPostCorePluginConvergence.mockResolvedValueOnce(
+        makeStartupConvergenceResult({
+          errored: true,
+          warnings: [
+            ...(hostLinkWarning
+              ? [
+                  {
+                    reason: "Failed to repair installed OpenClaw host peer links: EACCES",
+                    message: "Failed to repair installed OpenClaw host peer links: EACCES",
+                    guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+                  },
+                ]
+              : []),
+            {
+              pluginId: "discord",
+              reason: "missing-install-path: install path missing",
+              message: 'Plugin "discord" has no install path.',
+              guidance: ["Run `openclaw update repair` to retry plugin repair."],
+            },
+          ],
+          smokeFailures: [
+            {
+              pluginId: "discord",
+              reason: "missing-install-path",
+              detail: "install path missing",
+            },
+          ],
+        }),
+      );
+
+      await readConfigFileSnapshot.withImplementation(
+        async () => snapshot,
+        async () => {
+          const result = await runDoctorConfigPreflight(startupCheckpointOptions);
+          expect(result.stateMigrationStepReceipts).toContainEqual(
+            expect.objectContaining({
+              id: "plugin:discord",
+              outcome: "deferred",
+              warnings: [expect.stringContaining('Run "openclaw update repair"')],
+            }),
+          );
+        },
+      );
+
+      expect(recordDeferredPluginMigrations).toHaveBeenCalledWith({
+        env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
+        pending: [expect.objectContaining({ pluginId: "discord" })],
+        expectedPending: [],
+      });
+      expect(listActiveDegradedPlugins()).toMatchObject([
+        {
+          pluginId: "discord",
+          state: "configured-unavailable",
+          diagnostic: { reason: "missing-install-path" },
+        },
+      ]);
+      expect(readStartupMigrationWarning()).toContain('Plugin "discord"');
+      if (hostLinkWarning) {
+        expect(readStartupMigrationWarning()).toContain(
+          "Failed to repair installed OpenClaw host peer links: EACCES",
+        );
+      }
+      expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves verified plugin quarantine while an older writable parent defers repair", async () => {
     readMigrationCheckpointStatus.mockReturnValue("stale");
     const snapshot = makePreflightConfigSnapshot({
       gateway: { mode: "local", port: 19091 },
       plugins: { entries: { discord: { enabled: true } } },
     });
-    runPostCorePluginConvergence.mockResolvedValueOnce(
-      makeStartupConvergenceResult({
-        errored: true,
-        warnings: [
-          {
-            pluginId: "discord",
-            reason: "missing-install-path: install path missing",
-            message: 'Plugin "discord" has no install path.',
-            guidance: ["Run `openclaw update repair` to retry plugin repair."],
-          },
-        ],
-        smokeFailures: [
-          {
-            pluginId: "discord",
-            reason: "missing-install-path",
-            detail: "install path missing",
-          },
-        ],
-      }),
-    );
+    const quarantined: DegradedPlugin = {
+      pluginId: "discord",
+      state: "configured-unavailable",
+      diagnostic: {
+        kind: "plugin-verification",
+        reason: "missing-package-json",
+        detail: "package.json is missing",
+        installPath: "/plugins/discord",
+      },
+    };
+    setActiveDegradedPlugins([quarantined]);
+    planStartupPluginConvergence.mockResolvedValueOnce({
+      required: true,
+      installRecords: { discord: { source: "npm", installPath: "/plugins/discord" } },
+    });
+    runActivePluginPayloadSmokeCheck.mockResolvedValueOnce({
+      checked: ["discord"],
+      failures: makeQuarantinedPluginRepairConvergence("discord", "discord").smokeFailures,
+    });
 
-    await readConfigFileSnapshot.withImplementation(
-      async () => snapshot,
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+      },
       () =>
-        expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-          'Plugin "discord" has no install path.',
+        readConfigFileSnapshot.withImplementation(
+          async () => snapshot,
+          async () => {
+            const result = await runDoctorConfigPreflight(startupCheckpointOptions);
+            expect(result.stateMigrationStepReceipts).toContainEqual(
+              expect.objectContaining({
+                id: "plugin:discord",
+                outcome: "deferred",
+                warnings: [expect.stringContaining('Run "openclaw update repair"')],
+              }),
+            );
+          },
         ),
     );
 
-    expect(listActiveDegradedPlugins()).toEqual([]);
+    expect(runActivePluginPayloadSmokeCheck).toHaveBeenCalledOnce();
+    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+    expect(listActiveDegradedPlugins()).toEqual([quarantined]);
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
   });
 
@@ -1013,7 +902,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it.each([undefined, "discord"])(
-    "blocks a repair warning outside quarantine (plugin=%s)",
+    "records plugin repair warnings without blocking startup (plugin=%s)",
     async (pluginId) => {
       readMigrationCheckpointStatus.mockReturnValue("stale");
       const snapshot = makePreflightConfigSnapshot({
@@ -1024,17 +913,23 @@ describe("runDoctorConfigPreflight state migration", () => {
         makeQuarantinedPluginRepairConvergence("slack", pluginId),
       );
 
-      await expect(
-        readConfigFileSnapshot.withImplementation(
-          async () => snapshot,
-          () => runDoctorConfigPreflight(startupCheckpointOptions),
-        ),
-      ).rejects.toThrow("npm package not found");
+      await readConfigFileSnapshot.withImplementation(
+        async () => snapshot,
+        async () => {
+          const result = await runDoctorConfigPreflight(startupCheckpointOptions);
+          if (pluginId) {
+            expect(result.stateMigrationStepReceipts).toContainEqual(
+              expect.objectContaining({ id: `plugin:${pluginId}`, outcome: "deferred" }),
+            );
+          }
+          expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+          expect(readStartupMigrationWarning()).toContain("npm package not found");
+        },
+      );
 
       expect(listActiveDegradedPlugins()).toEqual([
         expect.objectContaining({ pluginId: "slack", state: "configured-unavailable" }),
       ]);
-      expect(autoMigrateLegacyState).not.toHaveBeenCalled();
       expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
       expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
       expect(note).toHaveBeenCalledWith(
@@ -1083,7 +978,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       expect.stringContaining("Failed to update discord: npm package not found."),
       "Doctor warnings",
     );
-    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 

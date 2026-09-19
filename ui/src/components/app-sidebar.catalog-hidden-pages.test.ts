@@ -38,7 +38,7 @@ async function mountExpanded(request: ReturnType<typeof vi.fn>) {
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {
-      features: { methods: ["sessions.catalog.list"] },
+      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const mounted = await mountSidebar(gateway.gateway, createSessions("main", ["agent:main:main"]));
@@ -94,8 +94,9 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
           page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1, "Refreshed"),
         );
       });
-      const { sidebar } = await mountExpanded(request);
-      await vi.advanceTimersByTimeAsync(30_000);
+      const { sidebar, gateway } = await mountExpanded(request);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(200);
       const issuedBeforeHide = heldStage === "base" ? 4 : 5;
       expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
 
@@ -116,7 +117,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       const callsBeforeShow = request.mock.calls.length;
       setVisibility("visible");
       globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await settle(sidebar);
       expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
         baseCallsBeforeShow + 1,
@@ -137,8 +138,9 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockResolvedValueOnce(page(1, "Refreshed"))
       .mockResolvedValueOnce(page(2, "Refreshed"))
       .mockResolvedValueOnce(page(3, "Refreshed"));
-    const { sidebar } = await mountExpanded(request);
-    await vi.advanceTimersByTimeAsync(30_000);
+    const { sidebar, gateway } = await mountExpanded(request);
+    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    await vi.advanceTimersByTimeAsync(200);
     await settle(sidebar);
     expect(request).toHaveBeenCalledTimes(6);
     expect(sidebar.textContent).toContain("Refreshed 3");
@@ -185,8 +187,9 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockResolvedValueOnce(page(2))
       .mockResolvedValueOnce(page(3))
       .mockReturnValueOnce(pending.promise);
-    const { sidebar, provider } = await mountExpanded(request);
-    await vi.advanceTimersByTimeAsync(30_000);
+    const { sidebar, provider, gateway } = await mountExpanded(request);
+    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    await vi.advanceTimersByTimeAsync(200);
     expect(request).toHaveBeenCalledTimes(4);
     provider.remove();
     pending.resolve(page(1, "Retired"));
@@ -242,7 +245,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
 
       document.body.append(provider);
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await settle(sidebar);
       expect(observed.has(sidebar.querySelector(".sidebar-shell__body")!)).toBe(true);
       expect(request).toHaveBeenCalledTimes(4);
@@ -264,8 +267,9 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       .mockResolvedValueOnce(page(2))
       .mockResolvedValueOnce(page(3))
       .mockReturnValueOnce(pending.promise);
-    const { sidebar } = await mountExpanded(request);
-    await vi.advanceTimersByTimeAsync(30_000);
+    const { sidebar, gateway } = await mountExpanded(request);
+    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    await vi.advanceTimersByTimeAsync(200);
     setVisibility("hidden");
     pending.resolve(page(1, "Only remaining", ""));
     await settle(sidebar);

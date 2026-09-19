@@ -1382,6 +1382,7 @@
   grid-auto-columns: 1fr;
   width: 100%;
   min-width: 0;
+  border-color: var(--border-strong);
 }
 
 .workboard-filter-display .workboard-view-toggle .btn {
@@ -1993,13 +1994,11 @@
 
 .workboard-empty-state {
   display: grid;
+  align-content: center;
   place-items: center;
-  gap: 6px;
-  min-height: 280px;
-  padding: 32px 18px;
-  border: 1px dashed color-mix(in srgb, var(--border-strong) 58%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel-strong) 28%, transparent);
+  gap: var(--space-2);
+  min-height: 200px;
+  padding: var(--space-8) var(--space-4);
   color: var(--muted);
   text-align: center;
 }
@@ -2013,6 +2012,10 @@
   max-width: 420px;
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+.workboard-empty-state .btn {
+  margin-top: var(--space-2);
 }
 
 .workboard-card {
@@ -4443,6 +4446,17 @@ workboard-inline-text {
   border-block: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.workboard-board--list .workboard-column__header:has(.workboard-list-group__toggle:focus-visible) {
+  background: var(--bg-hover);
+}
+
+@media (hover: hover) {
+  .workboard-board--list .workboard-column__header:has(.workboard-list-group__toggle:hover) {
+    background: var(--bg-hover);
+  }
 }
 
 .workboard-board--list .workboard-column__header h2 {
@@ -4568,7 +4582,7 @@ workboard-inline-text {
   row-gap: 0;
   border: 0;
   border-bottom: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--radius-md);
   box-shadow: none;
 }
 
@@ -4582,9 +4596,17 @@ workboard-inline-text {
 }
 
 .workboard-board.workboard-board--list
-  .workboard-card--list:where(:not(.workboard-card--selected, .workboard-card--dragging)):hover {
-  border-radius: var(--radius-md);
+  .workboard-card--list:where(
+    :not(.workboard-card--selected, .workboard-card--dragging)
+  ):focus-within {
   background: var(--bg-hover);
+}
+
+@media (hover: hover) {
+  .workboard-board.workboard-board--list
+    .workboard-card--list:where(:not(.workboard-card--selected, .workboard-card--dragging)):hover {
+    background: var(--bg-hover);
+  }
 }
 
 .workboard-card--list > * {

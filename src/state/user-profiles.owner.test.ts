@@ -7,6 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
+import { listUserProfilesSync } from "./user-profile-list.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
 import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import {
@@ -14,7 +15,6 @@ import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   linkEmail,
-  listProfiles,
   setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
@@ -241,7 +241,7 @@ describe("gateway owner profiles", () => {
       id: owner.id,
       displayName: "User Chosen",
     });
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: owner.id, emails: [], displayName: "User Chosen" }),
     ]);
     expect(readUserProfileVersion()).toBe(version + 2);
@@ -269,7 +269,9 @@ describe("gateway owner profiles", () => {
       }, options),
     ).toThrow("rollback owner");
     expect(readUserProfileVersion()).toBe(version);
-    expect(listProfiles(options).some((profile) => profile.id === "gateway-owner")).toBe(false);
+    expect(listUserProfilesSync(options).some((profile) => profile.id === "gateway-owner")).toBe(
+      false,
+    );
 
     runOpenClawStateWriteTransaction(() => {
       ensureGatewayOwnerProfile("Local Owner", options);
@@ -288,7 +290,7 @@ describe("gateway owner profiles", () => {
       .run("gateway.local", "owner", existing.id, existing.createdAt);
 
     expect(ensureGatewayOwnerProfile("Host Name", options)).toEqual(existing);
-    expect(listProfiles(options)).toHaveLength(1);
+    expect(listUserProfilesSync(options)).toHaveLength(1);
   });
 
   it.each(["owner@gateway", "owner@gateway.local"])(

@@ -294,8 +294,9 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
           while (now() < deadline) {
             enrollmentSignal.throwIfAborted();
-            const live = options.store.ensureNodeEnrollment(owner.environmentId);
+            const live = options.store.get(owner.environmentId);
             if (
+              !live ||
               live.destroyRequestedAtMs !== null ||
               live.state !== "provisioning" ||
               live.provisionOperationId !== owner.provisionOperationId ||

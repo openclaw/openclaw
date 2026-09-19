@@ -149,36 +149,37 @@ export async function runEmbeddedAttemptPromptPhase(
 
   const promptStartedAt = Date.now();
 
-  const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
-    attempt,
-    activeSession,
-    sessionManager,
-    hookRunner,
-    hookAgentId: sessionAgentId,
-    diagnosticTrace,
-    isRawModelRun,
-    ...(orphanRepair ? { orphanRepair } : {}),
-    sessionAgentId,
-    runtimeModel: runtimeInfo.model,
-    systemPromptText,
-    setActiveSessionSystemPrompt,
-    applyPromptBuildToolsAllow: (toolsAllow) => {
-      return promptToolPolicy.apply(toolsAllow).activeToolNames;
-    },
-    setLeasedSteering: (lease) => {
-      leasedSteering = lease;
-    },
-  });
-  if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
-    setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
-    skipPromptSubmission = true;
-    log.warn(`[tools] ${prepared.toolCatalog.emptyExplicitToolAllowlistError.message}`);
-  }
-  const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
-    promptAssembly;
-  leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
-
+  let transcriptLeafId: string | null = null;
   try {
+    const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
+      attempt,
+      activeSession,
+      sessionManager,
+      hookRunner,
+      hookAgentId: sessionAgentId,
+      diagnosticTrace,
+      isRawModelRun,
+      ...(orphanRepair ? { orphanRepair } : {}),
+      sessionAgentId,
+      runtimeModel: runtimeInfo.model,
+      systemPromptText,
+      setActiveSessionSystemPrompt,
+      applyPromptBuildToolsAllow: (toolsAllow) => {
+        return promptToolPolicy.apply(toolsAllow).activeToolNames;
+      },
+      setLeasedSteering: (lease) => {
+        leasedSteering = lease;
+      },
+    });
+    if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
+      setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
+      skipPromptSubmission = true;
+      log.warn(`[tools] ${prepared.toolCatalog.emptyExplicitToolAllowlistError.message}`);
+    }
+    const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
+    transcriptLeafId = promptAssembly.transcriptLeafId;
+    leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
+
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,

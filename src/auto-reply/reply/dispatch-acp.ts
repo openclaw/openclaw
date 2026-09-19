@@ -316,6 +316,7 @@ async function finalizeAcpTurnOutput(params: {
   ttsAccountId?: string;
   shouldDeferVisibleTextForTts: boolean;
   shouldEmitResolvedIdentityNotice: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<boolean> {
   const ttsMode = resolveConfiguredTtsMode(params.cfg, {
     agentId: params.agentId,
@@ -344,6 +345,9 @@ async function finalizeAcpTurnOutput(params: {
   if (!shouldDeferVisibleTextForTts) {
     await params.delivery.settleVisibleText();
   }
+  if (params.abortSignal?.aborted) {
+    return false;
+  }
   let queuedFinal =
     params.delivery.hasPendingAnswerDelivery() ||
     params.delivery.hasPendingFinalTtsMedia() ||
@@ -358,6 +362,9 @@ async function finalizeAcpTurnOutput(params: {
   ) {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
+      if (params.abortSignal?.aborted) {
+        return queuedFinal;
+      }
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
         payload: { text: accumulatedBlockTtsText },
         cfg: params.cfg,
@@ -406,15 +413,8 @@ async function finalizeAcpTurnOutput(params: {
 
   // Some ACP parent surfaces only expose terminal replies, so block routing alone is not enough
   // to prove the final result was visible to the user.
-  const textFallback = params.delivery.getBlockTextForFallback();
-  if (ttsMode !== "all" && textFallback.trim()) {
-    const delivered = await params.delivery.deliver(
-      "final",
-      { text: textFallback },
-      { skipTts: true, transcriptSource: { kind: "fallback" } },
-    );
-    queuedFinal = queuedFinal || delivered;
-  }
+  queuedFinal =
+    (await params.delivery.recoverBlockText({ onlyUndelivered: ttsMode === "all" })) || queuedFinal;
 
   if (params.shouldEmitResolvedIdentityNotice) {
     const { readAcpSessionEntry } = await loadDispatchAcpManagerRuntime();
@@ -650,22 +650,8 @@ export async function tryDispatchAcpReplyCore(params: {
     delivery.applyRoutedCounts(counts);
     return { queuedFinal: queuedNotice, counts };
   }
-  const deliverDeferredTextFallback = async (): Promise<boolean> => {
-    if (!shouldDeferVisibleTextForTts) {
-      return false;
-    }
-    const text = delivery.getBlockTextForFallback();
-    return text.trim()
-      ? await delivery.deliver(
-          "final",
-          { text },
-          {
-            skipTts: true,
-            transcriptSource: { kind: "fallback" },
-          },
-        )
-      : false;
-  };
+  const deliverDeferredTextFallback = async (): Promise<boolean> =>
+    shouldDeferVisibleTextForTts ? await delivery.recoverBlockText() : false;
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -1042,6 +1028,7 @@ export async function tryDispatchAcpReplyCore(params: {
     });
 
     await projector.flush(true);
+    await delivery.flushBlockText();
     if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
       queuedFinal =
         (await finalizeAcpTurnOutput({
@@ -1055,6 +1042,7 @@ export async function tryDispatchAcpReplyCore(params: {
           ttsAccountId: effectiveDispatchAccountId,
           shouldDeferVisibleTextForTts,
           shouldEmitResolvedIdentityNotice,
+          abortSignal: params.abortSignal,
         })) || queuedFinal;
     }
     // Recheck cancellation after final delivery settles so a late abort keeps
@@ -1091,6 +1079,7 @@ export async function tryDispatchAcpReplyCore(params: {
     });
     emitAuditError(acpError);
     await projector.flush(true);
+    await delivery.flushBlockText();
     queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
     await maybeUnbindStaleBoundConversations({
       targetSessionKey: canonicalSessionKey,

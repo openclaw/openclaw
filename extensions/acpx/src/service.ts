@@ -144,6 +144,10 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
 
   return {
     ...createLazyAcpRuntimeProxy(resolveRuntime),
+    async shutdown() {
+      await runtimePromise;
+      await runtime?.shutdown();
+    },
     isHealthy() {
       return runtime?.isHealthy() ?? false;
     },
@@ -471,6 +475,7 @@ export function createAcpxRuntimeService(
       lifecycleRevision += 1;
       if (runtime) {
         params.backendLifecycle.retract(runtime);
+        await runtime.shutdown();
       }
       runtime = null;
     },

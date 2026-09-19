@@ -6,10 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  listSessionEntriesReadOnly,
-  type SessionEntrySummary,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -19,8 +16,10 @@ import type {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { prepareSessionRowSelection } from "../session-utils-list.js";
 
 export type SessionCatalogInstances = Map<
   string,
@@ -42,9 +41,13 @@ type SessionCatalogRequestEntrySnapshot = {
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
+  projection: SessionRowProjection;
   /** Bound one delivery's lookups; provider planning retains the full snapshot. */
   sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
+  if (params.projection.needsMaterialization) {
+    throw new Error("Await session projection materialization before capturing catalog entries");
+  }
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
@@ -76,16 +79,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       if (frozen) {
         return [];
       }
+      const entries = selectedKeysByAgentId
+        ? [...(selectedKeysByAgentId.get(agentId) ?? [])].flatMap((key) =>
+            // An empty canonical alias must not become an unscoped projection query.
+            key ? prepareSessionRowSelection(params.projection, { agentId }, { key }).entries : [],
+          )
+        : prepareSessionRowSelection(params.projection, { agentId }).entries;
       entriesByAgentId.set(
         agentId,
-        listSessionEntriesReadOnly({
-          agentId,
-          clone: false,
-          projection: "list",
-          ...(selectedKeysByAgentId
-            ? { sessionKeys: [...(selectedKeysByAgentId.get(agentId) ?? [])] }
-            : {}),
-        }),
+        entries.map(([sessionKey, entry]) => ({ sessionKey, entry })),
       );
     }
     return entriesByAgentId.get(agentId) ?? [];

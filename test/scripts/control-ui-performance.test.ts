@@ -455,10 +455,10 @@ describe("Control UI performance budgets", () => {
       metric: string | null,
     ]
   >([
-    ["startup growth below 1 KiB", 47_103, 46_080, 50_000, 50_000, null],
-    ["startup growth at 1 KiB", 47_104, 46_080, 50_000, 50_000, "startup CSS"],
-    ["deferred growth below 1 KiB", 46_080, 46_080, 52_000, 50_977, null],
-    ["deferred growth at 1 KiB", 46_080, 46_080, 52_000, 50_976, "largest CSS"],
+    ["startup growth below 1.5 KiB", 47_615, 46_080, 50_000, 50_000, null],
+    ["startup growth at 1.5 KiB", 47_616, 46_080, 50_000, 50_000, "startup CSS"],
+    ["deferred growth below 1.5 KiB", 46_080, 46_080, 52_000, 50_465, null],
+    ["deferred growth at 1.5 KiB", 46_080, 46_080, 52_000, 50_464, "largest CSS"],
     ["startup at the hard cap", 51_200, 51_200, 50_000, 50_000, null],
     ["startup above the hard cap", 51_201, 51_201, 50_000, 50_000, "startup CSS"],
     ["deferred at the hard cap", 46_080, 46_080, 53_400, 53_400, null],

@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.7.1-2",
+    "lastTouchedAt": "2026-07-01T12:00:00.000Z"
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "models": {
+        "anthropic/claude-sonnet-4-5": {},
+        "anthropic/claude-opus-4-5": {}
+      },
+      "memorySearch": {
+        "provider": "local",
+        "model": "hf:Qwen/Qwen3-Embedding-0.6B-GGUF:q8_0"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "name": "Main",
+        "model": "anthropic/claude-sonnet-4-5"
+      },
+      {
+        "id": "research",
+        "name": "Research",
+        "model": "anthropic/claude-opus-4-5"
+      }
+    ]
+  },
+  "plugins": {
+    "entries": {
+      "llama-cpp": {
+        "enabled": true
+      },
+      "bonjour": {
+        "enabled": false
+      }
+    }
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "tools": {
+    "media": {
+      "audio": {
+        "models": [
+          {
+            "type": "cli",
+            "command": "echo",
+            "args": [
+              "synthetic-transcript"
+            ],
+            "timeoutSeconds": 30
+          }
+        ]
+      }
+    },
+    "alsoAllow": [
+      "browser"
+    ]
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "groupPolicy": "allowlist",
+      "allowFrom": [
+        "123456789"
+      ],
+      "accounts": {
+        "primary": {
+          "enabled": true
+        },
+        "secondary": {
+          "enabled": true,
+          "allowFrom": [
+            "987654321"
+          ]
+        }
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "none"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "nodes": {
+      "denyCommands": [
+        "system.run"
+      ]
+    },
+    "controlUi": {
+      "enabled": false
+    }
+  }
+}

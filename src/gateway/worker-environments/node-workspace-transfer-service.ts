@@ -14,11 +14,12 @@ import {
   readNodeWorkspaceUpload,
   type NodeWorkspaceTransferUpload,
 } from "./node-workspace-upload-reader.js";
-import { readWorkspaceFileSnapshotWithLimit } from "./workspace-actual-manifest.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import {
+  captureWorkspaceSnapshot,
+  computeWorkspaceFileSnapshot,
+} from "./workspace-manifest-worker.js";
 
 export {
   isNodeWorkspaceTransferLimitError,
@@ -309,7 +310,7 @@ export function createNodeWorkspaceTransferService(options: {
       }
       const root = await fsp.realpath(params.localPath);
       params.signal.throwIfAborted();
-      const actual = await readActualWorkspaceManifest({
+      const actual = await captureWorkspaceSnapshot({
         root,
         baseCommit: null,
         signal: params.signal,
@@ -322,7 +323,6 @@ export function createNodeWorkspaceTransferService(options: {
       const snapshot = {
         ...actual,
         root,
-        rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
       };
       context.snapshots.set(snapshot.manifestRef, snapshot);
       return {
@@ -691,7 +691,7 @@ export function createNodeWorkspaceTransferService(options: {
     },
 
     async verifyBlob(params: { path: string; size: number; sha256: string }): Promise<boolean> {
-      const snapshot = await readWorkspaceFileSnapshotWithLimit(
+      const snapshot = await computeWorkspaceFileSnapshot(
         params.path,
         Math.min(params.size, MAX_WORKSPACE_INVENTORY_TOTAL_BYTES),
       );

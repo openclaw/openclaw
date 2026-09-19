@@ -29,6 +29,7 @@ import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-res
 import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.js";
 import { createRepositoryWorkspaceMutationService } from "./repository-workspace-mutation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
@@ -371,7 +372,7 @@ describe("repository workspace result ownership", () => {
           mutate: async (assertCurrent) => {
             await expect(
               placements.withRepositoryWorkspaceReservation(sessionTarget, competing),
-            ).rejects.toThrow("checkpoint is busy");
+            ).rejects.toBeInstanceOf(SessionWorkspaceReservationBusyError);
             assertCurrent();
             return { changed: false, value: "unchanged" };
           },

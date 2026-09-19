@@ -42,8 +42,8 @@ async function gap(above: Locator, below: Locator) {
 suite.define(() => {
   for (const width of [1440, 390]) {
     it.each(neighbors)(
-      `matches paragraph rhythm before $name at ${width}px`,
-      async ({ markdown }) => {
+      `preserves block spacing before $name at ${width}px`,
+      async ({ name, markdown }) => {
         await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
           await installMockGateway(page, {
             historyMessages: [
@@ -59,14 +59,17 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat/main`);
           const bubble = page.locator(".chat-bubble").filter({ hasText: "Reference one." });
           const card = bubble.locator(".chat-assistant-attachment-card");
-          const blocks = bubble.locator(".chat-text > *");
+          const blocks = bubble
+            .locator(".chat-text > *")
+            .filter({ hasNot: page.locator(".chat-assistant-attachments") });
           await blocks.last().waitFor();
           const reference = await gap(blocks.nth(1), blocks.nth(2));
           expect(reference).toBeGreaterThan(0);
+          const expectedBefore = reference * (name === "heading" ? 1.5 : 1);
           await expect
             .poll(async () =>
               Math.max(
-                Math.abs((await gap(card, blocks.first())) - reference),
+                Math.abs((await gap(card, blocks.first())) - expectedBefore),
                 Math.abs((await gap(blocks.first(), blocks.nth(1))) - reference),
               ),
             )

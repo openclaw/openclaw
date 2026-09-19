@@ -1,37 +1,15 @@
-// Normalizes the Gateway's update-availability and update-schedule payloads into
-// the shapes the Control UI renders. These readers are the trust boundary for
-// wire data, so they stay separate from the lifecycle controllers that consume them.
-//
-// Deliberately NOT a copy of UpdateAvailableSchema/UpdateScheduleStateSchema
-// (packages/gateway-protocol/src/schema/config.ts). Those are closed
-// producer-side contracts the Gateway enforces on its own outbound results
-// (src/gateway/server-methods/update.ts), so re-deriving them here would be a
-// second contract that drifts. Rejecting unknown keys would also turn every
-// additive protocol field into a blank update overlay: the Control UI is
-// service-worker cached, so an already-open document keeps an older bundle
-// across a Gateway upgrade (ui/src/app/sw-refresh.runtime.ts). This reader
-// narrows only what the overlay renders, tolerates unknown and out-of-range
-// producer data, and enforces the one rule whose violation renders blank UI:
-// canonical NonEmptyString fields that are required must be non-empty.
-// update-overlay-helpers.test.ts pins that against Value.Check over the
-// canonical schemas; typebox stays out of this module because it sits in the
-// Control UI startup graph, which has a hard gzip budget
-// (scripts/check-control-ui-performance.mts).
+// Narrow only rendered fields and tolerate additive fields across Gateway restarts.
+// Schema-parity tests enforce required strings without loading TypeBox at startup.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isNonEmptyProtocolString } from "../../../packages/gateway-protocol/src/protocol-value-normalization.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 
-/** Narrows wire counters and timestamps declared as Type.Integer({ minimum }). */
 function isBoundedInteger(value: unknown, minimum: number): value is number {
-  return Number.isInteger(value) && (value as number) >= minimum;
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum;
 }
 
-// Mirrors commits: Type.Array(UpdateCommitSchema, { maxItems: 5 }) in
-// packages/gateway-protocol/src/schema/config.ts. The Updates page renders
-// every entry this reader returns, so the render-side cap is the protocol's
-// own contract, not extra strictness: keep it even though the rest of this
-// reader is tolerant of out-of-range producer data.
+// Match the protocol's commit cap even when a producer sends excess entries.
 const MAX_COMMITS = 5;
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
@@ -39,8 +17,7 @@ export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailab
   if (!isRecord(snapshot)) {
     return null;
   }
-  const update = (snapshot as { updateAvailable?: unknown }).updateAvailable;
-  return readUpdateAvailableValue(update);
+  return readUpdateAvailableValue(snapshot.updateAvailable);
 }
 
 export function readUpdateAvailableValue(update: unknown): UpdateAvailable | null {
@@ -52,13 +29,8 @@ export function readUpdateAvailableValue(update: unknown): UpdateAvailable | nul
   ) {
     return null;
   }
-  // Per-entry filtering rather than all-or-nothing: one malformed commit should
-  // not hide the rest of the list. Subject length stays unbounded here because
-  // the canonical maxLength counts grapheme clusters, which a String#length
-  // check silently misreads for emoji and combining marks. The MAX_COMMITS
-  // slice below still applies after filtering: the Updates page renders every
-  // returned entry, so an out-of-range producer payload must not grow the
-  // rendered list past the protocol's own cap.
+  // Drop malformed entries individually. String.length cannot enforce the
+  // protocol's grapheme limit for subjects containing emoji or combining marks.
   const rawCommits = update.commits;
   const commits = Array.isArray(rawCommits)
     ? rawCommits

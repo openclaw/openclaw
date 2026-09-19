@@ -63,7 +63,7 @@ describe("new-session placement target", () => {
     });
   });
 
-  it("restores draft visibility and capability choices from a creating recovery", () => {
+  it("restores the empty workspace, visibility, and capability choices from a creating recovery", () => {
     expect(
       projectDraftSessionPlacementRecovery({
         sessionKey: "agent:main:cloud",
@@ -82,10 +82,16 @@ describe("new-session placement target", () => {
           visibility: "draft",
           toolOverrides: { skills: { release: false } },
           worktree: true,
+          worktreeSource: "empty",
         },
       }),
     ).toMatchObject({
-      placement: { profileId: "aws", os: "windows/wsl2", machineClass: "tiny" },
+      placement: {
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "tiny",
+        worktreeSource: "empty",
+      },
       draft: {
         permissionMode: "guarded",
         visibility: "draft",

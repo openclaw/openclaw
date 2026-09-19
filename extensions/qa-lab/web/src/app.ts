@@ -214,7 +214,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
     capturePinnedLaneIds: [],
     selectedCaptureSessionIds: [],
     selectedCaptureEventKey: null,
-    selectedEvidenceEntryId: null,
+    selectedEvidenceEntryKey: null,
     selectedConversationKey: null,
     selectedThreadId: null,
     selectedScenarioId: null,
@@ -332,7 +332,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       esf: state.evidenceStatusFilter,
       eaf: state.evidenceArtifactFilter,
       esq: state.evidenceSearchText,
-      ese: state.selectedEvidenceEntryId,
+      ese: state.selectedEvidenceEntryKey,
     });
   }
 
@@ -682,14 +682,14 @@ export async function createQaLabApp(root: HTMLDivElement) {
       );
       state.evidence = payload.evidence;
       state.evidencePathDraft = payload.evidence?.evidencePath ?? evidencePath;
-      state.selectedEvidenceEntryId = payload.evidence?.entries[0]?.id ?? null;
+      state.selectedEvidenceEntryKey = payload.evidence?.entries[0]?.key ?? null;
       const url = new URL(window.location.href);
       url.pathname = "/evidence";
       url.searchParams.set("path", state.evidencePathDraft);
       window.history.replaceState(null, "", `${url.pathname}${url.search}`);
     } catch (error) {
       state.evidence = null;
-      state.selectedEvidenceEntryId = null;
+      state.selectedEvidenceEntryKey = null;
       state.evidenceError = formatErrorMessage(error);
     } finally {
       state.evidenceLoading = false;
@@ -1055,7 +1055,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
           value === "pass" || value === "fail" || value === "blocked" || value === "skipped"
             ? value
             : "all";
-        state.selectedEvidenceEntryId = null;
+        state.selectedEvidenceEntryKey = null;
         render();
       });
     root
@@ -1070,17 +1070,17 @@ export async function createQaLabApp(root: HTMLDivElement) {
           value === "file"
             ? value
             : "all";
-        state.selectedEvidenceEntryId = null;
+        state.selectedEvidenceEntryKey = null;
         render();
       });
     root.querySelector<HTMLInputElement>("#evidence-search")?.addEventListener("input", (e) => {
       state.evidenceSearchText = (e.currentTarget as HTMLInputElement).value;
-      state.selectedEvidenceEntryId = null;
+      state.selectedEvidenceEntryKey = null;
       render();
     });
-    root.querySelectorAll<HTMLElement>("[data-evidence-entry-id]").forEach((node) => {
+    root.querySelectorAll<HTMLElement>("[data-evidence-entry-key]").forEach((node) => {
       node.addEventListener("click", () => {
-        state.selectedEvidenceEntryId = node.dataset.evidenceEntryId ?? null;
+        state.selectedEvidenceEntryKey = node.dataset.evidenceEntryKey ?? null;
         render();
       });
     });

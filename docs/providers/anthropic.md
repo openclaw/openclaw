@@ -701,8 +701,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     OpenClaw adds the `compact-2026-01-12` beta header and sends an Anthropic
     `context_management` compaction edit. When compaction occurs, OpenClaw
-    stores the newest summary as hidden provider replay state and sends it
-    first on the next matching request. The full transcript remains local;
+    assembles the streamed summary and stores it with the provider's opaque
+    compaction metadata as hidden replay state. Both survive session reopening
+    and are sent first on the next matching request. Summary text still passes
+    through transcript redaction; opaque metadata is preserved for replay.
+    The full transcript remains local;
     only the outbound history before the checkpoint is omitted.
     If Anthropic rejects a stored checkpoint, that turn reports the provider
     error and the following turn falls back to full local history.

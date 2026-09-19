@@ -22,6 +22,7 @@ import {
   createGitHubPublicationCoordinatorMethods,
   type GitHubPublicationClaimRequest,
 } from "./github-publication-coordinator-methods.js";
+import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
@@ -264,6 +265,7 @@ export function createGitHubPublicationCoordinator(params: {
         if (!updated) {
           throw new Error("GitHub publication accepted workspace snapshot changed.");
         }
+        deferSharedGitHubPublicationChanged(db, updated);
         return updated;
       },
       undefined,
@@ -422,6 +424,12 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestPersonalForSession(...args)
         : personal.requestPersonalForSession(...args);
     },
+    sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
+      return repository.sharedStatus(...args) ?? methods.sharedStatus(...args);
+    },
+    latestShared(...args: Parameters<typeof methods.latestShared>) {
+      return repository.latestShared(...args) ?? methods.latestShared(...args);
+    },
     personalStatus(...args: Parameters<typeof personal.personalStatus>) {
       return repository.hasRequest(args[2])
         ? repository.personalStatus(...args)!
@@ -439,8 +447,22 @@ export function createGitHubPublicationCoordinator(params: {
       return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
     },
     async resumeSessionRequests() {
-      await methods.resumeSessionRequests();
-      await repository.resumeSessionRequests();
+      const failures: unknown[] = [];
+      for (const coordinator of [methods, repository]) {
+        try {
+          await coordinator.resumeSessionRequests();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          failures
+            .map((error) => (error instanceof Error ? error.message : String(error)))
+            .join("; "),
+        );
+      }
     },
     deferOrphanedRequests() {
       methods.deferOrphanedRequests();

@@ -1,4 +1,3 @@
-// Telegram plugin module implements native quote behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { TelegramTextEntity } from "./body-helpers.js";
 

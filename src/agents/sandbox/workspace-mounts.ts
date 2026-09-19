@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
+import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
@@ -13,21 +14,12 @@ import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
-const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
 
 /** Managed skill directory projected read-only into the sandbox workspace. */
 export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
 };
-
-function formatManagedWorkspaceBind(params: {
-  hostPath: string;
-  containerPath: string;
-  readOnly: boolean;
-}): string {
-  return `${params.hostPath}:${params.containerPath}:${params.readOnly ? "ro,z" : "z"}`;
-}
 
 function containerJoin(root: string, ...parts: string[]): string {
   const normalizedRoot = root.endsWith("/") && root !== "/" ? root.slice(0, -1) : root;
@@ -38,7 +30,7 @@ function containerJoin(root: string, ...parts: string[]): string {
   return suffix ? `${normalizedRoot}/${suffix}` : normalizedRoot;
 }
 
-function normalizeMountContainerPath(containerPath: string): string {
+export function normalizeMountContainerPath(containerPath: string): string {
   return normalizeContainerPathCore(containerPath).replace(/\/+$/, "") || "/";
 }
 
@@ -117,117 +109,146 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }
 
-/** Returns stable mount state for sandbox config hashes. */
-export function formatReadOnlyWorkspaceSkillMountHashState(
-  mounts: readonly ReadOnlyWorkspaceSkillMount[],
-): string[] {
-  return mounts.map((mount) => `${mount.hostPath}:${mount.containerPath}:ro`);
-}
+export type ManagedWorkspaceMount = ReadOnlyWorkspaceSkillMount & { readOnly: boolean };
+export type SandboxSelectedMount = ManagedWorkspaceMount & {
+  source: "workspace" | "agent" | "bind" | "protectedSkill";
+};
 
-/**
- * Returns the set of container paths that are protected by read-only skill mounts.
- *
- * User-defined binds that target any path in this set must be skipped so the
- * container engine sees one authoritative read-only mount for each destination.
- */
-export function resolveProtectedSkillMountContainerPaths(
-  mounts: readonly ReadOnlyWorkspaceSkillMount[],
-): Set<string> {
-  return new Set(mounts.map((mount) => normalizeMountContainerPath(mount.containerPath)));
-}
-
-/**
- * Returns a filtered copy of `binds` with entries whose container path conflicts with a
- * protected skill mount removed. Protected skill mounts always take precedence so checked-in
- * skills cannot be made writable by a user bind.
- */
-export function filterBindsConflictingWithProtectedMounts(
-  binds: readonly string[] | undefined,
-  protectedContainerPaths: ReadonlySet<string>,
-): string[] {
-  if (!binds?.length) {
-    return [];
-  }
-  if (protectedContainerPaths.size === 0) {
-    return [...binds];
-  }
-  const filtered: string[] = [];
-  for (const bind of binds) {
-    const spec = splitSandboxBindSpec(bind);
-    if (!spec) {
-      filtered.push(bind);
-      continue;
-    }
-    const containerPath = normalizeMountContainerPath(spec.container);
-    if (!protectedContainerPaths.has(containerPath)) {
-      filtered.push(bind);
-    }
-  }
-  return filtered;
-}
-
-/** Appends Docker `-v` args for read-only skill mounts. */
-export function appendReadOnlyWorkspaceSkillMountArgs(params: {
-  args: string[];
-  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
-}): void {
-  for (const mount of params.readOnlyWorkspaceSkillMounts) {
-    params.args.push(
-      "-v",
-      formatManagedWorkspaceBind({
-        hostPath: mount.hostPath,
-        containerPath: mount.containerPath,
-        readOnly: true,
-      }),
-    );
-  }
-}
-
-/** Appends Docker workspace mount args for the project, agent workspace, and skill overlays. */
-export function appendWorkspaceMountArgs(params: {
-  args: string[];
+/** Resolves Gateway-local sources before the container lifecycle selects daemon paths. */
+export function resolveWorkspaceMounts(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
   readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
-  includeReadOnlyWorkspaceSkillMounts?: boolean;
-}) {
-  const { args, workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
-
-  args.push(
-    "-v",
-    formatManagedWorkspaceBind({
+}): SandboxSelectedMount[] {
+  const { workspaceDir, agentWorkspaceDir, workdir, workspaceAccess } = params;
+  const mounts: SandboxSelectedMount[] = [
+    {
       hostPath: workspaceDir,
       containerPath: workdir,
       readOnly: workspaceAccess === "ro",
-    }),
-  );
+      source: "workspace",
+    },
+  ];
 
   if (workspaceAccess !== "none" && workspaceDir !== agentWorkspaceDir) {
-    args.push(
-      "-v",
-      formatManagedWorkspaceBind({
-        hostPath: agentWorkspaceDir,
-        containerPath: SANDBOX_AGENT_WORKSPACE_MOUNT,
-        readOnly: workspaceAccess === "ro",
-      }),
-    );
-  }
-
-  if (params.includeReadOnlyWorkspaceSkillMounts !== false) {
-    appendReadOnlyWorkspaceSkillMountArgs({
-      args,
-      readOnlyWorkspaceSkillMounts:
-        params.readOnlyWorkspaceSkillMounts ??
-        resolveReadOnlyWorkspaceSkillMounts({
-          workspaceDir,
-          agentWorkspaceDir,
-          skillsWorkspaceDir: params.skillsWorkspaceDir,
-          workdir,
-          workspaceAccess,
-        }),
+    mounts.push({
+      hostPath: agentWorkspaceDir,
+      containerPath: SANDBOX_AGENT_WORKSPACE_MOUNT,
+      readOnly: workspaceAccess === "ro",
+      source: "agent",
     });
   }
+
+  const skills = params.readOnlyWorkspaceSkillMounts ?? resolveReadOnlyWorkspaceSkillMounts(params);
+  for (const { hostPath, containerPath } of skills) {
+    mounts.push({ hostPath, containerPath, readOnly: true, source: "protectedSkill" });
+  }
+  return mounts;
+}
+
+/** Select exact-target winners without rewriting the operator's daemon-host bind strings. */
+function selectSandboxBindMounts(binds: readonly string[] | undefined): string[] {
+  const selected = new Map<string, string>();
+  for (const bind of binds ?? []) {
+    const parsed = splitSandboxBindSpec(bind);
+    // Unparsed entries still reach validation/the engine; dropping one would
+    // silently turn an invalid mount request into a different filesystem.
+    selected.set(parsed ? normalizeMountContainerPath(parsed.container) : bind, bind);
+  }
+  return [...selected.values()];
+}
+
+export function resolveSandboxBindMounts(
+  binds: readonly string[] | undefined,
+): SandboxSelectedMount[] {
+  return selectSandboxBindMounts(binds).flatMap((bind) => {
+    const parsed = splitSandboxBindSpec(bind);
+    if (!parsed?.host || !path.posix.isAbsolute(parsed.container)) {
+      return [];
+    }
+    return [
+      {
+        hostPath: parsed.host,
+        containerPath: normalizeMountContainerPath(parsed.container),
+        readOnly: parsed.options
+          .toLowerCase()
+          .split(",")
+          .some((option) => option.trim() === "ro"),
+        source: "bind" as const,
+      },
+    ];
+  });
+}
+
+/** One selection owns container creation, file projection, and file-tool permissions. */
+export function resolveSandboxMountSelection(
+  params: Parameters<typeof resolveWorkspaceMounts>[0] & {
+    binds?: readonly string[];
+    readOnlyResourceMounts?: readonly ReadOnlyWorkspaceSkillMount[];
+  },
+) {
+  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts(params);
+  const managed = resolveWorkspaceMounts({ ...params, readOnlyWorkspaceSkillMounts });
+  const resources = params.readOnlyResourceMounts ?? [];
+  const protectedTargets = new Set(
+    [...readOnlyWorkspaceSkillMounts, ...resources].map((mount) =>
+      normalizeMountContainerPath(mount.containerPath),
+    ),
+  );
+  // Keep one authoritative read-only instruction mount at each protected target.
+  // Unparsed binds still reach validation/the engine instead of silently disappearing.
+  const allowed = (params.binds ?? []).filter((bind) => {
+    const spec = splitSandboxBindSpec(bind);
+    return !spec || !protectedTargets.has(normalizeMountContainerPath(spec.container));
+  });
+  const custom = selectSandboxBindMounts(allowed);
+  const mounts = new Map<string, SandboxSelectedMount>();
+  for (const mount of managed) {
+    const containerPath = normalizeMountContainerPath(mount.containerPath);
+    mounts.set(containerPath, { ...mount, containerPath });
+  }
+  for (const mount of resolveSandboxBindMounts(custom)) {
+    mounts.set(mount.containerPath, mount);
+  }
+  for (const resource of resources) {
+    const containerPath = normalizeMountContainerPath(resource.containerPath);
+    mounts.set(containerPath, {
+      hostPath: resource.hostPath,
+      containerPath,
+      readOnly: true,
+      source: "protectedSkill",
+    });
+  }
+  return {
+    mounts: [...mounts.values()],
+    custom,
+    skippedBinds: (params.binds ?? []).filter((bind) => !allowed.includes(bind)),
+    readOnlyWorkspaceSkillMounts,
+  };
+}
+
+/** Docker keeps the final ro/rw flag; Podman rejects conflicting flags before creation. */
+export function sandboxMountOptionsReadOnly(options: string): boolean {
+  let readOnly = false;
+  for (const option of options.split(",")) {
+    if (option === "ro" || option === "rw") {
+      readOnly = option === "ro";
+    }
+  }
+  return readOnly;
+}
+
+export function resolveSandboxTmpfsMounts(tmpfs: readonly string[] | undefined) {
+  const mounts = new Map<string, { containerPath: string; readOnly: boolean }>();
+  for (const spec of tmpfs ?? []) {
+    const separator = spec.indexOf(":");
+    const target = separator === -1 ? spec : spec.slice(0, separator);
+    const options = separator === -1 ? "" : spec.slice(separator + 1);
+    const containerPath = normalizeMountContainerPath(target);
+    mounts.set(containerPath, { containerPath, readOnly: sandboxMountOptionsReadOnly(options) });
+  }
+  return [...mounts.values()];
 }

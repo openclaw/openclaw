@@ -3,13 +3,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveLogbookConfig } from "./config.js";
 import { buildAskPrompt } from "./prompts.js";
 import { LogbookService } from "./service.js";
+import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 
-const workerModuleUrl = new URL("./store.worker.ts", import.meta.url);
+const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
 
 afterEach(() => {
   vi.restoreAllMocks();

@@ -20,6 +20,7 @@ import { PluginRegistryInspectionResources } from "../../plugins/registry-inspec
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { createModelGenerationFixture } from "../embedded-agent-runner/model.generation-scope.test-support.js";
@@ -90,20 +91,6 @@ async function writeSessionFile(params: { sessionFile: string; sessionId: string
       "",
     ].join("\n"),
     "utf-8",
-  );
-}
-
-async function persistSessionEntry(params: {
-  sessionKey: string;
-  storePath: string;
-  entry: SessionEntry;
-}) {
-  await replaceSessionEntry(
-    {
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    params.entry,
   );
 }
 
@@ -186,7 +173,7 @@ async function prepareCompactionScenario(params: {
     ...params.sessionEntry,
   };
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-  await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
+  await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
 
   const compactCalls: CompactParams[] = [];
   const contextEngine =
@@ -281,6 +268,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     resetCliCompactionTestDeps();
     vi.clearAllTimers();
     vi.useRealTimers();
+    await closeOpenClawAgentDatabasesAsync(tmpDir);
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -651,11 +639,10 @@ describe("runCliTurnCompactionLifecycle", () => {
       suffix: "session-key",
       tmpDir,
       result: async ({ sessionKey, storePath }) => {
-        await persistSessionEntry({
-          sessionKey,
-          storePath,
-          entry: { sessionId: successorId, updatedAt: Date.now() },
-        });
+        await replaceSessionEntry(
+          { sessionKey, storePath },
+          { sessionId: successorId, updatedAt: Date.now() },
+        );
         return {
           ok: true,
           compacted: true,
@@ -1473,7 +1460,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await persistSessionEntry({ sessionKey, storePath, entry: sessionEntry });
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
 
     const bigOutput = "x".repeat(20_000);
     const compactCalls: CompactParams[] = [];

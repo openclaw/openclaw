@@ -183,7 +183,7 @@ describe("application update campaign overlays", () => {
           },
           schedule: AUTO_UPDATE_SCHEDULE,
         });
-        await refresh;
+        expect(await refresh).toBe(source === "manual refresh" ? false : undefined);
         await flushMicrotasks();
 
         expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("applying");
@@ -249,10 +249,12 @@ describe("application update campaign overlays", () => {
       expect(overlays.snapshot.updateStatusRefreshing).toBe(true);
 
       manualStatus.reject(new Error("manual status unavailable"));
-      await refresh;
+      expect(await refresh).toBe(false);
 
       expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
-      expect(overlays.snapshot.updateStatusBanner?.text).toContain("manual status unavailable");
+      expect(overlays.snapshot.updateStatusCheckBanner?.text).toContain(
+        "manual status unavailable",
+      );
     } finally {
       manualStatus.resolve({});
       overlays.dispose();
@@ -312,7 +314,7 @@ describe("application update campaign overlays", () => {
             stats: { reason: "admin-only-attempt" },
           },
         });
-        await refresh;
+        expect(await refresh).toBe(false);
 
         expect(overlays.snapshot.updateStatusBanner).toBeNull();
         expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
@@ -381,12 +383,38 @@ describe("application update campaign overlays", () => {
     await refresh;
 
     expect(overlays.snapshot.updateStatusRefreshing).toBe(false);
-    expect(overlays.snapshot.updateStatusBanner).toEqual({
-      source: "read",
-      tone: "danger",
-      text: expect.stringContaining("Gateway unavailable"),
+    expect(overlays.snapshot.updateStatusBanner).toBeNull();
+    expect(overlays.snapshot.updateStatusCheckBanner).toEqual({
+      tone: "warn",
+      text: "Could not check for updates: Gateway unavailable",
     });
+    request.mockResolvedValue({});
+    await overlays.refreshUpdateStatus();
+    expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
     overlays.dispose();
+  });
+
+  it("preserves the last update failure when a subsequent status check fails", async () => {
+    const run = updateRunFixture({ status: "failed", phase: "finished", reason: "build-failed" });
+    const request = vi.fn<RequestFn>(async () => ({ lastRun: run }));
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await overlays.refreshUpdateStatus();
+      const failure = overlays.snapshot.updateStatusBanner;
+      expect(failure?.tone).toBe("danger");
+      request.mockRejectedValue(new Error("status unavailable"));
+      await overlays.refreshUpdateStatus();
+      expect(overlays.snapshot.updateRun).toEqual(run);
+      expect(overlays.snapshot.updateStatusBanner).toEqual(failure);
+      expect(overlays.snapshot.updateStatusCheckBanner?.tone).toBe("warn");
+      request.mockResolvedValue({ lastRun: run });
+      await overlays.refreshUpdateStatus();
+      expect(overlays.snapshot.updateStatusCheckBanner).toBeNull();
+      expect(overlays.snapshot.updateStatusBanner).toEqual(failure);
+    } finally {
+      overlays.dispose();
+    }
   });
 
   it("hydrates campaign state from hello and update.available events", () => {

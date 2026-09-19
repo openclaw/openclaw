@@ -17,7 +17,7 @@ vi.mock("./status.scan-overview.ts", () => ({
   resolveStatusSummaryFromOverview,
 }));
 
-vi.mock("./status.scan.shared.js", () => ({
+vi.mock("../status/memory-plugin.js", () => ({
   resolveMemoryPluginStatus,
 }));
 

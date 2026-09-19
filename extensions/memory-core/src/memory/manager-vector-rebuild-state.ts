@@ -1,9 +1,7 @@
 // Memory Core plugin module owns persisted vector completeness state.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  MEMORY_INDEX_META_TABLE,
-  type MemoryVectorIndexState,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import type { MemoryVectorIndexState } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const VECTOR_REBUILD_META_KEY = "memory_vector_rebuild_v1";
 

@@ -3,11 +3,17 @@ import {
   assertOpenClawStateDatabaseOwner,
   resolveDatabasePath,
 } from "../state/openclaw-state-db-maintenance.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import {
+  readClawInstallSchemaVersionRows,
+  type ClawInstallSchemaVersionRow,
+} from "./provenance-runtime-read.kernel.js";
 import { parseClawInstallRecordSchemaVersion } from "./provenance-schema-version.js";
 
 type ClawInstallSchemaVersionRead =
@@ -38,37 +44,27 @@ function notifySnapshotListeners(): void {
   }
 }
 
+function decodeSchemaVersions(
+  rows: ClawInstallSchemaVersionRow[],
+): ClawInstallSchemaVersionSnapshot {
+  const schemaVersions = new Map<string, ClawInstallSchemaVersionRead>();
+  for (const row of rows) {
+    try {
+      schemaVersions.set(row.agentId, {
+        kind: "ok",
+        schemaVersion: parseClawInstallRecordSchemaVersion(row.schemaVersion),
+        agentConfigDigest: row.agentConfigDigest,
+      });
+    } catch (error) {
+      schemaVersions.set(row.agentId, { kind: "error", error });
+    }
+  }
+  return { kind: "ready", schemaVersions };
+}
+
 function readSchemaVersions(db: DatabaseSync): ClawInstallSchemaVersionSnapshot {
   try {
-    const hasInstallTable = db /* sqlite-allow-raw: lifecycle-owned state cache initialization. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-      .get();
-    if (!hasInstallTable) {
-      return { kind: "ready", schemaVersions: new Map() };
-    }
-    const rows = db /* sqlite-allow-raw: lifecycle-owned state cache initialization. */
-      .prepare("SELECT agent_id, schema_version, agent_config_digest FROM claw_installs")
-      .all() as Array<{
-      agent_id: string;
-      schema_version: string;
-      agent_config_digest: string;
-    }>;
-    const schemaVersions = new Map<string, ClawInstallSchemaVersionRead>();
-    for (const row of rows) {
-      try {
-        schemaVersions.set(row.agent_id, {
-          kind: "ok",
-          schemaVersion: parseClawInstallRecordSchemaVersion(row.schema_version),
-          agentConfigDigest: row.agent_config_digest,
-        });
-      } catch (error) {
-        schemaVersions.set(row.agent_id, { kind: "error", error });
-      }
-    }
-    return {
-      kind: "ready",
-      schemaVersions,
-    };
+    return decodeSchemaVersions(readClawInstallSchemaVersionRows(db));
   } catch (error) {
     return {
       kind: "state-error",
@@ -147,28 +143,14 @@ export function initializeCachedClawInstallSchemaVersions(
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
   try {
-    const snapshot = withExistingOpenClawStateDatabaseReadOnly(({ db, path: pathname }) => {
-      assertOpenClawStateDatabaseOwner(db, { pathname });
-      return readSchemaVersions(db);
-    }, options);
-    if (snapshot) {
-      snapshotsByPath.set(path, snapshot);
-    } else {
-      const previousAgentIds = knownAgentIds(previous);
-      snapshotsByPath.set(
-        path,
-        previousAgentIds.size > 0 || (previous !== undefined && isOwnershipUnknown(previous))
-          ? {
-              kind: "state-error",
-              error: new Error(
-                "OpenClaw state database disappeared after Claw ownership was observed.",
-              ),
-              knownAgentIds: previousAgentIds,
-              ownershipUnknown: true,
-            }
-          : { kind: "ready", schemaVersions: new Map() },
-      );
-    }
+    const snapshot = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db, path: pathname }) => {
+        assertOpenClawStateDatabaseOwner(db, { pathname });
+        return readSchemaVersions(db);
+      },
+      options,
+    );
+    snapshotsByPath.set(path, resolveSchemaVersionSnapshot(snapshot, previous));
   } catch (error) {
     snapshotsByPath.set(path, {
       kind: "state-error",
@@ -178,6 +160,82 @@ export function initializeCachedClawInstallSchemaVersions(
     });
   }
   notifySnapshotListeners();
+}
+
+function resolveSchemaVersionSnapshot(
+  snapshot: ClawInstallSchemaVersionSnapshot | undefined,
+  previous: ClawInstallSchemaVersionSnapshot | undefined,
+): ClawInstallSchemaVersionSnapshot {
+  if (snapshot) {
+    return snapshot;
+  }
+  const previousAgentIds = knownAgentIds(previous);
+  return previousAgentIds.size > 0 || (previous !== undefined && isOwnershipUnknown(previous))
+    ? {
+        kind: "state-error",
+        error: new Error("OpenClaw state database disappeared after Claw ownership was observed."),
+        knownAgentIds: previousAgentIds,
+        ownershipUnknown: true,
+      }
+    : { kind: "ready", schemaVersions: new Map() };
+}
+
+export async function prepareClawInstallSchemaVersions(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<{ path: string; publish: () => void }> {
+  const path = resolveSnapshotPath(options);
+  const previous = snapshotsByPath.get(path);
+  let snapshot: ClawInstallSchemaVersionSnapshot;
+  let assertCurrent: (() => void) | undefined;
+  try {
+    const context = captureOpenClawStateWorkerContext({ path, env: options.env });
+    assertCurrent = context.admission.assertCurrent;
+    const rows = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({
+          type: "claws.install-schema-versions",
+          input: undefined,
+        }),
+      { existingOnly: true },
+    );
+    snapshot = resolveSchemaVersionSnapshot(
+      rows === undefined ? undefined : decodeSchemaVersions(rows),
+      previous,
+    );
+  } catch (error) {
+    snapshot = {
+      kind: "state-error",
+      error,
+      knownAgentIds: knownAgentIds(previous),
+      ownershipUnknown: true,
+    };
+  }
+  return {
+    path,
+    publish: () => {
+      const current = snapshotsByPath.get(path);
+      // Lifecycle changes and committed Claw writes supersede the staged read.
+      if (current !== previous) {
+        return;
+      }
+      try {
+        if (resolveSnapshotPath(options) !== path) {
+          throw new Error("OpenClaw state location changed before consent provenance publication.");
+        }
+        assertCurrent?.();
+      } catch (error) {
+        snapshot = {
+          kind: "state-error",
+          error,
+          knownAgentIds: knownAgentIds(current),
+          ownershipUnknown: true,
+        };
+      }
+      snapshotsByPath.set(path, snapshot);
+      notifySnapshotListeners();
+    },
+  };
 }
 
 export function registerClawInstallSchemaVersionSnapshotListener(listener: () => void): () => void {
@@ -196,6 +254,7 @@ export function cacheClawInstallSchemaVersion(
     return;
   }
   snapshot.schemaVersions.set(agentId, { kind: "ok", schemaVersion, agentConfigDigest });
+  snapshotsByPath.set(resolveSnapshotPath(options), { ...snapshot });
   notifySnapshotListeners();
 }
 
@@ -207,5 +266,6 @@ export function deleteCachedClawInstallSchemaVersion(
   if (snapshot?.kind !== "ready" || !snapshot.schemaVersions.delete(agentId)) {
     return;
   }
+  snapshotsByPath.set(resolveSnapshotPath(options), { ...snapshot });
   notifySnapshotListeners();
 }

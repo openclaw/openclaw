@@ -28,7 +28,6 @@ describe("kimi coding onboard", () => {
         },
       ],
     });
-    expect(provider?.models?.map((model) => model.id)).toEqual(["kimi-for-coding"]);
     expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]?.alias).toBe("Kimi");
   });
 

@@ -5,12 +5,12 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js"
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesPageWithStatsAsync,
   visitSessionMessagesAsync,

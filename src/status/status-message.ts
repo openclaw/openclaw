@@ -228,13 +228,12 @@ function resolveExecutionLabel(
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   if (total == null) {
-    const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
     return `?/${ctxLabel}`;
   }
   const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(total);
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 

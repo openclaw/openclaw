@@ -146,20 +146,28 @@ describe("config presence", () => {
     ).toEqual([{ channelId: "mattermost", source: "env" }]);
   });
 
-  it("detects persisted Matrix credentials without config or env", () => {
-    const stateDir = makeTempStateDir().replace(
-      "openclaw-channel-config-presence-",
-      "persisted-matrix-",
-    );
-    fs.mkdirSync(stateDir, { recursive: true });
-    tempDirs.push(stateDir);
-    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+  it.each([
+    { channelIds: undefined, expectedIds: ["matrix"] },
+    { channelIds: ["matrix"], expectedIds: ["matrix"] },
+    { channelIds: ["whatsapp"], expectedIds: [] },
+    { channelIds: [], expectedIds: [] },
+  ])(
+    "scopes persisted credentials without hiding env signals: $channelIds",
+    ({ channelIds, expectedIds }) => {
+      const stateDir = makeTempStateDir().replace(
+        "openclaw-channel-config-presence-",
+        "persisted-matrix-",
+      );
+      fs.mkdirSync(stateDir, { recursive: true });
+      tempDirs.push(stateDir);
+      const env = { OPENCLAW_STATE_DIR: stateDir, MATTERMOST_BOT_TOKEN: "test-token" };
 
-    expectPotentialConfiguredChannelCase({
-      cfg: {},
-      env,
-      expectedIds: ["matrix"],
-      options: {},
-    });
-  });
+      expectPotentialConfiguredChannelCase({
+        cfg: {},
+        env,
+        expectedIds: ["mattermost", ...expectedIds],
+        options: { persistedAuthChannelIds: channelIds && new Set(channelIds) },
+      });
+    },
+  );
 });

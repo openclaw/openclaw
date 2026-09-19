@@ -1,16 +1,117 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { getFreePort } from "../test-utils/ports.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
+
+it.each([
+  { extra: "session_status", repaired: true },
+  { extra: "exec", repaired: false },
+])(
+  "persists only a permission-preserving agent profile repair ($extra)",
+  async ({ extra, repaired }) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+        async () => {
+          const raw: OpenClawConfig = {
+            gateway: { mode: "local", port: await getFreePort() },
+            plugins: { enabled: false },
+            tools: { alsoAllow: ["exec"] },
+            agents: {
+              ownership: "explicit",
+              entries: {
+                restricted: {
+                  tools: {
+                    profile: "minimal",
+                    allow: ["session_status", "exec"],
+                    alsoAllow: [extra],
+                  },
+                },
+              },
+            },
+          };
+          const configPath = await writeOpenClawConfig(home, raw);
+          const original = await fs.readFile(configPath, "utf8");
+
+          await prepareDoctorContext(configPath);
+
+          const saved = await readConfigFileSnapshot();
+          expect(saved.valid).toBe(repaired);
+          expect(saved.sourceConfig.agents?.entries?.restricted?.tools?.alsoAllow).toEqual(
+            repaired ? [] : [extra],
+          );
+          if (repaired) {
+            expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+          } else {
+            expect(saved.raw).toBe(original);
+          }
+        },
+      );
+    });
+  },
+);
+
+it("preserves sandbox override bytes and effective permissions during Doctor repair", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+      async () => {
+        const raw: OpenClawConfig = {
+          gateway: { mode: "local", port: await getFreePort() },
+          plugins: { enabled: false },
+          tools: { sandbox: { tools: { alsoAllow: ["exec"] } } },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              restricted: {
+                tools: {
+                  sandbox: { tools: { allow: ["read", "message"], alsoAllow: ["message"] } },
+                },
+              },
+            },
+          },
+        };
+        const configPath = await writeOpenClawConfig(home, raw);
+        const original = await fs.readFile(configPath, "utf8");
+        const before = resolveSandboxToolPolicyForAgent(raw, "restricted");
+        expect(isToolAllowed(before, "exec")).toBe(false);
+
+        await prepareDoctorContext(configPath);
+
+        const saved = await readConfigFileSnapshot();
+        const after = resolveSandboxToolPolicyForAgent(saved.sourceConfig, "restricted");
+        expect(isToolAllowed(after, "exec")).toBe(false);
+        expect(after).toStrictEqual(before);
+        expect(saved.raw).toBe(original);
+        expect(saved.valid).toBe(false);
+      },
+    );
+  });
+});
 
 it("normalizes retired metadata for an unmarked npm updater without repair flags", async () => {
   await withDoctorConfigPreflightHome(async (home) => {

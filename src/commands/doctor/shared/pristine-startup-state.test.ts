@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { BASE_GATEWAY_BENCH_CONFIG } from "../../../../scripts/lib/gateway-bench-runtime.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   planPristineStartupConfigMigrations,
@@ -126,18 +127,36 @@ describe("pristine startup state", () => {
   });
 
   it("accepts the core-only Gateway benchmark config", () => {
-    const env = createFixture({
-      browser: { enabled: false },
-      gateway: { mode: "local" },
-      plugins: { enabled: true, entries: { browser: { enabled: false } } },
-    });
+    const env = createFixture(BASE_GATEWAY_BENCH_CONFIG);
 
     expect(planPristineStartupStateMigrations(env).skipAllStateMigrations).toBe(true);
   });
 
+  it.each(["off", "minimal", "full"])("accepts stateless mDNS mode %s", (mode) => {
+    expect(
+      planPristineStartupStateMigrations(createFixture({ discovery: { mdns: { mode } } })),
+    ).toEqual({ skipAllStateMigrations: true, skipCoreStateMigrations: true });
+  });
+
+  it("retains migrations for other discovery configuration", () => {
+    for (const discovery of [
+      { wideArea: { enabled: true } },
+      { wideArea: { domain: "example.com" } },
+      { mdns: { enabled: false } },
+      { mdns: { mode: "invalid" } },
+      { mdns: null },
+    ]) {
+      expect(
+        planPristineStartupStateMigrations(createFixture({ discovery })),
+        JSON.stringify(discovery),
+      ).toEqual({ skipAllStateMigrations: false, skipCoreStateMigrations: false });
+    }
+  });
+
   it("rejects existing state and migration-bearing agent config", () => {
     expect(
-      planPristineStartupStateMigrations(createFixture({}, ["agents"])).skipAllStateMigrations,
+      planPristineStartupStateMigrations(createFixture(BASE_GATEWAY_BENCH_CONFIG, ["agents"]))
+        .skipAllStateMigrations,
     ).toBe(false);
     expect(
       planPristineStartupStateMigrations(
@@ -216,7 +235,10 @@ describe("pristine startup state", () => {
 
   it("retains migrations for bundled plugins with doctor state surfaces", () => {
     const env = addBundledPlugin(
-      createFixture({ plugins: { entries: { example: { enabled: true } } } }),
+      createFixture({
+        discovery: { mdns: { mode: "off" } },
+        plugins: { entries: { example: { enabled: true } } },
+      }),
       "example",
       { doctorContract: true },
     );

@@ -1,4 +1,3 @@
-// Discord plugin module implements account inspect behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";

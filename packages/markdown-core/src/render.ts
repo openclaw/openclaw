@@ -228,11 +228,12 @@ export function renderMarkdownWithMarkers(
     if (!styleMarkers[span.style]) {
       continue;
     }
-    const pieces = STRUCTURAL_STYLES.has(span.style)
-      ? [span]
-      : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-          splitAtBoundaries(piece, annotationBoundaries),
-        );
+    const pieces =
+      annotated.length === 0 || STRUCTURAL_STYLES.has(span.style)
+        ? [span]
+        : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
+            splitAtBoundaries(piece, annotationBoundaries),
+          );
     for (const piece of pieces) {
       if (piece.start === piece.end) {
         continue;
@@ -259,17 +260,22 @@ export function renderMarkdownWithMarkers(
 
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
-    const links = projected.links.flatMap((span) =>
-      subtractRanges(span, dominantAnnotationRanges)
-        .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
-        .map((piece) =>
-          copyMarkdownLinkSpan(span, {
-            start: piece.start,
-            end: piece.end,
-            href: piece.href,
-          }),
-        ),
-    );
+    const links =
+      annotated.length === 0
+        ? projected.links.map((span) =>
+            copyMarkdownLinkSpan(span, { start: span.start, end: span.end, href: span.href }),
+          )
+        : projected.links.flatMap((span) =>
+            subtractRanges(span, dominantAnnotationRanges)
+              .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
+              .map((piece) =>
+                copyMarkdownLinkSpan(span, {
+                  start: piece.start,
+                  end: piece.end,
+                  href: piece.href,
+                }),
+              ),
+          );
     for (const link of links) {
       if (link.start === link.end) {
         continue;

@@ -19,6 +19,10 @@ polling and replay, so long-running processes cannot grow the app-server bridge
 without limit. Process exit and cleanup remain tied to the sandbox-owned
 process. Failed environment registration never falls back to host execution.
 
+Interactive commands receive a real terminal. Ctrl-C interrupts both interactive
+and noninteractive native commands. Closing the exec-server connection cancels its
+outstanding HTTP requests and waits for cleanup before releasing the sandbox lease.
+
 See [Sandboxed native execution](/plugins/codex-harness-reference#sandboxed-native-execution)
 for configuration and local-only transport restrictions.
 

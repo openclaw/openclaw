@@ -582,26 +582,16 @@ function classifyWindowsGatewayFirewallState(
     };
   }
 
-  if (blockingProfiles.length > 0 || activeProfiles.length === 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_no_allow_rule",
-      message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
-        "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
-        "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
-      ],
-    };
-  }
-
   return {
     applies: true,
-    severity: "info",
-    code: "windows_firewall_unrestricted",
-    message: "Windows Firewall did not show a blocking active profile for the Gateway port.",
-    details: [`Active network profile: ${activeProfileText}.`],
+    severity: "warning",
+    code: "windows_firewall_no_allow_rule",
+    message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
+    details: [
+      `Active network profile: ${activeProfileText}.`,
+      "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
+      "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
+    ],
   };
 }
 

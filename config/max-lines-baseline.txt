@@ -22,7 +22,6 @@ extensions/browser/src/cli/browser-cli-manage.ts
 extensions/codex/doctor-contract-api.test.ts
 extensions/codex/src/app-server/approval-bridge.test.ts
 extensions/codex/src/app-server/approval-bridge.ts
-extensions/codex/src/app-server/attempt-context.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
 extensions/codex/src/app-server/client.ts
@@ -131,7 +130,6 @@ extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
-extensions/memory-core/src/dreaming.ts
 extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
@@ -172,7 +170,6 @@ extensions/policy/src/doctor/register.models-and-mcp.test-utils.ts
 extensions/policy/src/doctor/register.sandbox-and-tools.test-utils.ts
 extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
-extensions/qa-lab/src/cli.ts
 extensions/qa-lab/src/confidence-report.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
@@ -231,7 +228,6 @@ extensions/telegram/src/draft-stream.ts
 extensions/telegram/src/fetch.test.ts
 extensions/telegram/src/fetch.ts
 extensions/telegram/src/format.ts
-extensions/telegram/src/lane-delivery.test.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/send.test.ts
@@ -273,7 +269,6 @@ packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
-packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
@@ -331,7 +326,6 @@ src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
-src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-context-guard.test.ts
@@ -609,8 +603,6 @@ src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
 src/gateway/server-methods/skills.ts
-src/gateway/server-methods/talk.test.ts
-src/gateway/server-methods/talk.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
@@ -636,7 +628,9 @@ src/gateway/session-utils.subagent.test.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
-src/gateway/talk-realtime-relay.test.ts
+src/gateway/talk/handlers/index.test.ts
+src/gateway/talk/handlers/index.ts
+src/gateway/talk/relay/index.test.ts
 src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
@@ -668,7 +662,6 @@ src/infra/restart.ts
 src/infra/run-node.test.ts
 src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts
-src/infra/state-migrations.runtime-state.ts
 src/infra/state-migrations.session-store.ts
 src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
@@ -704,7 +697,6 @@ src/plugin-sdk/provider-stream-shared.test.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
-src/plugin-state/plugin-state-store.sqlite.ts
 src/plugins/capability-provider-runtime.test.ts
 src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
@@ -731,7 +723,6 @@ src/plugins/loader.hooks-and-runtime.test-utils.ts
 src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
 src/plugins/manifest-registry.test.ts
-src/plugins/manifest-registry.ts
 src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
@@ -748,7 +739,6 @@ src/plugins/setup-registry.ts
 src/plugins/tools.optional.test.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
-src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts
 src/secrets/apply.test.ts
@@ -762,7 +752,6 @@ src/secrets/runtime-web-tools.ts
 src/security/audit-extra.async.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/sessions/session-state-events.ts
 src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts
 src/skills/lifecycle/clawhub.test.ts
@@ -815,14 +804,13 @@ ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
-ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
+ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
 ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
-ui/src/pages/skills/view.ts
 ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts

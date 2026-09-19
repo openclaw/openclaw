@@ -3,6 +3,7 @@ import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
@@ -12,6 +13,8 @@ import {
   type ChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+
+registerModelControlsEnglish();
 
 type ChatEffortPickerParams = {
   disabled: boolean;

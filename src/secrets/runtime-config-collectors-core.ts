@@ -13,6 +13,7 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import { getPath } from "./path-utils.js";
 import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-fields.js";
@@ -59,6 +60,7 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
+    const providerPath = appendConfigPathSegment("models.providers", providerId);
     const owner = {
       ownerKind: "provider",
       ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
@@ -68,7 +70,7 @@ function collectModelProviderAssignments(params: {
     } satisfies SecretAssignmentOwner;
     collectRuntimeSecretInputAssignment({
       value: provider.apiKey,
-      path: `models.providers.${providerId}.apiKey`,
+      path: `${providerPath}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -84,7 +86,7 @@ function collectModelProviderAssignments(params: {
       for (const [headerKey, headerValue] of Object.entries(headers)) {
         collectRuntimeSecretInputAssignment({
           value: headerValue,
-          path: `models.providers.${providerId}.headers.${headerKey}`,
+          path: appendConfigPathSegment(`${providerPath}.headers`, headerKey),
           expected: "string",
           defaults: params.defaults,
           context: params.context,
@@ -102,7 +104,7 @@ function collectModelProviderAssignments(params: {
     if (request) {
       collectProviderRequestAssignments({
         request,
-        pathPrefix: `models.providers.${providerId}.request`,
+        pathPrefix: `${providerPath}.request`,
         defaults: params.defaults,
         context: params.context,
         active: providerIsActive,
@@ -121,7 +123,7 @@ function collectSkillAssignments(params: {
   for (const [skillKey, entry] of Object.entries(params.entries)) {
     collectRuntimeSecretInputAssignment({
       value: entry.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
+      path: `${appendConfigPathSegment("skills.entries", skillKey)}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -256,8 +258,8 @@ function collectTalkAssignments(params: {
       collectRuntimeSecretInputAssignment({
         value: config.apiKey,
         path: isInherited
-          ? `tts.providers.${id}.apiKey`
-          : `talk.${surface === "realtime" ? "realtime." : ""}providers.${id}.apiKey`,
+          ? `${appendConfigPathSegment("tts.providers", id)}.apiKey`
+          : `${appendConfigPathSegment(`talk.${surface === "realtime" ? "realtime." : ""}providers`, id)}.apiKey`,
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -395,7 +397,7 @@ function collectProviderRequestAssignments(params: {
     const collect = (key: string, value: unknown) => {
       collectRuntimeSecretInputAssignment({
         value,
-        path: `${pathPrefix}.${key}`,
+        path: appendConfigPathSegment(pathPrefix, key),
         expected: "string",
         defaults: params.defaults,
         context: params.context,
@@ -462,7 +464,7 @@ function collectMediaRequestAssignments(params: {
           : "shared media model does not declare capabilities and none could be inferred from its provider.";
       collectProviderRequestAssignments({
         request: rawModel.request,
-        pathPrefix: `tools.media.models.${index}.request`,
+        pathPrefix: `tools.media.models[${index}].request`,
         defaults: params.defaults,
         context: params.context,
         active,
@@ -532,8 +534,8 @@ function collectAgentTtsAssignments(params: {
       tts: entry.tts,
       pathPrefix:
         source.kind === "entries"
-          ? `agents.entries.${source.key}.tts`
-          : `agents.list.${source.index}.tts`,
+          ? `${appendConfigPathSegment("agents.entries", source.key)}.tts`
+          : `agents.list[${source.index}].tts`,
       defaults: params.defaults,
       context: params.context,
     });

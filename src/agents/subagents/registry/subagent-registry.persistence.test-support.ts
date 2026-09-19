@@ -14,7 +14,10 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../../process/gateway-work-admission.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -63,9 +66,13 @@ export function gateSubagentRequesterSettlement(
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
 export async function settleSubagentRegistryPersistenceWork() {
   await vi.dynamicImportSettled();
-  await vi.waitFor(() =>
-    expect(getActiveGatewayRootWorkCount(), "residual registry roots").toBe(0),
-  );
+  await vi.waitFor(() => {
+    const holders = getActiveGatewayRootWorkHolders();
+    expect(
+      getActiveGatewayRootWorkCount(),
+      `residual registry roots: ${holders.join(", ") || "unattributed"}`,
+    ).toBe(0);
+  });
 }
 
 type PersistenceCleanup = {

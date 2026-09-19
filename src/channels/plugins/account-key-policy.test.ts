@@ -52,7 +52,10 @@ function createPolicyConfig(accounts: Record<string, Record<string, unknown>>): 
     agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     plugins: { allow: [channel], load: { paths: [pluginDir] } },
     channels: { [channel]: { token: "root-token", name: "Root", mediaMaxMb: 1, accounts } },
-    bindings: [{ agentId: "ops", match: { channel, accountId: "work-phone", guildId: "room-a" } }],
+    bindings: [
+      { agentId: "ops", match: { channel, accountId: "default" } },
+      { agentId: "ops", match: { channel, accountId: "work-phone", guildId: "room-a" } },
+    ],
   };
 }
 
@@ -83,7 +86,12 @@ describe("prepared channel account policy entry points", () => {
     (token) => {
       const cfg = createPolicyConfig({ "Work Phone": { token, enabled: false } });
       const scope = createDoctorPluginMetadataSnapshotScope({});
-      const repaired = scope.run({ config: cfg }, () => repairUnownedChannelAccountBindings(cfg));
+      const sourceConfigBeforeMigrations = {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
+      };
+      const repaired = scope.run({ config: cfg }, () =>
+        repairUnownedChannelAccountBindings({ config: cfg, sourceConfigBeforeMigrations }),
+      );
       const expectedBindings = token
         ? cfg.bindings
         : [
@@ -93,7 +101,10 @@ describe("prepared channel account policy entry points", () => {
       expect(repaired.config.bindings).toEqual(expectedBindings);
       expect(
         scope.run({ config: repaired.config }, () =>
-          repairUnownedChannelAccountBindings(repaired.config),
+          repairUnownedChannelAccountBindings({
+            config: repaired.config,
+            sourceConfigBeforeMigrations,
+          }),
         ).changes,
       ).toEqual([]);
     },

@@ -282,6 +282,7 @@ suite.define(() => {
       const now = Date.now();
       const gateway = await installMockGateway(page, {
         sessionKey,
+        sessions: [{ key: sessionKey }],
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -581,6 +582,7 @@ suite.define(() => {
       const now = Date.now();
       await installMockGateway(page, {
         sessionKey: boardOwnerKey,
+        sessions: [{ key: boardOwnerKey }, { key: boardlessTargetKey }],
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],

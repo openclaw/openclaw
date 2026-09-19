@@ -35,7 +35,7 @@ function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   return { sessionKey, agentId: parsed.agentId };
 }
 
-export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
+function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
   if (!/^(?:https?:\/\/|\/)/i.test(raw.trim())) {
     return null;
   }
@@ -52,6 +52,17 @@ export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?
   } catch {
     return null;
   }
+}
+
+export function parseLocalMarkdownSessionUrl(
+  raw: string,
+  options: { basePath?: string; mainKey?: string; publicOrigin?: string } = {},
+) {
+  const path = parseMarkdownSessionUrl(raw, options.basePath, options.mainKey);
+  return path &&
+    (path.url.origin === globalThis.location.origin || path.url.origin === options.publicOrigin)
+    ? path
+    : null;
 }
 
 export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPattern: RegExp): void {
@@ -165,12 +176,13 @@ export function markdownSessionLinkFromEvent(
     "openclaw-session-progress-hovercard-provider",
   )?.context;
   const href = anchor?.getAttribute("href") ?? anchor?.dataset.sessionHref;
-  const path = href ? parseMarkdownSessionUrl(href, basePath ?? context?.basePath) : null;
-  if (
-    !path ||
-    (path.url.origin !== globalThis.location.origin &&
-      path.url.origin !== markdownSessionPublicOrigin(context))
-  ) {
+  const path = href
+    ? parseLocalMarkdownSessionUrl(href, {
+        basePath: basePath ?? context?.basePath,
+        publicOrigin: markdownSessionPublicOrigin(context),
+      })
+    : null;
+  if (!path) {
     return null;
   }
   const { url, target: parsed } = path;

@@ -3,9 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializePublishedConfigRuntimeEnv } from "../config/config-env-vars.js";
 import * as configIO from "../config/io.factory.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-row.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
+import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   invalidatePluginRuntimeDiscoveryAfterConfigMutation,
   refreshPluginRegistryAfterConfigMutation,
@@ -135,6 +140,70 @@ describe("plugin registry refresh config ownership", () => {
       expect(readPersistedInstalledPluginIndexSync({ filePath })?.installRecords).toEqual(records);
       expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(before);
     });
+  });
+
+  it("preserves newer install records during Gateway policy refresh", async () => {
+    await withOpenClawTestState(
+      {
+        label: "registry-refresh-gateway-policy",
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      },
+      async (state) => {
+        const config = { plugins: { enabled: false } };
+        const priorRecords = { fixture: { source: "archive" as const, version: "1.0.0" } };
+        const currentRecords = { fixture: { source: "archive" as const, version: "2.0.0" } };
+        await state.writeConfig(config);
+        await seedInstalledPluginIndex(priorRecords, { config, env: state.env });
+        const boot = loadPluginMetadataSnapshot({ config, env: state.env, allowCurrent: false });
+        const owner = retainGatewayPluginMetadata();
+        const warn = vi.fn();
+        const readCommittedIndex = (): unknown => {
+          const row = readPersistedInstalledPluginIndexRowSync({ env: state.env });
+          return row ? JSON.parse(row.value_json) : undefined;
+        };
+        try {
+          owner.publish(boot);
+          setGatewayPluginMetadataSnapshot(boot, { config, env: state.env });
+          await withPluginLifecycleLease({ env: state.env }, async (lease) => {
+            expect(await loadInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
+              priorRecords,
+            );
+            expect(readPersistedInstalledPluginIndexSync({ env: state.env })).toMatchObject({
+              installRecords: priorRecords,
+            });
+            await refreshPluginRegistryAfterConfigMutation({
+              configPath: state.configPath,
+              env: state.env,
+              reason: "source-changed",
+              installRecords: currentRecords,
+              invalidateRuntimeCache: false,
+              lease,
+              logger: { warn },
+            });
+            expect(readCommittedIndex()).toMatchObject({
+              index: { installRecords: currentRecords, refreshReason: "source-changed" },
+            });
+            // The outer operation still owns reads prepared before the nested source write.
+            await refreshPluginRegistryAfterConfigMutation({
+              configPath: state.configPath,
+              env: state.env,
+              reason: "policy-changed",
+              invalidateRuntimeCache: false,
+              lease,
+              logger: { warn },
+            });
+            expect(readCommittedIndex()).toMatchObject({
+              index: { installRecords: currentRecords, refreshReason: "policy-changed" },
+            });
+          });
+          expect(warn).not.toHaveBeenCalled();
+          expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
+          expect(boot.index.installRecords).toEqual(priorRecords);
+        } finally {
+          await owner.close();
+        }
+      },
+    );
   });
 
   it("rechecks authority after the runtime cache owner loads", async () => {

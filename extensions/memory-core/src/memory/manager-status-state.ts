@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager status state behavior.
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type {

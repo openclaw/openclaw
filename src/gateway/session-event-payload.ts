@@ -11,7 +11,7 @@ import type { GatewaySessionRow } from "./session-utils.js";
  * Picker metadata comes from catalog-backed list/patch responses; emitting a
  * locally reconstructed subset here would replace richer client state.
  */
-export function buildGatewaySessionEventFields(params: {
+function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
   label?: string;
@@ -130,6 +130,7 @@ export function buildGatewaySessionEventFields(params: {
     activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
+    runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
@@ -216,6 +217,7 @@ export function buildGatewaySessionSnapshot(params: {
       "activeModel",
       "modelOverrideSource",
       "agentRuntime",
+      "runtimeSelectionLocked",
     ] as const) {
       delete sessionRow[field];
       delete eventFields[field];

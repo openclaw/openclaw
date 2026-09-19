@@ -10,11 +10,15 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   buildScriptEvidenceSummary,
+  captureQaEvidenceRuntimeIdentity,
+  captureQaEvidenceSourceIdentity as readSourceIdentity,
+  createQaEvidenceInvocation,
   QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
+  type QaEvidenceIdentity,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
-} from "../extensions/qa-lab/api.js";
+} from "../extensions/qa-lab/test-api.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { summarizeGatewayMatrixOutcomes } from "./lib/code-mode-matrix-comparison.ts";
@@ -106,6 +110,7 @@ export type CodeModeMatrixCellResult = {
   costUsd?: number;
   diagnostics?: string;
   elapsedMs: number;
+  evidenceOccurrenceId?: string;
   error?: AgentExecEnvelope["error"];
   expected: string;
   failureCategory: CellFailureCategory | null;
@@ -695,57 +700,11 @@ async function prepareTaskFixture(workspace: string, cell: MatrixCell): Promise<
   return fixture;
 }
 
-async function readGitSha(repoRoot: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  });
-  return stdout.trim();
-}
-
-async function readSourceIdentity(repoRoot: string): Promise<SourceIdentity> {
-  const gitSha = await readGitSha(repoRoot);
-  const [{ stdout: patch }, { stdout: untrackedOutput }] = await Promise.all([
-    execFileAsync("git", ["diff", "--binary", "HEAD", "--", "."], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-    }),
-    execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-    }),
-  ]);
-  const untracked = untrackedOutput.split("\0").filter(Boolean).toSorted();
-  const sourceDirty = patch.length > 0 || untracked.length > 0;
-  if (!sourceDirty) {
-    return { gitSha, sourceDirty: false, sourcePatchSha256: null };
-  }
-
-  const hash = createHash("sha256").update(patch);
-  for (const relativePath of untracked) {
-    const filePath = path.join(repoRoot, relativePath);
-    const stat = await fs.lstat(filePath);
-    hash.update(`\0${relativePath}\0${stat.mode}\0`);
-    if (stat.isSymbolicLink()) {
-      hash.update(await fs.readlink(filePath));
-    } else if (stat.isFile()) {
-      hash.update(await fs.readFile(filePath));
-    }
-  }
-  return {
-    gitSha,
-    sourceDirty: true,
-    sourcePatchSha256: hash.digest("hex"),
-  };
-}
-
 async function hashDirectory(root: string): Promise<string> {
   const hash = createHash("sha256");
   const visit = async (directory: string): Promise<void> => {
     const entries = (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
-      a.name.localeCompare(b.name),
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
     );
     for (const entry of entries) {
       const filePath = path.join(directory, entry.name);
@@ -768,7 +727,9 @@ async function hashRuntimeArtifacts(repoRoot: string): Promise<string> {
   const artifacts = [{ label: "dist", root: path.join(repoRoot, "dist") }];
   const packagesRoot = path.join(repoRoot, "packages");
   const packageEntries = await fs.readdir(packagesRoot, { withFileTypes: true });
-  for (const entry of packageEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+  for (const entry of packageEntries.toSorted((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  )) {
     if (!entry.isDirectory()) {
       continue;
     }
@@ -1468,6 +1429,7 @@ export async function runCodeModeModelMatrix(
     await (deps.buildCliArtifacts ?? buildMatrixCliArtifacts)(options.repoRoot);
   }
   if (!options.dryRun && options.runtimeDir) {
+    // Current source can be clean after reverting edits that produced the retained artifacts.
     for (const stamp of [".buildstamp", ".runtime-postbuildstamp"]) {
       const value: unknown = JSON.parse(
         await fs.readFile(path.join(runtimeRepoRoot, "dist", stamp), "utf8"),
@@ -1476,10 +1438,12 @@ export async function runCodeModeModelMatrix(
         !value ||
         typeof value !== "object" ||
         !("head" in value) ||
-        value.head !== sourceIdentity.gitSha
+        value.head !== sourceIdentity.gitSha ||
+        !("inputsClean" in value) ||
+        value.inputsClean !== true
       ) {
         throw new Error(
-          `Frozen runtime ${stamp} does not match its committed source; rebuild it first.`,
+          `Frozen runtime ${stamp} must match its clean committed source and record clean build inputs. Choose a revision with provenance-capable stamp writers and run pnpm build; rebuilding older source without those writers cannot satisfy this check.`,
         );
       }
     }
@@ -1494,6 +1458,27 @@ export async function runCodeModeModelMatrix(
   const buildSha256 = options.dryRun
     ? null
     : await (deps.readBuildSha256 ?? hashRuntimeArtifacts)(runtimeRepoRoot);
+  const launch: QaEvidenceIdentity = {
+    source: {
+      ref: sourceIdentity.gitSha,
+      integrity: `git:${sourceIdentity.gitSha}${sourceIdentity.sourcePatchSha256 ? `+sha256:${sourceIdentity.sourcePatchSha256}` : ""}`,
+    },
+    runtime: captureQaEvidenceRuntimeIdentity(),
+    package: null,
+    protocol: null,
+    accountRef: null,
+    proofClass: null,
+  };
+  const invocation = createQaEvidenceInvocation({
+    scenarios: cells.map((cell) => ({ id: cell.id, execution: { kind: "script" } })),
+    channel: null,
+    launch,
+  });
+  const writeEvidence = async (generatedAt: string) =>
+    await writeJson(
+      path.join(outputDir, QA_EVIDENCE_FILENAME),
+      invocation.snapshot({ generatedAt, evidenceMode: "full" }),
+    );
   const manifest = {
     schemaVersion: MATRIX_SCHEMA_VERSION,
     generatedAt: now.toISOString(),
@@ -1512,17 +1497,12 @@ export async function runCodeModeModelMatrix(
     cells: cells.map((cell) => cell.id),
   };
   await writeJson(path.join(outputDir, "manifest.json"), manifest);
+  // Persist the complete schedule before any cell starts. An interrupted or dry
+  // run retains null selections instead of inventing successful observations.
+  await writeEvidence(now.toISOString());
   if (options.dryRun) {
     const summary = { status: "dry-run", total: cells.length };
     await writeJson(path.join(outputDir, "summary.json"), summary);
-    await writeJson(
-      path.join(outputDir, QA_EVIDENCE_FILENAME),
-      buildCodeModeMatrixEvidence({
-        generatedAt: now.toISOString(),
-        repoRoot: options.repoRoot,
-        results: [],
-      }),
-    );
     return { exitCode: 0, outputDir, summary };
   }
 
@@ -1541,7 +1521,7 @@ export async function runCodeModeModelMatrix(
     const resultsPath = path.join(outputDir, "results.jsonl");
     await fs.writeFile(resultsPath, "", "utf8");
     const executeCell = deps.runCell ?? runMatrixCell;
-    for (const cell of cells) {
+    for (const [index, cell] of cells.entries()) {
       abortController.signal.throwIfAborted();
       const workload = isGatewayTask(cell.task)
         ? (await import("./lib/code-mode-matrix-gateway.ts")).createGatewayMatrixWorkload(
@@ -1551,6 +1531,9 @@ export async function runCodeModeModelMatrix(
             options.timeoutSeconds,
           )
         : undefined;
+      // Repetitions are independent scheduled cells, not retries whose eventual
+      // success could hide an earlier failure.
+      const occurrenceId = invocation.begin(index, null);
       let result: CodeModeMatrixCellResult;
       const cellStartedAt = Date.now();
       try {
@@ -1582,12 +1565,57 @@ export async function runCodeModeModelMatrix(
       if (workload) {
         result.workload = workload;
       }
+      result.evidenceOccurrenceId = occurrenceId;
+      const artifactPath = path.posix.join("observations", `${occurrenceId}.json`);
+      const artifactBytes = `${JSON.stringify(redactJsonValueForDevToolLog({ result, launch, buildSha256 }), null, 2)}\n`;
+      await fs.mkdir(path.join(outputDir, "observations"), { recursive: true });
+      await fs.writeFile(path.join(outputDir, artifactPath), artifactBytes, {
+        flag: "wx",
+        mode: 0o600,
+      });
+      const artifact = {
+        kind: "matrix-observation",
+        path: artifactPath,
+        source: "code-mode-model-matrix",
+        sha256: createHash("sha256").update(artifactBytes).digest("hex"),
+      };
+      // The envelope observes provider/model responses, not a target runtime's
+      // package, protocol, account, or proof class. Keep this receipt prepared-only.
+      invocation.complete(occurrenceId, {
+        status: evidenceStatus(result),
+        entries: buildCodeModeMatrixEvidence({
+          generatedAt: result.timestamp,
+          repoRoot: options.repoRoot,
+          results: [result],
+        }).entries.map((entry) =>
+          Object.assign({}, entry, {
+            execution: entry.execution
+              ? {
+                  ...entry.execution,
+                  artifacts: [
+                    ...entry.execution.artifacts,
+                    {
+                      kind: artifact.kind,
+                      path: artifact.path,
+                      source: artifact.source,
+                    },
+                  ],
+                }
+              : undefined,
+          }),
+        ),
+        receipts: [
+          { id: `${occurrenceId}:prepared`, phase: "prepared", identity: launch, artifact },
+        ],
+      });
+      invocation.select(index, occurrenceId);
       results.push(result);
       await fs.appendFile(
         resultsPath,
         `${JSON.stringify(redactJsonValueForDevToolLog(result))}\n`,
         "utf8",
       );
+      await writeEvidence(result.timestamp);
       const label = result.passed ? "PASS" : `FAIL ${result.failureCategory ?? "unknown"}`;
       console.log(`[code-mode-matrix] ${label} ${result.id} ${result.elapsedMs}ms`);
     }
@@ -1634,14 +1662,7 @@ export async function runCodeModeModelMatrix(
         await compareCodeModeMatrixResultsFile(options.baselineResults, results),
       );
     }
-    await writeJson(
-      path.join(outputDir, QA_EVIDENCE_FILENAME),
-      buildCodeModeMatrixEvidence({
-        generatedAt: summary.finishedAt,
-        repoRoot: options.repoRoot,
-        results,
-      }),
-    );
+    await writeEvidence(summary.finishedAt);
     return {
       exitCode: failed > 0 && !options.allowFailures ? 1 : 0,
       outputDir,

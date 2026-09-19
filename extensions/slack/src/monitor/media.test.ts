@@ -133,9 +133,13 @@ const logVerboseMock = vi.hoisted(() => vi.fn());
 const mediaWarnMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./media.runtime.js", () => ({
+  captureChannelReadAuthority: () => undefined,
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
   saveRemoteMedia: saveRemoteMediaMock,
   slackMediaLog: { warn: mediaWarnMock },
+  unlinkIfExists: async (filePath: string) => {
+    await fs.unlink(filePath).catch(() => undefined);
+  },
 }));
 
 vi.mock("./thread.runtime.js", () => ({
@@ -1322,7 +1326,7 @@ describe("Slack message file intake", () => {
         unavailableWithSameMetadata,
         unavailableWithoutId,
       ],
-      preloadedMedia: new Map([
+      preloadedMedia: new Map<SlackFile, SlackMediaResult[number]>([
         [
           downloaded,
           {

@@ -108,6 +108,40 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+export const AgentActivityItemSchema = closedObject({
+  itemId: NonEmptyString,
+  phase: Type.Union([Type.Literal("start"), Type.Literal("update"), Type.Literal("end")]),
+  kind: Type.String(),
+  title: Type.String(),
+  status: Type.Optional(
+    Type.Union([
+      Type.Literal("running"),
+      Type.Literal("completed"),
+      Type.Literal("failed"),
+      Type.Literal("blocked"),
+    ]),
+  ),
+  name: Type.Optional(Type.String()),
+  meta: Type.Optional(Type.String()),
+  commandBearing: Type.Optional(Type.Boolean()),
+  toolCallId: Type.Optional(Type.String()),
+  startedAt: Type.Optional(Type.Number()),
+  endedAt: Type.Optional(Type.Number()),
+  error: Type.Optional(Type.String()),
+  summary: Type.Optional(Type.String()),
+  progressText: Type.Optional(Type.String()),
+  suppressChannelProgress: Type.Optional(Type.Boolean()),
+  hideFromChannelProgress: Type.Optional(Type.Boolean()),
+  approvalId: Type.Optional(Type.String()),
+  approvalSlug: Type.Optional(Type.String()),
+});
+export type AgentActivityItem = Static<typeof AgentActivityItemSchema>;
+export const ChatHistoryActivitySchema = closedObject({
+  messageId: NonEmptyString,
+  items: Type.Array(AgentActivityItemSchema),
+});
+export type ChatHistoryActivity = Static<typeof ChatHistoryActivitySchema>;
+
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
  * payloads. There is no continuation loop: more than 200 raw events or the byte
@@ -116,6 +150,7 @@ export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 export const ChatHistoryDeltaResultSchema = closedObject({
   kind: Type.Literal("delta"),
   messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
   deltaCursor: Type.String(),
   sessionInfo: Type.Unknown(),
   agentsList: Type.Optional(Type.Unknown()),
@@ -211,6 +246,7 @@ export const ChatAttachmentSchema = Type.Object(
     type: Type.Optional(Type.String()),
     mimeType: Type.Optional(Type.String()),
     fileName: Type.Optional(Type.String()),
+    origin: Type.Optional(Type.Union([Type.Literal("paste"), Type.Literal("file")])),
     // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
     content: Type.Optional(Type.Unknown()),
     sizeBytes: Type.Optional(Type.Number()),

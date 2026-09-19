@@ -114,9 +114,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected abstract providerRetirementPromise: Promise<void>;
   protected abstract providersPendingRetirement: Set<EmbeddingProvider>;
-  protected abstract closing: boolean;
-  protected abstract activeManagerOperations: number;
-  protected abstract managerIdleWaiters: Set<() => void>;
   protected abstract activeBackgroundSearchSyncs: Set<Promise<void>>;
   protected abstract indexIdentityDirty: boolean;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
@@ -516,25 +513,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       state.status === "mismatched" ||
       (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
     return state;
-  }
-
-  protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
-    if (this.closing || this.closed) {
-      throw new Error("Memory index manager is closed");
-    }
-    this.activeManagerOperations += 1;
-    try {
-      return await this.withPublishedDatabase(run);
-    } finally {
-      this.activeManagerOperations -= 1;
-      if (this.activeManagerOperations === 0) {
-        const waiters = Array.from(this.managerIdleWaiters);
-        this.managerIdleWaiters.clear();
-        for (const resolve of waiters) {
-          resolve();
-        }
-      }
-    }
   }
 
   protected async awaitManagerIdle(): Promise<void> {

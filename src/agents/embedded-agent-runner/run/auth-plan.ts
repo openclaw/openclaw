@@ -47,6 +47,7 @@ function loadEmbeddedRunAuthProfileStore(params: {
 }
 
 export async function prepareEmbeddedRunAuthPlan(params: {
+  assertCurrent: () => void;
   runParams: RunEmbeddedAgentParams;
   provider: string;
   /** Selected logical ID returned by the model resolver. */
@@ -228,12 +229,12 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       generationRouteModelMemo: params.preparedModelRuntime?.routeModelResolutionMemo,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {
+          assertCurrent: params.assertCurrent,
           modelIdSource: "selected",
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: true,
-          preferBundledStaticCatalogTransport: true,
           preparedModelRuntime: params.preparedModelRuntime,
           workspaceDir: params.workspaceDir,
           authProfileId,

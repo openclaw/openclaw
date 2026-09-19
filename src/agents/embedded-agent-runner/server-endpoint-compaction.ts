@@ -35,13 +35,14 @@ export async function attemptServerEndpointCompaction(params: {
   customInstructions?: string;
   config?: OpenClawConfig;
   onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
-  onCompactionCommitted?: () => void;
+  onCompactionCommitted?: (tokensBefore: number) => void;
   assertActive?: () => void;
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
     params.customInstructions?.trim() ||
-    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams).enabled
+    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams, params.trigger)
+      .enabled
   ) {
     return undefined;
   }
@@ -113,7 +114,7 @@ export async function attemptServerEndpointCompaction(params: {
         );
       }
       compactionCommitted = true;
-      params.onCompactionCommitted?.();
+      params.onCompactionCommitted?.(compacted.usage.input_tokens);
     });
   } catch (err) {
     // Observer or handle-release failures after commit must not trigger a

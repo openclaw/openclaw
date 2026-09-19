@@ -1,4 +1,3 @@
-// Telegram plugin module implements action runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
@@ -15,6 +14,9 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingPreviewToolProgress,
   sendDurableMessageBatch,
   type DurableMessageBatchSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -31,14 +33,24 @@ import {
   createTelegramActionGate,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
+  resolveTelegramAccount,
 } from "./accounts.js";
-import { TELEGRAM_CALLBACK_DATA_MAX_BYTES } from "./approval-callback-data.js";
+import {
+  readTelegramChatId,
+  readTelegramForumTopicIconColor,
+  readTelegramReplyToMessageId,
+  readTelegramSendMediaUrls,
+  readTelegramThreadId,
+} from "./action-params.js";
+import { resolveTelegramStreamMode } from "./bot/helpers.js";
 import {
   appendTelegramDroppedControlFallback,
-  resolveTelegramInlineButtons,
-  type TelegramButtonBuildOptions,
+  buildTelegramControlDegradation,
+  resolveTelegramButtonsFromParams,
   type TelegramDroppedControl,
 } from "./button-types.js";
+import type { TelegramDraftPreview } from "./draft-stream.js";
+import { readTelegramHistoryAction } from "./history-read.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -52,6 +64,7 @@ import {
 } from "./message-topic-binding.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
+import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
   createForumTopicTelegram,
@@ -89,9 +102,6 @@ export const telegramActionRuntime = {
   sendStickerTelegram,
 };
 
-const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
-  0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
-] as const;
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
 const TELEGRAM_REACTION_HINT_LIMIT = 20;
 const TELEGRAM_ACTION_ALIASES = {
@@ -104,6 +114,7 @@ const TELEGRAM_ACTION_ALIASES = {
   "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
+  read: "read",
   searchSticker: "searchSticker",
   send: "sendMessage",
   sendMessage: "sendMessage",
@@ -119,47 +130,12 @@ type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM
 type ConversationReadInvocationOrigin = NonNullable<
   ChannelMessageActionContext["conversationReadOrigin"]
 >;
-type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
-
-function readTelegramForumTopicIconColor(
-  params: Record<string, unknown>,
-): TelegramForumTopicIconColor | undefined {
-  const iconColor = readPositiveIntegerParam(params, "iconColor", {
-    message: "iconColor must be one of Telegram's supported forum topic colors.",
-  });
-  if (iconColor == null) {
-    return undefined;
-  }
-  if (!TELEGRAM_FORUM_TOPIC_ICON_COLORS.includes(iconColor as TelegramForumTopicIconColor)) {
-    throw new Error("iconColor must be one of Telegram's supported forum topic colors.");
-  }
-  return iconColor as TelegramForumTopicIconColor;
-}
 function normalizeTelegramActionName(action: string): TelegramActionName {
   const normalized = TELEGRAM_ACTION_ALIASES[action as keyof typeof TELEGRAM_ACTION_ALIASES];
   if (!normalized) {
     throw new Error(`Unsupported Telegram action: ${action}`);
   }
   return normalized;
-}
-
-function readTelegramChatId(params: Record<string, unknown>) {
-  return (
-    readStringOrNumberParam(params, "chatId") ??
-    readStringOrNumberParam(params, "channelId") ??
-    readStringOrNumberParam(params, "to", { required: true })
-  );
-}
-
-function readTelegramThreadId(params: Record<string, unknown>) {
-  return (
-    readPositiveIntegerParam(params, "messageThreadId", {
-      message: "messageThreadId must be a positive integer.",
-    }) ??
-    readPositiveIntegerParam(params, "threadId", {
-      message: "threadId must be a positive integer.",
-    })
-  );
 }
 
 function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
@@ -181,73 +157,6 @@ function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | nul
     return to;
   }
   return `${parsed.chatId}:topic:${topicId}`;
-}
-
-function readTelegramReplyToMessageId(params: Record<string, unknown>) {
-  return (
-    readPositiveIntegerParam(params, "replyToMessageId", {
-      message: "replyToMessageId must be a positive integer.",
-    }) ??
-    readPositiveIntegerParam(params, "replyTo", {
-      message: "replyTo must be a positive integer.",
-    })
-  );
-}
-
-function pushTelegramMediaUrl(mediaUrls: string[], seen: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim();
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  mediaUrls.push(normalized);
-}
-
-function readTelegramSendMediaUrls(params: Record<string, unknown>) {
-  const mediaUrls: string[] = [];
-  const seen = new Set<string>();
-  pushTelegramMediaUrl(mediaUrls, seen, params.mediaUrl);
-  pushTelegramMediaUrl(mediaUrls, seen, params.media);
-  pushTelegramMediaUrl(mediaUrls, seen, params.path);
-  pushTelegramMediaUrl(mediaUrls, seen, params.filePath);
-  pushTelegramMediaUrl(mediaUrls, seen, params.fileUrl);
-  if (Array.isArray(params.mediaUrls)) {
-    for (const mediaUrl of params.mediaUrls) {
-      pushTelegramMediaUrl(mediaUrls, seen, mediaUrl);
-    }
-  }
-  if (Array.isArray(params.attachments)) {
-    for (const attachment of params.attachments) {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-        continue;
-      }
-      const record = attachment as Record<string, unknown>;
-      pushTelegramMediaUrl(mediaUrls, seen, record.media);
-      pushTelegramMediaUrl(mediaUrls, seen, record.mediaUrl);
-      pushTelegramMediaUrl(mediaUrls, seen, record.path);
-      pushTelegramMediaUrl(mediaUrls, seen, record.filePath);
-      pushTelegramMediaUrl(mediaUrls, seen, record.fileUrl);
-      pushTelegramMediaUrl(mediaUrls, seen, record.url);
-    }
-  }
-  return mediaUrls;
-}
-
-function resolveTelegramButtonsFromParams(
-  params: Record<string, unknown>,
-  presentation = normalizeMessagePresentation(params.presentation),
-  options?: TelegramButtonBuildOptions,
-) {
-  return resolveTelegramInlineButtons(
-    {
-      presentation,
-      interactive: params.interactive,
-    },
-    options,
-  );
 }
 
 function readTelegramSendContent(params: {
@@ -295,31 +204,6 @@ function readTelegramSendContent(params: {
   return {
     content: content ?? "",
     hasExplicitContent: explicitContent != null,
-  };
-}
-
-function buildTelegramControlDegradation(
-  controls: readonly TelegramDroppedControl[],
-  fallbackDelivered: boolean,
-) {
-  if (controls.length === 0) {
-    return undefined;
-  }
-  const reasons = [...new Set(controls.map((control) => control.reason))];
-  const hasOverflow = reasons.includes("callback_data_too_long");
-  return {
-    warning: fallbackDelivered
-      ? `Telegram delivered ${controls.length} unencodable control${controls.length === 1 ? "" : "s"} as readable text.`
-      : `Telegram could not deliver ${controls.length} control${controls.length === 1 ? "" : "s"}.`,
-    degradedDelivery: {
-      droppedControls: controls.length,
-      fallback: fallbackDelivered ? "text" : "not_delivered",
-      reasons,
-      ...(hasOverflow ? { callbackDataLimitBytes: TELEGRAM_CALLBACK_DATA_MAX_BYTES } : {}),
-      guidance: hasOverflow
-        ? `Shorten callback data to at most ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} UTF-8 bytes and retry if clickable controls are required.`
-        : "Retry with a supported control action if clickable controls are required.",
-    },
   };
 }
 
@@ -440,7 +324,9 @@ export async function handleTelegramAction(
     skipQueue?: boolean;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
+    requesterSenderId?: string | null;
     reply?: ChannelMessageActionContext["reply"];
+    progressSnapshot?: ChannelMessageActionContext["progressSnapshot"];
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
@@ -461,6 +347,10 @@ export async function handleTelegramAction(
       inboundEventKind: options?.inboundEventKind,
     });
   };
+
+  if (action === "read") {
+    return await readTelegramHistoryAction(params, cfg, options);
+  }
 
   if (action === "emoji-list") {
     if (!isActionEnabled("reactions")) {
@@ -924,6 +814,22 @@ export async function handleTelegramAction(
       readStringParam(params, "message", { allowEmpty: false });
     // Telegram treats an explicit empty caption as a request to remove it.
     let caption = readStringParam(params, "caption", { allowEmpty: true });
+    let progressPreview: TelegramDraftPreview | undefined;
+    if (options?.progressSnapshot) {
+      const telegramCfg = resolveTelegramAccount({ cfg, accountId }).config;
+      const streamMode = resolveTelegramStreamMode(telegramCfg);
+      progressPreview = renderTelegramProgressDraftPreview(options.progressSnapshot, {
+        richMessages: telegramCfg.richMessages === true,
+        toolProgress: resolveChannelStreamingPreviewToolProgress(
+          telegramCfg,
+          streamMode !== "progress",
+          streamMode,
+        ),
+        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+        maxLineChars: resolveChannelProgressDraftMaxLineChars(telegramCfg),
+      });
+      content = progressPreview.text;
+    }
     const droppedControls: TelegramDroppedControl[] = [];
     const buttons = resolveTelegramButtonsFromParams(params, undefined, {
       allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
@@ -970,6 +876,7 @@ export async function handleTelegramAction(
           token,
           accountId: accountId ?? undefined,
           gatewayClientScopes: options?.gatewayClientScopes,
+          assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
         },
       );
       return jsonResult({
@@ -979,17 +886,27 @@ export async function handleTelegramAction(
         ...buildTelegramControlDegradation(droppedControls, false),
       });
     }
+    // Draft previews use <br>; the edit HTML sanitizer requires Bot API newlines.
     const result = await telegramActionRuntime.editMessageTelegram(
       authorizedChatId,
       messageId ?? 0,
-      caption ?? content ?? "",
+      progressPreview?.parseMode === "HTML"
+        ? progressPreview.text.replaceAll("<br>", "\n")
+        : (progressPreview?.text ?? caption ?? content ?? ""),
       {
         cfg,
         token,
         accountId: accountId ?? undefined,
         buttons,
-        editMode: caption != null ? "caption" : "auto",
+        editMode: progressPreview ? "text" : caption != null ? "caption" : "auto",
+        ...(progressPreview
+          ? {
+              textMode: progressPreview.parseMode === "HTML" ? "html" : "markdown",
+              richMessage: progressPreview.richMessage,
+            }
+          : {}),
         gatewayClientScopes: options?.gatewayClientScopes,
+        assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       },
     );
     return jsonResult({

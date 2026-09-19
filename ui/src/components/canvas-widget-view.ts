@@ -321,9 +321,12 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
       </div>`;
     }
     if (!this.view || !this.context) {
-      return html`<div role="status" style=${`min-height:${this.preferredHeight ?? 420}px`}>
-        ${t("common.loading")}
-      </div>`;
+      return html`<div
+        class="skeleton"
+        role="status"
+        aria-label=${t("common.loading")}
+        style=${`min-height:${this.preferredHeight ?? 420}px`}
+      ></div>`;
     }
     let src: string | undefined;
     try {

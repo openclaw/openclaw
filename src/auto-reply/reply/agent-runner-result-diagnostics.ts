@@ -104,6 +104,7 @@ export async function buildReplyDiagnosticsPayload(params: {
           modelOverrideSource: followupRun.run.modelOverrideSource,
           hasAutoFallbackProvenance: followupRun.run.hasAutoFallbackProvenance === true,
           modelSelectionLocked: followupRun.run.modelSelectionLocked,
+          subagentSpawnLineage: followupRun.run.subagentSpawnLineage,
         }).kind === "active",
       blockStreaming:
         runResult.meta?.requestShaping?.blockStreaming ??

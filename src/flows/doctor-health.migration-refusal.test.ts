@@ -24,16 +24,23 @@ const snapshotProcesses = vi.hoisted(() => ({
   execFile: vi.fn<typeof import("node:child_process").execFile>(),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
+  const { promisify } = await import("node:util");
   const actual = await importOriginal<typeof import("node:child_process")>();
   snapshotProcesses.execFile.mockImplementation(actual.execFile);
-  Object.defineProperties(
+  Object.defineProperty(
     snapshotProcesses.execFile,
-    Object.getOwnPropertyDescriptors(actual.execFile),
+    promisify.custom,
+    Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
   );
   return { ...actual, execFile: snapshotProcesses.execFile };
 });
 
-const maintenance = vi.hoisted(() => ({ finish: vi.fn(), release: vi.fn() }));
+const maintenance = vi.hoisted(() => ({
+  run: <T>(operation: () => T): T => operation(),
+  finish: vi.fn(),
+  releaseState: vi.fn(),
+  release: vi.fn(),
+}));
 afterEach(() => vi.restoreAllMocks());
 
 describe("Doctor refused-migration maintenance outcome", () => {
@@ -166,7 +173,7 @@ describe("Doctor maintenance admission", () => {
           vi.spyOn(
             coordinators,
             owner === "gateway"
-              ? "acquireGatewayLifecycleCoordinator"
+              ? "acquireGatewayMaintenanceCoordinator"
               : "acquireStateDatabaseCoordinator",
           ).mockImplementation(() => {
             throw new coordinators.StateDatabaseCoordinatorContentionError(
@@ -199,7 +206,7 @@ describe("Doctor maintenance admission", () => {
 });
 
 describe("Doctor agent lease admission", () => {
-  it("admits the exact dangling Workshop index without mutating state", async () => {
+  it("reserves dangling Workshop index admission for Doctor without mutating state", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const opened = openOpenClawStateDatabase({ env: state.env });
       const pathname = opened.path;
@@ -227,8 +234,21 @@ describe("Doctor agent lease admission", () => {
       }
       const before = fs.readFileSync(pathname);
 
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toThrow(
+        /malformed database schema/,
+      );
       expect(fs.readFileSync(pathname)).toEqual(before);
+      const doctor = await doctorMaintenance.beginDoctorMaintenance({
+        options: { repair: true, nonInteractive: true },
+        root: null,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      try {
+        expect(doctor).toBeDefined();
+        expect(fs.readFileSync(pathname)).toEqual(before);
+      } finally {
+        await doctor?.release();
+      }
     });
   });
 

@@ -22,7 +22,7 @@ export type {
 
 /** Release only this QA root's parent stores before its files are removed. */
 export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
-  const [auth, agents, state, paths] = await Promise.all([
+  const [auth, { closeOpenClawAgentDatabasesAsync }, state, paths] = await Promise.all([
     import("../agents/auth-profiles/sqlite.js"),
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
@@ -31,7 +31,7 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
-  await agents.closeOpenClawAgentDatabasesAsync(tempRoot);
+  await closeOpenClawAgentDatabasesAsync(tempRoot);
   await state.closeOpenClawStateDatabaseByPathAsync(
     paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
   );

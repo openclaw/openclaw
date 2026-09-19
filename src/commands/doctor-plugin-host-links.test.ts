@@ -58,10 +58,14 @@ function createRegisteredExtensionPlugin(params: {
   return { packageDir, staleHostDir };
 }
 
-function createNpmInstallRecord(pluginId: string, packageDir: string): PluginInstallRecord {
+function createRegistryInstallRecord(
+  source: "npm" | "clawhub",
+  pluginId: string,
+  packageDir: string,
+): PluginInstallRecord {
   const packageName = `@clawemail/${pluginId}`;
   return {
-    source: "npm",
+    source,
     spec: `${packageName}@2026.7.1`,
     installPath: packageDir,
     version: "2026.7.1",
@@ -95,7 +99,7 @@ function createDoctorParams(stateDir: string, shouldRepair: boolean) {
   };
 }
 
-describe("doctor registered npm plugin host links", () => {
+describe.each(["npm", "clawhub"] as const)("doctor registered %s plugin host links", (source) => {
   it.each(["peerDependencies", "dependencies"] as const)(
     "repairs a stale copied host for a registered extensions-root %s plugin",
     async (dependencyField) => {
@@ -105,7 +109,7 @@ describe("doctor registered npm plugin host links", () => {
         dependencyField,
       });
       await writeInstallRecords(stateDir, {
-        email: createNpmInstallRecord("email", packageDir),
+        email: createRegistryInstallRecord(source, "email", packageDir),
       });
 
       await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
@@ -116,11 +120,36 @@ describe("doctor registered npm plugin host links", () => {
     },
   );
 
+  it("relinks a cloned plugin without changing the source host link or package", async () => {
+    const sourceState = tempDirs.make("openclaw-source-plugin-host-");
+    const clonedState = tempDirs.make("openclaw-cloned-plugin-host-");
+    const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({ stateDir: sourceState });
+    const oldHost = path.join(sourceState, "old-host");
+    fs.renameSync(staleHostDir, oldHost);
+    fs.symlinkSync(oldHost, staleHostDir, "junction");
+    const sourceManifest = fs.readFileSync(path.join(packageDir, "package.json"));
+    const hostManifest = fs.readFileSync(path.join(oldHost, "package.json"));
+    const clonedPackage = path.join(clonedState, "extensions", "email");
+    fs.cpSync(packageDir, clonedPackage, { recursive: true, verbatimSymlinks: true });
+    await writeInstallRecords(clonedState, {
+      email: createRegistryInstallRecord(source, "email", clonedPackage),
+    });
+
+    await maybeRepairPluginRegistryState(createDoctorParams(clonedState, true));
+
+    expect(fs.realpathSync(path.join(clonedPackage, "node_modules", "openclaw"))).toBe(
+      fs.realpathSync(process.cwd()),
+    );
+    expect(fs.readlinkSync(staleHostDir)).toBe(oldHost);
+    expect(fs.readFileSync(path.join(packageDir, "package.json"))).toEqual(sourceManifest);
+    expect(fs.readFileSync(path.join(oldHost, "package.json"))).toEqual(hostManifest);
+  });
+
   it("reports a stale registered extensions-root host without changing it in read-only doctor", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
     const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({ stateDir });
     await writeInstallRecords(stateDir, {
-      email: createNpmInstallRecord("email", packageDir),
+      email: createRegistryInstallRecord(source, "email", packageDir),
     });
 
     const params = createDoctorParams(stateDir, false);
@@ -170,7 +199,7 @@ describe("doctor registered npm plugin host links", () => {
       packageDir: path.join(stateDir, "external-owner", "email"),
     });
     await writeInstallRecords(stateDir, {
-      email: createNpmInstallRecord("email", packageDir),
+      email: createRegistryInstallRecord(source, "email", packageDir),
     });
 
     await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
@@ -191,7 +220,7 @@ describe("doctor registered npm plugin host links", () => {
       fs.mkdirSync(path.dirname(packageDir), { recursive: true });
       fs.symlinkSync(outsideDir, packageDir, "dir");
       await writeInstallRecords(stateDir, {
-        email: createNpmInstallRecord("email", packageDir),
+        email: createRegistryInstallRecord(source, "email", packageDir),
       });
 
       await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
@@ -212,7 +241,7 @@ describe("doctor registered npm plugin host links", () => {
       const packageDir = path.join(stateDir, "extensions", "email");
       fs.symlinkSync(developerPackageDir, packageDir, "dir");
       await writeInstallRecords(stateDir, {
-        email: createNpmInstallRecord("email", packageDir),
+        email: createRegistryInstallRecord(source, "email", packageDir),
       });
 
       await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
@@ -228,7 +257,7 @@ describe("doctor registered npm plugin host links", () => {
       nestedPackageName: "not-openclaw",
     });
     await writeInstallRecords(stateDir, {
-      email: createNpmInstallRecord("email", packageDir),
+      email: createRegistryInstallRecord(source, "email", packageDir),
     });
 
     await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
@@ -245,8 +274,8 @@ describe("doctor registered npm plugin host links", () => {
     const email = createRegisteredExtensionPlugin({ stateDir });
     fs.writeFileSync(path.join(broken.packageDir, "package.json"), "{", "utf8");
     await writeInstallRecords(stateDir, {
-      broken: createNpmInstallRecord("broken", broken.packageDir),
-      email: createNpmInstallRecord("email", email.packageDir),
+      broken: createRegistryInstallRecord(source, "broken", broken.packageDir),
+      email: createRegistryInstallRecord(source, "email", email.packageDir),
     });
 
     const issues = await detectPluginRegistryHealthIssues(createDoctorParams(stateDir, false));
@@ -266,6 +295,6 @@ describe("doctor registered npm plugin host links", () => {
     );
     expect(fs.lstatSync(broken.staleHostDir).isDirectory()).toBe(true);
     expect(fs.lstatSync(email.staleHostDir).isSymbolicLink()).toBe(true);
-    expect(vi.mocked(note).mock.calls.join("\n")).toContain("Could not inspect registered npm");
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain("Could not inspect registered");
   });
 });

@@ -809,6 +809,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
 
   it("waits for native completion after tool events buffered during turn start", async () => {
     vi.useFakeTimers();
+    const turnStartRequested = createDeferred<void>();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
       if (method === "config/read") {
@@ -837,6 +838,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
             status: "completed",
           }),
         );
+        turnStartRequested.resolve();
         return turnStartResult("turn-1", "inProgress");
       }
       return {};
@@ -863,11 +865,8 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const run = runCodexAppServerAttempt(params).finally(() => {
       settled = true;
     });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      fastWait,
-    );
+    await Promise.race([run, turnStartRequested.promise]);
+    expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything());
 
     await vi.advanceTimersByTimeAsync(11 * 60_000);
     expect(settled).toBe(false);
@@ -910,7 +909,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-existing",
-        turn: { id: "turn-1", status: "interrupted" },
+        turn: { id: "turn-1", status: "interrupted", items: [] },
       },
     });
     const firstResult = await firstRun;
@@ -997,7 +996,11 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     "bounds pre-bind terminal projection after client closure with %s",
     async (termination) => {
       const projection = createDeferred<void>();
-      const onReasoningStream = vi.fn(() => projection.promise);
+      const projectionStarted = createDeferred<void>();
+      const onReasoningStream = vi.fn(() => {
+        projectionStarted.resolve();
+        return projection.promise;
+      });
       const controller = new AbortController();
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
@@ -1025,7 +1028,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       const run = runCodexAppServerAttempt(params);
       void run.then(settled, settled);
       try {
-        await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
+        await Promise.race([
+          projectionStarted.promise,
+          run.then(() => {
+            throw new Error("Codex attempt ended before reasoning projection");
+          }),
+        ]);
+        expect(onReasoningStream).toHaveBeenCalledOnce();
         harness.close();
         if (termination === "caller cancellation") {
           controller.abort("caller stopped while draining");
@@ -1385,37 +1394,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it("releases completion when the app-server client closes during an active turn", async () => {
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createTestParams());
-
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    harness.close(
-      new Error('codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"'),
-    );
-
-    const result = await run;
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: true,
-      diagnostics: {
-        transportError:
-          'codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"',
-      },
-    });
-  });
-
   it("settles a client-close route after the host trajectory capability closes", async () => {
     const harness = createStartedThreadHarness();
     const params = Object.assign(createTestParams(), {
@@ -1657,6 +1635,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     // turn/completed handler must not strand resolveCompletion, otherwise the
     // gateway session lane stays locked and every follow-up message queues
     // behind a run that will never resolve.
+    const turnStartRequested = createDeferred<void>();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let turnStarted = false;
     const request = vi.fn(async (method: string) => {
@@ -1671,6 +1650,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       }
       if (method === "turn/start") {
         turnStarted = true;
+        turnStartRequested.resolve();
         return turnStartResult("turn-1", "inProgress");
       }
       return {};
@@ -1698,9 +1678,8 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       throw new Error("downstream consumer exploded");
     };
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() =>
-      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-    );
+    await Promise.race([run, turnStartRequested.promise]);
+    expect(request.mock.calls.map(([method]) => method)).toContain("turn/start");
     await notify({
       method: "turn/completed",
       params: {

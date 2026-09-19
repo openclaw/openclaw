@@ -244,9 +244,7 @@ export async function snapshotAriaViaPlaywright(opts: {
       ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
       : undefined;
   const collectAxTree = withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
     page,
-    targetId: opts.targetId,
     fn: async (send) => {
       await send("Accessibility.enable").catch(() => {});
       return (await send("Accessibility.getFullAXTree")) as {

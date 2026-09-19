@@ -127,6 +127,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
           }),
         effectiveDmAllow: emptyAllow,
         context: {
+          commandAuthorizedByConfig: false,
           cfg: {},
           telegramCfg: {},
           allowFrom: [],

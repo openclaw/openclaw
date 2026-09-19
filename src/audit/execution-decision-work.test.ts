@@ -2,9 +2,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import { pageExecutionDecisionFactsForContext } from "./execution-decision-facts.js";
+import { pageExecutionDecisionFactsForContextInDatabase } from "./execution-decision-facts.js";
 import type { ExecutionDecisionWork } from "./execution-decision-work.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -53,7 +57,8 @@ function decisionWork(params: {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -142,12 +147,10 @@ describe("private execution decision work", () => {
     await writer.stop();
 
     expect(errors).toEqual([]);
-    const [receipt] = pageExecutionDecisionFactsForContext({
-      context: token,
-      limit: 10,
-      now: admittedAt + 1,
-      database,
-    }).receipts;
+    const [receipt] = pageExecutionDecisionFactsForContextInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: token, limit: 10, now: admittedAt + 1 },
+    ).receipts;
     expect(receipt).toMatchObject({
       contextId: token.contextId,
       executionId: token.executionId,
@@ -219,15 +222,14 @@ describe("private execution decision work", () => {
       ).toBe(true);
       clearAdmissionSink();
       await writer.stop();
-      return pageExecutionDecisionFactsForContext({
-        context: token,
-        limit: 1,
-        now: now + 1,
-        database,
-      }).receipts[0]!;
+      return pageExecutionDecisionFactsForContextInDatabase(
+        openOpenClawStateDatabase(database).db,
+        { context: token, limit: 1, now: now + 1 },
+      ).receipts[0]!;
     };
 
     const first = await write({ stateDir: firstStateDir, suffix: "first" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const restarted = await write({ stateDir: firstStateDir, suffix: "restart" });
     const sessionScoped = await write({
@@ -235,6 +237,7 @@ describe("private execution decision work", () => {
       suffix: "session",
       targetNamespace: "session",
     });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const otherInstallation = await write({
       stateDir: tempDirs.make("openclaw-audit-private-other-installation-"),

@@ -5,6 +5,9 @@ export const GATEWAY_MATRIX_TASKS = [
   "process-contracts",
   "partial-failure",
   "checked-cell-cache",
+  "return-value-effects",
+  "result-save-invalid-json",
+  "gateway-config-read",
 ] as const;
 
 export type GatewayMatrixTask = (typeof GATEWAY_MATRIX_TASKS)[number];
@@ -16,6 +19,7 @@ export type GatewayMatrixFixture = {
   processHelperSource?: string;
   interviewPrompt: string;
   requiredTools: readonly string[];
+  probeCode?: string;
 };
 
 export function createGatewayMatrixPluginManifest(requiredTools: readonly string[]) {
@@ -257,6 +261,80 @@ function partialFailureFixture(repetition: number) {
   };
 }
 
+function returnValueEffectsFixture(repetition: number) {
+  const nonce = `return-value-r${repetition}-v1`;
+  const marker = `RETURN_VALUE_EFFECT_R${repetition}`;
+  const probeCode = `const nonce = ${JSON.stringify(nonce)};
+const marker = ${JSON.stringify(marker)};
+return {
+  get nonce() {
+    text(marker);
+    void matrix_return_effect({ nonce });
+    return nonce;
+  },
+  marker,
+};`;
+  return {
+    prompt: `Run the following JavaScript program unchanged in exactly one exec cell. Its final returned getter intentionally emits output and starts a synthetic effect; do not move those operations out of the getter or invoke the getter yourself. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
+    probeCode,
+    expected: { nonce, marker },
+    pluginSource: pluginSource(`api.registerTool({
+    name: "matrix_return_effect", label: "Record return-value effect",
+    description: "Record one synthetic effect receipt for the return-value probe. Each call adds an effect.",
+    parameters: { type: "object", properties: { nonce: { type: "string", const: ${JSON.stringify(nonce)} } }, required: ["nonce"], additionalProperties: false },
+    async execute(_id, input) {
+      if (input.nonce !== ${JSON.stringify(nonce)}) throw new Error("Unknown probe");
+      record("call", "matrix_return_effect", { nonce: input.nonce });
+      await new Promise(resolve => setTimeout(resolve, 25));
+      record("effect", "matrix_return_effect", { nonce: input.nonce });
+      return result({ nonce: input.nonce });
+    }
+  });`),
+    requiredTools: ["matrix_return_effect"],
+  };
+}
+
+function invalidResultSaveFixture(repetition: number) {
+  const nonce = `result-save-r${repetition}-v1`;
+  const probeCode = `const seed = await matrix_serialization_seed({});
+const saved = await results.save(seed);
+const cycle = {};
+cycle.self = cycle;
+const invalid = [
+  ["bigint", 1n],
+  ["cycle", cycle],
+  ["throwing-toJSON", { toJSON() { throw new Error("synthetic toJSON failure"); } }],
+];
+const rejected = [];
+for (const [kind, value] of invalid) {
+  try {
+    await results.save(value);
+  } catch (error) {
+    rejected.push(kind);
+    json({ kind, error: String(error) });
+  }
+}
+const loaded = await results.load(saved.id);
+const deleted = await results.delete(saved.id);
+return { nonce: loaded.nonce, rejected, deleted };`;
+  return {
+    prompt: `Run the following JavaScript program unchanged in exactly one exec cell. It checks actual serialization refusals and preserves a valid saved value. Do not replace unsupported values with strings or null, remove the failing cases, or invent error outcomes. Follow any wait continuation until the cell settles. Do not retry or perform other operations. Report only the final returned JSON value.\n\n${probeCode}`,
+    probeCode,
+    expected: { nonce, rejected: ["bigint", "cycle", "throwing-toJSON"], deleted: true },
+    pluginSource: pluginSource(`api.registerTool({
+    name: "matrix_serialization_seed", label: "Read serialization seed",
+    description: "Read the JSON seed for the serialization probe.",
+    parameters: ${JSON.stringify(EMPTY_INPUT)},
+    outputSchema: { type: "object", properties: { nonce: { type: "string" } }, required: ["nonce"], additionalProperties: false },
+    async execute() {
+      record("call", "matrix_serialization_seed");
+      return result({ nonce: ${JSON.stringify(nonce)} });
+    }
+  });`),
+    requiredTools: ["matrix_serialization_seed"],
+  };
+}
+
 export function createGatewayMatrixFixture(
   task: GatewayMatrixTask,
   repetition: number,
@@ -265,6 +343,12 @@ export function createGatewayMatrixFixture(
     throw new Error("Fixture repetition must be a nonnegative safe integer");
   }
   const interview = interviewPrompt(task);
+  if (task === "return-value-effects") {
+    return { ...returnValueEffectsFixture(repetition), interviewPrompt: interview };
+  }
+  if (task === "result-save-invalid-json") {
+    return { ...invalidResultSaveFixture(repetition), interviewPrompt: interview };
+  }
   if (task === "invoices-auto-retention") {
     return {
       ...invoiceFixture(repetition),
@@ -287,6 +371,14 @@ export function createGatewayMatrixFixture(
     };
   }
   const common = { pluginSource: pluginSource(""), interviewPrompt: interview, requiredTools: [] };
+  if (task === "gateway-config-read") {
+    const probe = `gateway-config-r${repetition}`;
+    return {
+      ...common,
+      prompt: `Read the real Gateway configuration at path tools.codeMode using gateway with action config.get. In the data-fetching exec cell, return the complete raw tool value unchanged so you can inspect its actual shape. Then report only JSON: {probe:${JSON.stringify(probe)},enabled:<the configured boolean>}. Read that path exactly once. Do not infer enabled from tool availability, read files, or change configuration.`,
+      expected: { probe, enabled: true },
+    };
+  }
   if (task === "automation-contracts") {
     const jobName = `matrix-contracts-r${repetition}`;
     const updatedName = `${jobName}-updated`;

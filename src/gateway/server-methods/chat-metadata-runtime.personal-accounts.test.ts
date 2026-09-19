@@ -74,7 +74,10 @@ describe("gateway chat metadata personal accounts", () => {
               surface === "metadata"
                 ? await harness.runtime.read(request)
                 : (await harness.runtime.readStartup(request))?.metadata;
-            expect(metadata).toEqual(shared);
+            expect(metadata).toEqual({
+              ...shared,
+              ...("sessionKey" in selector ? { runtimeSelectionLocked: false } : {}),
+            });
           }
           expect(await harness.runtime.read(bobScope)).toEqual(shared);
           expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);

@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmdirSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, rmdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolvePathPrefixSync } from "../infra/fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
@@ -17,7 +19,10 @@ import {
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawAgentDatabaseStoredPath,
+  resolveOpenClawRegisteredAgentDatabasePath,
+} from "./openclaw-state-db.paths.js";
 
 export {
   inspectOpenClawRegisteredAgentDatabases,
@@ -39,7 +44,6 @@ type AgentDatabasePathIdentity = {
 };
 
 const missingSuffixAliasCache = new Map<string, boolean>();
-const MAX_DANGLING_SYMLINK_HOPS = 64;
 const PROBE_NAME_LENGTH = 6;
 const PROBE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const PROBE_FIRST_ALPHABET = "bdefghijkmoqrstuvwxyz";
@@ -49,12 +53,6 @@ type CreatedProbePath = {
   device: bigint | number;
   inode: bigint | number;
 };
-
-function createSymlinkLoopError(lexicalPath: string): NodeJS.ErrnoException {
-  const error = new Error(`Symlink loop while resolving ${lexicalPath}.`) as NodeJS.ErrnoException;
-  error.code = "ELOOP";
-  return error;
-}
 
 function areAsciiCaseVariants(left: string | undefined, right: string | undefined): boolean {
   const foldAsciiCase = (value: string) =>
@@ -317,7 +315,7 @@ function areMissingSuffixAliases(params: {
     path.join(params.parentRealPath, params.left).length,
     path.join(params.parentRealPath, params.right).length,
   );
-  try {
+  const observe = (): boolean | undefined => {
     let probeParent = params.parentRealPath;
     for (let index = 0; index < leftSegments.length; index += 1) {
       const leftSegment = leftSegments[index]!;
@@ -340,7 +338,6 @@ function areMissingSuffixAliases(params: {
         let caseProbePairs = createAsciiCaseProbePairs(componentProbeNameLength, forbiddenNames);
         if (!areAsciiCaseVariants(normalizedLeft, normalizedRight)) {
           if (!shouldProbeUnicodeCaseVariants(normalizedLeft, normalizedRight)) {
-            missingSuffixAliasCache.set(cacheKey, false);
             return false;
           }
           const privateParent = createNeutralProbeDirectory({
@@ -350,7 +347,7 @@ function areMissingSuffixAliases(params: {
             nameLength: componentProbeNameLength,
           });
           if (!privateParent) {
-            return true;
+            return undefined;
           }
           caseProbeParent = privateParent;
           caseProbePairs = [[leftSegment, rightSegment]];
@@ -361,10 +358,9 @@ function areMissingSuffixAliases(params: {
           createdPaths,
         });
         if (!caseProbe) {
-          return true;
+          return undefined;
         }
         if (!caseProbe.aliases) {
-          missingSuffixAliasCache.set(cacheKey, false);
           return false;
         }
         nextProbeParent = caseProbe.path;
@@ -384,7 +380,7 @@ function areMissingSuffixAliases(params: {
             nameLength: componentProbeNameLength,
           });
           if (!privateParent) {
-            return true;
+            return undefined;
           }
           normalizationProbeParent = privateParent;
           normalizationPairs = [[leftSegment, rightSegment]];
@@ -395,10 +391,9 @@ function areMissingSuffixAliases(params: {
           createdPaths,
         });
         if (!normalizationProbe) {
-          return true;
+          return undefined;
         }
         if (!normalizationProbe.aliases) {
-          missingSuffixAliasCache.set(cacheKey, false);
           return false;
         }
         nextProbeParent ??= normalizationProbe.path;
@@ -411,80 +406,33 @@ function areMissingSuffixAliases(params: {
           nameLength: componentProbeNameLength,
         });
         if (!nextProbeParent) {
-          return true;
+          return undefined;
         }
         probeParent = nextProbeParent;
       }
     }
-    missingSuffixAliasCache.set(cacheKey, true);
     return true;
-  } catch {
-    // Unprobeable case/normalization candidates are ambiguous. Treat them as
-    // colliding so registry uniqueness fails closed instead of admitting two owners.
-    return true;
-  } finally {
-    for (const created of createdPaths.toReversed()) {
-      removeOwnedProbePath(created);
-    }
+  };
+  let aliases: boolean | undefined;
+  let cause: unknown;
+  try {
+    aliases = observe();
+  } catch (error) {
+    cause = error;
   }
-}
-
-function resolveDanglingSymlinkTargetPath(lexicalPath: string): {
-  existingPath: string;
-  unresolvedSegments: string[];
-} {
-  let resolved = path.parse(lexicalPath).root;
-  const remaining = lexicalPath.slice(resolved.length).split(path.sep).filter(Boolean);
-  const visitedSymlinks = new Set<string>();
-  const visitedResolutionStates = new Set<string>();
-  let symlinkHops = 0;
-  while (remaining.length > 0) {
-    const segment = remaining.shift();
-    if (!segment || segment === ".") {
-      continue;
-    }
-    if (segment === "..") {
-      resolved = path.dirname(resolved);
-      continue;
-    }
-    const candidate = path.join(resolved, segment);
-    try {
-      const stat = lstatSync(candidate, { bigint: true });
-      if (!stat.isSymbolicLink()) {
-        resolved = candidate;
-        continue;
-      }
-      const symlinkIdentity = `${stat.dev}:${stat.ino}:${candidate}`;
-      const resolutionState = `${symlinkIdentity}\0${remaining.join(path.sep)}`;
-      if (
-        symlinkHops >= MAX_DANGLING_SYMLINK_HOPS ||
-        (visitedSymlinks.has(symlinkIdentity) && visitedResolutionStates.has(resolutionState))
-      ) {
-        throw createSymlinkLoopError(lexicalPath);
-      }
-      visitedSymlinks.add(symlinkIdentity);
-      visitedResolutionStates.add(resolutionState);
-      symlinkHops += 1;
-      const target = readlinkSync(candidate);
-      if (path.isAbsolute(target)) {
-        resolved = path.parse(target).root;
-        remaining.unshift(...target.slice(resolved.length).split(path.sep));
-      } else {
-        // Process raw target components in order: normalizing `..` here would skip
-        // filesystem resolution of a preceding symlink and could change ownership.
-        remaining.unshift(...target.split(path.sep));
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        // Once a component is missing, later `..` components cannot traverse it
-        // on the filesystem. Preserve the raw suffix so lexical normalization
-        // cannot alias this dangling path to a live database.
-        return { existingPath: resolved, unresolvedSegments: [segment, ...remaining] };
-      }
-      throw error;
-    }
+  let cleaned = true;
+  for (const created of createdPaths.toReversed()) {
+    cleaned = removeOwnedProbePath(created) && cleaned;
   }
-  return { existingPath: resolved, unresolvedSegments: [] };
+  if (aliases === undefined || !cleaned) {
+    throw new Error(
+      `Cannot determine whether database paths alias under ${JSON.stringify(params.parentRealPath)}: ${JSON.stringify(params.left)} and ${JSON.stringify(params.right)}. Check directory access and retry.`,
+      { cause },
+    );
+  }
+  // A comparison becomes reusable only after every owned probe was removed.
+  missingSuffixAliasCache.set(cacheKey, aliases);
+  return aliases;
 }
 
 function anchorDatabasePathWithoutNormalizing(pathname: string): string {
@@ -524,17 +472,20 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    // Preserve symlink/alias identity before the leaf exists without lexically
-    // collapsing unresolved components such as `missing/../live.sqlite`.
-    const dangling = resolveDanglingSymlinkTargetPath(lexicalPath);
-    const parentRealPath = realpathSync.native(dangling.existingPath);
+    // Registry locators ignore input separator runs; expanded symlink targets
+    // retain raw missing suffixes, including `missing/../live.sqlite`.
+    const rootPath = path.parse(lexicalPath).root;
+    const observed = resolvePathPrefixSync(
+      rootPath + lexicalPath.slice(rootPath.length).split(path.sep).filter(Boolean).join(path.sep),
+    );
+    const parentRealPath = observed.existingPath;
     const parentStat = statSync(parentRealPath, { bigint: true });
     return {
       lexicalPath,
       parentDevice: parentStat.dev,
       parentInode: parentStat.ino,
       parentRealPath,
-      unresolvedSuffix: dangling.unresolvedSegments.join(path.sep),
+      unresolvedSuffix: observed.unresolvedSegments.join(path.sep),
     };
   }
 }
@@ -648,11 +599,12 @@ export function registerOpenClawAgentDatabase(params: {
             }),
           ),
       );
+      invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
     },
     { env: params.env },
   );
   invalidateOpenClawAgentDatabaseValidation(params.path);
-  invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
 function canonicalPathForRegistryBoundary(pathname: string): string {
@@ -705,11 +657,12 @@ export function unregisterOpenClawAgentDatabase(params: {
           .where("agent_id", "=", params.agentId)
           .where("path", "in", matchingPaths),
       );
+      invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
     },
     { env: params.env },
   );
   invalidateOpenClawAgentDatabaseValidation(params.path);
-  invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
 
 /** Remove every durable database registration owned by a deleted agent. */
@@ -722,13 +675,17 @@ export function unregisterOpenClawAgentDatabases(params: {
     env: params.env,
     ...(params.database ? { database: params.database, path: params.database.path } : {}),
   };
-  runOpenClawStateWriteTransaction((database) => {
+  const removedPaths = runOpenClawStateWriteTransaction((database) => {
     const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
-    executeSqliteQuerySync(
+    const removed = executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId),
+      db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId).returning("path"),
+    );
+    invalidateRegisteredAgentDatabasesMemo(options);
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    return removed.rows.map((row) =>
+      resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
     );
   }, options);
-  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId);
-  invalidateRegisteredAgentDatabasesMemo(options);
+  invalidateOpenClawAgentDatabaseValidationsForAgent(params.agentId, removedPaths);
 }

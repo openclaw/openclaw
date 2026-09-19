@@ -109,7 +109,7 @@ async function withTempFile<T>(
 export const imessageActionsRuntime = {
   resolveIMessageMessageId: resolveIMessageMessageIdImpl,
 
-  authorizeMessageReference(params: {
+  async authorizeMessageReference(params: {
     accountId: string;
     chatContext: IMessageChatContext;
     cliPath: string;
@@ -118,8 +118,8 @@ export const imessageActionsRuntime = {
     remoteHost?: string;
     messageId: string;
     conversationReadOrigin?: string;
-  }): void {
-    authorizeIMessageResourceReference(params);
+  }): Promise<void> {
+    await authorizeIMessageResourceReference(params);
   },
 
   resolveChatGuidForTarget: resolveIMessageActionChatGuid,

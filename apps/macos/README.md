@@ -49,6 +49,9 @@ still runs in process as usual. App relocation, Sparkle updates, and post-update
 service repair are disabled in profile mode; update the installed app through
 the normal default-profile workflow.
 
+Full chat windows keep Reasoning, Tool Activity, pinned and recent models, and
+collapsed sidebar groups in the active profile's app defaults.
+
 Profiles are not test sandboxes. PortGuardian intentionally shares its tunnel
 ledger and orphan cleanup across app instances, and port reservation inspects
 other profiles' Gateway service claims. Use a clean test account or VM when

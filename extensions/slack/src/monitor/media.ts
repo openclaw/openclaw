@@ -1,4 +1,3 @@
-// Slack plugin module implements media behavior.
 import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
@@ -16,9 +15,11 @@ import type { SlackAttachment, SlackFile } from "../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import {
   type FetchLike,
+  captureChannelReadAuthority,
   fetchWithRuntimeDispatcher,
   saveRemoteMedia,
   slackMediaLog,
+  unlinkIfExists,
 } from "./media.runtime.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
 import { logVerbose } from "./thread.runtime.js";
@@ -82,7 +83,10 @@ function createSlackMediaRequest(
   };
 }
 
-function createSlackMediaFetch(govSlack: boolean): FetchLike {
+function createSlackMediaFetch(
+  govSlack: boolean,
+  assertReadAuthority = captureChannelReadAuthority(),
+): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
     if (!url) {
@@ -90,6 +94,7 @@ function createSlackMediaFetch(govSlack: boolean): FetchLike {
     }
     const parsed = assertSlackFileUrl(url, govSlack);
     const fetchImpl = "dispatcher" in (init ?? {}) ? fetchWithRuntimeDispatcher : globalThis.fetch;
+    assertReadAuthority?.();
     return fetchImpl(parsed.href, { ...init, redirect: "manual" });
   };
 }
@@ -249,16 +254,19 @@ async function downloadSlackMediaFile(params: {
   abortSignal?: AbortSignal;
   govSlack: boolean;
 }): Promise<SlackMediaResult> {
+  const assertReadAuthority = captureChannelReadAuthority();
+  assertReadAuthority?.();
   const { url: slackUrl, requestInit } = createSlackMediaRequest(
     params.url,
     params.token,
     params.govSlack,
   );
-  const fetchImpl = createSlackMediaFetch(params.govSlack);
+  const fetchImpl = createSlackMediaFetch(params.govSlack, assertReadAuthority);
   const saved = await saveSlackMedia({
     options: {
       url: slackUrl,
       fetchImpl,
+      beforeRequest: assertReadAuthority,
       requestInit,
       filePathHint: params.file.name,
       fallbackContentType: resolveSlackMediaMimetype(params.file, params.file.mimetype),
@@ -279,7 +287,7 @@ async function downloadSlackMediaFile(params: {
   if (!isExpectedHtml) {
     const detectedMime = normalizeOptionalLowercaseString(saved.contentType?.split(";")[0]);
     if (detectedMime === "text/html" || (await looksLikeHtmlFile(saved.path))) {
-      await fs.rm(saved.path, { force: true }).catch(() => undefined);
+      await unlinkIfExists(saved.path);
       throw new Error("blocked: unexpected HTML content");
     }
   }

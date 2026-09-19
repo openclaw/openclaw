@@ -5,6 +5,7 @@ import { resolvePolicyPluginActivationState } from "./config-policy.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
+  normalizePluginTargetConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
   resolveEffectivePluginActivationState,
@@ -61,6 +62,18 @@ function expectNormalizedEnableState(params: {
 }
 
 describe("normalizePluginsConfig", () => {
+  it("keeps targeted authored plugin state identical across JSON persistence", () => {
+    const normalized = normalizePluginTargetConfig(
+      { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },
+      "codex",
+    );
+    const persistedJson = JSON.stringify(normalized);
+    expect(JSON.parse(persistedJson)).toStrictEqual(normalized);
+    expect(normalized.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: { appServer: {} },
+    });
+  });
   it.each([
     [{}, "memory-core"],
     [{ slots: { memory: "custom-memory" } }, "custom-memory"],

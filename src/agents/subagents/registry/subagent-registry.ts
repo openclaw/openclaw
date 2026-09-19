@@ -3,6 +3,7 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -27,6 +28,7 @@ import {
   type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 import { ANNOUNCE_EXPIRY_MS } from "./subagent-registry-helpers.js";
+import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
 import { finalizeSubagentTaskRun } from "./subagent-registry-lifecycle-delivery.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
@@ -46,7 +48,6 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
-import { SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP } from "./subagent-registry-suspended-delivery.js";
 import { resolveSubagentTaskForRun } from "./subagent-registry-sweep-kill.js";
 import {
   createSubagentRegistrySweeper,
@@ -72,19 +73,6 @@ const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
-/** Admission pressure for recoverable completion deliveries; rows are never pruned for capacity. */
-export function getSubagentDeliveryBacklogPressure(): {
-  suspended: number;
-  blocked: boolean;
-} {
-  let suspended = 0;
-  for (const entry of subagentRuns.values()) {
-    if (isDeliverySuspended(entry)) {
-      suspended += 1;
-    }
-  }
-  return { suspended, blocked: suspended >= SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP };
-}
 
 // Hot lifecycle callers name every changed or removed row. Zero ids is reserved
 // for explicit full-registry replacement at restore/reset boundaries.
@@ -186,6 +174,9 @@ const {
   settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
+registerSystemEventStoreOwner(Symbol.for("openclaw.subagentNotifications"), () =>
+  suspendReplacedStoreNotifications(subagentLifecycleController.options),
+);
 
 function scheduleSubagentDeliveryResumeRetry(
   runId: string,
@@ -397,6 +388,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
       bindGatewayContextResolver(entry, lifecycleGatewayContextResolver);
       subagentRuns.commitOwnership(entry);
     }
+    suspendReplacedStoreNotifications(subagentLifecycleController.options);
     return true;
   },
   persist: persistSubagentRuns,
@@ -570,6 +562,8 @@ export function adoptPausedSubagentRunForFollowUp(params: {
   childSessionKey: string;
   runId: string;
   task: string;
+  /** Exact paused owner captured by explicit task-resume admission. */
+  expected?: SubagentRunRecord;
   gatewayContextResolver?: GatewayContextResolver;
 }): boolean {
   const childSessionKey = params.childSessionKey.trim();
@@ -585,7 +579,7 @@ export function adoptPausedSubagentRunForFollowUp(params: {
     childSessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
-  if (!paused) {
+  if (!paused || (params.expected && paused !== params.expected)) {
     return false;
   }
   return subagentRunManager.replaceSubagentRunAfterSteer({
@@ -689,6 +683,41 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
+
+/** Attaches presentation to an existing wake without changing completion ownership. */
+export function attachRequesterProgressPresentation(params: {
+  operationId: string;
+  members: readonly { runId: string; generation: number; rearmGeneration: number }[];
+  assertCurrent: () => void;
+}): void {
+  params.assertCurrent();
+  const rows = params.members.map((member) => {
+    const entry = subagentRuns.get(member.runId);
+    const wake = entry?.requesterSettleWake;
+    if (
+      !entry ||
+      entry.generation !== member.generation ||
+      wake?.requesterYieldBatch !== true ||
+      wake.status !== "pending" ||
+      wake.rearmGeneration !== member.rearmGeneration
+    ) {
+      throw new Error("Progress handoff batch was replaced");
+    }
+    return { entry, wake, previous: wake.progressOperationId };
+  });
+  for (const { wake } of rows) {
+    wake.progressOperationId = params.operationId;
+  }
+  try {
+    params.assertCurrent();
+    persistSubagentRunsOrThrow(...rows.map(({ entry }) => entry.runId));
+  } catch (error) {
+    for (const { wake, previous } of rows) {
+      wake.progressOperationId = previous;
+    }
+    throw error;
+  }
+}
 
 const bootstrapState = subagentRegistryBootstrapState;
 bootstrapState.restorer = subagentRestorer;

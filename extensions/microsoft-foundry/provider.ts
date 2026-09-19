@@ -15,7 +15,6 @@ import {
   applyFoundryProviderConfig,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
-  isFoundryClaudeMythosPreview,
   isFoundryProviderApi,
   mergeFoundryCanonicalModelParams,
   normalizeFoundryEndpoint,
@@ -192,20 +191,9 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       if (!capabilities.reasoning || capabilities.api !== "anthropic-messages") {
         return undefined;
       }
-      const profile = resolveClaudeThinkingProfile(capabilities.modelName, undefined, {
+      return resolveClaudeThinkingProfile(capabilities.modelName, undefined, {
         includeNativeMax: supportsClaudeNativeMaxEffort({ id: capabilities.modelName }),
       });
-      if (!isFoundryClaudeMythosPreview(capabilities.modelName)) {
-        return profile;
-      }
-      const levels = profile.levels.filter((level) => level.id !== "off");
-      return {
-        ...profile,
-        defaultLevel: "adaptive",
-        levels: levels.some((level) => level.id === "adaptive")
-          ? levels
-          : [...levels, { id: "adaptive" }],
-      };
     },
     normalizeResolvedModel: ({ modelId, model }: ProviderNormalizeResolvedModelContext) => {
       const endpoint = extractFoundryEndpoint(model.baseUrl ?? "");

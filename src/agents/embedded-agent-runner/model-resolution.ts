@@ -11,6 +11,7 @@ type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
 
 /** Resolves embedded-run models through discovery first, then the prepared static catalog. */
 export async function resolveTieredModel(params: {
+  assertCurrent?: () => void;
   provider: string;
   fallbackProvider?: string;
   modelId: string;
@@ -30,6 +31,7 @@ export async function resolveTieredModel(params: {
   const resolveCandidates = async (options: Parameters<typeof resolveModelAsync>[4]) => {
     const modelOptions: Parameters<typeof resolveModelAsync>[4] = {
       ...options,
+      assertCurrent: params.assertCurrent,
       workspaceDir: params.workspaceDir,
       authProfileId: params.authProfileId,
       authProfileMode: params.authProfileMode,

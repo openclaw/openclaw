@@ -103,7 +103,7 @@ async function runSlackMessageScenario(params: {
         observationScenarioTitle: params.scenarioTitle,
         sentTs: sent.ts,
         sutIdentity: params.environment.sutIdentity,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: params.run.noReplyObservationMs ?? params.timeoutMs,
       });
       const afterNoReplyDetails = await params.run.afterNoReply?.({
         ...scenarioContext,

@@ -13,9 +13,12 @@ const workflow: { jobs: Record<string, { steps: { name?: string; run?: string }[
 const watchStep = workflow.jobs["ios-build"]?.steps.find(
   (step) => step.name === "Run focused Apple Watch operation simulator tests",
 );
+const voiceStep = workflow.jobs["ios-build"]?.steps.find(
+  (step) => step.name === "Run focused iOS voice cleanup simulator tests",
+);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runWatchStep(mode = "ready") {
+function runSimulatorStep(mode = "ready", step = watchStep) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
   const product = path.join(root, "project derived data", "Watch Product.app");
@@ -34,7 +37,7 @@ appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({ tool, args })
 if (tool === "xcrun") {
   if (args[1] === "list") {
     console.log(JSON.stringify({ devices: { watch: [
-      { name: "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }
+      { name: mode === "voice" ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true, udid: "watch-fixture" }
     ] } }));
   } else if (args[1] === "bootstatus" && mode === "boot-failed") {
     process.exit(23);
@@ -65,10 +68,10 @@ if (tool === "xcrun") {
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
   }
-  if (!watchStep?.run) {
+  if (!step?.run) {
     throw new Error("Missing Watch simulator workflow step");
   }
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", watchStep.run], {
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run], {
     cwd: root,
     encoding: "utf8",
     env: {
@@ -88,7 +91,7 @@ if (tool === "xcrun") {
 
 describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => {
   it("reuses project build products and installs the exact Watch target before running its tests", () => {
-    const { result, commands, product } = runWatchStep();
+    const { result, commands, product } = runSimulatorStep();
     expect(result.status, result.stderr).toBe(0);
     const xcodeCommands = commands.filter((command) => command.tool === "xcodebuild");
     for (const command of xcodeCommands) {
@@ -135,7 +138,7 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
   it.each(["missing-product", "ambiguous-product", "relative-product"])(
     "rejects %s settings before simulator installation or test execution",
     (mode) => {
-      const { result, commands } = runWatchStep(mode);
+      const { result, commands } = runSimulatorStep(mode);
       expect(result.status).not.toBe(0);
       expect(commands.some((command) => command.args.includes("install"))).toBe(false);
       expect(commands.some((command) => command.args.includes("test-without-building"))).toBe(
@@ -145,9 +148,30 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
   );
 
   it("preserves simulator readiness failure without installing or running tests", () => {
-    const { result, commands } = runWatchStep("boot-failed");
+    const { result, commands } = runSimulatorStep("boot-failed");
     expect(result.status).toBe(23);
     expect(commands.some((command) => command.args.includes("install"))).toBe(false);
     expect(commands.some((command) => command.args.includes("test-without-building"))).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () => {
+  it("executes cleanup and sibling suites with normal Debug simulator signing", () => {
+    const { result, commands } = runSimulatorStep("voice", voiceStep);
+    expect(result.status, result.stderr).toBe(0);
+    const builds = commands.filter((command) => command.tool === "xcodebuild");
+    expect(builds).toHaveLength(1);
+    const build = builds[0];
+    if (!build) {
+      throw new Error("Missing voice cleanup xcodebuild command");
+    }
+    expect(build.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
+      "-only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests",
+      "-only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests",
+      "-only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests",
+      "-only-testing:OpenClawTests/TalkModeManagerTests",
+    ]);
+    expect(build.args).toEqual(expect.arrayContaining(["-configuration", "Debug", "test"]));
+    expect(build.args.some((arg) => arg.startsWith("CODE_SIGN"))).toBe(false);
   });
 });

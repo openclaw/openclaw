@@ -40,6 +40,19 @@ cross-agent access.
 Excerpts are redacted before they return to the model. Results are also bounded by count, excerpt
 length, and total response size.
 
+## Control UI search
+
+The command palette and Threads page send their session filters to the Gateway, which
+searches the full authorized indexed history in that scope. The browser does not download
+a session roster to choose which transcripts to search, and a roster page size does not
+exclude older matching sessions.
+
+Search returns a bounded set of the best matches. More matches than the result limit is
+normal, not an incomplete-index warning; refine the query to narrow the results. Genuine
+indexing work and cold archived transcripts excluded from search have separate status
+messages. Cold transcript history becomes searchable again when its session is opened
+and the history is restored. Search does not restore archived history automatically.
+
 ## Index lifecycle
 
 OpenClaw stores a full-text index next to the transcript rows in each agent's SQLite database.

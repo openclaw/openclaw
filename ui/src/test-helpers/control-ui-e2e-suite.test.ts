@@ -47,6 +47,7 @@ function fixtureSource(mode: FixtureMode, root: string): string {
       ? `import { createOpenClawTestState } from ${JSON.stringify(path.join(repoRoot, "src/test-utils/openclaw-test-state.ts"))};`
       : "";
   return `
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, expect, it, vi } from "vitest";
@@ -67,12 +68,12 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
       if (${JSON.stringify(mode)} === "late-context") await new Promise(resolve => setTimeout(resolve, 40));
       state.arrived = true;
       const rejectClosedPage = async () => { throw new Error("synthetic page closed"); };
-      const closedPage = {
+      const closedPage = Object.assign(new EventEmitter(), {
         evaluate: rejectClosedPage,
         screenshot: rejectClosedPage,
         isClosed: () => true,
         url: () => "about:blank",
-      };
+      });
       return {
         setDefaultTimeout() {},
         pages: () => [],

@@ -19,7 +19,6 @@ import {
   isProviderApiKeyConfigured,
   normalizeGithubCopilotDomain,
   readClaudeCliCredentialsCached,
-  removeProviderAuthProfilesWithLock,
   resolveCopilotApiToken,
 } from "./provider-auth.js";
 
@@ -32,10 +31,6 @@ const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TO
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("provider auth public SDK", () => {
-  it("retains provider-scoped profile removal", () => {
-    expect(removeProviderAuthProfilesWithLock).toBeTypeOf("function");
-  });
-
   it("keeps the shipped Claude credential reader functional during its deprecation window", async () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-auth-");
     const credentialsDir = path.join(homeDir, ".claude");

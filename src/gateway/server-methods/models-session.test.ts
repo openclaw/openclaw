@@ -6,6 +6,11 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
@@ -13,11 +18,13 @@ import {
 } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   registerGatewayModelCatalogPrivateAccess,
   type PreparedGatewayModelCatalogSnapshot,
 } from "../server-model-catalog-auth.js";
+import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
   connectChatMetadataAccount,
   createChatMetadataOwner,
@@ -50,6 +57,7 @@ function fixture() {
     "openai-chatgpt-responses",
   );
   const authStore = expectDefined(getPreparedModelRuntimeAuthStore(owner), "prepared auth store");
+  let snapshotCurrent = true;
   const snapshot: PreparedGatewayModelCatalogSnapshot = {
     ...owner.modelCatalog,
     catalogComplete: false,
@@ -59,7 +67,7 @@ function fixture() {
     config,
     observationConfig: config,
     metadataSnapshot: owner.metadataSnapshot,
-    isCurrent: owner.isCurrent,
+    isCurrent: () => snapshotCurrent && owner.isCurrent(),
     authStore,
     authModes: owner.authModes,
     authMaterializations: [],
@@ -121,6 +129,10 @@ function fixture() {
     client,
     clients,
     snapshot,
+    invalidateSnapshot: () => {
+      snapshotCurrent = false;
+    },
+    context,
     readPrepared,
     loadDeferred,
     request,
@@ -134,6 +146,113 @@ const isolated = {
 } as const;
 
 describe("direct session model catalogs", () => {
+  it.each([
+    "selected patch",
+    "selected reset",
+    "store close",
+    "access change",
+    "catalog owner",
+  ] as const)("replies with retryable unavailability after %s", async (change) => {
+    await withOpenClawTestState(isolated, async (state) => {
+      const f = fixture();
+      await state.writeConfig(f.config);
+      const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "original",
+        updatedAt: 1,
+        authProfileOverride: f.authProfileId,
+        authProfileOverrideSource: "user",
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      f.readPrepared.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return f.snapshot;
+      });
+      const pending = f.request({ sessionKey: scope.sessionKey, view: "configured" });
+      void pending.catch(() => {});
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(f.readPrepared).toHaveBeenCalledOnce();
+        if (change === "selected patch") {
+          await upsertSessionEntryCore(scope, { label: "changed" });
+        } else if (change === "selected reset") {
+          await upsertSessionEntryCore(scope, {
+            sessionId: "replacement",
+            lifecycleRevision: "replacement",
+          });
+        } else if (change === "store close") {
+          closeOpenClawAgentDatabaseByPath(openOpenClawAgentDatabase(scope).path);
+        } else if (change === "access change") {
+          bumpGatewayAccessRevision();
+        } else {
+          f.invalidateSnapshot();
+        }
+      } finally {
+        release.resolve();
+      }
+      const respond = await pending;
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringMatching(/changed|current/),
+          retryable: true,
+          retryAfterMs: 0,
+        }),
+      );
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+    });
+  });
+
+  it.each([false, true])(
+    "revalidates chat.metadata immediately before response (selected changed: %s)",
+    async (changeSelected) => {
+      await withOpenClawTestState(isolated, async (state) => {
+        const f = fixture();
+        await state.writeConfig(f.config);
+        const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
+        const other = { ...selected, sessionKey: "agent:main:metadata-other" };
+        await upsertSessionEntryCore(selected, { sessionId: "selected", updatedAt: 1 });
+        await upsertSessionEntryCore(other, { sessionId: "other", updatedAt: 1 });
+        const entered = createDeferred();
+        const release = createDeferred();
+        f.context.readChatMetadata = async () => {
+          entered.resolve();
+          await release.promise;
+          return { swarmEnabled: false };
+        };
+        const respond = vi.fn<RespondFn>();
+        const params = { sessionKey: selected.sessionKey };
+        const pending = handleChatMetadataRequest({
+          req: { type: "req", id: "held-metadata", method: "chat.metadata", params },
+          params,
+          context: f.context,
+          client: f.client,
+          respond,
+          isWebchatConnect: () => false,
+        });
+        void pending.catch(() => {});
+        try {
+          await Promise.race([entered.promise, pending]);
+          await upsertSessionEntryCore(changeSelected ? selected : other, { label: "changed" });
+        } finally {
+          release.resolve();
+        }
+        if (changeSelected) {
+          await expect(pending).rejects.toThrow("Session changed");
+          expect(respond).not.toHaveBeenCalled();
+        } else {
+          await pending;
+          expect(respond).toHaveBeenCalledWith(true, { swarmEnabled: false });
+        }
+        expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+      });
+    },
+  );
+
   it("uses a saved session pin after the viewer changes their default and keeps agent reads separate", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();

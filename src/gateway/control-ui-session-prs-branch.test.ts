@@ -255,7 +255,7 @@ describe("session branch diff stats", () => {
     expect(await load()).toEqual(detached);
     expect(fetchImpl.mock.calls).toHaveLength(6);
     failureStatus = 503;
-    expect(await load()).toEqual(detached);
+    expect(await load()).toEqual({ ...detached, status: "unavailable" });
     failureStatus = 429;
     expect(await load()).toEqual({ ...detached, rateLimited: true });
     const callsAtBackoff = fetchImpl.mock.calls.length;
@@ -343,6 +343,7 @@ describe("session branch diff stats", () => {
     vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([42]);
     let hasPull = false;
     let limited = false;
+    let referenceStatus = 503;
     const fetchImpl = routedFetch([
       {
         match: "/pulls?head=",
@@ -352,7 +353,7 @@ describe("session branch diff stats", () => {
             : githubJson(hasPull ? [pullListItem({ head: { ref: "feature" } })] : []),
       },
       { match: "/pulls/103469", response: () => githubJson({ additions: 1, deletions: 0 }) },
-      { match: "/pulls/42", response: () => githubJson({}, hasPull ? 503 : 404) },
+      { match: "/pulls/42", response: () => githubJson({}, hasPull ? referenceStatus : 404) },
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     const load = () =>
@@ -373,9 +374,16 @@ describe("session branch diff stats", () => {
     const published = await load();
     expect(published.pullRequests).toMatchObject([{ number: 103469, state: "open" }]);
     expect(published.branch).toBeUndefined();
-    expect(published.status).toBeUndefined();
+    expect(published.status).toBe("unavailable");
+    expect(published.rateLimited).toBe(false);
     vi.mocked(loadSessionPullRequestReferences).mockRejectedValueOnce(new Error("indexing"));
     expect(await load()).toEqual(published);
+
+    referenceStatus = 404;
+    const recovered = await load();
+    expect(recovered.pullRequests).toEqual(published.pullRequests);
+    expect(recovered.branch).toBeUndefined();
+    expect(recovered.status).toBeUndefined();
 
     limited = true;
     vi.mocked(loadSessionPullRequestReferences).mockResolvedValue([43]);

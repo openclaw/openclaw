@@ -15,7 +15,12 @@ const { createChildAdapterMock, createPtyAdapterMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 
 vi.mock("./adapters/pty.js", () => ({
@@ -134,8 +139,10 @@ describe("process supervisor first cancellation reason", () => {
     expect(run.activity.resultSettled).toBe(true);
 
     const lateAdapter = createCancellationTestAdapter();
+    const killed = createDeferred();
+    lateAdapter.killMock.mockImplementation(() => killed.resolve());
     startup.resolve(lateAdapter);
-    await Promise.resolve();
+    await killed.promise;
     expect(lateAdapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(lateAdapter.disposeMock).not.toHaveBeenCalled();
     lateAdapter.settle("SIGKILL");

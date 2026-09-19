@@ -348,7 +348,9 @@ extension SettingsProTab {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .accessibilityLabel("Review exec approval")
+                    .accessibilityLabel(item.prompt.kind == "exec"
+                        ? String(localized: "Review exec approval")
+                        : String(localized: "Review approval"))
                     .accessibilityValue(item.prompt.commandPreview ?? item.prompt.commandText)
                 }
             }
@@ -385,6 +387,9 @@ extension SettingsProTab {
                             .font(OpenClawType.body)
                     }
                 } else {
+                    if pendingApproval.kind == "system-agent" {
+                        ApprovalDashboardReviewButton(prompt: pendingApproval)
+                    }
                     if pendingApproval.allowsAllowOnce {
                         Button {
                             Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }

@@ -157,8 +157,14 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
+    expect(instructions).toContain(
+      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+    );
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
     expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain(
+      "When a kept OpenClaw session stops before the requested outcome, continue it with `sessions_send`",
+    );
     expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
@@ -192,7 +198,7 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 });
 
 describe("buildDeveloperInstructions UI presentation guidance", () => {
-  const uiTools = ["show_widget", "dashboard", "portal", "message"].map(
+  const uiTools = ["screen", "show_widget", "dashboard", "portal", "message"].map(
     (name): CodexDynamicToolFunctionSpec => ({
       type: "function",
       name,
@@ -226,6 +232,8 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
 
       expect(instructions).toContain("## UI Presentation");
+      expect(instructions).toContain(`\`${prefix}screen(action="browser_show")\``);
+      expect(instructions).toContain("Do not create or expand a dashboard to open a panel");
       for (const tool of uiTools) {
         expect(instructions).toContain(`\`${prefix}${tool.name}\``);
       }
@@ -246,7 +254,7 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
 
   it("distinguishes unavailable custom authoring from dashboard and portal support", () => {
     const instructions = buildDeveloperInstructions(createParams(), {
-      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget"),
+      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget" && tool.name !== "screen"),
     });
 
     expect(instructions).toContain("`dashboard`");
@@ -255,6 +263,7 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       "Custom authoring is unavailable this turn, not unsupported by dashboards.",
     );
     expect(instructions).not.toContain("`show_widget`");
+    expect(instructions).not.toContain('action="browser_show"');
   });
 
   it("does not advertise ClawHub for a message schema without that capability", () => {

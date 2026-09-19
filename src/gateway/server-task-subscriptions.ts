@@ -1,7 +1,9 @@
 import { getAgentRunContext, getAgentRunContextOwnership } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { cloneTaskRecordForObserver } from "../tasks/task-registry-records.js";
 import { getTaskRegistryProcessState } from "../tasks/task-registry.process-state.js";
-import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
+import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.types.js";
 import { isTerminalTaskStatus, type TaskRecord } from "../tasks/task-registry.types.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
@@ -171,22 +173,38 @@ export function startGatewayTaskSubscriptions(params: {
         }
       },
     };
-    if (!disposed) {
-      runtime.configureTaskRegistryRuntime({ observers });
+    if (disposed) {
+      return undefined;
     }
-    return { runtime, observers };
+    runtime.configureTaskRegistryRuntime({ observers });
+    // Run admission and scheduler waits can change before any agent activity arrives.
+    const unsubscribeRunChanges = sessionChanges.subscribe((change) => {
+      if (!("sessionKey" in change) && change.scope !== "agent-runs") {
+        return;
+      }
+      const sessionKey = "sessionKey" in change ? change.sessionKey : undefined;
+      const taskIds = sessionKey
+        ? (state.taskIdsByRelatedSessionKey.get(sessionKey) ?? [])
+        : state.tasks.keys();
+      for (const taskId of taskIds) {
+        const task = state.tasks.get(taskId);
+        if (task?.runtime === "cli" && !isTerminalTaskStatus(task.status)) {
+          observers.onEvent({ kind: "upserted", task: cloneTaskRecordForObserver(task) });
+        }
+      }
+    });
+    return () => {
+      unsubscribeRunChanges();
+      if (runtime.getTaskRegistryObservers() === observers) {
+        runtime.configureTaskRegistryRuntime({ observers: null });
+      }
+    };
   });
   void registered.catch((error: unknown) => {
     params.log.warn("Task registry observer registration failed", { error });
   });
   return () => {
     disposed = true;
-    return registered
-      .then(({ runtime, observers }) => {
-        if (runtime.getTaskRegistryObservers() === observers) {
-          runtime.configureTaskRegistryRuntime({ observers: null });
-        }
-      })
-      .catch(() => undefined);
+    return registered.then((unsubscribe) => unsubscribe?.()).catch(() => undefined);
   };
 }

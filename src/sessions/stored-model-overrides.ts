@@ -1,6 +1,7 @@
 // Resolves persisted per-session model choices across child and parent sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelFallbackRouteResolution } from "../agents/model-fallback.types.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import {
   normalizeStoredOverrideModel,
   resolvePersistedOverrideModelRef,
@@ -20,12 +21,14 @@ export type StoredModelOverride = {
   routeResolution: ModelFallbackRouteResolution;
 };
 
-function resolveStoredOverrideFromEntry(params: {
-  entry?: SessionEntry;
-  defaultProvider: string;
-  source: StoredModelOverride["source"];
-  allowPluginNormalization?: boolean;
-}): StoredModelOverride | null {
+function resolveStoredOverrideFromEntry(
+  params: {
+    entry?: SessionEntry;
+    defaultProvider: string;
+    source: StoredModelOverride["source"];
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): StoredModelOverride | null {
   if (params.entry?.modelOverrideSource === "default") {
     return null;
   }
@@ -41,6 +44,7 @@ function resolveStoredOverrideFromEntry(params: {
     overrideModel: normalized.modelOverride,
     routeResolution,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   return ref
     ? {
@@ -52,16 +56,19 @@ function resolveStoredOverrideFromEntry(params: {
 }
 
 /** Resolves only the current session's persisted model override. */
-export function resolveDirectStoredModelOverride(params: {
-  sessionEntry?: SessionEntry;
-  defaultProvider: string;
-  allowPluginNormalization?: boolean;
-}): StoredModelOverride | null {
+export function resolveDirectStoredModelOverride(
+  params: {
+    sessionEntry?: SessionEntry;
+    defaultProvider: string;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): StoredModelOverride | null {
   return resolveStoredOverrideFromEntry({
     entry: params.sessionEntry,
     defaultProvider: params.defaultProvider,
     source: "session",
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
@@ -80,7 +87,7 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-/** Resolves the persisted model override visible to the current session. */
+/** Keep prepared host metadata outside the published command resolver contract. */
 export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;
@@ -90,6 +97,29 @@ export function resolveStoredModelOverride(params: {
   defaultProvider: string;
   allowPluginNormalization?: boolean;
 }): StoredModelOverride | null {
+  return resolveStoredModelOverrideCore({
+    loadSessionEntry: params.loadSessionEntry,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.parentSessionKey,
+    defaultProvider: params.defaultProvider,
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+}
+
+/** Resolves the persisted model override visible to the current session. */
+export function resolveStoredModelOverrideCore(
+  params: {
+    loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    parentSessionKey?: string;
+    defaultProvider: string;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): StoredModelOverride | null {
   if (params.sessionEntry?.modelOverrideSource === "default") {
     return null;
   }
@@ -97,6 +127,7 @@ export function resolveStoredModelOverride(params: {
     sessionEntry: params.sessionEntry,
     defaultProvider: params.defaultProvider,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   if (direct) {
     return direct;
@@ -117,5 +148,6 @@ export function resolveStoredModelOverride(params: {
     defaultProvider: params.defaultProvider,
     source: "parent",
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
 }

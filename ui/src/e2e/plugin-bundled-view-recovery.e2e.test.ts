@@ -89,7 +89,8 @@ suite.define(() => {
 
       const alert = page.getByRole("alert");
       await alert.waitFor();
-      expect(await alert.textContent()).toContain("A new version is available");
+      expect(await alert.textContent()).toContain("This view could not load");
+      expect(await alert.textContent()).not.toContain("updated in the background");
       expect(await alert.textContent()).toContain("Failed to fetch dynamically imported module");
       await alert.getByRole("button", { name: "Reload" }).waitFor();
       await page.screenshot({

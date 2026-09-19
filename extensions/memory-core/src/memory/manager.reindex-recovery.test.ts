@@ -12,10 +12,13 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
-import { recordMemorySessionTombstones } from "../memory-entry-origins.js";
+import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
@@ -112,6 +115,7 @@ describe("memory manager reindex recovery", () => {
     // The agent close releases its leases through shared state and reopens it, so the
     // shared handle is released second; otherwise Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
@@ -394,7 +398,7 @@ describe("memory manager reindex recovery", () => {
       vi.spyOn(harness.provider, "embedBatch").mockImplementationOnce(async (inputs) => {
         reservation = await reservePublishedWriter(() => {
           if (scenario === "purge") {
-            recordMemorySessionTombstones({
+            seedMemoryForgetTombstones({
               agentId: "main",
               sessionIds: ["forgotten-during-embedding"],
             });

@@ -19,6 +19,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/amazon-bedrock-provider",
           "npmSpec": "@openclaw/amazon-bedrock-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -44,6 +45,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/amazon-bedrock-mantle-provider",
           "npmSpec": "@openclaw/amazon-bedrock-mantle-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -69,6 +71,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/anthropic-vertex-provider",
           "npmSpec": "@openclaw/anthropic-vertex-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
@@ -2143,7 +2146,8 @@
           {
             "endpointClass": "zai-native",
             "hosts": [
-              "api.z.ai"
+              "api.z.ai",
+              "open.bigmodel.cn"
             ]
           }
         ],

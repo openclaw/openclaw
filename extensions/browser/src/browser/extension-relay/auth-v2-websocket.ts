@@ -1,5 +1,5 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { RawData, WebSocket } from "ws";
+import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { BrowserRelayProofFields } from "./auth-v2-crypto.js";
 import {

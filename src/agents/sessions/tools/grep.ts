@@ -8,6 +8,7 @@ import path from "node:path";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -265,8 +266,15 @@ export function createGrepToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
+            if (spawnedChild.pid === undefined) {
+              await waitForCommandSpawn(spawnedChild);
+            }
+            if (settled) {
+              stopChild();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             let stderr = "";
             let stderrDroppedBytes = 0;
             let matchCount = 0;

@@ -81,16 +81,11 @@
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  transition: transform 0.16s var(--ease-out);
 }
 
 .session-progress-card__chevron svg {
   width: 14px;
   height: 14px;
-}
-
-.session-progress-card--composer:not([open]) .session-progress-card__chevron {
-  transform: rotate(-90deg);
 }
 
 .session-progress-card__summary:focus-visible {
@@ -120,6 +115,12 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.session-progress-card--composer .session-progress-card__step-marker {
+  height: 1lh;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .session-progress-card__current-marker {

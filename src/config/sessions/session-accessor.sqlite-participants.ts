@@ -1,4 +1,7 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -10,7 +13,10 @@ import {
 } from "../../state/openclaw-agent-session-participants-schema.js";
 import { readUserProfileAliases } from "../../state/user-profiles.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  publishSessionEntryCacheParticipantUpdate,
+  trackSessionEntryCacheWrite,
+} from "./session-accessor.sqlite-entry-cache.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -55,21 +61,36 @@ export function recordSessionParticipant(
         );
       }
       const kysely = getSessionKysely(database.db);
-      const records = executeSqliteQuerySync(
+      const participantQuery = kysely
+        .selectFrom("session_participants")
+        .select(["actor_id", "contribution_count", "first_prompted_at", "last_prompted_at"])
+        .where("session_key", "=", resolved.sessionKey)
+        .where("identity_namespace", "=", namespace);
+      const exact = executeSqliteQueryTakeFirstSync(
         database.db,
-        kysely
-          .selectFrom("session_participants")
-          .selectAll()
-          .where("session_key", "=", resolved.sessionKey)
-          .orderBy("actor_id"),
-      ).rows;
+        participantQuery.where("actor_id", "=", actorId),
+      );
+      // SQLite bindings replace lone surrogates; preserve the original JS identity comparison.
+      let existing = exact?.actor_id === actorId ? exact : undefined;
       // Prefer the exact row, otherwise the first retained alias. Preserve raw history;
       // read-time canonicalization combines aliases without a cross-database rewrite.
-      const existing =
-        records.find((row) => row.identity_namespace === namespace && row.actor_id === actorId) ??
-        records.find((row) => row.identity_namespace === namespace && aliases?.has(row.actor_id));
-      if (!existing && records.length >= MAX_SESSION_PARTICIPANTS) {
-        return "capped";
+      if (!existing && aliases && aliases.size > 1) {
+        existing = executeSqliteQuerySync(
+          database.db,
+          participantQuery.orderBy("actor_id"),
+        ).rows.find((row) => aliases.has(row.actor_id));
+      }
+      if (!existing) {
+        const count = executeSqliteQueryTakeFirstSync(
+          database.db,
+          kysely
+            .selectFrom("session_participants")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("session_key", "=", resolved.sessionKey),
+        );
+        if ((count?.count ?? 0) >= MAX_SESSION_PARTICIPANTS) {
+          return "capped";
+        }
       }
       const aggregate = mergeParticipantAggregate(
         existing,
@@ -80,23 +101,31 @@ export function recordSessionParticipant(
         },
         "sum",
       );
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .insertInto("session_participants")
-          .values({
-            session_key: resolved.sessionKey,
-            identity_namespace: namespace,
-            actor_id: existing?.actor_id ?? actorId,
-            ...aggregate,
-          })
-          .onConflict((conflict) =>
-            conflict
-              .columns(["session_key", "identity_namespace", "actor_id"])
-              .doUpdateSet(aggregate),
-          ),
+      const writeGeneration = trackSessionEntryCacheWrite(database, () =>
+        executeSqliteQuerySync(
+          database.db,
+          kysely
+            .insertInto("session_participants")
+            .values({
+              session_key: resolved.sessionKey,
+              identity_namespace: namespace,
+              actor_id: existing?.actor_id ?? actorId,
+              ...aggregate,
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns(["session_key", "identity_namespace", "actor_id"])
+                .doUpdateSet(aggregate),
+            ),
+        ),
       );
-      publishSessionEntryCacheInvalidation(database);
+      publishSessionEntryCacheParticipantUpdate(database, resolved.sessionKey, {
+        writeGeneration,
+        projectionChanged:
+          !existing ||
+          existing.actor_id !== actorId ||
+          aggregate.first_prompted_at !== existing.first_prompted_at,
+      });
       deferOpenClawAgentPostCommitPublication(database, () =>
         emitSessionLifecycleEvent({
           agentId: resolved.agentId,

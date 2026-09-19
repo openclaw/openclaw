@@ -65,6 +65,7 @@ describe("guided onboarding inference composition", () => {
       await fs.writeFile(
         configPath,
         `${JSON.stringify({
+          meta: { migrations: { utilityModelSeparation: true } },
           ...(!team ? { gateway: { mode: "local" } } : {}),
           plugins: { slots: { memory: "none" } },
           agents: {
@@ -72,7 +73,6 @@ describe("guided onboarding inference composition", () => {
               ...(!team ? { workspace } : {}),
               skipBootstrap: true,
               skills: [],
-              models: { "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } } },
             },
           },
           models: {

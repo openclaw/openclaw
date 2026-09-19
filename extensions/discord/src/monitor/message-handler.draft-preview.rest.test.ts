@@ -1,3 +1,4 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import { RequestClient } from "../internal/discord.js";
@@ -42,7 +43,7 @@ describe("Discord draft preview REST lifecycle", () => {
             throw new Error("Expected a serialized Discord message");
           }
           const body = JSON.parse(init.body) as { content: string };
-          const messageId = init.method === "POST" ? `preview-${++nextId}` : id;
+          const messageId = init.method === "POST" ? String(++nextId) : id;
           visible.set(messageId, body.content);
           return Response.json({ id: messageId });
         },
@@ -72,6 +73,9 @@ describe("Discord draft preview REST lifecycle", () => {
         meta: '<progress aria-label="private detail"></progress>',
       });
       controller.handleAssistantMessageBoundary();
+      await controller.pushItemEvent(
+        projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
+      );
       await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
       await controller.flush();
       expect(visible.size).toBe(1);
@@ -100,7 +104,7 @@ describe("Discord draft preview REST lifecycle", () => {
         const url = new URL(input instanceof Request ? input.url : input);
         requests.push(`${init?.method ?? "GET"} ${url.pathname.replace("/api/v10", "")}`);
         if (init?.method === "POST") {
-          return Response.json({ id: "preview-error" });
+          return Response.json({ id: "999" });
         }
         return new Response(null, { status: 204 });
       },
@@ -136,7 +140,7 @@ describe("Discord draft preview REST lifecycle", () => {
         fetch: async (input, init) => {
           const url = new URL(input instanceof Request ? input.url : input);
           if (init?.method === "POST") {
-            const id = `preview-${++createdCount}`;
+            const id = String(++createdCount);
             if (typeof init.body !== "string") {
               throw new Error("Expected a serialized Discord JSON request body");
             }
@@ -170,8 +174,8 @@ describe("Discord draft preview REST lifecycle", () => {
         finishFirstCreate.resolve();
         await controller.flush();
 
-        expect(controller.draftStream?.messageId()).toBe("preview-2");
-        expect(visibleMessages.get("preview-2")).toBe("queued turn progress");
+        expect(controller.draftStream?.messageId()).toBe("2");
+        expect(visibleMessages.get("2")).toBe("queued turn progress");
         controller.markFinalReplyStarted();
         controller.markFinalReplyDelivered(false);
         await controller.cleanup();
@@ -182,12 +186,12 @@ describe("Discord draft preview REST lifecycle", () => {
       }
 
       if (deleteFailures === 2) {
-        expect(deletedIds).toEqual(["preview-1", "preview-1"]);
-        expect([...visibleMessages]).toEqual([["preview-1", "prior turn progress"]]);
+        expect(deletedIds).toEqual(["1", "1"]);
+        expect([...visibleMessages]).toEqual([["1", "prior turn progress"]]);
         await controller.cleanup();
       }
       expect([...visibleMessages]).toEqual([]);
-      expect(deletedIds.filter((id) => id === "preview-1")).toHaveLength(deleteFailures + 1);
+      expect(deletedIds.filter((id) => id === "1")).toHaveLength(deleteFailures + 1);
     },
   );
 });

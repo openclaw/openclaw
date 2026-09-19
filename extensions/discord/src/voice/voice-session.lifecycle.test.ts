@@ -19,7 +19,9 @@ defineDiscordVoiceTests(
     entersStateMock,
     createAudioPlayerMock,
     realtimeSessionMock,
+    logVerboseMock,
     managerModule,
+    configureVoiceStateGateway,
     createClient,
     createManager,
     expectConnectedStatus,
@@ -610,6 +612,142 @@ defineDiscordVoiceTests(
         await Promise.all([firstJoin, secondJoin, thirdJoin]);
       }
     });
+
+    it("serializes a join requested synchronously by channel lookup", async () => {
+      const client = createClient();
+      const fetchChannel = expectDefined(
+        client.fetchChannel.getMockImplementation(),
+        "channel lookup",
+      );
+      const manager = createManager(undefined, client);
+      let secondJoin: ReturnType<typeof manager.join> | undefined;
+      client.fetchChannel.mockImplementationOnce((channelId) => {
+        secondJoin = manager.join({ guildId: "g1", channelId: "1002" });
+        return fetchChannel(channelId);
+      });
+
+      const firstResult = await manager.join({ guildId: "g1", channelId: "1001" });
+      const secondResult = await expectDefined(secondJoin, "reentrant join");
+
+      expect(firstResult.ok).toBe(true);
+      expect(secondResult.ok).toBe(true);
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+      expectConnectedStatus(manager, "1002");
+    });
+
+    it("retains prior shutdown when leave immediately cancels a replacement join", async () => {
+      const manager = createManager({
+        voice: { enabled: true, mode: "agent-proxy", realtime: { provider: "openai" } },
+      });
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const closing = createDeferred<void>();
+      const stopped = createDeferred<void>();
+      realtimeSessionMock.close.mockImplementationOnce(() => {
+        closing.resolve();
+        return stopped.promise;
+      });
+
+      const replacement = manager.join({ guildId: "g1", channelId: "1002" });
+      const leaving = manager.leave({ guildId: "g1" });
+      const successor = manager.join({ guildId: "g1", channelId: "1003" });
+      try {
+        await closing.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+        stopped.resolve();
+        const [replacementResult, , successorResult] = await Promise.all([
+          replacement,
+          leaving,
+          successor,
+        ]);
+        expect(replacementResult.ok).toBe(false);
+        expect(successorResult.ok).toBe(true);
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+        expectConnectedStatus(manager, "1003");
+      } finally {
+        stopped.resolve();
+        await Promise.allSettled([replacement, leaving, successor]);
+      }
+    });
+
+    it.each(["occupancy-loss", "cancelled"] as const)(
+      "keeps queued joins behind physical cleanup after %s during startup",
+      async (reason) => {
+        const client = createClient();
+        let voiceStates: Array<Record<string, unknown>> = [
+          {
+            guild_id: "g1",
+            user_id: "human",
+            channel_id: "1001",
+            member: { user: { id: "human", bot: false } },
+          },
+        ];
+        configureVoiceStateGateway(client, () => voiceStates);
+        const connecting = createDeferred<void>();
+        const ready = createDeferred<void>();
+        const closing = createDeferred<void>();
+        const stopped = createDeferred<void>();
+        realtimeSessionMock.connect.mockImplementationOnce(async () => {
+          connecting.resolve();
+          await ready.promise;
+        });
+        realtimeSessionMock.close.mockImplementationOnce(() => {
+          closing.resolve();
+          return stopped.promise;
+        });
+        const manager = createManager(
+          { voice: { enabled: true, mode: "agent-proxy", realtime: { provider: "openai" } } },
+          client,
+        );
+        // Bound the original microtask starvation so its regression failure can finish cleanup.
+        let waits = 0;
+        logVerboseMock.mockImplementation((message: string) => {
+          if (message.includes("waiting for active guild join") && ++waits >= 100) {
+            throw new Error("Voice join starved physical cleanup by awaiting settled work");
+          }
+        });
+        const first = manager.join(
+          { guildId: "g1", channelId: "1001" },
+          { autoJoinWhenOccupied: reason === "occupancy-loss" },
+        );
+        let leaving: ReturnType<typeof manager.leave> | undefined;
+        let joins: Promise<Awaited<ReturnType<typeof manager.join>>[]> | undefined;
+        try {
+          await connecting.promise;
+          if (reason === "occupancy-loss") {
+            voiceStates = [];
+          } else {
+            leaving = manager.leave({ guildId: "g1", channelId: "1001" });
+          }
+          ready.resolve();
+          await closing.promise;
+          const second = manager.join({ guildId: "g1", channelId: "1002" });
+          const third = manager.join({ guildId: "g1", channelId: "1003" });
+          const joined = Promise.all([first, second, third]);
+          joins = joined;
+          void joined.catch(() => undefined);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+          stopped.resolve();
+          const [firstResult, secondResult, thirdResult] = await joined;
+          await leaving;
+          expect(firstResult.ok).toBe(reason === "occupancy-loss");
+          expect(secondResult.ok).toBe(true);
+          expect(thirdResult.ok).toBe(true);
+          expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3);
+          expectConnectedStatus(manager, "1003");
+        } finally {
+          ready.resolve();
+          stopped.resolve();
+          logVerboseMock.mockReset();
+          await Promise.allSettled([first, leaving, joins]);
+        }
+      },
+    );
 
     it("does not start queued joins after the voice manager is destroyed", async () => {
       const connection = createConnectionMock();

@@ -3,11 +3,12 @@ import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-ru
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
 
@@ -76,12 +77,12 @@ export function clearSessionResetRuntimeState(
   let systemEventsCleared = 0;
 
   for (const key of cleared.keys) {
-    // Global session rows may share one transient queue across agents. An
-    // agent-scoped reset must not discard another agent's pending work.
-    const removed = consumeSelectedSystemEventEntries(
-      key,
-      selectAgentSystemEvents(peekSystemEventEntries(key), opts.agentId),
-    );
+    const owner = parseAgentSessionKey(key)?.agentId;
+    if (owner && owner !== normalizeAgentId(opts.agentId)) {
+      continue;
+    }
+    const queueKey = resolveSystemEventQueueKey(key, opts.agentId);
+    const removed = consumeSelectedSystemEventEntries(queueKey, peekSystemEventEntries(queueKey));
     systemEventsCleared += removed.length;
   }
 

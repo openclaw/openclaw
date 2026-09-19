@@ -35,26 +35,18 @@ export async function fetchGeminiUsage(
   }
   const buckets =
     isRecord(parsed.data) && Array.isArray(parsed.data.buckets) ? parsed.data.buckets : [];
-  const quotas = new Map<string, number>();
-  for (const bucket of buckets) {
-    if (!isRecord(bucket)) {
-      continue;
-    }
-    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
-    const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
-    const current = quotas.get(model);
-    if (current === undefined || frac < current) {
-      quotas.set(model, frac);
-    }
-  }
-
   const windows: UsageWindow[] = [];
   let proMin = 1;
   let flashMin = 1;
   let hasPro = false;
   let hasFlash = false;
 
-  for (const [model, frac] of quotas) {
+  for (const bucket of buckets) {
+    if (!isRecord(bucket)) {
+      continue;
+    }
+    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
+    const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
     const lower = normalizeLowercaseStringOrEmpty(model);
     if (lower.includes("pro")) {
       hasPro = true;

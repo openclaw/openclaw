@@ -1,4 +1,3 @@
-// Discord plugin module implements native command arg ui behavior.
 import { ButtonStyle } from "discord-api-types/v10";
 import {
   buildCommandTextFromArgs,

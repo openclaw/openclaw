@@ -2,29 +2,20 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserPathsModule from "../../browser/paths.js";
-import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
+  mockBrowserGateway,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
 import * as cliCoreApiModule from "../core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn<
-    (
-      _opts: unknown,
-      req: { path?: string },
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
-  >(async (_opts: unknown, req: { path?: string }) =>
-    req.path === "/wait/download" || req.path === "/download"
-      ? { download: { path: "/tmp/openclaw/downloads/file.txt" } }
-      : { ok: true },
-  ),
-}));
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+const gatewayMock = mockBrowserGateway();
+gatewayMock.mockImplementation(async (_method, _opts, request) =>
+  request.path === "/wait/download" || request.path === "/download"
+    ? { download: { path: "/tmp/openclaw/downloads/file.txt" } }
+    : { ok: true },
+);
 const browserCliRuntime = getBrowserCliRuntime();
 vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
@@ -46,12 +37,12 @@ function createActionInputProgram(): Command {
 }
 
 function getLastRequestOptions(): { timeoutMs?: number } | undefined {
-  return mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as { timeoutMs?: number } | undefined;
+  return gatewayMock.mock.calls.at(-1)?.[2];
 }
 
 describe("browser action input file/download commands", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
+    gatewayMock.mockClear();
     vi.mocked(browserPathsModule.resolveExistingUploadPaths).mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
@@ -81,9 +72,7 @@ describe("browser action input file/download commands", () => {
     expect(browserPathsModule.resolveExistingUploadPaths).toHaveBeenCalledWith({
       requestedPaths: ["/tmp/openclaw/uploads/a.pdf", "media://inbound/b"],
     });
-    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
-      | { path?: string; body?: Record<string, unknown> }
-      | undefined;
+    const request = gatewayMock.mock.calls.at(-1)?.[2];
     expect(request).toMatchObject({
       path: "/hooks/file-chooser",
       body: {
@@ -143,7 +132,7 @@ describe("browser action input file/download commands", () => {
         from: "user",
       }),
     ).rejects.toThrow("--timeout-ms must be a positive integer.");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects conflicting dialog actions without arming the hook", async () => {
@@ -152,7 +141,7 @@ describe("browser action input file/download commands", () => {
     await program.parseAsync(["browser", "dialog", "--accept", "--dismiss"], { from: "user" });
 
     const errorCall = getBrowserCliRuntime().error.mock.calls.at(-1);
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expect(String(errorCall?.[0])).toContain("Specify only one of --accept or --dismiss");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });

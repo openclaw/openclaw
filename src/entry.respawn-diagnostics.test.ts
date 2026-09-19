@@ -3,13 +3,21 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const boundary = vi.hoisted(() => ({
   mode: "flags" as "flags" | "compile-cache",
   trace: false,
+  runtimeSupported: true,
   events: [] as string[],
   writer: undefined as ((message: string, error?: unknown) => void | Promise<void>) | undefined,
 }));
 
 vi.mock("./infra/is-main.js", () => ({ isMainModule: () => true }));
-vi.mock("./infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProcess: vi.fn() }));
+vi.mock("./infra/openclaw-exec-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/openclaw-exec-env.js")>()),
+  ensureOpenClawExecMarkerOnProcess: vi.fn(),
+}));
 vi.mock("./infra/warning-filter.js", () => ({ installProcessWarningFilter: vi.fn() }));
+vi.mock("./infra/runtime-guard.js", () => ({
+  isCurrentRuntimeSupported: async () => boundary.runtimeSupported,
+  assertSupportedRuntime: async () => {},
+}));
 vi.mock("./cli/dotenv.js", () => ({
   loadCliDotEnv: () => boundary.events.push("dotenv"),
 }));
@@ -47,6 +55,7 @@ const originalTitle = process.title;
 beforeEach(() => {
   vi.resetModules();
   boundary.events = [];
+  boundary.runtimeSupported = true;
   boundary.writer = undefined;
   process.argv = [
     process.execPath,
@@ -61,6 +70,21 @@ afterEach(() => {
   process.title = originalTitle;
   vi.restoreAllMocks();
 });
+
+it.each([true, false])(
+  "prepares early runtime diagnostics after async support resolves to %s",
+  async (supported) => {
+    boundary.mode = "compile-cache";
+    boundary.trace = false;
+    boundary.runtimeSupported = supported;
+
+    await import("./entry.js");
+
+    expect(boundary.events).toEqual(
+      supported ? ["spawn"] : ["dotenv", "trace formatting", "spawn"],
+    );
+  },
+);
 
 it.each([
   { mode: "flags", trace: false },

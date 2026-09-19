@@ -7,6 +7,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
@@ -92,6 +93,7 @@ export function projectInFlightRunSnapshot(params: {
 type RegisteredChatAbortController = {
   controller: AbortController;
   markExecutionStarted: () => boolean;
+  deferTimeoutCompletion: (settle: () => void) => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: () => void;
 } & (
@@ -228,6 +230,7 @@ export function registerChatAbortController(params: {
         releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
       }
       entry.registrationCleanupRequested = true;
+      entry.pendingTimeoutCompletion = undefined;
       // Terminal event handling owns final removal once the event has been
       // observed. Runs that never emitted a terminal event still clean up here.
       if (entry.projectSessionTerminalPending === true) {
@@ -265,6 +268,7 @@ export function registerChatAbortController(params: {
     return {
       controller,
       registered: false,
+      deferTimeoutCompletion: () => false,
       markExecutionStarted,
       bindAgentRunDelegatedAuthority,
       cleanup,
@@ -303,6 +307,16 @@ export function registerChatAbortController(params: {
     controller,
     registered: true,
     entry,
+    deferTimeoutCompletion: (settle) => {
+      if (params.chatAbortControllers.get(params.runId) !== entry) {
+        return false;
+      }
+      entry.pendingTimeoutCompletion = {
+        expiresAtMs: Date.now() + AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+        settle,
+      };
+      return true;
+    },
     markExecutionStarted,
     bindAgentRunDelegatedAuthority,
     cleanup,
@@ -576,6 +590,19 @@ export function removeChatAbortControllerEntry(
   const entry = entries.get(runId);
   if (!entry || (expectedEntry && entry !== expectedEntry)) {
     return false;
+  }
+  const pending = entry.pendingTimeoutCompletion;
+  if (pending) {
+    if (isFutureDateTimestampMs(pending.expiresAtMs, { nowMs: Date.now() })) {
+      return false;
+    }
+    // Orphan cleanup must record the known timeout before revoking this exact
+    // receipt owner. A late producer then reuses that receipt, never rewrites it.
+    entry.pendingTimeoutCompletion = undefined;
+    pending.settle();
+    if (entries.get(runId) !== entry) {
+      return false;
+    }
   }
   entries.delete(runId);
   try {

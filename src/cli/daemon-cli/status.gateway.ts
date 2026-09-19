@@ -16,7 +16,7 @@ import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { WindowsGatewayFirewallDiagnostic } from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { pickProbeHostForBind } from "./shared.js";
 
-export type GatewayStatusSummary = {
+type GatewayStatusSummary = {
   bindMode: GatewayBindMode;
   bindHost: string;
   customBindHost?: string;

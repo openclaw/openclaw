@@ -99,7 +99,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       const tool = { name: "read", description: "Read text", parameters: Type.Object({}) };
       for (const [index, cacheRead] of [10_000, 0, 10_000].entries()) {
         await session.agent.streamFn(testModel, {
-          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}turn ${index}`,
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}stable suffix`,
           messages: [],
           tools: [{ ...tool, description: index === 2 ? "Read workspace text" : tool.description }],
         });
@@ -506,7 +506,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect.objectContaining({
         images: [expect.objectContaining({ type: "image" })],
         appendOnlyRuntimeContext: true,
-        leasedSteering: { leaseId: "lease-1", runIds: ["run-1"] },
+        leasedSteering: { leaseId: "lease-1", runIds: ["run-1"], isCurrent: expect.any(Function) },
         modelPrompt: "hello",
         runtimeContextMessage: expect.objectContaining({ content: "runtime" }),
         transcriptLeafId: "leaf-1",
@@ -702,6 +702,41 @@ describe("runEmbeddedAttemptPromptPhase", () => {
 
     expect(fixture.readState().promptError).toBe(providerError);
     expect(fixture.readState().promptErrorSource).toBe("prompt");
+  });
+
+  it("releases transferred steering when prompt assembly rejects an invalidated result", async () => {
+    const fixture = createFixture();
+    const invalidationError = new Error("queued child result lost authority");
+    const prepareAssembly = expectDefined(
+      mocks.preparePromptAssembly.getMockImplementation(),
+      "prompt assembly fixture",
+    );
+    mocks.preparePromptAssembly.mockImplementationOnce(async (...args) => {
+      await prepareAssembly(...args);
+      throw invalidationError;
+    });
+    mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => {
+      fixture.order.push("prompt-error");
+      input.releaseLeasedSteering(input.error);
+      return { promptFailure: { error: input.error, source: "prompt" } };
+    });
+
+    await expect(
+      runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState),
+    ).resolves.toEqual({
+      promptStartedAt: expect.any(Number),
+      transcriptLeafId: null,
+    });
+
+    expect(mocks.releasePendingSteering).toHaveBeenCalledExactlyOnceWith({
+      error: invalidationError.message,
+      leaseId: "lease-1",
+      runIds: ["run-1"],
+    });
+    expect(fixture.readState().promptError).toBe(invalidationError);
+    expect(mocks.preparePromptContext).not.toHaveBeenCalled();
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+    expect(fixture.order).toEqual(["assembly", "prompt-error", "stop-steering"]);
   });
 
   it("releases steering when preflight skips provider submission", async () => {

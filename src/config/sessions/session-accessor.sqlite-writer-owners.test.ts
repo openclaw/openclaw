@@ -335,7 +335,7 @@ it.each([false, true])(
   },
 );
 
-it("coalesces automatic maintenance under its own planning and finalization labels", async () => {
+it("coalesces automatic maintenance through the shared reclamation writer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const staleKey = "agent:main:subagent:writer-stale";
@@ -359,7 +359,12 @@ it("coalesces automatic maintenance under its own planning and finalization labe
       finalized.resolve(result);
       return result;
     });
-    const operations = observeSlowWriters();
+    const reclamationKinds: unknown[] = [];
+    const operations = observeSlowWriters((_operation, fields) => {
+      if ("reclamationKind" in fields && fields.reclamationKind) {
+        reclamationKinds.push(fields.reclamationKind);
+      }
+    });
     const request = {
       activeSessionKey: activeKey,
       archiveDirectory: state.sessionsDir(),
@@ -378,8 +383,21 @@ it("coalesces automatic maintenance under its own planning and finalization labe
       await yieldToEventLoop();
       expect(operations).toEqual([
         "session.maintenance.plan",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
+        "session.maintenance.plan",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
+        "session.reclamation.retain",
+        "session.reclamation.worker-commit",
         "session.maintenance.finalize",
         "session.archive.publish-prepare",
+      ]);
+      expect(reclamationKinds).toEqual([
+        "maintenance-plan",
+        "maintenance-plan",
+        "maintenance-finalize",
+        "maintenance-finalize",
       ]);
       expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
       expect(loadSessionEntry({ sessionKey: activeKey, storePath })?.sessionId).toBe("active");

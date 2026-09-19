@@ -11,6 +11,7 @@ import type {
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -154,6 +155,7 @@ export function setupWorkerEnvironmentServiceSuite() {
     // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
     await testState.service?.stop();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
@@ -169,6 +171,7 @@ export function getDevelopmentProfile() {
 export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.stateDb = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: testState.root },

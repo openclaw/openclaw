@@ -92,16 +92,17 @@ suite.define(() => {
             );
           expect(rows).toHaveLength(5);
           expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
-          const header = page.locator(".content-header--settings");
-          const bounds = await header
-            .locator(".agent-select__trigger, .page-header-actions > button")
+          expect(await page.locator(".content openclaw-agent-select").count()).toBe(0);
+          expect(await page.locator(".settings-sidebar openclaw-agent-select").count()).toBe(1);
+          const bounds = await page
+            .locator("[data-models-connect], .model-providers__refresh-button")
             .evaluateAll((buttons) =>
               buttons.map((button) => {
                 const { x, y, width: buttonWidth, height } = button.getBoundingClientRect();
                 return { x, y, width: buttonWidth, height };
               }),
             );
-          expect(bounds).toHaveLength(3);
+          expect(bounds).toHaveLength(2);
           for (const [index, box] of bounds.entries()) {
             expect(box.x).toBeGreaterThanOrEqual(0);
             expect(box.x + box.width).toBeLessThanOrEqual(width);

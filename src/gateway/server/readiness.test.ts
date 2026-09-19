@@ -4,6 +4,7 @@ import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
 import { createReadinessChecker } from "./readiness.js";
 
 /**
@@ -234,6 +235,47 @@ describe("createReadinessChecker", () => {
       vi.advanceTimersByTime(1_000);
       expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
+    withReadinessClock(() => {
+      let pluginReload: GatewayPluginReloadStatus | undefined;
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const manager = createHealthyDiscordManager(startedAt, Date.now());
+      const readiness = createReadinessChecker({
+        channelManager: manager,
+        startedAt,
+        getPluginReloadStatus: () => pluginReload,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false }) }),
+      );
+
+      pluginReload = {
+        phase: "recovering",
+        pluginIds: ["discord"],
+        deadlineAtMs: Date.now() + 5_000,
+        reason: "Waiting for admitted work before restoring the previous plugin runtime.",
+      };
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["plugin-reload"]),
+        pluginReload,
+      });
+      pluginReload = {
+        phase: "failed",
+        pluginIds: ["discord"],
+        reason: "Plugin recovery failed; inspect discord and restart the Gateway.",
+      };
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["plugin-reload"]),
+        pluginReload,
+      });
+
+      pluginReload = undefined;
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
     });
   });
 

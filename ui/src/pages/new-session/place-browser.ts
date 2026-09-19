@@ -1,7 +1,10 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { PlaceBrowserState } from "./place-browser-state.ts";
+
+registerNewSessionSetupEnglish();
 
 export function renderPlaceBrowser(params: {
   browser: PlaceBrowserState;

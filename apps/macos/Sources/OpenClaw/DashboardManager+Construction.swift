@@ -1,6 +1,12 @@
+import AppKit
 import Foundation
 import OpenClawKit
 import WebKit
+
+enum DashboardRouteProbePurpose: Sendable {
+    case authentication
+    case presentation
+}
 
 extension DashboardManager {
     struct AuxiliaryWindowInstance {
@@ -24,6 +30,31 @@ extension DashboardManager {
     struct NavigationIntent {
         let id = UUID()
         let windowID: ObjectIdentifier?
+    }
+
+    @MainActor
+    struct WindowIntent {
+        let window: NSWindow?
+        private let lifetime: UInt64?
+        private let generation: UInt64?
+
+        init(_ controller: DashboardWindowController?) {
+            self.window = controller?.window
+            self.lifetime = controller?.windowLifetimeRevision
+            self.generation = controller?.windowIntentGeneration
+        }
+
+        func currentController(for target: DashboardGatewayTarget, in manager: DashboardManager)
+            -> DashboardWindowController?
+        {
+            // A replacement document may inherit the shell; a new selection,
+            // close, or experience switch retires the shell's earlier intent.
+            guard let controller = self.window?.windowController as? DashboardWindowController,
+                  manager.target(for: controller) == target,
+                  controller.windowLifetimeRevision == self.lifetime,
+                  controller.windowIntentGeneration == self.generation else { return nil }
+            return controller
+        }
     }
 
     final class ProfileObservation {
@@ -214,5 +245,40 @@ extension DashboardManager {
             mode: mode,
             displayName: name,
             browserSession: browserSession)
+    }
+}
+
+extension DashboardManager {
+    static func requiresIsolatedDashboardDocument(
+        _ controller: DashboardWindowController,
+        configuration: WindowConfiguration,
+        endpoint: GatewayConnection.EndpointSnapshot,
+        displayedRoute: (revision: UInt64?, authority: UInt64?)?,
+        comparePrimaryRoute: Bool = true) -> Bool
+    {
+        !controller.hasTLSParams(configuration.tlsParams) ||
+            controller.auth != configuration.auth ||
+            !controller.hasCurrentBrowserSession ||
+            controller.browserSession != configuration.browserSession ||
+            (comparePrimaryRoute && (endpoint.routeAuthority != displayedRoute?.authority ||
+                    endpoint.revision.map { $0 != displayedRoute?.revision } == true))
+    }
+}
+
+extension DashboardManager {
+    func localWindowConfiguration() async throws
+        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
+    {
+        let state = AppStateStore.shared
+        guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+              state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+        let generation = state.gatewayRoutingGeneration
+        let endpoint = try GatewayEndpointStore.localEndpoint(hostingBesideRemotePrimary: true)
+        let configuration = try await dashboardConfiguration(
+            endpoint: endpoint, mode: .local, target: .local, token: endpoint.config.token)
+        guard state.connectionMode == .remote, state.hostsLocalGatewayWithRemotePrimary,
+              state.gatewayRoutingGeneration == generation,
+              state.gatewayConfigIsCurrentForRouting else { throw CancellationError() }
+        return (configuration, endpoint)
     }
 }

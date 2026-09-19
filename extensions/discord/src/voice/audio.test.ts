@@ -263,21 +263,27 @@ describe("Discord voice WAV workspace ownership", () => {
       const writeError = Object.assign(new Error("disk full"), { code: "ENOSPC" });
       voiceWorkspaceFixture.writeError = writeError;
 
-      await expect(writeVoiceWavFile(Buffer.alloc(960))).rejects.toBe(writeError);
+      await expect(writeVoiceWavFile([Buffer.alloc(960)])).rejects.toBe(writeError);
 
       expect(await fs.readdir(rootDir)).toEqual([]);
     });
   });
 
-  it("retains successful WAV files until their processing owner releases them", async () => {
+  it("snapshots chunked PCM into an exact WAV until its owner releases it", async () => {
     await withVoiceWorkspace(async ({ rootDir }) => {
-      const pcm = Buffer.alloc(960);
-
-      const result = await writeVoiceWavFile(pcm);
+      const pcm = Buffer.from([0xee, 0x00, 0xff, 0x80, 0x7f, 0xaa, 0x55, 0x12, 0x34, 0xdd]);
+      const chunks = [pcm.subarray(1, 4), pcm.subarray(4, 9)];
+      const writing = writeVoiceWavFile(chunks);
+      pcm.fill(0x66);
+      chunks.reverse();
+      const result = await writing;
 
       expect(path.basename(result.path)).toBe("segment.wav");
-      expect((await fs.readFile(result.path)).subarray(0, 4).toString()).toBe("RIFF");
-      expect(result.durationSeconds).toBe(960 / (4 * 48_000));
+      expect((await fs.readFile(result.path)).toString("hex")).toBe(
+        "524946462c00000057415645666d7420100000000100020080bb000000ee020004001000" +
+          "646174610800000000ff807faa551234",
+      );
+      expect(result.durationSeconds).toBe(8 / (4 * 48_000));
       expect(await fs.readdir(rootDir)).toHaveLength(1);
 
       await result.cleanup();

@@ -49,7 +49,10 @@ const retirements = resolveGlobalSingleton(
 );
 type PluginRegistrySnapshot = ReturnType<typeof captureActivePluginRegistrySnapshot>;
 type RegistryOwnerClose = {
-  promise: Promise<{ memoryErrors: readonly unknown[] }>;
+  promise: Promise<{
+    memoryErrors: readonly unknown[];
+    pluginFailures: PluginHostCleanupResult["failures"];
+  }>;
   failure?: PluginRuntimeCloseRetainedError;
 };
 type RegistryOwner = PluginRegistrySnapshot & {
@@ -189,7 +192,9 @@ function preparePluginRegistryRetirement(
           });
         } else {
           await waitForPluginCommandExecutions(registry);
-          markPluginRegistryRetired(registry);
+          if (!isRegistryLive(registry)) {
+            markPluginRegistryRetired(registry);
+          }
         }
       });
     } finally {
@@ -422,7 +427,12 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
         registryOwners.has(owner) ? owner.activeRegistry : null,
       );
     },
-    close(this: void, onRetirement?: (retire: () => Promise<void>) => Promise<void>) {
+    close(
+      this: void,
+      onRetirement?: (
+        retire: () => Promise<PluginHostCleanupResult>,
+      ) => Promise<void | PluginHostCleanupResult>,
+    ) {
       if (owner.closing && !owner.closing.failure) {
         return owner.closing.promise;
       }
@@ -462,7 +472,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
           }
           // Memory preparation can be retried. Once disposal is issued, its raw
           // completion joins inventory cleanup without holding up independent owners.
-          let retirement: Promise<void> | undefined;
+          let retirement: Promise<PluginHostCleanupResult> | undefined;
           const retire = () =>
             (retirement ??= Promise.resolve().then(async () => {
               registryOwners.delete(owner);
@@ -482,15 +492,15 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
               }
               if (registryOwners.size === 0 && state.activeRegistry === null) {
                 await clearActivePluginRegistry(previous);
-                return;
+              } else {
+                const retainedRegistry = survivor?.activeRegistry ?? null;
+                retirePluginRegistryIfUnused(previous, () => retainedRegistry);
               }
-              const retainedRegistry = survivor?.activeRegistry ?? null;
-              retirePluginRegistryIfUnused(previous, () => retainedRegistry);
-              await waitForPluginRegistryRetirement(previous);
+              return await waitForPluginRegistryRetirement(previous);
             }));
-          await onRetirement?.(retire);
-          await retire();
-          return { memoryErrors };
+          const cleanup = await onRetirement?.(retire);
+          const registryCleanup = await retire();
+          return { memoryErrors, pluginFailures: (cleanup ?? registryCleanup).failures };
         }),
       };
       // Install the single-flight owner before preparation can invoke plugin code.

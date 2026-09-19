@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,6 +82,7 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
     // The agent close releases its leases through shared state and reopens it, so the
     // shared handle is released second; otherwise Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true });

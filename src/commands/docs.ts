@@ -75,7 +75,9 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
       signal: controller.signal,
     });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // A retained capture clone can keep cancellation pending until peer EOF.
+      // Request cancellation, then let this request owner abort transport in finally.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`HTTP ${response.status}`);
     }
     const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
@@ -92,6 +94,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);
+    controller.abort();
   }
 }
 

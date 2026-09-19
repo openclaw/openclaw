@@ -115,12 +115,3 @@ export function chromeMcpProfileOptionsFromParams(params: {
 }): string | ChromeMcpProfileOptions | undefined {
   return params.profile ?? params.userDataDir;
 }
-
-export function cacheKeyMatchesProfileName(cacheKey: string, profileName: string): boolean {
-  try {
-    const parsed = JSON.parse(cacheKey);
-    return Array.isArray(parsed) && parsed[0] === profileName;
-  } catch {
-    return false;
-  }
-}

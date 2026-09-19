@@ -112,6 +112,9 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTools && opts.tools !== undefined) {
             throw new CronCliError("Use --tools or --clear-tools, not both");
           }
+          if (typeof opts.script === "string" && !readNonBlankString(opts.script)) {
+            throw new CronCliError("--script must not be blank");
+          }
           const commandCwd = normalizeOptionalString(opts.commandCwd);
           if (typeof opts.commandCwd === "string" && !commandCwd) {
             throw new CronCliError("--command-cwd must not be blank");

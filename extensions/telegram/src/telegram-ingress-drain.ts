@@ -27,6 +27,7 @@ import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
   prepareTelegramPollAnswerContext,
+  prepareTelegramPollAnswerContextAsync,
   recordPreparedTelegramPollAnswer,
   settleTelegramPollAnswerContext,
 } from "./poll-answer-context.js";
@@ -304,6 +305,21 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         context.phase === "claim" ? context.claimedLaneKey : undefined,
       );
     },
+    inspectAsync: async (update, context) => {
+      if (
+        context.phase === "admission" &&
+        typeof update === "object" &&
+        update !== null &&
+        isEligibleTelegramPollAnswerUpdate(update)
+      ) {
+        await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
+      }
+      return inspectTelegramSpooledUpdate(
+        update,
+        params.botInfo,
+        context.phase === "claim" ? context.claimedLaneKey : undefined,
+      );
+    },
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {
@@ -357,30 +373,10 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           },
           telegramLifecycle,
         );
-        const outcome = result.value;
-        if (outcome && typeof outcome === "object" && "kind" in outcome) {
-          if (outcome.kind === "failed-retryable") {
-            return { kind: "failed-retryable", error: outcome.error };
-          }
-          if (outcome.kind === "completed" || outcome.kind === "skipped") {
-            await lifecycle.onAdopted();
-            return { kind: "completed" };
-          }
-        }
-        // Every spooled participant gets deferredWork. Forward its terminal
-        // result without retaining Telegram's ingress serialization lane.
+        // A participant owns durable disposition; frame outcomes apply only
+        // to handlers that did not create one.
         const participant = result.deferredWork;
         if (participant) {
-          let abortedWhilePending = participant.wasOwnerAbortedWhilePending();
-          const onAbort = () => {
-            if (!participant.isSettled()) {
-              abortedWhilePending = true;
-            }
-          };
-          telegramLifecycle.abortSignal.addEventListener("abort", onAbort, { once: true });
-          const removeAbortListener = () => {
-            telegramLifecycle.abortSignal.removeEventListener("abort", onAbort);
-          };
           const settleAfterOwnerAbort = async (error?: unknown) => {
             // A lost owner did not finish a delivery attempt. Preserve only the
             // rollback failure for which replay is unsafe after a dispatch key
@@ -403,8 +399,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           void participant.task
             .then(
               async (terminal) => {
-                removeAbortListener();
-                if (abortedWhilePending) {
+                if (participant.wasOwnerAbortedWhilePending() && terminal.kind !== "completed") {
                   await settleAfterOwnerAbort(
                     terminal.kind === "failed-retryable" ? terminal.error : undefined,
                   );
@@ -417,8 +412,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
                 await lifecycle.onAdopted();
               },
               async (error: unknown) => {
-                removeAbortListener();
-                if (abortedWhilePending) {
+                if (participant.wasOwnerAbortedWhilePending()) {
                   await settleAfterOwnerAbort(error);
                   return;
                 }
@@ -436,14 +430,22 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
             });
           return { kind: "deferred" };
         }
-        if (!participant) {
-          // A dispatched update that records no outcome and defers no participant
-          // was consumed silently; completing here tombstones the spool row with
-          // attempts=0 and no trace, so keep a diagnostic trail for regressions.
-          params.onLog?.(
-            `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
-          );
+        const outcome = result.value;
+        if (outcome && typeof outcome === "object" && "kind" in outcome) {
+          if (outcome.kind === "failed-retryable") {
+            return { kind: "failed-retryable", error: outcome.error };
+          }
+          if (outcome.kind === "completed" || outcome.kind === "skipped") {
+            await lifecycle.onAdopted();
+            return { kind: "completed" };
+          }
         }
+        // A dispatched update that records no outcome and defers no participant
+        // was consumed silently; completing here tombstones the spool row with
+        // attempts=0 and no trace, so keep a diagnostic trail for regressions.
+        params.onLog?.(
+          `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
+        );
         await lifecycle.onAdopted();
         return { kind: "completed" };
       } catch (error) {
@@ -479,6 +481,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       ...(params.onLog ? { onLog: params.onLog } : {}),
     },
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    deferredClaims: "wait-on-stop",
     admissionMode: "while-running",
     createStoppedError: () => new Error("Telegram ingress monitor is stopped."),
     ...(params.onDurableAdmission ? { onDurableAdmission: params.onDurableAdmission } : {}),

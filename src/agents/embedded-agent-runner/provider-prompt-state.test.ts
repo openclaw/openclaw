@@ -111,7 +111,7 @@ describe("provider prompt state", () => {
       sentPayloads.push(replacement === undefined ? rawPayload : replacement);
       return createResultStream("error");
     });
-    const finalPayload = { input: "final", model: model.id };
+    const finalPayload = { input: "final 🦞 日本語".repeat(3_000), model: model.id };
     const wrapped = wrapStreamFnWithProviderPromptState({
       streamFn: transport,
       state,

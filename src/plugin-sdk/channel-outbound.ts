@@ -10,6 +10,8 @@ import {
 } from "../channels/streaming.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
+export { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
+
 type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
 // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
 // message runtime internals into registration/discovery-only paths.
@@ -99,7 +101,6 @@ export {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
-  isPotentialTruncatedFinal,
   formatPlanChecklistLines,
   selectPlanChecklistSteps,
   compactChannelProgressDraftLine,
@@ -120,8 +121,6 @@ export {
   resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingProgressNarration,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
-  resolveTranscriptBackedChannelFinalText,
-  selectLongerFinalText,
 } from "../channels/streaming.js";
 export type {
   AgentPlanStep,
@@ -245,3 +244,9 @@ export async function withDurableMessageSendContext<T>(
   const mod = await loadChannelMessageRuntimeModule();
   return await mod.withDurableMessageSendContextCore(params, run);
 }
+
+export {
+  isPotentialTruncatedFinal,
+  resolveTranscriptBackedChannelFinalText,
+  selectLongerFinalText,
+} from "../channels/streaming-final-text.js";

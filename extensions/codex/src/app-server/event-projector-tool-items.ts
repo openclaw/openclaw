@@ -1,10 +1,13 @@
 import {
   inferToolMetaFromArgs,
+  projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   itemName,
   itemStatus,
+  auditNativeToolName,
+  unknownItemStatus,
   shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
@@ -21,6 +24,34 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
+
+export function projectCodexToolActivity(
+  item: CodexThreadItem,
+  phase: "start" | "result",
+  meta?: string,
+) {
+  const name = itemName(item) ?? auditNativeToolName(item);
+  return name
+    ? projectAgentToolActivity({
+        toolCallId: item.id,
+        name,
+        phase,
+        // Native dynamic items retain requested args, not host-hook execution facts.
+        args: item.type === "dynamicToolCall" ? undefined : itemToolArgs(item),
+        meta,
+        status:
+          item.type === "collabAgentToolCall" && item.status === "interrupted"
+            ? "failed"
+            : unknownItemStatus(item)
+              ? "unknown"
+              : itemStatus(item),
+        result: { details: itemToolResult(item).result },
+        ...(item.type === "collabAgentToolCall" && item.tool === "wait"
+          ? { nativeOperation: "wait" }
+          : {}),
+      })
+    : undefined;
+}
 
 export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
   switch (item.type) {

@@ -3,7 +3,67 @@ import { en } from "./en.ts";
 
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
+  custodian: {
+    viewingPlugin: "Viewing {plugin}",
+    pluginHelpQuestion: "Help me understand {setting} for {plugin}.",
+    pluginHelpFailed: "Could not prepare the setting question. Try Ask OpenClaw again.",
+    pluginHelpUnset: "Not set",
+    pluginHelpValue: "Current value: {value}",
+    pluginHelpPending: "Your plugin question is saved as a draft and will appear after this step.",
+  },
   pluginsPage: {
+    editor: {
+      title: "{name} settings",
+      search: "Search settings",
+      other: "Other",
+      noMatches: "No matching settings.",
+      empty: "This plugin has no configurable settings.",
+      permissions: "Permissions",
+      actions: "Actions for {name}",
+      reset: "Reset value",
+      ask: "Ask OpenClaw",
+    },
+    credentials: {
+      stored: "••••••••",
+      replace: "Enter a new key to replace the stored credential.",
+      reveal: "Show entered key",
+      hide: "Hide entered key",
+      signup: "Get an API key",
+      useReference: "Use a secret reference",
+      editReference: "Edit reference",
+      viewSource: "View source",
+      fromSource: "From {source}",
+      environment: "From environment · {name}",
+      referenceTitle: "Secret reference",
+      referenceHelp:
+        "Choose where this credential is stored. Saving changes the reference only; it does not rotate or test the secret.",
+      environmentHelp:
+        "This credential comes from {name} in the Gateway environment. Change that environment variable at its source. Its value is never shown here.",
+      source: "Source",
+      provider: "Provider",
+      identifier: "Identifier",
+      sources: {
+        env: "Environment",
+        file: "File",
+        exec: "Command provider",
+        store: "Secret store",
+      },
+      help: {
+        env: "Use the environment variable name, for example SEARCH_API_KEY.",
+        file: "Use a JSON pointer such as /search/apiKey, or value for a single-value file provider.",
+        exec: "Use the identifier accepted by the configured command provider, such as team/search-key.",
+        store: "Use the stored secret name, for example SEARCH_API_KEY.",
+      },
+      unresolved:
+        "This reference is currently unresolved. The configured source must provide the secret before the plugin can use it.",
+      invalid:
+        "The setting could not accept this value. Check the source, provider, and identifier.",
+      invalidStored:
+        "This credential has an invalid stored value. Replace it or edit its reference.",
+      stale: "Configuration changed. Reload this reference before editing it.",
+      saveFailed:
+        "The credential could not be saved. Your draft is still available; try saving again.",
+    },
     breadcrumb: "Breadcrumb",
     settingsDescription: "Configure installed plugins, access, and lifecycle.",
     settingsTabs: "Plugin settings sections",
@@ -82,6 +142,17 @@ const enPluginManagement = {
     detailSections: "Plugin details",
     detailViewOnClawHub: "View on ClawHub",
     detailUpdated: "Updated",
+    detailPublished: "Published",
+    detailRepository: "Repository",
+    detailDocumentation: "Documentation",
+    detailCategories: "Categories",
+    detailInstalledVersion: "Installed version",
+    detailSettings: "Settings",
+    detailEnable: "Enable",
+    detailDisable: "Disable",
+    detailReload: "Reload plugin",
+    detailTools: "Tools",
+    detailNoToolDescription: "This plugin has not provided a description for this tool.",
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
@@ -151,7 +222,7 @@ const enPluginManagement = {
     reload: "Reload",
     reloadNamed: "Reload {name}",
     reloadHint:
-      "Reload plugin code in the Gateway without changing enablement. Other entries in the same package also reload.",
+      "Install and enablement changes apply automatically. Reload changed plugin code or retry a failed apply; enablement stays unchanged. Rebuild compiled plugins first. Compiled bundled code also needs a Gateway restart. Reload itself does not restart the Gateway; other entries in this package reload too.",
     reloadUnavailable: "Plugin reload is unavailable in the current Gateway runtime.",
     reloadedSuccess: "Reloaded {name} (Gateway generation {generation}).",
     installSaved: "Installation of {name} was saved. {error}",
@@ -174,6 +245,7 @@ const enPluginManagement = {
     workspace: "Workspace",
     config: "Config",
     official: "Official",
+    community: "Community",
     verifiedSource: "Verified source",
     codePlugin: "Code plugin",
     bundlePlugin: "Bundle plugin",
@@ -228,6 +300,7 @@ const enPluginManagement = {
 
 export const registerPluginManagementEnglish = Object.assign(
   () => {
+    Object.assign(en.custodian, enPluginManagement.custodian);
     en.pluginsPage = enPluginManagement.pluginsPage;
   },
   { catalog: enPluginManagement },

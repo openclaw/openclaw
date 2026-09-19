@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -18,6 +19,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import * as transcriptProviders from "../../transcripts/provider-registry.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
@@ -27,7 +29,10 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 const logGateway = { warn: vi.fn() };
 
 function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
@@ -97,6 +102,35 @@ async function seed(stateDir: string) {
 }
 
 describe("transcript Gateway read authorization and errors", () => {
+  it("requires write scope and archive visibility to generate notes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const { selector, store, session } = await seed(stateDir);
+      expect((await request("transcripts.summarize", { selector }))[0]).toBe(false);
+      expect(
+        (
+          await request(
+            "transcripts.summarize",
+            { selector },
+            roles("none"),
+            client(undefined, ["operator.write"]),
+          )
+        )[0],
+      ).toBe(false);
+      expect((await store.readSummary(session)).summary).toBeUndefined();
+      expect(
+        (
+          await request(
+            "transcripts.summarize",
+            { selector },
+            {},
+            client(undefined, ["operator.write"]),
+          )
+        )[0],
+      ).toBe(true);
+      expect((await store.readSummary(session)).summary).toBeDefined();
+    });
+  });
+
   beforeEach(() => {
     logGateway.warn.mockClear();
     vi.spyOn(transcriptProviders, "getTranscriptSourceProvider").mockReturnValue(undefined);
@@ -169,7 +203,7 @@ describe("transcript Gateway read authorization and errors", () => {
         );
       } finally {
         provider.mockRestore();
-        activeSessions.clear();
+        await clearTranscriptCapturesForTest();
       }
     });
   });
@@ -267,6 +301,7 @@ describe("transcript Gateway read authorization and errors", () => {
       });
       const profile = ensureProfileForEmail("url-reader@example.test");
       const caller = client(profile.id);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const selector = transcriptSessionSelector(session);
       const publicOutputs: string[] = [];
@@ -431,6 +466,8 @@ describe("meeting transcript RPC", () => {
     metadata: { privateMetadata: "hidden" },
   };
 
+  const selector = transcriptSessionSelector(session);
+
   async function invoke(method: string, params: Record<string, unknown>) {
     const respond = vi.fn();
     const handler = transcriptsHandlers[method];
@@ -464,11 +501,93 @@ describe("meeting transcript RPC", () => {
     await store.writeSession(session);
   });
   afterEach(async () => {
-    activeSessions.clear();
+    await clearTranscriptCapturesForTest();
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
+
+  it("generates missing notes once for concurrent opens and preserves them on later opens", async () => {
+    await store.appendUtteranceForSession(session, { text: "Decision: ship the meeting reader." });
+    const writes = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
+    const [first, second] = await Promise.all([
+      invoke("transcripts.summarize", { selector }),
+      invoke("transcripts.summarize", { selector }),
+    ]);
+    expect(first[0]).toBe(true);
+    expect(second[0]).toBe(true);
+    expect(first[1].summary.overview).toContain("ship the meeting reader");
+    expect(second[1].summary).toEqual(first[1].summary);
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect((await invoke("transcripts.summarize", { selector }))[1].summary).toEqual(
+      first[1].summary,
+    );
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(store.sessionDir(session))).toBe(false);
+  });
+
+  it.each(["snapshot", "response"] as const)(
+    "does not return notes when requester authority expires during %s",
+    async (phase) => {
+      await store.appendUtteranceForSession(session, { text: "Agreed to ship." });
+      let current = true;
+      if (phase === "snapshot") {
+        const readSnapshot = store.readSummarySnapshot.bind(store);
+        vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementation(
+          async (...args) => {
+            const snapshot = await readSnapshot(...args);
+            current = false;
+            return snapshot;
+          },
+        );
+      } else {
+        let reads = 0;
+        const readEntry = store.readLibraryEntry.bind(store);
+        vi.spyOn(TranscriptsStore.prototype, "readLibraryEntry").mockImplementation(
+          async (...args) => {
+            const result = await readEntry(...args);
+            if (++reads === 2) {
+              current = false;
+            }
+            return result;
+          },
+        );
+      }
+      const respond = vi.fn();
+      await transcriptsHandlers["transcripts.summarize"]!({
+        req: { type: "req", id: "revoked", method: "transcripts.summarize" },
+        params: { selector },
+        client: null,
+        respond,
+        hasCurrentClientAuthority: () => current,
+        isWebchatConnect: () => false,
+        context: { getRuntimeConfig: () => ({}), logGateway } as unknown as GatewayRequestContext,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+      if (phase === "snapshot") {
+        expect((await store.readSummary(session)).summary).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([{ texts: [] }, { texts: ["context:", "###", "Transcribe the audio."] }])(
+    "leaves meetings without substantive speech unsummarized: %j",
+    async ({ texts }) => {
+      for (const text of texts) {
+        await store.appendUtteranceForSession(session, { text });
+      }
+      expect(await invoke("transcripts.summarize", { selector })).toMatchObject([
+        true,
+        { session: { hasSummary: false, utteranceCount: texts.length } },
+      ]);
+      expect((await store.readSummary(session)).summary).toBeUndefined();
+    },
+  );
 
   it("lists exact capture counts, first-appearance speakers, and sanitized source fields", async () => {
     const older = { ...session, startedAt: "2026-08-01T14:00:00.000Z" };
@@ -543,7 +662,6 @@ describe("meeting transcript RPC", () => {
       source: "heuristic",
     } satisfies TranscriptsSummary;
     await store.writeSummary(summary, session);
-    const selector = transcriptSessionSelector(session);
     const payload = (await invoke("transcripts.get", { selector }))[1];
     expect(payload.summary.markdown.trimEnd()).toBe(
       (await store.readSummary(session)).markdown?.trimEnd(),

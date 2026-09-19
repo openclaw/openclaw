@@ -14,15 +14,13 @@ import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -36,7 +34,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
@@ -69,60 +66,76 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
 
+/** Role owns message geometry; delivery state belongs in the content, not the shell. */
 @Composable
-private fun ChatBubbleContainer(
+internal fun ChatBubbleContainer(
   user: Boolean,
   speaker: String,
-  modifier: Modifier = Modifier,
-  borderColor: Color? = null,
-  content: @Composable () -> Unit,
+  messageActions: @Composable (Modifier, @Composable () -> Unit) -> Unit = { modifier, body ->
+    Box(modifier = modifier) { body() }
+  },
+  content: @Composable ColumnScope.() -> Unit,
 ) {
   Row(
-    modifier = modifier.fillMaxWidth(),
+    modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
   ) {
-    Surface(
-      shape = RoundedCornerShape(12.dp),
-      border = BorderStroke(1.dp, borderColor ?: if (user) ClawTheme.colors.accentBorder else ClawTheme.colors.borderStrong),
-      color = if (user) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised,
-      tonalElevation = 0.dp,
-      shadowElevation = 0.dp,
-      modifier =
-        Modifier
-          .fillMaxWidth(0.90f)
-          .semantics(mergeDescendants = true) { contentDescription = speaker },
+    // Keep the action host on the complete bubble, including padding, without
+    // extending its hit area into the empty part of a user row.
+    messageActions(
+      Modifier
+        .fillMaxWidth(chatBubbleWidthFraction(user))
+        .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
-      Column(
-        modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(if (user) CHAT_BUBBLE_CORNER_RADIUS_DP.dp else 0.dp),
+        color = if (user) ClawTheme.colors.userMessageSurface else Color.Transparent,
+        contentColor = ClawTheme.colors.text,
+        border = null,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
       ) {
-        content()
+        Column(
+          modifier =
+            if (user) {
+              Modifier.padding(horizontal = 11.dp, vertical = 8.dp)
+            } else {
+              Modifier.padding(vertical = 4.dp)
+            },
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+          content = content,
+        )
       }
     }
   }
 }
+
+internal fun chatBubbleWidthFraction(isUser: Boolean): Float = if (isUser) 0.78f else 1f
+
+internal const val CHAT_BUBBLE_CORNER_RADIUS_DP = 24
 
 @Composable
 internal fun ChatMessageLinkPreview(
   messageId: String,
   role: String,
   content: List<ChatMessageContent>,
+  excludedUrls: Set<String> = emptySet(),
 ) {
   val normalizedRole = normalizeVisibleChatMessageRole(role) ?: return
   if (normalizedRole != "user" && normalizedRole != "assistant") return
   val previewUrl =
-    remember(messageId, normalizedRole, content) {
+    remember(messageId, normalizedRole, content, excludedUrls) {
       content
         .asSequence()
         .filter { it.type == "text" }
         .mapNotNull { it.text?.let(::extractFirstBareUrl) }
         .firstOrNull()
+        ?.takeUnless { chatSourceKey(it) in excludedUrls }
     }
   if (previewUrl != null) {
     ChatLinkPreview(messageId = messageId, url = previewUrl)
@@ -329,7 +342,6 @@ fun ChatOutboxBubble(
   ChatBubbleContainer(
     user = true,
     speaker = nativeString("You"),
-    borderColor = statusColor.copy(alpha = 0.6f),
   ) {
     if (item.text.isNotBlank()) {
       ChatMarkdown(text = item.text, textColor = ClawTheme.colors.text)
@@ -498,37 +510,7 @@ private fun ChatImagePreview(
     }
   }
   if (previewVisible) {
-    Dialog(
-      onDismissRequest = { previewVisible = false },
-      properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-      Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
-        contentAlignment = Alignment.Center,
-      ) {
-        Image(
-          bitmap = image,
-          contentDescription = nativeString("Image preview"),
-          contentScale = ContentScale.Fit,
-          modifier = Modifier.fillMaxSize().padding(20.dp),
-        )
-        Surface(
-          onClick = { previewVisible = false },
-          modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(44.dp),
-          shape = CircleShape,
-          color = Color.Black.copy(alpha = 0.62f),
-          contentColor = Color.White,
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.Close,
-              contentDescription = nativeString("Close image preview"),
-              modifier = Modifier.size(22.dp),
-            )
-          }
-        }
-      }
-    }
+    ChatImageViewer(image = image, onDismiss = { previewVisible = false })
   }
 }
 

@@ -1,4 +1,3 @@
-// Feishu plugin module implements card action behavior.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,

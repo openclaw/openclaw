@@ -103,6 +103,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
   commitGuard?: () => void;
+  assertRestoreAllowed?: () => void;
 }): Promise<() => void> {
   const { entry, scope } = params;
   const id = entry.worktree?.id;
@@ -155,6 +156,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
       );
     }
     if (record.removedAt !== undefined) {
+      params.assertRestoreAllowed?.();
       try {
         await serviceFor(scope.env).restore({ id, commitGuard: assertCurrent });
       } catch (error) {

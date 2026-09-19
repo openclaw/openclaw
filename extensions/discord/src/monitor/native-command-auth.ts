@@ -1,4 +1,3 @@
-// Discord plugin module implements native command auth behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -232,7 +231,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     channel: interaction.channel,
     client: interaction.client,
     hasGuild: Boolean(interaction.guild),
-    channelIdFallback: "",
+    channelIdFallback: interaction.rawData.channel_id ?? "",
   });
   if (params.isPolicyCurrent?.() === false) {
     return false;

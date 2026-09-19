@@ -231,44 +231,20 @@ function resolvePersistedTuiAttachmentKind(
   return "file";
 }
 
-/** Render assistant attachments without exposing their sources or capability URLs. */
-function extractAssistantAttachmentText(message: unknown): string {
-  const record = asMessageRecord(message);
-  if (!record) {
-    return "";
-  }
-  const contentAttachments = Array.isArray(record.content)
-    ? record.content.flatMap((block) => {
-        const entry = asMessageRecord(block);
-        const kind = entry ? resolveTuiAttachmentBlockKind(entry) : null;
-        return kind ? [`Attached ${kind}`] : [];
-      })
-    : [];
-  if (contentAttachments.length > 0) {
-    return contentAttachments.join("\n");
-  }
-
-  const persistedAttachments = (readPersistedMediaFacts(record) ?? [])
-    .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
-    .map((fact) => `Attached ${resolvePersistedTuiAttachmentKind(fact)}`);
-  if (persistedAttachments.length > 0) {
-    return persistedAttachments.join("\n");
-  }
-
-  const legacyMedia = [
-    ...(typeof record.mediaUrl === "string" && record.mediaUrl.trim() ? [record.mediaUrl] : []),
-    ...(Array.isArray(record.mediaUrls)
-      ? record.mediaUrls.filter((value) => typeof value === "string" && value.trim())
-      : []),
-  ];
-  return legacyMedia.map(() => "Attached media").join("\n");
-}
-
+/** Render attachment summaries and failures without exposing source metadata. */
 function formatTuiAssistantContent(message: unknown, contentText: string): string {
-  const content = asMessageRecord(message)?.content;
+  const record = asMessageRecord(message);
+  const content = record?.content;
   const failures: ReplyMediaFailure[] = [];
+  const contentAttachments: string[] | undefined = contentText ? undefined : [];
   for (const block of Array.isArray(content) ? content : []) {
     const entry = asMessageRecord(block);
+    if (contentAttachments && entry) {
+      const kind = resolveTuiAttachmentBlockKind(entry);
+      if (kind) {
+        contentAttachments.push(`Attached ${kind}`);
+      }
+    }
     const attachment =
       entry?.type === "attachment_error" ? asMessageRecord(entry.attachment) : undefined;
     const code = attachment?.code;
@@ -282,9 +258,23 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
       failures.push({ code, kind, label: `${kind === "document" ? "file" : kind} attachment` });
     }
   }
-  return (
-    appendReplyMediaFailures(contentText || extractAssistantAttachmentText(message), failures) ?? ""
-  );
+  let text = contentText || contentAttachments?.join("\n") || "";
+  if (!text && record) {
+    const persistedAttachments = (readPersistedMediaFacts(record) ?? [])
+      .filter((fact) => fact.path || fact.url || fact.contentType || fact.kind)
+      .map((fact) => `Attached ${resolvePersistedTuiAttachmentKind(fact)}`);
+    text = persistedAttachments.join("\n");
+    if (!text) {
+      const legacyMedia = [
+        ...(typeof record.mediaUrl === "string" && record.mediaUrl.trim() ? [record.mediaUrl] : []),
+        ...(Array.isArray(record.mediaUrls)
+          ? record.mediaUrls.filter((value) => typeof value === "string" && value.trim())
+          : []),
+      ];
+      text = legacyMedia.map(() => "Attached media").join("\n");
+    }
+  }
+  return appendReplyMediaFailures(text, failures) ?? "";
 }
 
 function resolveMessageRecord(

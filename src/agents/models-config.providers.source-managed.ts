@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { isRecord } from "../utils.js";
 import {
   resolveNonEnvSecretRefHeaderValueMarker,
@@ -48,7 +49,7 @@ function resolveSourceManagedApiKeyMarker(params: {
 }): string | undefined {
   const sourceApiKeyRef = resolveConfigSecretRef({
     config: params.sourceConfig,
-    path: `models.providers.${params.sourceProvider.providerKey}.apiKey`,
+    path: `${appendConfigPathSegment("models.providers", params.sourceProvider.providerKey)}.apiKey`,
     value: params.sourceProvider.providerConfig.apiKey,
     defaults: params.sourceConfig?.secrets?.defaults,
   });
@@ -64,17 +65,18 @@ function resolveSourceManagedHeaderMarkers(params: {
   sourceProvider: SourceProviderEntry;
   sourceConfig: OpenClawConfig | undefined;
 }): Record<string, string> {
-  const sourceHeaders = isRecord(params.sourceProvider.providerConfig.headers)
-    ? params.sourceProvider.providerConfig.headers
-    : undefined;
-  if (!sourceHeaders) {
+  const sourceHeaders = params.sourceProvider.providerConfig.headers;
+  if (!isRecord(sourceHeaders)) {
     return {};
   }
   const markers: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(sourceHeaders)) {
     const sourceHeaderRef = resolveConfigSecretRef({
       config: params.sourceConfig,
-      path: `models.providers.${params.sourceProvider.providerKey}.headers.${headerName}`,
+      path: appendConfigPathSegment(
+        `${appendConfigPathSegment("models.providers", params.sourceProvider.providerKey)}.headers`,
+        headerName,
+      ),
       value: headerValue,
       defaults: params.sourceConfig?.secrets?.defaults,
     });

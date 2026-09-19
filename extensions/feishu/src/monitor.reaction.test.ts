@@ -453,32 +453,55 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(result).toBeNull();
   });
 
-  it("uses event chat context when provided", async () => {
+  it.each([
+    { eventChatType: "group", lookupChatType: "p2p" },
+    { eventChatType: "topic_group", lookupChatType: "private" },
+    { eventChatType: "private", lookupChatType: "group" },
+    { eventChatType: "p2p", lookupChatType: "group" },
+  ] as const)(
+    "prefers event $eventChatType over lookup $lookupChatType",
+    async ({ eventChatType, lookupChatType }) => {
+      const result = await resolveReactionWithLookup({
+        event: makeReactionEvent({
+          chat_id: "oc_group_from_event",
+          chat_type: eventChatType,
+        }),
+        lookupChatId: "oc_group_from_lookup",
+        lookupChatType,
+      });
+
+      expect(result).toEqual({
+        sender: {
+          sender_id: { open_id: "ou_user1" },
+          sender_type: "user",
+        },
+        message: {
+          message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
+          reply_target_message_id: "om_msg1",
+          typing_target_message_id: "om_msg1",
+          chat_id: "oc_group_from_event",
+          chat_type: eventChatType,
+          message_type: "text",
+          content: JSON.stringify({
+            text: "[reacted with THUMBSUP to message om_msg1]",
+          }),
+        },
+      });
+    },
+  );
+
+  it("uses lookup chat type when the event chat type is invalid", async () => {
     const result = await resolveReactionWithLookup({
       event: makeReactionEvent({
         chat_id: "oc_group_from_event",
-        chat_type: "group",
+        chat_type: "bogus",
       }),
       lookupChatId: "oc_group_from_lookup",
+      lookupChatType: "private",
     });
 
-    expect(result).toEqual({
-      sender: {
-        sender_id: { open_id: "ou_user1" },
-        sender_type: "user",
-      },
-      message: {
-        message_id: "om_msg1:reaction:THUMBSUP:fixed-uuid",
-        reply_target_message_id: "om_msg1",
-        typing_target_message_id: "om_msg1",
-        chat_id: "oc_group_from_event",
-        chat_type: "group",
-        message_type: "text",
-        content: JSON.stringify({
-          text: "[reacted with THUMBSUP to message om_msg1]",
-        }),
-      },
-    });
+    expect(result?.message.chat_id).toBe("oc_group_from_event");
+    expect(result?.message.chat_type).toBe("private");
   });
 
   it("falls back to reacted message chat_id when event chat_id is absent", async () => {

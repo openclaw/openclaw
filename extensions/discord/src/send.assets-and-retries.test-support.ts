@@ -449,7 +449,7 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
 
       putMock.mockRejectedValueOnce(rateLimitError).mockResolvedValueOnce(undefined);
 
-      const res = await reactMessageDiscord("chan1", "msg1", "ok", {
+      const res = await reactMessageDiscord("chan1", "1", "ok", {
         cfg: discordTestConfig,
         rest,
         token: "t",

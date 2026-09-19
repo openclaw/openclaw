@@ -13,6 +13,7 @@ import {
 } from "../../scripts/lib/extension-test-plan.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { createExtensionDatabaseWorkersVitestConfig } from "../vitest/vitest.extension-database-workers.config.ts";
 import { createExtensionTelegramVitestConfig } from "../vitest/vitest.extension-telegram.config.ts";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -28,6 +29,7 @@ type PluginPrereleaseMatrixRow = {
   extensions_csv: string;
   includePatterns: string[];
   task: string;
+  vitest_config: string;
 };
 
 const FROZEN_TARGET_EXTENSION_PLAN_URL = new URL(
@@ -43,14 +45,19 @@ function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
 
-function listTelegramRunnableTestFiles() {
-  const testConfig = createExtensionTelegramVitestConfig({}).test ?? {};
+function listTelegramRunnableTestFiles(worker = false) {
+  const testConfig =
+    (worker
+      ? createExtensionDatabaseWorkersVitestConfig({})
+      : createExtensionTelegramVitestConfig({})
+    ).test ?? {};
   const dir = testConfig.dir ?? process.cwd();
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     path.isAbsolute(pattern) ? path.relative(dir, pattern).replaceAll("\\", "/") : pattern,
   );
   return globSync(testConfig.include ?? [], { cwd: dir, exclude })
     .map((file) => path.relative(process.cwd(), path.resolve(dir, file)).replaceAll("\\", "/"))
+    .filter((file) => file.startsWith("extensions/telegram/"))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -152,7 +159,7 @@ describe("plugin prerelease Telegram extension shards", () => {
     expect(
       allShards
         .flatMap((shard) => shard.planGroups)
-        .find((group) => group.extensionIds.includes("telegram")),
+        .find((group) => group.config === "test/vitest/vitest.extension-telegram.config.ts"),
     ).toMatchObject({
       config: "test/vitest/vitest.extension-telegram.config.ts",
       extensionIds: ["telegram"],
@@ -174,26 +181,38 @@ describe("plugin prerelease Telegram extension shards", () => {
     const genericRows = matrix.include.filter((row) => row.task === "extensions-batch");
     const telegramRows = matrix.include.filter((row) => row.task === "extension-file-shard");
     const allTelegramTestFiles = listExtensionTestFilesForRoots(["extensions/telegram"]);
-    const runnableTelegramTestFiles = listTelegramRunnableTestFiles();
+    const runnableTelegramTestFiles = [
+      ...listTelegramRunnableTestFiles(),
+      ...listTelegramRunnableTestFiles(true),
+    ].toSorted();
 
     expect(genericRows).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(genericRows.some((row) => row.extensions_csv.split(",").includes("telegram"))).toBe(
       false,
     );
     const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
-    const expectedTelegramPartitions = splitExtensionTestJobTargets(
-      telegramConfig,
-      runnableTelegramTestFiles,
+    const expectedTelegramPartitions = [
+      [
+        "test/vitest/vitest.extension-database-workers.config.ts",
+        listTelegramRunnableTestFiles(true),
+      ],
+      [telegramConfig, listTelegramRunnableTestFiles()],
+    ] as const;
+    const expectedRows = expectedTelegramPartitions.flatMap(([config, files]) =>
+      splitExtensionTestJobTargets(config, files).map((includePatterns) => ({
+        config,
+        includePatterns,
+      })),
     );
-    expect(telegramRows).toHaveLength(expectedTelegramPartitions.length);
+    expect(telegramRows).toHaveLength(expectedRows.length);
     expect(telegramRows).toEqual(
-      expectedTelegramPartitions.map((includePatterns, index) =>
+      expectedRows.map(({ config, includePatterns }, index) =>
         expect.objectContaining({
           check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
           extensions_csv: "telegram",
           includePatterns,
           runner: "blacksmith-8vcpu-ubuntu-2404",
-          vitest_config: telegramConfig,
+          vitest_config: config,
         }),
       ),
     );
@@ -217,7 +236,7 @@ describe("plugin prerelease Telegram extension shards", () => {
       for (const [index, partition] of telegramPartitions.entries()) {
         const includeFile = join(tempDir, `telegram-shard-${index + 1}.json`);
         writeFileSync(includeFile, JSON.stringify(partition));
-        const specs = createVitestRunSpecs(["test/vitest/vitest.extension-telegram.config.ts"], {
+        const specs = createVitestRunSpecs([telegramRows[index]!.vitest_config], {
           baseEnv: {
             OPENCLAW_TEST_PROJECTS_PARALLEL: "2",
             OPENCLAW_VITEST_INCLUDE_FILE: includeFile,

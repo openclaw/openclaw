@@ -19,6 +19,7 @@ import {
   requestNativeTool,
   runPlugin,
   SUCCESS_RESULT,
+  waitUntilAborted,
 } from "./execute-plugin.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -48,23 +49,6 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
   capability.register(session);
   activeSessions.add(session);
   return { handle: session, close };
-}
-
-function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
-  const signal = execution.abortSignal;
-  if (!signal) {
-    throw new Error("Host execution did not expose its abort signal.");
-  }
-  return new Promise((_, reject) => {
-    signal.addEventListener(
-      "abort",
-      () =>
-        reject(
-          signal.reason instanceof Error ? signal.reason : new Error("CLI test run was aborted."),
-        ),
-      { once: true },
-    );
-  });
 }
 
 afterEach(() => {

@@ -127,6 +127,7 @@ async function resolveModelDirective(params: {
   surface?: string;
   agentCfg?: Parameters<typeof resolveReplyDirectives>[0]["agentCfg"];
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
+  preparedModelCatalog?: ModelCatalogSnapshot;
 }) {
   const authorized = params.authorized ?? true;
   const { body } = params;
@@ -147,7 +148,7 @@ async function resolveModelDirective(params: {
   } as TemplateContext;
   const cfg = withFastReplyConfig({
     ...(params.cfg ?? configWithModelAlias("fable")),
-    models: {
+    models: params.cfg?.models ?? {
       providers: {
         anthropic: { baseUrl: "https://directive.invalid", models: [directiveModel] },
       },
@@ -192,7 +193,7 @@ async function resolveModelDirective(params: {
           provider: "anthropic",
           model: "claude-opus-4-6",
           hasResolvedHeartbeatModelOverride: false,
-          preparedModelCatalog: preparedDirectiveCatalog,
+          preparedModelCatalog: params.preparedModelCatalog ?? preparedDirectiveCatalog,
           typing: makeTypingController(),
         }),
       { config: cfg, trustConfigIdentity: true },
@@ -222,6 +223,46 @@ describe("reply directive resolution", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("uses prepared thinking defaults for an unrestricted ordinary reply", async () => {
+    const model = { ...directiveModel, reasoning: true };
+    const preparedModelCatalog: ModelCatalogSnapshot = {
+      entries: [{ provider: "anthropic", ...model }],
+      routeVariants: [],
+    };
+    prepareModelCatalogThinkingPolicies({
+      catalog: preparedModelCatalog,
+      metadataSnapshot: directiveMetadata,
+      providers: [
+        {
+          provider: {
+            id: "anthropic",
+            resolveThinkingProfile: () => ({
+              levels: [{ id: "off" }, { id: "high" }],
+              defaultLevel: "high",
+            }),
+          },
+        },
+      ],
+    });
+    const { result } = await resolveModelDirective({
+      body: "Summarize the notes.",
+      cfg: {
+        models: {
+          providers: {
+            anthropic: { baseUrl: "https://directive.invalid", models: [model] },
+          },
+        },
+      },
+      preparedModelCatalog,
+    });
+    if (result.kind !== "continue") {
+      throw new Error(`expected continue result, got ${result.kind}`);
+    }
+    await expect(result.result.resolveModelLevels()).resolves.toMatchObject({
+      resolvedThinkLevel: "high",
+    });
   });
 
   it.each([
@@ -378,7 +419,6 @@ describe("reply directive resolution", () => {
       }),
       blockStreamingEnabled: result.result.blockStreamingEnabled,
       blockReplyPipeline: null,
-      directlySentBlockKeys: new Set(),
       directBlockDeliveries: [],
     });
     const { emit, subscription } = createSubscribedSessionHarness({

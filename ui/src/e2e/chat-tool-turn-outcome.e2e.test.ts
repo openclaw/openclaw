@@ -16,6 +16,7 @@ beforeEach(() => {
     : undefined;
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { registerItemOnlyOutcomeTest } from "./chat-tool-item-outcomes.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -74,6 +75,8 @@ async function expandCompletedWorkGroups(page: import("playwright").Page) {
 }
 
 suite.define(() => {
+  registerItemOnlyOutcomeTest(suite, captureToolActivityProof);
+
   it.each([
     { name: "dark-desktop", colorScheme: "dark" as const, height: 900, width: 1200 },
     { name: "light-desktop", colorScheme: "light" as const, height: 900, width: 1200 },
@@ -332,6 +335,24 @@ suite.define(() => {
               },
             },
           ],
+          activity: [
+            {
+              itemId: "tool:call-read",
+              toolCallId: "call-read",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Read source",
+            },
+            {
+              itemId: "tool:call-patch",
+              toolCallId: "call-patch",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Apply patch",
+            },
+          ],
           timestamp: 1,
         },
         {
@@ -354,7 +375,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("Read a file, edited a file, created a file");
+    expect(await activity.textContent()).toContain("Read source, Apply patch");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -482,6 +503,16 @@ suite.define(() => {
           role: "toolResult",
           toolCallId: "call-release-patch",
           toolName: "apply_patch",
+          activity: [
+            {
+              itemId: "tool:call-release-patch",
+              toolCallId: "call-release-patch",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Apply Patch",
+            },
+          ],
           content: [{ type: "text", text: "Applied patch" }],
           timestamp: timestamp + 3_000,
         },
@@ -489,6 +520,16 @@ suite.define(() => {
           role: "toolResult",
           toolCallId: "call-release-test",
           toolName: "exec",
+          activity: [
+            {
+              itemId: "tool:call-release-test",
+              toolCallId: "call-release-test",
+              kind: "tool",
+              phase: "end",
+              status: "completed",
+              title: "Exec",
+            },
+          ],
           content: [{ type: "text", text: "PASS src/release/release-plan.test.ts (8 tests)" }],
           timestamp: timestamp + 4_000,
         },
@@ -526,9 +567,7 @@ suite.define(() => {
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
     await captureFactrowProof(page, activity, "dark");
-    expect(await summary.textContent()).toContain(
-      "Ran a command, edited a file, created a file, deleted a file",
-    );
+    expect(await summary.textContent()).toContain("Apply Patch, Exec");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });
@@ -576,7 +615,7 @@ suite.define(() => {
     await context.close();
   });
 
-  it("keeps a message-only turn visible with its first message line", async () => {
+  it("keeps a message-only turn visible with its caption behind disclosure", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const message = "Hello Molty, first claw-to-claw hello.";
@@ -611,19 +650,16 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    const row = page.locator(".chat-tool-msg-summary", { hasText: message });
+    const row = page.locator(".chat-tool-msg-summary");
     await row.waitFor();
 
-    expect(await page.locator(".chat-work-group").count()).toBe(0);
-    expect(await row.locator(".chat-tool-msg-summary__label").textContent()).toBe("Message");
-    expect(await row.locator(".chat-tool-msg-summary__names").textContent()).toBe(message);
+    expect(await row.count()).toBe(1);
+    expect(await page.getByText(message, { exact: false }).isVisible()).toBe(false);
     await captureToolActivityProof(page, "message-only-turn-visible");
     await row.click();
-    await page.getByText("action:", { exact: true }).waitFor();
-    expect(await page.getByText("send", { exact: true }).count()).toBe(1);
-    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
-      0,
-    );
+    const diagnostics = page.locator(".chat-tool-msg-body");
+    await diagnostics.getByText("Hidden second line.", { exact: false }).waitFor();
+    expect(await diagnostics.textContent()).toContain(message);
     await context.close();
   });
 
@@ -662,6 +698,22 @@ suite.define(() => {
     });
     // Start-phase sync is throttled and repaints on the next event, so follow
     // with a delta (as real runs do) to surface the live card.
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        itemId: "tool:call-wave",
+        toolCallId: "call-wave",
+        kind: "tool",
+        name: "exec",
+        title: "Run checks",
+        phase: "start",
+        status: "running",
+      },
+    });
     await page.waitForTimeout(200);
     await gateway.emitGatewayEvent("chat", {
       deltaText: "Working on it.",
@@ -695,7 +747,7 @@ suite.define(() => {
 
     await gateway.emitGatewayEvent("agent", {
       runId,
-      seq: 2,
+      seq: 3,
       stream: "tool",
       ts: Date.now(),
       sessionKey: "main",
@@ -709,6 +761,22 @@ suite.define(() => {
     });
     // The wave is a live-run marker only: the result event must end it and
     // restore plain text color even though the run has not finished yet.
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 4,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        itemId: "tool:call-wave",
+        toolCallId: "call-wave",
+        kind: "tool",
+        name: "exec",
+        title: "Run checks",
+        phase: "end",
+        status: "failed",
+      },
+    });
     await expect.poll(() => page.locator(".chat-tool-row--running").count()).toBe(0);
     const settled = await page
       .locator(".chat-tool-row__cmd")

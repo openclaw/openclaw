@@ -2652,6 +2652,102 @@ struct ChatViewModelTests {
         #expect(viewModel.swarmActivityState != initial)
     }
 
+    @Test @MainActor func `sidebar question previews use request text across sessions and retire terminal cards`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        let record = QuestionRecord(
+            id: "sidebar-secret-request",
+            questions: [Question(
+                questionid: "credential", header: "Credential", question: "Provide the deployment credential",
+                options: [], isother: true, issecret: true)],
+            agentid: "main", sessionkey: "agent:main:inactive",
+            createdatms: 1, expiresatms: 4_000_000_000_000, status: .pending)
+        viewModel.upsertQuestion(record)
+        let card = viewModel.questionCards[0]
+        card.setOtherText(questionID: "credential", value: "synthetic-draft-do-not-preview")
+        #expect(viewModel.visibleQuestionCards.isEmpty)
+        #expect(viewModel.pendingQuestionAttentionRequests.first?.preview == "Provide the deployment credential")
+        #expect(viewModel.pendingQuestionAttentionRequests.first?.sessionKey == "agent:main:inactive")
+        viewModel.resolveQuestionEvent(.init(id: record.id, status: .cancelled))
+        #expect(viewModel.pendingQuestionAttentionRequests.isEmpty)
+        #expect(card.otherText.isEmpty)
+        #expect(viewModel.questionCards.count == 1)
+    }
+
+    @Test @MainActor func `detached question refresh cannot restore requests or restart expiry tasks`() async throws {
+        let gate = QuestionListGate()
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: [], listQuestionsHook: { await gate.wait() }))
+        viewModel.upsertQuestion(chatQuestionRecord(id: "old-owner"))
+        let card = viewModel.questionCards[0]
+        card.toggleOption(questionID: "choice", label: "One")
+        let refresh = Task { await viewModel.refreshQuestions() }
+        try await waitUntil("pending question refresh before retirement") { await gate.isWaiting }
+        viewModel.detachTransport()
+        await gate.resume(with: [chatQuestionRecord(id: "late-owner")])
+        await refresh.value
+        #expect(viewModel.pendingQuestionAttentionRequests.isEmpty)
+        #expect(viewModel.questionExpiryTasks.isEmpty)
+        #expect(viewModel.questionRefreshRetryTask == nil)
+        #expect(card.selectedOptions.isEmpty)
+    }
+
+    @Test @MainActor func `retiring question authority keeps attachment cleanup while rejecting retained actions`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            resolveQuestionHook: { _, _, _ in
+                Issue.record("A retired question must not submit")
+                return QuestionAnswers(answers: [:])
+            },
+            cancelQuestionHook: { _ in Issue.record("A retired question must not cancel") })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let attachment = OpenClawPendingAttachment(
+            url: nil, data: Data("fixture".utf8), fileName: "fixture.txt", mimeType: "text/plain", preview: nil)
+        viewModel.attachments = [attachment]
+        viewModel.input = "Keep this attachment draft"
+        viewModel.upsertQuestion(chatQuestionRecord(id: "retired-account"))
+        let card = viewModel.questionCards[0]
+        card.toggleOption(questionID: "choice", label: "One")
+        viewModel.retireQuestionAuthority()
+        viewModel.upsertQuestion(chatQuestionRecord(id: "late-event"))
+        await viewModel.submitQuestion(card)
+        await viewModel.skipQuestion(card)
+        #expect(viewModel.questionCards.isEmpty)
+        #expect(card.selectedOptions.isEmpty)
+        #expect(viewModel.isAttachmentOwnerPinned)
+        #expect(viewModel.input == "Keep this attachment draft")
+        viewModel.removeAttachment(attachment.id)
+        #expect(!viewModel.isAttachmentOwnerPinned)
+    }
+
+    @Test @MainActor func `multi question records contribute every question once to sidebar totals`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        let sessionKey = "agent:main:inactive"
+        for (id, count) in [("older", 3), ("newer", 2)] {
+            viewModel.upsertQuestion(QuestionRecord(
+                id: id,
+                questions: (0..<count).map { index in
+                    Question(
+                        questionid: "question-\(index)", header: "Review",
+                        question: "Review item \(index)", options: [QuestionOption(label: "Ready")])
+                },
+                agentid: "main", sessionkey: sessionKey,
+                createdatms: id == "older" ? 1 : 2,
+                expiresatms: 4_000_000_000_000, status: .pending))
+        }
+        let requests = viewModel.pendingQuestionAttentionRequests
+        let summary = ChatSessionSidebarModel.attentionSummary(
+            requests: requests + [requests[0]],
+            sessions: [.placeholder(key: sessionKey)], mainSessionKey: "agent:main:main",
+            activeAgentID: "main", sessionRoutingContract: nil)
+        #expect(summary?.oldest.id == "older")
+        #expect(summary?.count == 5)
+        #expect(summary?.additionalRequestsText == "4 more questions")
+    }
+
     @Test @MainActor func `locally expired question remains in transcript`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -4989,6 +5085,44 @@ struct ChatViewModelTests {
             ToolActivityEvent(id: "t1", name: "demo", isActive: true, sessionKey: "main"),
             ToolActivityEvent(id: "t1", name: "demo", isActive: false, sessionKey: "main"),
         ])
+    }
+
+    @Test func `prepared item-only completion settles notifications before the run ends`() async throws {
+        let sessionId = "sess-main"
+        let recorder = await MainActor.run { ToolActivityRecorder() }
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: sessionId)],
+            sendMessageStatus: "pending",
+            onToolActivity: { id, name, isActive, sessionKey in
+                recorder.record(id: id, name: name, isActive: isActive, sessionKey: sessionKey)
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm)
+        let runId = try await waitForLastSentRunId(transport)
+        for (seq, id, phase, status, hidden) in [
+            (2, "wait", "start", "running", true),
+            (3, "work", "start", "running", false),
+            (4, "work", "end", "completed", false),
+        ] {
+            transport.emit(.agent(OpenClawAgentEventPayload(
+                runId: runId, seq: seq, stream: "item", ts: 10,
+                data: [
+                    "itemId": AnyCodable(id), "kind": AnyCodable("tool"),
+                    "phase": AnyCodable(phase), "status": AnyCodable(status),
+                    "title": AnyCodable("Check samples"),
+                    "hideFromChannelProgress": AnyCodable(hidden),
+                ])))
+        }
+        try await waitUntil("prepared activity settles") {
+            await MainActor.run { recorder.events.count == 2 }
+        }
+        #expect(await MainActor.run { recorder.events } == [
+            ToolActivityEvent(id: "work", name: "Check samples", isActive: true, sessionKey: "main"),
+            ToolActivityEvent(id: "work", name: "Check samples", isActive: false, sessionKey: "main"),
+        ])
+        #expect(await MainActor.run { vm.pendingRunCount } == 1)
+        #expect(await MainActor.run { vm.pendingToolCalls.map(\.toolCallId) } == ["wait"])
+        #expect(await MainActor.run { vm.toolActivities.map(\.toolCallId) } == ["wait", "work"])
     }
 
     @Test func `session switch ends tool activity under its original session`() async throws {
@@ -12668,14 +12802,11 @@ struct ChatViewModelTests {
         }
         await MainActor.run { vm.switchSession(to: "other") }
         try await waitUntil("other session loads") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading }
         }
         await MainActor.run { vm.selectVerboseLevel("full") }
-        try await waitUntil("newer verbosity patch completes") {
-            let count = await patchCount.current()
-            let preferred = await MainActor.run { vm.preferredVerboseLevel }
-            return count == 2 && preferred == "full"
-        }
+        await vm.waitForPendingSessionSettings(in: "other")
+        #expect(await patchCount.current() == 2)
 
         await firstPatchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")

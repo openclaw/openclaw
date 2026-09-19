@@ -5,10 +5,10 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { AgentLocalStatusesResult } from "./status.agent-local.js";
 import {
   resolveSharedMemoryStatusSnapshot,
-  type MemoryPluginStatus,
   type MemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 

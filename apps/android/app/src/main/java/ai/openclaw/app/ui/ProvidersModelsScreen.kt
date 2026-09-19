@@ -48,7 +48,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 /** Android provider readiness screen backed by the configured gateway model view. */
 @Composable
@@ -70,17 +69,23 @@ internal fun ProvidersModelsScreen(
   }
 
   ClawScaffold(
-    contentPadding = PaddingValues(start = 20.dp, top = 13.dp, end = 20.dp, bottom = 6.dp),
+    contentPadding =
+      PaddingValues(
+        start = ClawTheme.spacing.sm,
+        top = ClawTheme.spacing.xxs,
+        end = ClawTheme.spacing.sm,
+        bottom = ClawTheme.spacing.xxxs,
+      ),
     contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
       LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-        contentPadding = PaddingValues(bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+        contentPadding = PaddingValues(bottom = ClawTheme.spacing.xxxs),
       ) {
         item {
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
             Row(
               modifier = Modifier.fillMaxWidth(),
               verticalAlignment = Alignment.CenterVertically,
@@ -88,11 +93,11 @@ internal fun ProvidersModelsScreen(
             ) {
               ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), outlined = true, onClick = onBack)
             }
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-              Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display.copy(fontSize = 14.8.sp, lineHeight = 18.sp), color = ClawTheme.colors.text, maxLines = 1)
+            Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
+              Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display, color = ClawTheme.colors.text)
               Text(
                 text = nativeString("Review provider readiness\nand configured models."),
-                style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+                style = ClawTheme.type.caption,
                 color = ClawTheme.colors.textMuted,
               )
             }
@@ -256,7 +261,7 @@ private fun LazyListScope.providerListItems(
       count = row.models.size,
       key = { index -> "model:${row.id}:$index:${row.models[index].id}" },
     ) { index ->
-      Box(modifier = Modifier.padding(horizontal = 10.dp)) {
+      Box(modifier = Modifier.padding(horizontal = ClawTheme.spacing.xs)) {
         ProviderModelRow(model = row.models[index])
       }
     }
@@ -274,9 +279,9 @@ private fun ProviderOverviewPanel(
   val readyCount = providerRows.count { it.ready }
   val needsSetupCount = providerRows.count { it.availability == ProviderAvailability.Unavailable }
   val unknownCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
-  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xs)) {
+    Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         ProviderMetricTile(label = nativeString("Ready"), value = readyCount.toString(), modifier = Modifier.weight(1f))
         ProviderMetricTile(label = nativeString("Needs"), value = needsSetupCount.toString(), modifier = Modifier.weight(1f))
         ProviderMetricTile(label = nativeString("Unknown"), value = unknownCount.toString(), modifier = Modifier.weight(1f))
@@ -304,7 +309,7 @@ private fun ProviderMetricTile(
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     contentColor = ClawTheme.colors.text,
   ) {
-    Column(modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(modifier = Modifier.padding(horizontal = ClawTheme.spacing.xxs, vertical = ClawTheme.spacing.xxs), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
       Text(text = value, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1)
       Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
     }
@@ -313,12 +318,12 @@ private fun ProviderMetricTile(
 
 @Composable
 private fun ProviderListRow(row: ProviderRow) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxs)) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       ProviderBadge(text = row.name)
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
         Text(text = row.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = configuredModelsCountText(row.modelCount), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = configuredModelsCountText(row.modelCount), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       AvailabilityPill(availability = row.availability, label = row.status)
     }
@@ -342,17 +347,17 @@ internal fun configuredModelsCountText(count: Int): String =
 @Composable
 private fun ProviderModelRow(model: GatewayModelSummary) {
   Surface(shape = RoundedCornerShape(ClawTheme.radii.row), color = ClawTheme.colors.surface, border = BorderStroke(1.dp, ClawTheme.colors.border)) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = ClawTheme.spacing.xxs, vertical = ClawTheme.spacing.xxs), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs), verticalAlignment = Alignment.Top) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
           Text(text = model.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-          Text(text = model.id, style = ClawTheme.type.caption.copy(fontSize = 12.2.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+          Text(text = model.id, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         val availability = model.available.toProviderAvailability()
         AvailabilityPill(availability = availability, label = availability.modelLabel)
       }
       modelCapabilities(model).takeIf { it.isNotEmpty() }?.let { capabilities ->
-        Text(text = capabilities, style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(text = capabilities, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
       }
     }
   }
@@ -363,9 +368,9 @@ private fun AvailabilityPill(
   availability: ProviderAvailability,
   label: String,
 ) {
-  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
     Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(availability.color()))
-    Text(text = label, style = ClawTheme.type.caption.copy(fontSize = 12.2.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
   }
 }
 
@@ -427,7 +432,7 @@ private fun ProviderSectionLabel(title: String) {
   Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
     Text(
       text = localizedUppercase(title, currentAppLanguage().languageTag),
-      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
   }

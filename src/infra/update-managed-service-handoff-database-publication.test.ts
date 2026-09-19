@@ -130,6 +130,23 @@ describe("managed handoff database publication", () => {
     expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
   });
 
+  it("uses synchronous directory spelling for synchronous durability receipts", () => {
+    // Windows native realpath expands short aliases that ordinary realpath may preserve.
+    // Model that spelling difference without replacing the directory or its identity.
+    const nativeRealpath = fs.realpathSync.native;
+    vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      const result = nativeRealpath(...args);
+      return args[0] === root && typeof result === "string" ? result + path.sep + "." : result;
+    });
+
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      insertRow(db, root, "alias-owner"),
+    );
+
+    expect(readOwners()).toEqual(["alias-owner"]);
+    expect(fs.statSync(databasePath).nlink).toBe(1);
+  });
+
   it("recovers an existing private empty database through the existing DDL path", () => {
     fs.writeFileSync(databasePath, "", { mode: 0o600 });
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);

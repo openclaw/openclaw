@@ -467,7 +467,11 @@ describe("Git database admission", () => {
       const before = snapshotTree(state.install);
       const refused = new Error("refuse after effective-environment transport");
       const admission = vi.fn(async (target) => {
-        expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
+        expect(target).toEqual({
+          sha: state.target,
+          version: "2026.7.2",
+          schemaVersions: { state: 5, agent: 14 },
+        });
         throw refused;
       });
       const result = updateGitCheckout({
@@ -492,7 +496,7 @@ describe("Git database admission", () => {
     "checks development admission before target scripts, refuseFirst=%s",
     async (refuseFirst) => {
       const state = fixture();
-      state.commit("2026.7.3", 15);
+      const newest = state.commit("2026.7.3", 15);
       const before = snapshotTree(state.install);
       const refused = new Error("fallback database refusal");
       const builds: string[] = [];
@@ -519,12 +523,18 @@ describe("Git database admission", () => {
             inspectGitTarget: async (target) => {
               inspected.push(target.schemaVersions!.agent);
               if (refuseFirst) {
-                expect(target).toEqual({ schemaVersions: { state: 5, agent: 15 } });
+                expect(target).toEqual({
+                  sha: newest,
+                  version: "2026.7.3",
+                  schemaVersions: { state: 5, agent: 15 },
+                });
                 throw refused;
               }
             },
             beforeGitMutation: async (target) => {
               expect(target).toEqual({
+                sha: state.target,
+                version: "2026.7.2",
                 schemaVersions: { state: 5, agent: 14 },
               });
               throw refused;
@@ -593,7 +603,11 @@ process.exit(result.status ?? 93);
     const state = fixture();
     let checkoutObserved = false;
     const admission = vi.fn(async (target) => {
-      expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
+      expect(target).toEqual({
+        sha: state.target,
+        version: "2026.7.2",
+        schemaVersions: { state: 5, agent: 14 },
+      });
       state.commit("2026.7.3", 15);
     });
     const command: CommandRunner = async (argv, options) => {
@@ -627,7 +641,11 @@ process.exit(result.status ?? 93);
     const result = state.run({
       beforeGitMutation: async (target) => {
         expect(fs.existsSync(published)).toBe(false);
-        expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
+        expect(target).toEqual({
+          sha: state.target,
+          version: "2026.7.2",
+          schemaVersions: { state: 5, agent: 14 },
+        });
         if (refuse) {
           throw complete;
         }
@@ -655,7 +673,11 @@ process.exit(result.status ?? 93);
       const before = snapshotTree(state.install);
       const refusal = new Error("incompatible database");
       const inspect = vi.fn(async (target) => {
-        expect(target).toEqual({ schemaVersions: { state: 5, agent: 14 } });
+        expect(target).toEqual({
+          sha: state.target,
+          version: "2026.7.2",
+          schemaVersions: { state: 5, agent: 14 },
+        });
         throw refusal;
       });
       await expect(state.run({ inspectGitTarget: inspect })).rejects.toBe(refusal);

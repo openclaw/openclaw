@@ -16,6 +16,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
@@ -54,6 +55,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
     this.subscriptions = [
       this.context.gateway.subscribe((snapshot) => this.applySnapshot(snapshot)),
       this.context.agents.subscribe(() => this.syncControllers()),
+      this.context.settingsAgentSelection.subscribe(() => this.syncControllers()),
       this.context.runtimeConfig.subscribe(() => this.syncControllers()),
     ];
     this.applySnapshot(this.context.gateway.snapshot);
@@ -115,7 +117,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
       authorizable: this.canRead && this.profileId !== null,
       configurable: false,
     });
-    const agentId = this.context.agents.state.agentsList?.defaultId;
+    const agentId = this.context.settingsAgentSelection.state.selectedId;
     this.system.sync({
       ...common,
       target: agentId
@@ -175,7 +177,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
   override render() {
     const personal = this.personal.personal;
     const system = this.system.status?.selected.identity ?? this.personal.system;
-    const agentId = this.context.agents.state.agentsList?.defaultId;
+    const agentId = this.context.settingsAgentSelection.state.selectedId;
     const agent = this.context.agents.state.agentsList?.agents?.find(
       (entry) => entry.id === agentId,
     );
@@ -408,3 +410,5 @@ export class GitHubConnections extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-github-connections")) {
   customElements.define("openclaw-github-connections", GitHubConnections);
 }
+
+registerGitHubEnglish();

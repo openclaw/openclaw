@@ -5,6 +5,7 @@ import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run
 import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CommandLane } from "../process/lanes.js";
 import { planSystemAgentCommandWithConfiguredModel } from "./assistant.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -188,7 +189,7 @@ describe("OpenClaw configured-model planner", () => {
       throw new Error("missing test route");
     }
     const authDeps = {
-      ensureAuthProfileStore: vi.fn(() => ({
+      loadAuthProfileStoreForRuntime: vi.fn(() => ({
         version: 1,
         profiles: {
           "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },
@@ -382,6 +383,7 @@ describe("OpenClaw configured-model planner", () => {
       }),
     );
     expect(runCliAgent.mock.calls[0]?.[0]?.toolsAllow).toBeUndefined();
+    expect(runCliAgent.mock.calls[0]?.[0]?.lane).toBeUndefined();
     expect(removeTempDir).toHaveBeenCalledWith("/tmp/openclaw-planner");
   });
 
@@ -442,6 +444,7 @@ describe("OpenClaw configured-model planner", () => {
         toolsAllow: [],
         thinkLevel: "off",
         timeoutMs: 120_000,
+        lane: CommandLane.SystemAgentInference,
       }),
     );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(

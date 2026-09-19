@@ -19,6 +19,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -84,6 +85,13 @@ function buildFinalizeEnv(
 
 type PostCoreFinalizeOutcome =
   | { status: "skipped"; reason: "not-git-update" | "entrypoint-missing" }
+  | {
+      status: "skipped";
+      reason: "update-ledger-busy";
+      entrypoint: string;
+      exitCode: number;
+      message: string;
+    }
   | { status: "ok"; entrypoint: string }
   | {
       status: "error";
@@ -93,7 +101,7 @@ type PostCoreFinalizeOutcome =
       message?: string;
     };
 
-type FinalizeSpawnResult = { code: number | null; stderr?: string };
+type FinalizeSpawnResult = { code: number | null; stdout?: string; stderr?: string };
 
 type PostCoreFinalizeSpawner = (params: {
   argv: string[];
@@ -104,7 +112,7 @@ type PostCoreFinalizeSpawner = (params: {
 
 const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, timeoutMs, env }) => {
   const res = await runCommandWithTimeout(argv, { baseEnv: {}, cwd, timeoutMs, env });
-  return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
+  return { code: res.code, stdout: res.stdout, stderr: res.stderr };
 };
 
 // Only git/source updates routed through `runGatewayUpdate` defer-and-drop
@@ -219,6 +227,22 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
     if (spawnResult.code === 0) {
       return { status: "ok", entrypoint };
     }
+    const reported = safeParseJsonRecord(spawnResult.stdout ?? "");
+    if (
+      typeof spawnResult.code === "number" &&
+      reported?.status === "skipped" &&
+      reported.mode === "finalize" &&
+      reported.reason === "update-ledger-busy"
+    ) {
+      return {
+        status: "skipped",
+        reason: reported.reason,
+        entrypoint,
+        exitCode: spawnResult.code,
+        message:
+          "Update finalization was deferred while update history was busy. Retry the update after the database writer finishes; plugin convergence is still required before restarting.",
+      };
+    }
     return {
       status: "error",
       reason: "nonzero-exit",
@@ -246,13 +270,16 @@ export function foldPostCoreFinalizeIntoResult(
   result: UpdateRunResult,
   outcome: PostCoreFinalizeOutcome,
 ): UpdateRunResult {
-  if (outcome.status !== "error") {
+  if (
+    outcome.status === "ok" ||
+    (outcome.status === "skipped" && outcome.reason !== "update-ledger-busy")
+  ) {
     return result;
   }
   return {
     ...result,
-    status: "error",
-    reason: "post-core-plugin-finalize-failed",
+    status: outcome.status,
+    reason: outcome.status === "skipped" ? outcome.reason : "post-core-plugin-finalize-failed",
     steps: [
       ...result.steps,
       {
@@ -260,7 +287,7 @@ export function foldPostCoreFinalizeIntoResult(
         command: "openclaw update finalize",
         cwd: result.root ?? process.cwd(),
         durationMs: 0,
-        exitCode: outcome.reason === "nonzero-exit" ? (outcome.exitCode ?? 1) : 1,
+        exitCode: outcome.exitCode ?? 1,
         ...(outcome.message ? { stderrTail: trimLogTail(outcome.message) } : {}),
       },
     ],

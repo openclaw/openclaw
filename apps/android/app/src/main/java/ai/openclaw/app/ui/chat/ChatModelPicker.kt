@@ -90,6 +90,8 @@ internal fun chatModelSendBlocked(
 
 internal fun chatModelPickerAction(model: GatewayModelSummary): ChatModelPickerAction =
   when {
+    model.manualSelectionAllowed == false -> ChatModelPickerAction.Disabled
+
     model.available != false -> ChatModelPickerAction.Select
 
     model.unavailableReason == GatewayModelUnavailableReason.MissingAuth ||
@@ -112,7 +114,8 @@ internal fun chatModelPickerSections(
   favorites: List<String>,
   recents: List<String>,
 ): ChatModelPickerSections {
-  val modelsByRef = catalog.associateBy { it.providerQualifiedRef() }
+  val choices = catalog.filter { it.manualSelectionAllowed != false }
+  val modelsByRef = choices.associateBy { it.providerQualifiedRef() }
   val includedRefs = mutableSetOf<String>()
   val pinned =
     favorites.mapNotNull { ref ->
@@ -122,6 +125,6 @@ internal fun chatModelPickerSections(
     recents.mapNotNull { ref ->
       modelsByRef[ref]?.takeIf { includedRefs.add(ref) }
     }
-  val remaining = catalog.filter { model -> includedRefs.add(model.providerQualifiedRef()) }
+  val remaining = choices.filter { model -> includedRefs.add(model.providerQualifiedRef()) }
   return ChatModelPickerSections(pinned = pinned, recent = recent, remaining = remaining)
 }

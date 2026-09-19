@@ -33,6 +33,7 @@ import {
   serializeWorkerSessionTurnClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
+import { formatWorkerInferenceError } from "./worker-error.js";
 
 const DEFAULT_REQUEST_MAX_BYTES = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES;
 // One active turn plus one provider that ignored abort. This prevents repeated
@@ -111,6 +112,7 @@ function trySend(
 function terminalError(
   reason: WorkerInferenceErrorReason,
   outcome?: WorkerInferenceTerminalOutcome,
+  errorMessage?: string,
 ): WorkerInferenceTerminalOutcome {
   const usage =
     outcome?.type === "done"
@@ -138,7 +140,7 @@ function terminalError(
   return {
     type: "error",
     reason,
-    message,
+    message: errorMessage ?? message,
     ...(usage ? { usage } : {}),
   };
 }
@@ -364,8 +366,12 @@ export function createWorkerInferenceManager(options: {
         isCurrent: () => durableFence(entry) === null,
         ...(config ? { config } : {}),
       });
-    } catch {
-      outcome = terminalError(entry.abortReason ?? "provider-error");
+    } catch (error) {
+      outcome = terminalError(
+        entry.abortReason ?? "provider-error",
+        undefined,
+        entry.abortReason ? undefined : formatWorkerInferenceError(error),
+      );
     }
     finish(entry, outcome);
   };
@@ -378,8 +384,15 @@ export function createWorkerInferenceManager(options: {
     const operation = runWithGatewayIndependentRootWorkContinuation(
       () => executeEntry(entry),
       "worker:dispatch",
-    ).catch(() => {
-      finish(entry, terminalError(entry.abortReason ?? "provider-error"));
+    ).catch((error: unknown) => {
+      finish(
+        entry,
+        terminalError(
+          entry.abortReason ?? "provider-error",
+          undefined,
+          entry.abortReason ? undefined : formatWorkerInferenceError(error),
+        ),
+      );
     });
     operations.set(operation, entry.request.sessionId);
     void operation.then(
@@ -698,17 +711,15 @@ export function createWorkerInferenceManager(options: {
     ).catch(() => undefined);
   };
 
-  const manager = {
+  return {
     start,
     cancel,
     cancelEnvironment,
     cancelClaim,
     cancelSession,
+    beginSessionDrain,
     hasSession,
     resolveSessionIdForRunId,
     stop,
   };
-  // Archive-only control stays non-enumerable so the manager's inferred contract remains stable.
-  Object.defineProperty(manager, "beginSessionDrain", { value: beginSessionDrain });
-  return manager;
 }

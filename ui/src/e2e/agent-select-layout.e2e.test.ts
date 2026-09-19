@@ -31,7 +31,10 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/agents`);
-        const picker = page.locator("openclaw-agent-select");
+        if (width === 390) {
+          await page.locator(".topbar-nav-toggle").click();
+        }
+        const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         const trigger = picker.locator(".agent-select__trigger");
         const openPicker = async () => {
           await picker.waitFor();
@@ -46,7 +49,7 @@ suite.define(() => {
           ]);
         };
         await openPicker();
-        const selected = picker.getByRole("menuitemradio", { name: "Main agent, Default" });
+        const selected = picker.getByRole("menuitemradio", { name: "Main agent", exact: true });
         const writer = picker.getByRole("menuitemradio", { name: "Writer", exact: true });
         await selected.waitFor({ state: "visible" });
 
@@ -60,19 +63,19 @@ suite.define(() => {
 
         const check = await selected.locator(".agent-select__option-check svg").boundingBox();
         const avatar = await selected.locator(".agent-select__avatar").boundingBox();
-        const badge = await selected.locator(".agent-select__badge").boundingBox();
+        const label = await selected.locator(".agent-select__option-label").boundingBox();
         const selectedRow = await selected.boundingBox();
         const otherRow = await writer.boundingBox();
         expect(check).not.toBeNull();
         expect(avatar).not.toBeNull();
-        expect(badge).not.toBeNull();
+        expect(label).not.toBeNull();
         expect(selectedRow).not.toBeNull();
         expect(otherRow).not.toBeNull();
         expect(check!.width).toBeGreaterThan(0);
         expect(check!.width).toBeLessThanOrEqual(avatar!.width);
         expect(check!.height).toBeLessThanOrEqual(avatar!.height);
-        expect(check!.x).toBeGreaterThanOrEqual(badge!.x + badge!.width);
-        expect(check!.y + check!.height / 2).toBeCloseTo(badge!.y + badge!.height / 2, 0);
+        expect(check!.x).toBeGreaterThanOrEqual(label!.x + label!.width);
+        expect(check!.y + check!.height / 2).toBeCloseTo(label!.y + label!.height / 2, 0);
         expect(selectedRow!.height).toBeCloseTo(otherRow!.height, 0);
 
         await writer.click();

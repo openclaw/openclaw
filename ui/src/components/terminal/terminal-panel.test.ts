@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { prepareCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
@@ -58,6 +58,11 @@ async function startPanelWithPendingOpen(sessionKey?: string) {
 }
 
 describe("OpenClawTerminalPanel", () => {
+  beforeAll(async () => {
+    // Load the real responder before short RPC assertions begin on a cold worker.
+    await import("@openclaw/libterminal/browser");
+  });
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());

@@ -19,7 +19,7 @@ import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
@@ -37,7 +37,7 @@ const log = createSubsystemLogger("music-generation");
 type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVars;
+  getProviderEnvVars?: typeof getProviderEnvVarsCore;
   log?: Pick<typeof log, "debug">;
 };
 

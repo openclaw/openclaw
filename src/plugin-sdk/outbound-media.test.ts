@@ -6,7 +6,11 @@ import type {
 // Outbound media tests cover plugin media attachment normalization and access policy.
 import {
   createPluginStateKeyedStoreForTests,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
+  type OpenClawStateKyselyDatabaseForTests,
 } from "./plugin-state-test-runtime.js";
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
 type OutboundMediaModule = typeof import("./outbound-media.js");
@@ -413,10 +417,46 @@ describe("createHostedOutboundMediaStore", () => {
       publicBaseUrl: "https://gateway.example.com",
       maxBytes: 1024,
     });
+    const { db } = openOpenClawStateDatabase();
+    const sql = getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db);
+    const persistedTtls = executeSqliteQuerySync(
+      db,
+      sql
+        .selectFrom("plugin_state_entries")
+        .select("namespace")
+        .select((eb) => eb("expires_at", "-", eb.ref("created_at")).as("ttlMs"))
+        .where("plugin_id", "=", "fixture-plugin")
+        .where("namespace", "in", ["ttl-media", "ttl-media-chunks"])
+        .orderBy("namespace")
+        .orderBy("entry_key"),
+    ).rows;
+    expect(persistedTtls).toEqual([
+      { namespace: "ttl-media", ttlMs: 200 },
+      { namespace: "ttl-media-chunks", ttlMs: 100 },
+      { namespace: "ttl-media-chunks", ttlMs: 100 },
+      { namespace: "ttl-media-chunks", ttlMs: 100 },
+    ]);
+    // Keep physical expiry independent of the parent test's logical media clock.
+    executeSqliteQuerySync(
+      db,
+      sql
+        .updateTable("plugin_state_entries")
+        .set({ expires_at: vi.getRealSystemTime() + 86_400_000 })
+        .where("plugin_id", "=", "fixture-plugin")
+        .where("namespace", "in", ["ttl-media", "ttl-media-chunks"]),
+    );
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toHaveLength(3);
 
     vi.setSystemTime(1101);
+    executeSqliteQuerySync(
+      db,
+      sql
+        .updateTable("plugin_state_entries")
+        .set({ expires_at: 1 })
+        .where("plugin_id", "=", "fixture-plugin")
+        .where("namespace", "=", "ttl-media-chunks"),
+    );
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toEqual([]);
     await store.cleanupExpired(1101);

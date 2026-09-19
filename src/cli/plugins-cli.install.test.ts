@@ -195,16 +195,17 @@ function createClawHubInstallResult(params: {
 
 function createNpmPluginInstallResult(
   pluginId = "demo",
+  version = "1.2.3",
 ): Awaited<ReturnType<typeof installPluginFromNpmSpecMock>> {
   return {
     ok: true,
     pluginId,
     targetDir: cliInstallPath(pluginId),
-    version: "1.2.3",
+    version,
     npmResolution: {
       packageName: pluginId,
-      resolvedVersion: "1.2.3",
-      tarballUrl: `https://registry.npmjs.org/${pluginId}/-/${pluginId}-1.2.3.tgz`,
+      resolvedVersion: version,
+      tarballUrl: `https://registry.npmjs.org/${pluginId}/-/${pluginId}-${version}.tgz`,
     },
   };
 }
@@ -1671,7 +1672,15 @@ describe("plugins cli install", () => {
   it.each(["clawhub:@openclaw/brave-plugin", "clawhub:@openclaw/brave-plugin@latest"])(
     "installs the beta artifact for official ClawHub intent %s",
     async (spec) => {
-      primeSuccessfulClawHubPluginInstall();
+      primeSuccessfulPluginPersistence("brave");
+      installPluginFromClawHubMock.mockResolvedValue(
+        createClawHubInstallResult({
+          pluginId: "brave",
+          packageName: "@openclaw/brave-plugin",
+          version: "2026.8.2-beta.1",
+          channel: "beta",
+        }),
+      );
 
       pluginCliConfigMock.mockReturnValue({
         ...createEmptyPluginConfig(),
@@ -1681,8 +1690,9 @@ describe("plugins cli install", () => {
       await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", spec]);
 
       expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
+      expect(clawHubInstallCall().expectedPluginId).toBe("brave");
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-      expect(persistedInstallRecord("demo").spec).toBe(spec);
+      expect(persistedInstallRecord("brave").spec).toBe(spec);
     },
   );
 
@@ -2130,7 +2140,7 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("does not retry a selected beta release when its artifact is unavailable", async () => {
+  it("does not change source or retry latest when the selected explicit npm beta is unavailable", async () => {
     primeSuccessfulPluginPersistence("brave");
     pluginCliConfigMock.mockReturnValue({
       ...createEmptyPluginConfig(),
@@ -2145,10 +2155,13 @@ describe("plugins cli install", () => {
       code: "npm_package_not_found",
     });
 
-    await expect(runPluginsCommand(["plugins", "install", "brave"])).rejects.toThrow("__exit__:1");
+    await expect(
+      runPluginsCommand(["plugins", "install", "npm:@openclaw/brave-plugin"]),
+    ).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@2026.8.2-beta.1");
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
     expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain(
@@ -2175,39 +2188,61 @@ describe("plugins cli install", () => {
   });
 
   it.each(
-    [false, true].flatMap((npmAbsent) =>
-      ["matrix", "@openclaw/matrix@latest"].map((arg) => ({ npmAbsent, arg })),
-    ),
+    [
+      { pluginId: "matrix", packageName: "@openclaw/matrix", arg: "matrix", channel: "stable" },
+      {
+        pluginId: "matrix",
+        packageName: "@openclaw/matrix",
+        arg: "@openclaw/matrix@latest",
+        channel: "stable",
+      },
+      { pluginId: "brave", packageName: "@openclaw/brave-plugin", arg: "brave", channel: "beta" },
+    ].flatMap((entry) => [false, true].map((npmAbsent) => Object.assign({ npmAbsent }, entry))),
   )(
-    "uses the declared ClawHub secondary for $arg only when npm is absent ($npmAbsent)",
-    async ({ npmAbsent, arg }) => {
-      primeSuccessfulPluginPersistence("matrix");
+    "uses the declared ClawHub secondary for $arg on $channel only when npm is absent ($npmAbsent)",
+    async ({ npmAbsent, arg, pluginId, packageName, channel }) => {
+      primeSuccessfulPluginPersistence(pluginId);
+      const version = channel === "beta" ? "2026.8.2-beta.1" : "1.2.3";
+      if (channel === "beta") {
+        pluginCliConfigMock.mockReturnValue({
+          ...createEmptyPluginConfig(),
+          update: { channel },
+        } as OpenClawConfig);
+        mockNpmChannelMetadata(packageName, version, "2026.8.1");
+      }
 
       findBundledPluginSourceMock.mockReturnValue(undefined);
       installPluginFromNpmSpecMock.mockResolvedValue(
         npmAbsent
           ? { ok: false, error: "npm error E404 package not found", code: "npm_package_not_found" }
-          : createNpmPluginInstallResult("matrix"),
+          : createNpmPluginInstallResult(pluginId, version),
       );
       installPluginFromClawHubMock.mockResolvedValue(
         createClawHubInstallResult({
-          pluginId: "matrix",
-          packageName: "@openclaw/matrix",
-          version: "1.2.3",
-          channel: "latest",
+          pluginId,
+          packageName,
+          version,
+          channel: channel === "beta" ? "beta" : "latest",
         }),
       );
 
       await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", arg]);
 
-      const spec = arg.endsWith("@latest") ? "@openclaw/matrix@latest" : "@openclaw/matrix";
-      expect(npmInstallCall().spec).toBe(spec);
+      const spec = arg.endsWith("@latest") ? `${packageName}@latest` : packageName;
+      expect(npmInstallCall().spec).toBe(channel === "beta" ? `${packageName}@${version}` : spec);
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
       if (npmAbsent) {
-        expect(clawHubInstallCall().spec).toBe(`clawhub:${spec}`);
+        expect(clawHubInstallCall().spec).toBe(
+          `clawhub:${channel === "beta" ? `${packageName}@beta` : spec}`,
+        );
+        expect(runtimeLogsContain(`${spec} unavailable; using clawhub:${spec} instead.`)).toBe(
+          true,
+        );
       }
-      expect(persistedInstallRecord("matrix").spec).toBe(npmAbsent ? `clawhub:${spec}` : spec);
+      expect(persistedInstallRecord(pluginId).spec).toBe(npmAbsent ? `clawhub:${spec}` : spec);
       expect(installPluginFromClawHubMock).toHaveBeenCalledTimes(npmAbsent ? 1 : 0);
-      expect(persistedInstallRecord("matrix").source).toBe(npmAbsent ? "clawhub" : "npm");
+      expect(persistedInstallRecord(pluginId).source).toBe(npmAbsent ? "clawhub" : "npm");
+      expect(persistedInstallRecord(pluginId).version).toBe(version);
       expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
     },
   );

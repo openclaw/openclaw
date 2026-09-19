@@ -1,5 +1,8 @@
-import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
+import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import {
@@ -8,6 +11,8 @@ import {
   projectCrabboxLegacyWarmLeases,
   WARM_IMAGE_MAX_ENTRIES,
 } from "./crabbox-worker-warm-image-records.js";
+
+export type CrabboxState = Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore">;
 
 type WorkerNodeRuntimeIdentity = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
@@ -77,20 +82,20 @@ export class CrabboxWarmImageRequestError extends Error {}
 const WARM_IMAGE_MAX_ALLOCATIONS = 256;
 const CAPTURE_WARNING_AGE_MS = 1_200_000;
 
-const openLegacyLeases = (env?: NodeJS.ProcessEnv) =>
-  createPluginStateSyncKeyedStore<unknown>("crabbox", {
+const openLegacyLeases = (state: CrabboxState, env?: NodeJS.ProcessEnv) =>
+  state.openKeyedStore<unknown>({
     namespace: "warm-leases",
     maxEntries: LEGACY_WARM_LEASE_MAX_ENTRIES,
     overflowPolicy: "evict-oldest",
     ...(env ? { env } : {}),
   });
-export function listCrabboxLegacyWarmLeases(env?: NodeJS.ProcessEnv) {
-  return projectCrabboxLegacyWarmLeases(openLegacyLeases(env).entries());
+export async function listCrabboxLegacyWarmLeases(state: CrabboxState, env?: NodeJS.ProcessEnv) {
+  return projectCrabboxLegacyWarmLeases(await openLegacyLeases(state, env).entries());
 }
 
-export function assertCrabboxWarmImageMigrationReady(): void {
-  const leases = openLegacyLeases();
-  if ((leases.count?.() ?? leases.entries().length) > 0) {
+export async function assertCrabboxWarmImageMigrationReady(state: CrabboxState): Promise<void> {
+  const leases = openLegacyLeases(state);
+  if ((leases.count ? await leases.count() : (await leases.entries()).length) > 0) {
     throw new Error(
       "Crabbox has legacy worker allocations whose original image choices are unknown; run openclaw doctor --fix and follow its provider-cleanup recovery instructions before provisioning workers.",
     );
@@ -210,20 +215,49 @@ export function withCrabboxWarmImageDisplayFacts(
   return next;
 }
 
-export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
-  const store = createPluginStateSyncKeyedStore<WarmProfileRecord>("crabbox", {
+async function compareProfile<T>(
+  store: PluginStateKeyedStore<T>,
+  key: string,
+  prepare: (current: T | undefined) => PluginStateCompareIntent<T>,
+): Promise<boolean> {
+  if (!store.observe || !store.compareAndApply) {
+    throw new Error("Crabbox warm images require atomic asynchronous plugin state support.");
+  }
+  let observation = await store.observe(key);
+  for (;;) {
+    const result = await store.compareAndApply(
+      key,
+      observation.comparison,
+      prepare(observation.value),
+    );
+    if (result.status !== "conflict") {
+      return result.status === "applied";
+    }
+    // Only an explicit comparison conflict can retry; uncertain writes must settle with their owner.
+    observation = result.current;
+  }
+}
+
+export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.ProcessEnv) {
+  const store = state.openKeyedStore<WarmProfileRecord>({
     namespace: "warm-images",
     maxEntries: WARM_IMAGE_MAX_ENTRIES,
     overflowPolicy: "reject-new",
     ...(env ? { env } : {}),
   });
   const canonical = {
-    ...store,
-    lookup(key: string) {
-      return requireCanonicalProfile(store.lookup(key));
+    count: () => (store.count ? store.count() : store.entries().then((entries) => entries.length)),
+    deleteIf(key: string, predicate: (current: WarmProfileRecord) => boolean) {
+      return compareProfile(store, key, (current) => ({
+        operation: "delete",
+        action: current && predicate(requireCanonicalProfile(current)!) ? "delete" : "keep",
+      }));
     },
-    entries() {
-      const entries = store.entries();
+    async lookup(key: string) {
+      return requireCanonicalProfile(await store.lookup(key));
+    },
+    async entries() {
+      const entries = await store.entries();
       for (const entry of entries) {
         requireCanonicalProfile(entry.value);
       }
@@ -233,11 +267,18 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       key: string,
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
     ) {
-      return store.update(key, (current) => update(requireCanonicalProfile(current)));
+      return compareProfile(store, key, (current) => {
+        const value = update(requireCanonicalProfile(current));
+        return value === undefined
+          ? { operation: "update", action: "keep" }
+          : { operation: "update", action: "set", value };
+      });
     },
   };
-  const lookupLease = (id: string) => {
-    const entries = canonical.entries().filter(({ value }) => Object.hasOwn(value.allocations, id));
+  const lookupLease = async (id: string) => {
+    const entries = (await canonical.entries()).filter(({ value }) =>
+      Object.hasOwn(value.allocations, id),
+    );
     if (entries.length > 1) {
       throw new Error(
         `Crabbox lease ${id} has conflicting warm-image owners; run openclaw doctor --fix.`,
@@ -249,8 +290,13 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       : undefined;
   };
 
-  const markPhase = (id: string, phase: "prepared" | "enrolled", baseCommit?: string) => {
-    const owner = lookupLease(id);
+  const markPhase = async (
+    id: string,
+    phase: "prepared" | "enrolled",
+    baseCommit?: string,
+    assertCurrent?: () => void,
+  ) => {
+    const owner = await lookupLease(id);
     if (!owner) {
       return;
     }
@@ -261,7 +307,9 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       throw new Error("Crabbox project preparation requires a verified Git commit.");
     }
     let rejection: string | undefined;
-    canonical.update(owner.key, (record) => {
+    await canonical.update(owner.key, (record) => {
+      assertCurrent?.();
+      rejection = undefined;
       const allocation = record?.allocations[id];
       if (!record || !allocation) {
         rejection = "Crabbox allocation closed before preparation completed.";
@@ -299,16 +347,21 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
   return {
     ...canonical,
     lookupLease,
-    recordAllocation(params: {
+    async recordAllocation(params: {
       key: string;
       id: string;
       projectKey?: string;
       availableImage?: WarmImageRecord;
       displayFacts?: WarmProfileDisplayFacts;
       allocation: Omit<WarmAllocationRecord, "choice" | "imageGeneration">;
+      assertCurrent: () => void;
     }) {
       let rejection: string | undefined;
-      canonical.update(params.key, (current) => {
+      let acceptedOwnerJson: string | undefined;
+      await canonical.update(params.key, (current) => {
+        params.assertCurrent();
+        rejection = undefined;
+        acceptedOwnerJson = undefined;
         const record = withCrabboxWarmImageDisplayFacts(
           current ?? {
             version: 3,
@@ -318,6 +371,11 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
           params.displayFacts,
         );
         if (Object.hasOwn(record.allocations, params.id)) {
+          acceptedOwnerJson = JSON.stringify({
+            key: params.key,
+            projectKey: record.projectKey,
+            ...record.allocations[params.id],
+          });
           return params.displayFacts ? record : undefined;
         }
         if (Object.keys(record.allocations).length >= WARM_IMAGE_MAX_ALLOCATIONS) {
@@ -336,7 +394,7 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
           )
             ? { kind: "checkpoint", checkpointId: record.image.checkpointId }
             : { kind: "cold" };
-        return {
+        const next = {
           ...record,
           allocations: {
             ...record.allocations,
@@ -358,17 +416,34 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
             },
           },
         };
+        acceptedOwnerJson = JSON.stringify({
+          key: params.key,
+          projectKey: next.projectKey,
+          ...next.allocations[params.id],
+        });
+        return next;
       });
-      // Domain rejections are not database failures; the store wraps callback exceptions.
+      // Publish only the rejection from the observation accepted by the store.
       if (rejection) {
         throw new Error(rejection);
       }
-      return lookupLease(params.id)!;
+      const owner = await lookupLease(params.id);
+      if (!owner || JSON.stringify(owner) !== acceptedOwnerJson) {
+        throw new Error(
+          "Crabbox allocation changed before provisioning completed; retry the worker operation.",
+        );
+      }
+      return owner;
     },
-    markPrepared: (id: string, baseCommit: string) => markPhase(id, "prepared", baseCommit),
-    markEnrolled: (id: string) => markPhase(id, "enrolled"),
-    notePreparedDemand(id: string, preparation: { preparationKey: string; demandAtMs: number }) {
-      const owner = lookupLease(id);
+    markPrepared: (id: string, baseCommit: string, assertCurrent?: () => void) =>
+      markPhase(id, "prepared", baseCommit, assertCurrent),
+    markEnrolled: (id: string, assertCurrent?: () => void) =>
+      markPhase(id, "enrolled", undefined, assertCurrent),
+    async notePreparedDemand(
+      id: string,
+      preparation: { preparationKey: string; demandAtMs: number },
+    ) {
+      const owner = await lookupLease(id);
       const generation = owner?.imageGeneration;
       if (
         !owner ||
@@ -383,7 +458,7 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       }
       // Assignment has no fork: refresh only the generation selected or produced
       // by this lease, even after demotion; never renew a different publication.
-      canonical.update(owner.key, (record) =>
+      await canonical.update(owner.key, (record) =>
         record &&
         record.allocations[id]?.preparationKey === owner.preparationKey &&
         record.allocations[id]?.cacheKey === owner.cacheKey &&
@@ -438,54 +513,62 @@ export function crabboxWarmImageRecoveryHint(selector: string): string {
   return `Stop the owning Gateway and capture processes, confirm any worker being recovered is stopped, and resolve any untracked checkpoint in the Crabbox catalog before running: openclaw crabbox warm-images --recover ${selector} --acknowledge-provider-cleanup. Then restart the Gateway; the next eligible worker can capture again.`;
 }
 
-export function listCrabboxWarmImages(env?: NodeJS.ProcessEnv) {
-  return openCrabboxWarmImageStore(env)
-    .entries()
-    .map(({ key, value }) => ({
-      profileKey: key,
-      profileId: value.profileId,
-      backend: value.backend,
-      machineClass: value.machineClass,
-      os: value.os,
-      projectLabel: value.projectLabel,
-      projectRoot: value.projectRoot,
-      projectKey: value.projectKey,
-      checkpointId: value.image?.checkpointId,
-      state: value.image?.state ?? "no-image",
-      createdAtMs: value.image?.createdAtMs,
-      preparationKey: value.image?.preparationKey,
-      cacheKey: value.image?.cacheKey,
-      purpose: value.image?.purpose,
-      lastDemandAtMs: value.image?.lastDemandAtMs,
-      baseCommit: value.image?.baseCommit,
-      runtimeIdentity: value.image?.runtimeIdentity,
-      pinned: value.image?.pinned,
-      previous: value.previous
-        ? {
-            checkpointId: value.previous.checkpointId,
-            createdAtMs: value.previous.createdAtMs,
-            baseCommit: value.previous.baseCommit,
-            runtimeIdentity: value.previous.runtimeIdentity,
-            pinned: value.previous.pinned,
-            held: isCrabboxWarmImageHeld(value, value.previous.checkpointId),
-          }
+export async function listCrabboxWarmImages(state: CrabboxState, env?: NodeJS.ProcessEnv) {
+  return (await openCrabboxWarmImageStore(state, env).entries()).map(({ key, value }) =>
+    projectCrabboxWarmImage(key, value),
+  );
+}
+
+export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
+  requireCanonicalProfile(value);
+  return {
+    profileKey: key,
+    profileId: value.profileId,
+    backend: value.backend,
+    machineClass: value.machineClass,
+    os: value.os,
+    projectLabel: value.projectLabel,
+    projectRoot: value.projectRoot,
+    projectKey: value.projectKey,
+    checkpointId: value.image?.checkpointId,
+    state: value.image?.state ?? "no-image",
+    createdAtMs: value.image?.createdAtMs,
+    preparationKey: value.image?.preparationKey,
+    cacheKey: value.image?.cacheKey,
+    purpose: value.image?.purpose,
+    lastDemandAtMs: value.image?.lastDemandAtMs,
+    baseCommit: value.image?.baseCommit,
+    runtimeIdentity: value.image?.runtimeIdentity,
+    pinned: value.image?.pinned,
+    previous: value.previous
+      ? {
+          checkpointId: value.previous.checkpointId,
+          createdAtMs: value.previous.createdAtMs,
+          baseCommit: value.previous.baseCommit,
+          runtimeIdentity: value.previous.runtimeIdentity,
+          pinned: value.previous.pinned,
+          held: isCrabboxWarmImageHeld(value, value.previous.checkpointId),
+        }
+      : undefined,
+    allocations: value.allocations,
+    capture: crabboxWarmImageCaptureStatus(key, value),
+    retirement:
+      value.operation?.type === "retire"
+        ? { checkpointId: value.operation.checkpointId }
         : undefined,
-      allocations: value.allocations,
-      capture: crabboxWarmImageCaptureStatus(key, value),
-      retirement:
-        value.operation?.type === "retire"
-          ? { checkpointId: value.operation.checkpointId }
-          : undefined,
-    }));
+  };
 }
 
 /** Recovery closes only the capture generation; allocation decisions remain authoritative. */
-export function clearCrabboxWarmImageCapture(key: string, selector: string): boolean {
-  const store = openCrabboxWarmImageStore();
+export async function clearCrabboxWarmImageCapture(
+  store: ReturnType<typeof openCrabboxWarmImageStore>,
+  key: string,
+  selector: string,
+): Promise<boolean> {
   const matches = (current: WarmProfileRecord) =>
     current.operation?.type === "capture" && current.operation.id === selector;
   if (
-    store.deleteIf(
+    await store.deleteIf(
       key,
       (current) =>
         !current.image &&
@@ -501,23 +584,30 @@ export function clearCrabboxWarmImageCapture(key: string, selector: string): boo
   );
 }
 
-export function recoverCrabboxWarmImageCapture(
+export async function recoverCrabboxWarmImageCapture(
+  state: CrabboxState,
   selector: string,
   acknowledgeProviderCleanup: boolean,
-): void {
+): Promise<void> {
   if (!acknowledgeProviderCleanup) {
     throw new Error(
       "Recovery requires --acknowledge-provider-cleanup: confirm the original Gateway/capture processes and any worker being recovered are stopped, and any untracked provider artifact has been resolved. No state was changed.",
     );
   }
   if (selector.startsWith("legacy-lease-")) {
-    const store = openLegacyLeases();
-    const entry = store
-      .entries()
-      .find(({ key, value }) => legacyLeaseSelector(key, value) === selector);
+    const store = openLegacyLeases(state);
+    const entry = (await store.entries()).find(
+      ({ key, value }) => legacyLeaseSelector(key, value) === selector,
+    );
     if (
       !entry ||
-      !store.deleteIf(entry.key, (value) => legacyLeaseSelector(entry.key, value) === selector)
+      !(await compareProfile(store, entry.key, (value) => ({
+        operation: "delete",
+        action:
+          value !== undefined && legacyLeaseSelector(entry.key, value) === selector
+            ? "delete"
+            : "keep",
+      })))
     ) {
       throw new Error(
         "Legacy allocation selector is absent or changed; rerun openclaw crabbox warm-images --json. No state was changed.",
@@ -525,10 +615,11 @@ export function recoverCrabboxWarmImageCapture(
     }
     return;
   }
-  const entry = openCrabboxWarmImageStore()
-    .entries()
-    .find(({ key, value }) => crabboxWarmImageCaptureStatus(key, value)?.selector === selector);
-  if (!entry || !clearCrabboxWarmImageCapture(entry.key, selector)) {
+  const store = openCrabboxWarmImageStore(state);
+  const entry = (await store.entries()).find(
+    ({ key, value }) => crabboxWarmImageCaptureStatus(key, value)?.selector === selector,
+  );
+  if (!entry || !(await clearCrabboxWarmImageCapture(store, entry.key, selector))) {
     throw new Error(
       "Capture selector is absent or changed; rerun openclaw crabbox warm-images --json. No state was changed.",
     );

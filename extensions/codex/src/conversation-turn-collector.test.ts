@@ -1,4 +1,3 @@
-// Codex tests cover conversation turn collector plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -33,17 +32,35 @@ describe("codex conversation turn collector", () => {
     await expect(completion).resolves.toEqual({ replyText: "hello world" });
   });
 
-  it("does not let completed commentary replace or impersonate a final answer", async () => {
+  it.each([
+    {
+      scenario: "commentary after an answer",
+      metadata: { phase: "commentary", delivery: null },
+      replyText: "real answer",
+    },
+    {
+      scenario: "async-only",
+      metadata: { phase: "final_answer", delivery: "async" },
+      replyText: "",
+    },
+    {
+      scenario: "async after an answer",
+      metadata: { phase: "final_answer", delivery: "async" },
+      replyText: "real answer",
+    },
+  ])("does not promote progress to a final answer ($scenario)", async ({ metadata, replyText }) => {
     const collector = createCodexConversationTurnCollector("thread-1");
     collector.setTurnId("turn-1");
-    collector.handleNotification({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { type: "agentMessage", id: "answer", text: "real answer", phase: "final_answer" },
-      },
-    });
+    if (replyText) {
+      collector.handleNotification({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { type: "agentMessage", id: "answer", text: replyText, phase: "final_answer" },
+        },
+      });
+    }
     collector.handleNotification({
       method: "item/agentMessage/delta",
       params: { threadId: "thread-1", turnId: "turn-1", itemId: "progress", delta: "progress" },
@@ -55,9 +72,9 @@ describe("codex conversation turn collector", () => {
         turnId: "turn-1",
         item: {
           type: "agentMessage",
-          id: "completed-progress",
+          id: "progress",
           text: "completed progress",
-          phase: "commentary",
+          ...metadata,
         },
       },
     });
@@ -69,14 +86,14 @@ describe("codex conversation turn collector", () => {
           id: "turn-1",
           status: "completed",
           items: [
-            { type: "agentMessage", id: "progress", text: "late progress", phase: "commentary" },
+            { type: "agentMessage", id: "progress", text: "completed progress", ...metadata },
           ],
         },
       },
     });
 
     await expect(collector.wait({ timeoutMs: 100 })).resolves.toEqual({
-      replyText: "real answer",
+      replyText,
     });
   });
 

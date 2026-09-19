@@ -1,14 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   boardWidgetContentPermissionCases,
   createBoardHarness as createHarness,
   createMcpAppDependencies,
 } from "./board.test-support.js";
-import { readSessionsMutationVersion } from "./session-change-event.js";
 
 const reviewWidgetApproval = vi.hoisted(() => vi.fn());
 const readSessionEntry = vi.hoisted(() => vi.fn());
@@ -227,8 +227,15 @@ describe("board gateway methods", () => {
   });
 
   it("applies updates and broadcasts board.changed", async () => {
-    const { invoke, broadcast, context } = createHarness();
-    const before = readSessionsMutationVersion(context);
+    const { invoke, broadcast } = createHarness();
+    const changes = vi.fn();
+    onTestFinished(
+      sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && !change.storePath) {
+          changes(change);
+        }
+      }),
+    );
     const response = await invoke("board.update", {
       sessionKey: "session",
       ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
@@ -242,7 +249,7 @@ describe("board gateway methods", () => {
       { sessionKey, revision: 1 },
       boardBroadcastScope,
     );
-    expect(readSessionsMutationVersion(context)).toBe(before + 1);
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ sessionKey, agentId: "main" });
   });
 
   it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {

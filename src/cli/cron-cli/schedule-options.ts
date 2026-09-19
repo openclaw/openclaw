@@ -1,4 +1,5 @@
 // Shared schedule option resolver for cron create/edit commands.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
@@ -63,7 +64,7 @@ type CronEditScheduleRequest =
     }
   | { kind: "none" };
 
-/** Resolve explicit `--at`, `--every`, or `--cron` options for cron creation. */
+/** A single normalized creation selector resolves or throws during validation. */
 function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
   const normalized = normalizeScheduleOptions(options);
   if (normalized.onExitCwd && !normalized.onExitCommand) {
@@ -75,13 +76,7 @@ function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
       "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
     );
   }
-  const schedule = resolveDirectSchedule(normalized);
-  if (!schedule) {
-    throw new Error(
-      "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
-    );
-  }
-  return schedule;
+  return expectDefined(resolveDirectSchedule(normalized), "created cron schedule");
 }
 
 /** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
@@ -210,6 +205,11 @@ export function applyExistingCronSchedulePatch(
 }
 
 function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedScheduleOptions {
+  for (const value of [options.at, options.every, options.cron, options.onExit]) {
+    if (typeof value === "string" && !value.trim()) {
+      throw new CronCliError("Schedule values must not be blank");
+    }
+  }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {

@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
@@ -35,6 +36,7 @@ import {
 } from "./update-managed-service-handoff-result.test-support.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
+import { recordUpdateRunStep } from "./update-run-ledger.js";
 
 const { forceKillChildProcessTreeMock, resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(
   () => ({
@@ -269,7 +271,7 @@ describe("managed service update handoff", () => {
     const result = await runManagedServiceManagerBoundary("launchd", {
       controlDisconnect: "transferred",
       nativePreparation: "timeout-stop",
-      launchdTeardown: { bootoutDelayMs: 2_500 },
+      launchdTeardown: { waitForNativeTimeout: true },
       ledger: true,
       helperExitCode: 18,
     });
@@ -511,7 +513,7 @@ describe("managed service update handoff", () => {
         );
         expect(
           run?.steps.find((step) => step.step === "repairing" && step.status === "failed")?.detail,
-        ).toContain(phase === "validating" ? "candidate rehearsal" : "live");
+        ).toContain(phase === "validating" ? "update checks" : "installed version");
         expect(run?.repair[0]?.reason).toBe("requester-revoked");
       } else {
         expect(run?.repair[0]).toMatchObject({ status: "succeeded" });
@@ -529,6 +531,44 @@ describe("managed service update handoff", () => {
     expect(sentinel).toMatchObject({
       payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
     });
+  });
+
+  itUnix("preserves the Gateway refusal when cancellation settles its run", async () => {
+    const reason = "managed-service-handoff-failed";
+    const message = "managed update ownership transfer failed";
+    const { commands, parentSignal, run, sentinel } = await runManagedServiceManagerBoundary(
+      "systemd",
+      {
+        ledger: true,
+        controlDisconnect: "unarmed",
+        beforeDisconnect: (admittedRun, env) => {
+          recordUpdateRunStep(
+            expectDefined(admittedRun, "admitted update run").runId,
+            {
+              step: "requested",
+              status: "failed",
+              reason,
+              failureFacts: [{ check: reason, code: reason, message }],
+            },
+            { env },
+          );
+        },
+      },
+    );
+    expect(commands).toEqual([]);
+    expect(parentSignal).toBeNull();
+    expect(run).toMatchObject({
+      status: "failed",
+      reason,
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "requested",
+          status: "failed",
+          failureFacts: [{ check: reason, code: reason, message }],
+        }),
+      ]),
+    });
+    expect(sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
   });
 
   itUnix("cancels a validating updater without stopping the serving generation", async () => {

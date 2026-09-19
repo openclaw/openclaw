@@ -279,7 +279,7 @@ KillMode=mixed
 WantedBy=default.target
 ```
 
-`TimeoutStopSec=330` covers the Gateway's five-minute cooperative drain plus teardown reserve. To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
+`TimeoutStopSec=330` covers the Gateway's maximum 315-second stop drain plus a 15-second cleanup and exit margin. The Gateway clamps its drain to the installed unit's effective stop timeout; see [Systemd stop deadlines](/gateway/restart-recovery#systemd-stop-deadlines). To inspect the current managed unit body, run `systemctl --user cat openclaw-gateway.service` (or `systemctl --user cat openclaw-gateway-<profile>.service` for a named profile).
 
   </Tab>
 
@@ -326,6 +326,14 @@ host, the user unit above with `loginctl enable-linger` is the supported way
 to keep the Gateway running without a login session.
 
 Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
+
+`openclaw gateway status --deep` inspects the installed system unit and reports
+`systemd system`. Run Doctor from the non-root `User=` account with the same state
+and config paths. For offline repair, stop the unit through its system service
+owner first, run `openclaw doctor --fix`, then start the unit through that owner.
+Doctor can verify a stopped system unit without rewriting its definition or
+creating a competing user service. An unavailable manager or an unverified
+service account still blocks maintenance.
 
 After writing the unit, reload systemd and enable it:
 

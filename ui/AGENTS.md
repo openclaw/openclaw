@@ -20,6 +20,26 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Background updates may refresh their own scoped cache; they must not replace
   the foreground selection or publish another context's state into its view.
 
+## Session Roster Refresh
+
+- Session rosters apply nested Gateway row snapshots through the shared reconciler.
+  `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
+  window: standalone lifecycle, patch/send/steer, run-start/settlement/capacity,
+  and title updates can avoid list reads
+  when membership and pin/owner/archive facts stay unchanged and recency does not
+  move backwards. Unknown rows, broad changes, catalog changes, Gateway-owned
+  filters, linked ancestor facts, failed reads, owner-prefix boundary uncertainty, and overlapping reads retain an
+  authoritative refresh. Events never create list membership.
+- `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
+  debounce the first event after idle by 200 ms, coalesce continuous events within
+  one second, and after each automatic refresh wait three times its duration
+  (at least one second, at most 15 seconds) before the next automatic read.
+  Trailing invalidation stays with that owner, including while a request is pending.
+- Explicit refreshes, filter/agent changes, reconnects, and foreground replacements
+  bypass event backoff and absorb pending invalidation. Recheck visibility and
+  current intent after background admission; hidden pages retain one catch-up
+  refresh until visible.
+
 ## i18n Rules
 
 - Foreign-language files in `ui/src/i18n/locales/*.ts` are stable, source-owned lazy-module adapters; their translations are generated from canonical grouped memory in `ui/src/i18n/.i18n/*.tm.jsonl`.

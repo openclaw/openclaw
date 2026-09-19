@@ -3,12 +3,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import {
-  createGateway,
-  createSessions,
-  mountSidebar,
-  setupSidebarTest,
-} from "../test-helpers/app-sidebar.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import "./app-sidebar.ts";
 import {
   canRunPlaywrightChromium,

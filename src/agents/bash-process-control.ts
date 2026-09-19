@@ -16,5 +16,6 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
     return false;
   }
   supervisor.cancel(sessionId, "manual-cancel");
+  session.cancellationRequested = true;
   return true;
 }

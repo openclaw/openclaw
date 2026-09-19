@@ -106,6 +106,20 @@ describe("secret target registry fast path", () => {
     getSecretTargetRegistryMock.mockClear();
   });
 
+  it("resolves core paths before loading channel or full registries", () => {
+    const pathSegments = ["models", "providers", "openai", "headers", "X.Trace"];
+    const target = resolveConfigSecretTargetByPath(pathSegments);
+
+    expect(target).toMatchObject({
+      pathSegments,
+      pathTokens: pathSegments,
+      providerId: "openai",
+    });
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
@@ -119,6 +133,7 @@ describe("secret target registry fast path", () => {
       artifactCandidates: ["secret-contract-api.js"],
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
   });
 
   it("discovers selected core config targets without loading plugin metadata", () => {

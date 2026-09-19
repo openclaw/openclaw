@@ -4,11 +4,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { globSync } from "tinyglobby";
 import { beforeAll, describe, expect, it } from "vitest";
-import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  listVitestRuntimeConsumerFiles,
+  resolveVitestCliEntry,
+  resolveVitestPretestBuildMode,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
+import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
+import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
+import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
 
 const {
   applyParallelVitestCachePaths,
@@ -39,6 +48,81 @@ describe("test-projects args", () => {
     ]) {
       buildVitestRunPlans([target]);
     }
+  });
+
+  const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
+  const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
+  it.each<[string, string, string | undefined, boolean]>([
+    ["server-methods/cron.runs.test.ts", gatewayWorkerFile, undefined, true],
+    [gatewayWorkerFile, gatewayWorkerFile, undefined, true],
+    [catalogFile, catalogFile, undefined, true],
+    [
+      "server-methods/cron.runs.test.ts",
+      gatewayWorkerFile,
+      "server-methods/cron.runs.test.ts",
+      false,
+    ],
+    ["server-methods/cron.runs.test.ts", gatewayWorkerFile, "server-methods/*.test.ts", false],
+    [catalogFile, catalogFile, catalogFile, false],
+    [catalogFile, catalogFile, "test/plugins/**/*.test.ts", false],
+    [catalogFile, catalogFile, "unrelated.test.ts", true],
+  ])(
+    "discovers Gateway owner selector %s for %s (exclude %s)",
+    (selector, expected, exclude, visible) => {
+      const previousArgv = process.argv;
+      try {
+        process.argv = [
+          "node",
+          "vitest",
+          "run",
+          "--config",
+          expected === catalogFile
+            ? "test/vitest/vitest.gateway-methods.config.ts"
+            : "test/vitest/vitest.gateway-database-workers.config.ts",
+          selector,
+          ...(exclude ? ["--exclude", exclude] : []),
+        ];
+        const config =
+          expected === catalogFile
+            ? createGatewayMethodsVitestConfig({})
+            : createGatewayDatabaseWorkersVitestConfig({});
+        const testConfig = expectDefined(config.test, "Gateway owner test config");
+        const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
+        const relative = path.relative(dir, path.resolve(expected)).replaceAll("\\", "/");
+        const excludes = [
+          ...(testConfig.exclude ?? []),
+          ...collectVitestExcludePatterns(process.argv.slice(2)),
+        ];
+        // Vitest's uncached watch matcher uses paths relative to the project directory.
+        expect(
+          testConfig.include?.some((pattern) => matchesVitestGlob(relative, pattern)) &&
+            !excludes.some((pattern) => matchesVitestGlob(relative, pattern)),
+        ).toBe(visible);
+        const files = globSync(testConfig.include ?? [], {
+          cwd: dir,
+          ignore: excludes,
+          expandDirectories: false,
+          dot: true,
+        }).map((file) => path.resolve(dir, file));
+        expect(files).toEqual(visible ? [path.resolve(expected)] : []);
+      } finally {
+        process.argv = previousArgv;
+      }
+    },
+  );
+
+  it("keeps memory CLI runtime preparation with its infra test owner", () => {
+    const file = "src/entry.memory-json.test.ts";
+    const infra = "test/vitest/vitest.infra.config.ts";
+    const unit = ["test/vitest/vitest.unit.config.ts", "test/vitest/vitest.unit-src.config.ts"];
+    expect(listVitestRuntimeConsumerFiles([infra])).toContain(file);
+    expect(listVitestRuntimeConsumerFiles(unit)).not.toContain(file);
+    expect(listVitestRuntimeConsumerFiles(unit)).toContain(
+      "src/node-host/linux-node-plugin.integration.test.ts",
+    );
+    expect(resolveVitestPretestBuildMode([{ configs: [infra], includePatterns: [file] }])).toBe(
+      "runtime",
+    );
   });
 
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -215,8 +299,23 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.unit-fast.config.ts",
     },
     {
+      title: "routes the Git backup outcome consumer to the infra config",
+      target: "src/snapshot/git-backup.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
       title: "routes the worker-backed task registry to the infra config",
       target: "src/tasks/task-registry.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
+      title: "routes the real memory CLI JSON tests to the infra config",
+      target: "src/entry.memory-json.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+    },
+    {
+      title: "routes plugin setup lifecycle to the infra fork shard",
+      target: "src/plugins/setup-registry.lifecycle.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
@@ -226,8 +325,13 @@ describe("test-projects args", () => {
     },
     {
       title: "routes wizard targets to the wizard config",
-      target: "src/wizard/setup.test.ts",
+      target: "src/wizard/setup.official-plugins.test.ts",
       config: "test/vitest/vitest.wizard.config.ts",
+    },
+    {
+      title: "routes wizard recovery to the host-owned infra fork shard",
+      target: "src/wizard/setup.inference-recovery.integration.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes tui targets to the tui config",
@@ -414,14 +518,19 @@ describe("test-projects args", () => {
         watchMode: false,
       },
     ]);
-    expect(buildVitestRunPlans(["src/auto-reply/reply/dispatch-from-config.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.auto-reply.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/auto-reply/reply/dispatch-from-config.test.ts"],
-        watchMode: false,
-      },
-    ]);
+    for (const target of [
+      "src/auto-reply/reply/dispatch-from-config.test.ts",
+      "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
+    ]) {
+      expect(buildVitestRunPlans([target])).toEqual([
+        {
+          config: "test/vitest/vitest.auto-reply.config.ts",
+          forwardedArgs: [],
+          includePatterns: [target],
+          watchMode: false,
+        },
+      ]);
+    }
   });
 
   it("expands a test filename prefix into standalone sibling suites", () => {
@@ -617,7 +726,7 @@ describe("test-projects args", () => {
 
     expect(plans).toEqual([
       {
-        config: "test/vitest/vitest.extension-memory.config.ts",
+        config: "test/vitest/vitest.extension-database-workers.config.ts",
         forwardedArgs: [],
         includePatterns: expect.arrayContaining([
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
@@ -678,9 +787,8 @@ describe("test-projects args", () => {
       expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)));
     }
 
-    // Mixed E2E runs coalesce package contracts with runtime readers. Other
-    // importer owners and every include-vs-forwarded shape must still match
-    // the standalone selection.
+    // Mixed selections coalesce package contracts and Gateway worker tests
+    // into their aggregate owners. Singleton selection retains each leaf owner.
     for (const plan of plans) {
       expect(plan.watchMode).toBe(false);
       for (const file of plan.includePatterns ?? plan.forwardedArgs) {
@@ -688,7 +796,10 @@ describe("test-projects args", () => {
           plan.config === "test/vitest/vitest.e2e.config.ts" &&
           packageContractTestFiles.includes(file)
             ? "test/vitest/vitest.package-contract.config.ts"
-            : plan.config;
+            : plan.config === "test/vitest/vitest.gateway.config.ts" &&
+                gatewayDatabaseWorkerTestFiles.includes(file)
+              ? "test/vitest/vitest.gateway-database-workers.config.ts"
+              : plan.config;
         expect(buildVitestRunPlans([file])).toEqual([
           {
             config,

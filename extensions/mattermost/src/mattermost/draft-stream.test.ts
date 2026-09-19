@@ -880,6 +880,103 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       publishedParts: [{ messageId: "post-1", content: "Provider rewrite" }],
     });
   });
+
+  it.each([
+    {
+      name: "advances past two confirmed chunks",
+      secondContent: "Second",
+      remainingText: "Third",
+    },
+    {
+      name: "keeps the prior prefix when a continuation is rewritten",
+      secondContent: "Provider rewrite",
+      remainingText: "Second Third",
+    },
+  ])("$name before a third boundary chunk fails", async ({ secondContent, remainingText }) => {
+    const { requestMock, stream } = createDraftStreamFixture({
+      chunkText: () => ["First", "Second", "Third"],
+    });
+
+    stream.updateAssistantText("First Second Third");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "First" })
+      .mockResolvedValueOnce({ id: "post-2", message: secondContent })
+      .mockRejectedValueOnce(new Error("third chunk failed"));
+
+    await stream.forceNewMessage();
+
+    expect(stream.resolveFinalText("First Second Third\n\nFinal after failure")).toEqual({
+      kind: "remaining",
+      text: `${remainingText}\n\nFinal after failure`,
+      publishedParts: [
+        { messageId: "post-1", content: "First" },
+        { messageId: "post-2", content: secondContent },
+      ],
+    });
+    expect(
+      requestMock.mock.calls.map(([requestPath, init]) => ({
+        path: requestPath,
+        method: init?.method,
+        message: parseRequestJson(init).message,
+      })),
+    ).toEqual([
+      { path: "/posts", method: "POST", message: "First Second Third" },
+      { path: "/posts/post-1", method: "PUT", message: "First" },
+      { path: "/posts", method: "POST", message: "Second" },
+      { path: "/posts", method: "POST", message: "Third" },
+    ]);
+  });
+
+  it("publishes the known prefix before an IDless failure warning re-enters", async () => {
+    const finalText = "First Second Third\n\nFinal after failure";
+    let resolutionAtWarning: unknown;
+    let reenteredBoundary: Promise<void> | undefined;
+    const warn = vi.fn(() => {
+      resolutionAtWarning = stream.resolveFinalText(finalText);
+      stream.update("must not publish twice");
+      reenteredBoundary = stream.forceNewMessage();
+      void reenteredBoundary.catch(() => {});
+    });
+    const { requestMock, stream } = createDraftStreamFixture({
+      chunkText: () => ["First", "Second", "Third"],
+      warn,
+    });
+
+    stream.updateAssistantText("First Second Third");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "First" })
+      .mockResolvedValueOnce({ id: "post-2", message: "Second" })
+      .mockResolvedValueOnce({ message: "Third" });
+
+    await expect(stream.forceNewMessage()).rejects.toThrow("did not include a post id");
+    await expect(reenteredBoundary).rejects.toThrow("did not include a post id");
+
+    const expectedResolution = {
+      kind: "remaining",
+      text: "Third\n\nFinal after failure",
+      publishedParts: [
+        { messageId: "post-1", content: "First" },
+        { messageId: "post-2", content: "Second" },
+      ],
+    };
+    expect(warn).toHaveBeenCalledOnce();
+    expect(resolutionAtWarning).toEqual(expectedResolution);
+    expect(stream.resolveFinalText(finalText)).toEqual(expectedResolution);
+    expect(
+      requestMock.mock.calls.map(([requestPath, init]) => ({
+        path: requestPath,
+        method: init?.method,
+        message: parseRequestJson(init).message,
+      })),
+    ).toEqual([
+      { path: "/posts", method: "POST", message: "First Second Third" },
+      { path: "/posts/post-1", method: "PUT", message: "First" },
+      { path: "/posts", method: "POST", message: "Second" },
+      { path: "/posts", method: "POST", message: "Third" },
+    ]);
+  });
 });
 
 describe("createMattermostDraftPreviewBoundaryController", () => {

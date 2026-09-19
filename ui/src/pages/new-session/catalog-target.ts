@@ -7,11 +7,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+
+registerNewSessionSetupEnglish();
 
 function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
   return JSON.stringify([requestedAgentId, catalogId, group]);
@@ -246,7 +249,7 @@ export class CatalogTargetDiscovery {
     void owner.client
       .request<SessionsCatalogListResult>(
         "sessions.catalog.list",
-        { agentId: owner.agentId, limitPerHost: 1 },
+        { agentId: owner.agentId, metadataOnly: true },
         { signal: controller.signal },
       )
       .then(

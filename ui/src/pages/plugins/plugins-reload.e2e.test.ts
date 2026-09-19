@@ -97,7 +97,7 @@ describeControlUiE2e("Control UI backend plugin reload", () => {
         )
         .toBeLessThanOrEqual(1);
       for (const button of [
-        row.getByRole("switch", { name: "Enable or disable Calendar Plus", exact: true }),
+        row.getByRole("button", { name: "Disable Calendar Plus", exact: true }),
         row.getByRole("button", { name: "Reload Calendar Plus", exact: true }),
         row.getByRole("button", { name: "Uninstall Calendar Plus", exact: true }),
       ]) {

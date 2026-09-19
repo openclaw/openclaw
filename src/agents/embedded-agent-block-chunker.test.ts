@@ -53,6 +53,70 @@ describe("EmbeddedBlockChunker", () => {
     },
   );
 
+  it.each([
+    {
+      breakPreference: "paragraph",
+      text: "Aaaa\n\nBbbb\n\nCccc",
+      normal: [{ chunk: "Aaaa\n\nBbbb", sourceText: "Aaaa\n\nBbbb\n\n" }],
+      forced: [
+        { chunk: "Aaaa", sourceText: "Aaaa\n\n" },
+        { chunk: "Bbbb", sourceText: "Bbbb\n\n" },
+        { chunk: "Cccc", sourceText: "Cccc" },
+      ],
+      tail: "Cccc",
+    },
+    {
+      breakPreference: "newline",
+      text: "Aaaa\nBbbb\nCccc",
+      normal: [{ chunk: "Aaaa\nBbbb", sourceText: "Aaaa\nBbbb\n" }],
+      forced: [
+        { chunk: "Aaaa", sourceText: "Aaaa\n" },
+        { chunk: "Bbbb", sourceText: "Bbbb\n" },
+        { chunk: "Cccc", sourceText: "Cccc" },
+      ],
+      tail: "Cccc",
+    },
+    {
+      breakPreference: "sentence",
+      text: "Aaaa. Bbbb. Tail",
+      normal: [{ chunk: "Aaaa. Bbbb.", sourceText: "Aaaa. Bbbb. " }],
+      forced: [
+        { chunk: "Aaaa. Bbbb.", sourceText: "Aaaa. Bbbb. " },
+        { chunk: "Tail", sourceText: "Tail" },
+      ],
+      tail: "Tail",
+    },
+  ] as const)(
+    "preserves $breakPreference selection and source cursors across a forced tail",
+    ({ breakPreference, text, normal, forced, tail }) => {
+      for (const force of [false, true]) {
+        const prefix = force ? `${"x".repeat(20)}\n` : "";
+        const source = prefix + text;
+        const chunker = new EmbeddedBlockChunker({ minChars: 3, maxChars: 20, breakPreference });
+        const emitted: Array<{ chunk: string; sourceText: string | undefined }> = [];
+        const emit = (chunk: string, options?: { sourceText: string }) =>
+          emitted.push({ chunk, sourceText: options?.sourceText });
+        chunker.append(source);
+        chunker.drain({ force, emit });
+        expect(emitted).toEqual(
+          force ? [{ chunk: "x".repeat(20), sourceText: prefix }, ...forced] : normal,
+        );
+        expect(chunker.bufferedText).toBe(force ? "" : tail);
+        expect(chunker.hasBuffered()).toBe(!force);
+        expect(chunker.consumedLength).toBe(source.length - (force ? 0 : tail.length));
+        expect(chunker.sourceLength).toBe(source.length);
+        emitted.length = 0;
+        chunker.drain({ force: true, emit });
+        expect(emitted).toEqual(force ? [] : [{ chunk: tail, sourceText: tail }]);
+        expect(chunker.bufferedText).toBe("");
+        expect(chunker.hasBuffered()).toBe(false);
+        expect(chunker.consumedLength).toBe(source.length);
+        expect(chunker.sourceLength).toBe(source.length);
+        expect(drainChunks(chunker, true)).toEqual([]);
+      }
+    },
+  );
+
   it("balances an unfinished fence at the exact cap and retains its later continuation", () => {
     const chunker = new EmbeddedBlockChunker({
       minChars: 8,
@@ -390,6 +454,73 @@ describe("EmbeddedBlockChunker", () => {
     expect(scanSpy).toHaveBeenCalledTimes(1);
     scanSpy.mockRestore();
   });
+
+  it.each(["open", "closed"])(
+    "bounds paragraph candidate scans while streaming a long %s fence",
+    (kind) => {
+      const maxChars = 1_200;
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 1,
+        maxChars,
+        breakPreference: "newline",
+        flushOnParagraph: true,
+      });
+      const code = "code\n\n".repeat(600);
+      const closing = "```\n\nAfter";
+      const initial = `\`\`\`txt\n${code}${kind === "closed" ? closing : ""}`;
+      const completed = `\`\`\`txt\n${code}${closing}`;
+      const chunks: string[] = [];
+      const sources: string[] = [];
+      const emit = (chunk: string, options?: { sourceText: string }) => {
+        chunks.push(chunk);
+        sources.push(options?.sourceText ?? "");
+      };
+      chunker.append(initial);
+      let candidates = 0;
+      // Capture before spying; every invocation explicitly supplies the original RegExp receiver.
+      // oxlint-disable-next-line typescript/unbound-method
+      const nativeExec = RegExp.prototype.exec;
+      const paragraphPattern = /\n[\t ]*\n+/g;
+      const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+        this: RegExp,
+        text: string,
+      ) {
+        const result = nativeExec.call(this, text);
+        if (result && this.source === paragraphPattern.source && this.flags === "g") {
+          candidates++;
+        }
+        return result;
+      });
+      try {
+        chunker.drain({ force: false, emit });
+      } finally {
+        spy.mockRestore();
+      }
+      const streamedCount = chunks.length;
+      expect(streamedCount).toBeGreaterThan(1);
+      expect(chunker.sourceLength).toBe(initial.length);
+      if (kind === "open") {
+        chunker.append(closing);
+      }
+      chunker.drain({ force: true, emit });
+
+      expect(sources.join("")).toBe(completed);
+      expect(chunker.consumedLength).toBe(completed.length);
+      expect(chunker.sourceLength).toBe(completed.length);
+      expect(chunker.bufferedText).toBe("");
+      expectChunksWithinLength(chunks, maxChars);
+      for (const chunk of chunks.filter((text) => text.startsWith("```"))) {
+        expect(chunk.startsWith("```txt\n")).toBe(true);
+        expect(chunk.trimEnd().endsWith("```")).toBe(true);
+      }
+      const rendered = chunks
+        .flatMap((chunk) => chunk.split("\n").filter((line) => !line.startsWith("```")))
+        .join("")
+        .replace(/\s/g, "");
+      expect(rendered).toBe(`${"code".repeat(600)}After`);
+      expect(candidates).toBeLessThanOrEqual(3 * (streamedCount + 1));
+    },
+  );
 
   it("does not split inside the closing fence marker when clamping at maxChars", () => {
     // Clamp-based splitting rewraps fenced chunks so no partial closing marker

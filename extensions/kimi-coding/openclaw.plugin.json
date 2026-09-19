@@ -48,7 +48,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",
@@ -75,7 +74,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",

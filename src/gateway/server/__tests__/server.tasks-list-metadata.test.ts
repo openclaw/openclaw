@@ -1,7 +1,9 @@
-import { afterAll, expect, test } from "vitest";
+import { err } from "@openclaw/normalization-core/result";
+import { afterAll, expect, test, vi } from "vitest";
 import type { TasksListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { listTaskRecordsUnsorted } from "../../../tasks/runtime-internal.js";
+import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import { listTaskRecordsUnsorted } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
@@ -12,6 +14,7 @@ import {
   expectedTaskIds,
   expectCursorRejected,
   FOREIGN_SESSION_KEY,
+  OWNED_SESSION_KEY,
   type RpcResponse,
   sendRpc,
   TASK_COUNT,
@@ -175,5 +178,46 @@ test("preserves task pagination during metadata patches but invalidates new requ
     );
     expect(afterCreation.ok, JSON.stringify(afterCreation.error)).toBe(true);
     expect(afterCreation.payload?.tasks[0]?.id).toBe(missingSessionTask.taskId);
+
+    const pageParams = { sessionKey: OWNED_SESSION_KEY, limit: 25 };
+    const available = await sendRpc<TasksListResult>(
+      viewer,
+      "tasks-readable",
+      "tasks.list",
+      pageParams,
+    );
+    expect(available.ok, JSON.stringify(available.error)).toBe(true);
+    expect(available.payload?.tasks).toHaveLength(25);
+
+    const failure = new Error("session metadata read failed", { cause: new Error("SQLITE_IOERR") });
+    const readMetadata = sessionAccessor.loadExactSessionEntryCandidatesReadOnlyBatch;
+    let failedReads = 0;
+    const failingRead = vi
+      .spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch")
+      .mockImplementation((scopes) => {
+        const results = readMetadata(scopes);
+        if (scopes.some((scope) => scope.sessionKeys.includes(OWNED_SESSION_KEY))) {
+          failedReads += 1;
+        }
+        return results.map((result, index) =>
+          scopes[index]?.sessionKeys.includes(OWNED_SESSION_KEY) ? err(failure) : result,
+        );
+      });
+    try {
+      const unavailable = await sendRpc<TasksListResult>(
+        viewer,
+        "tasks-unreadable",
+        "tasks.list",
+        pageParams,
+      );
+      expect(unavailable.payload).toBeUndefined();
+      expect(unavailable).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: expect.stringContaining("SQLITE_IOERR") },
+      });
+      expect(failedReads).toBe(1);
+    } finally {
+      failingRead.mockRestore();
+    }
   });
 }, 60_000);

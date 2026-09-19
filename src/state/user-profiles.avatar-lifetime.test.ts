@@ -7,11 +7,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { listUserProfilesSync } from "./user-profile-list.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
   getProfileAvatar,
-  listProfiles,
   setDisplayName,
 } from "./user-profiles.js";
 
@@ -69,7 +69,7 @@ it.each([false, true])(
       expect(getProfileAvatar(profile.id, originalOptions)?.bytes).toEqual(
         fetched ? Uint8Array.from(bytes) : undefined,
       );
-      expect(listProfiles(options)).toEqual([
+      expect(listUserProfilesSync(options)).toEqual([
         expect.objectContaining({ id: other.id, hasAvatar: false }),
       ]);
     } finally {

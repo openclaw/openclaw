@@ -4,6 +4,9 @@ const TRAILING_UNSUPPORTED_CITATION_CONTROL_MARKER_RE = /[ \t]*cite(?:[^�
 
 /** Removes unsupported model citation-control markers without disturbing normal hard breaks. */
 export function stripUnsupportedCitationControlMarkers(text: string): string {
+  if (!text.includes("\uE200cite")) {
+    return text;
+  }
   return text
     .replace(TRAILING_UNSUPPORTED_CITATION_CONTROL_MARKER_RE, "")
     .replace(UNSUPPORTED_CITATION_CONTROL_MARKER_RE, "");

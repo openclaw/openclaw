@@ -16,6 +16,7 @@ export type InitialSessionTranscriptWriter = Readonly<{
   committedFence: SessionTranscriptWriterFence | undefined;
   assertActive: () => void;
   recordCommitted: (fence: SessionTranscriptWriterFence) => void;
+  withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
 }>;
 
 type SessionTranscriptWriteTarget = {

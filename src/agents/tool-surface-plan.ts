@@ -5,7 +5,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
-import { normalizeToolPolicyName } from "./tool-policy-shared.js";
+import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
@@ -23,6 +23,7 @@ type AgentToolSurfacePlanParams = {
   modelProvider?: string;
   modelId?: string;
   codeModeOverride?: boolean | "auto";
+  disableToolSearch?: true;
   toolsEnabled: boolean;
   disableTools?: boolean;
   isRawModelRun: boolean;
@@ -31,12 +32,16 @@ type AgentToolSurfacePlanParams = {
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
+  const restrictions = params.toolsAllow
+    ? (readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow])
+    : [];
   // Private completion replies have one message capability. Ordinary forced
   // delivery keeps message direct while other tools can still use discovery.
   const completionPrivateMessageOnly =
     params.forceDirectMessageTool &&
-    params.toolsAllow?.length === 1 &&
-    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message";
+    restrictions.some(
+      (allow) => allow.length === 1 && normalizeToolPolicyName(allow[0] ?? "") === "message",
+    );
   const codeModeConfig = resolveCodeModeConfig(
     params.config,
     params.agentId,
@@ -45,20 +50,25 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
       : undefined,
   );
   codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
-  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+  const selectedToolConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     completionPrivateMessageOnly,
     model: params.model,
   });
+  // Apply invocation restrictions after selecting the current runtime snapshot;
+  // config rebinding must not put an auxiliary direct-tool run back behind discovery.
+  const toolSearchRuntimeConfig = params.disableToolSearch
+    ? { ...selectedToolConfig, tools: { ...selectedToolConfig?.tools, toolSearch: false as const } }
+    : selectedToolConfig;
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
     params.toolsEnabled &&
     getActiveAgentRingZeroTools().length === 0 &&
     params.disableTools !== true &&
     !params.isRawModelRun &&
-    params.toolsAllow?.length !== 0 &&
+    restrictions.every((allow) => allow.length > 0) &&
     !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
     toolsAvailable &&

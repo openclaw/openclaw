@@ -16,6 +16,7 @@ export type SessionPatch = {
   boardFace?: "chat" | "dashboard";
   boardPresentation?: "split" | "expanded" | null;
   model?: string | null;
+  agentRuntime?: string | null;
   contextWindow?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;

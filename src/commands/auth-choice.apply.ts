@@ -132,6 +132,9 @@ export async function applyAuthChoice(
   await prepared.persistAuthProfiles();
   return {
     config: prepared.config,
+    ...(prepared.utilityModelOverride
+      ? { utilityModelOverride: prepared.utilityModelOverride, modelTarget: prepared.modelTarget }
+      : {}),
     ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
     ...(prepared.retrySelection ? { retrySelection: true } : {}),
   };

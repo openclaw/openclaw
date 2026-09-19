@@ -1,6 +1,7 @@
 // Browser tests cover agent.existing session plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { saveMediaBuffer } from "../../media/store.js";
 import type { ChromeMcpSnapshotNode } from "../chrome-mcp.snapshot.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
@@ -217,6 +218,42 @@ describe("existing-session browser routes", () => {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });
+
+  it.each(["snapshot", "screenshot"])(
+    "clears %s labels after media persistence fails and its caller aborts",
+    async (operation) => {
+      const failure = new Error("media persistence failed");
+      const controller = new AbortController();
+      vi.mocked(saveMediaBuffer).mockImplementationOnce(async () => {
+        controller.abort();
+        throw failure;
+      });
+      const response = createBrowserRouteResponse();
+      const handler = operation === "snapshot" ? getSnapshotGetHandler() : getSnapshotPostHandler();
+      const request = handler?.(
+        {
+          params: {},
+          query: { format: "ai", labels: "1" },
+          body: { labels: true },
+          signal: controller.signal,
+        },
+        response.res,
+      );
+      if (operation === "snapshot") {
+        await request;
+        expect(response.body).toEqual({ error: failure.message });
+      } else {
+        await expect(request).rejects.toBe(failure);
+        expect(response.body).toBeUndefined();
+      }
+      expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          signal: undefined,
+          fn: expect.stringContaining("node.remove()"),
+        }),
+      );
+    },
+  );
 
   it("omits deltas for existing-session snapshots without stable document identity", async () => {
     chromeMcpMocks.takeChromeMcpSnapshot
@@ -556,6 +593,27 @@ describe("existing-session browser routes", () => {
     const body = requireRecord(response.body, "response body");
     expect(String(body.error)).toContain("type does not support timeoutMs");
     expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
+  });
+
+  it("explains unsupported focused paste without forwarding or echoing its text", async () => {
+    const response = createBrowserRouteResponse();
+    await getActPostHandler()?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "insertText", text: "synthetic-password-paste" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({
+      code: "ACT_EXISTING_SESSION_UNSUPPORTED",
+      error: expect.stringContaining("Paste is not supported for existing-session"),
+    });
+    expect(JSON.stringify(response.body)).not.toContain("synthetic-password-paste");
+    expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("fails closed for existing-session dialogId responses", async () => {

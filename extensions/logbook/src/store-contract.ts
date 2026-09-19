@@ -25,7 +25,7 @@ type Operation<Input, Output> = { input: Input; output: Output };
 export type LogbookOperations = {
   insertFrame: Operation<LogbookFrameInput, number>;
   lastFrame: Operation<undefined, { capturedAtMs: number; contentHash: string } | null>;
-  unbatchedActiveFrames: Operation<{ limit: number }, LogbookFrame[]>;
+  unbatchedActiveFrames: Operation<{ limit: number }, Pick<LogbookFrame, "id" | "capturedAtMs">[]>;
   countUnbatchedActiveFrames: Operation<undefined, number>;
   frameById: Operation<{ id: number }, LogbookFrame | null>;
   framesInRange: Operation<{ startMs: number; endMs: number }, LogbookFrame[]>;
@@ -39,6 +39,7 @@ export type LogbookOperations = {
   resetErrorBatches: Operation<undefined, number>;
   nextPendingBatch: Operation<undefined, LogbookBatch | null>;
   batchFrames: Operation<{ batchId: number }, LogbookFrame[]>;
+  sampledBatchFrames: Operation<{ batchId: number }, LogbookFrame[]>;
   replaceObservations: Operation<
     { batchId: number; day: string; segments: LogbookObservationInput[] },
     void

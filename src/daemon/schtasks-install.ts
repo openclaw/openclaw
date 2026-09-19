@@ -42,6 +42,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
@@ -122,6 +123,7 @@ async function writeScheduledTaskScript({
   workingDirectory,
   environment,
   description,
+  definitionTransaction,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
   scriptPath: string;
   taskLaunchPath: string;
@@ -142,19 +144,26 @@ async function writeScheduledTaskScript({
     workingDirectory,
     environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
   });
-  assertGatewayServiceUpdateCurrent();
-  await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
+  const scriptBytes = encodeWindowsLauncherScript({ format: "cmd", content: script });
+  await publishServiceFile({
+    filePath: scriptPath,
+    contents: scriptBytes,
+    mode: 0o600,
+    definitionTransaction,
+  });
   if (taskLaunchPath !== scriptPath) {
     const launcher = buildHiddenLauncherScript({
       description: taskDescription,
       scriptPath,
       taskSupervisor: environment?.OPENCLAW_SERVICE_KIND === "gateway",
     });
-    assertGatewayServiceUpdateCurrent();
-    await fs.writeFile(
-      taskLaunchPath,
-      encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
-    );
+    const launcherBytes = encodeWindowsLauncherScript({ format: "vbs", content: launcher });
+    await publishServiceFile({
+      filePath: taskLaunchPath,
+      contents: launcherBytes,
+      mode: 0o600,
+      definitionTransaction,
+    });
   }
   return { scriptPath, taskLaunchPath, taskDescription };
 }
@@ -173,43 +182,69 @@ export async function stageScheduledTask({
 async function updateExistingScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: GatewayServiceInstallArgs["warn"];
   taskName: string;
   quotedLaunchPath: string;
   scriptPath: string;
   taskLaunchPath: string;
   description?: string;
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<ScheduledTaskActivation | null> {
   if (!(await isRegisteredScheduledTask(params.env))) {
     return null;
   }
-  const change = await execSchtasks([
-    "/Change",
-    "/TN",
-    params.taskName,
-    "/TR",
-    params.quotedLaunchPath,
-  ]);
-  if (change.code !== 0) {
-    return null;
+  if (!params.definitionTransaction) {
+    // Ordinary installs retain their existing /Change failure and Startup fallback contract.
+    const change = await execSchtasks([
+      "/Change",
+      "/TN",
+      params.taskName,
+      "/TR",
+      params.quotedLaunchPath,
+    ]);
+    if (change.code !== 0) {
+      return null;
+    }
   }
   // Re-apply the full XML so older tasks inherit both false battery flags (#59299).
-  // Best effort: failure keeps the prior settings rather than losing the task.
-  const upgradeXmlPath = await writeTaskXmlTempFile(
-    buildScheduledTaskXml({
-      taskDescription: params.description ?? "OpenClaw Gateway",
-      taskUser: resolveTaskUser(params.env),
-      launchPath: params.taskLaunchPath,
-    }),
-  );
+  // Transactional repair must compensate; ordinary installs keep best-effort activation.
+  const expectedXml = buildScheduledTaskXml({
+    taskDescription: params.description ?? "OpenClaw Gateway",
+    taskUser: resolveTaskUser(params.env),
+    launchPath: params.taskLaunchPath,
+  });
+  const upgradeXmlPath = await writeTaskXmlTempFile(expectedXml);
   try {
-    await execSchtasks(["/Create", "/F", "/TN", params.taskName, "/XML", upgradeXmlPath]);
+    await params.definitionTransaction?.taskPrepared(expectedXml);
+    params.definitionTransaction?.assertCurrent();
+    const upgraded = await execSchtasks([
+      "/Create",
+      "/F",
+      "/TN",
+      params.taskName,
+      "/XML",
+      upgradeXmlPath,
+    ]);
+    if (upgraded.code !== 0) {
+      const detail = (upgraded.stderr || upgraded.stdout).trim() || "unknown error";
+      const message = `Scheduled Task definition upgrade failed: ${detail}`;
+      if (params.definitionTransaction) {
+        throw new Error(message);
+      }
+      params.warn?.(`${message}. Keeping the existing policy and starting the task.`);
+    } else {
+      await params.definitionTransaction?.taskWritten(expectedXml);
+    }
   } finally {
     await fs.rm(path.dirname(upgradeXmlPath), { recursive: true, force: true }).catch(() => {});
   }
+  await params.definitionTransaction?.beforeWrite();
   const activation = await runScheduledTaskOrThrow({
     taskName: params.taskName,
     env: params.env,
     scriptPath: params.scriptPath,
+    assertCurrent: params.definitionTransaction?.assertCurrent,
+    allowFallback: params.definitionTransaction ? false : undefined,
   });
   writeFormattedLines(
     params.stdout,
@@ -225,9 +260,11 @@ async function updateExistingScheduledTask(params: {
 async function activateScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: GatewayServiceInstallArgs["warn"];
   scriptPath: string;
   taskLaunchPath: string;
   description?: string;
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 }): Promise<ScheduledTaskActivation | "startup-fallback"> {
   const taskDescription = params.description ?? "OpenClaw Gateway";
   const taskName = resolveTaskName(params.env);
@@ -244,22 +281,30 @@ async function activateScheduledTask(params: {
   const taskUser = resolveTaskUser(params.env);
   // Use `schtasks /Create /XML` so the task carries explicit battery settings.
   // The CLI flag form cannot set these and kills the Gateway when a laptop unplugs (#59299).
-  const xmlPath = await writeTaskXmlTempFile(
-    buildScheduledTaskXml({ taskDescription, taskUser, launchPath: params.taskLaunchPath }),
-  );
+  const expectedXml = buildScheduledTaskXml({
+    taskDescription,
+    taskUser,
+    launchPath: params.taskLaunchPath,
+  });
+  const xmlPath = await writeTaskXmlTempFile(expectedXml);
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
     // The XML owns UserId and InteractiveToken. `/NP` overrides that principal
     // with a non-interactive S4U logon, so a successful task never starts here.
+    await params.definitionTransaction?.taskPrepared(expectedXml);
+    params.definitionTransaction?.assertCurrent();
     create = await execSchtasks(xmlArgs);
+    if (create.code === 0) {
+      await params.definitionTransaction?.taskWritten(expectedXml);
+    }
   } finally {
     await fs.rm(path.dirname(xmlPath), { recursive: true, force: true }).catch(() => {});
   }
   if (create.code !== 0) {
     const detail = create.stderr || create.stdout;
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
-      if (isUpdateOwnedGatewayServiceCommand()) {
+      if (isUpdateOwnedGatewayServiceCommand() || params.definitionTransaction) {
         throw new Error(
           "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; startup fallback is unsupported.",
         );
@@ -279,13 +324,14 @@ async function activateScheduledTask(params: {
             scriptPath: params.scriptPath,
           });
       assertGatewayServiceUpdateCurrent();
-      await fs.writeFile(
-        startupEntryPath,
-        encodeWindowsLauncherScript({
+      await publishServiceFile({
+        filePath: startupEntryPath,
+        contents: encodeWindowsLauncherScript({
           format: useHiddenLauncher ? "vbs" : "cmd",
           content: launcher,
         }),
-      );
+        mode: 0o600,
+      });
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,
@@ -300,10 +346,13 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
+  await params.definitionTransaction?.beforeWrite();
   const activation = await runScheduledTaskOrThrow({
     taskName,
     env: params.env,
     scriptPath: params.scriptPath,
+    assertCurrent: params.definitionTransaction?.assertCurrent,
+    allowFallback: params.definitionTransaction ? false : undefined,
   });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
@@ -326,7 +375,8 @@ export async function installScheduledTask(
   const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
   const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
   // Capture ownership before repair changes the port/profile that locates the old process.
-  const startupEntryInstalled = await isStartupEntryInstalled(fallbackEnv);
+  const startupEntryInstalled =
+    !args.definitionTransaction && (await isStartupEntryInstalled(fallbackEnv));
   let startupRuntime = startupEntryInstalled
     ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(() => null)
     : null;
@@ -365,9 +415,11 @@ export async function installScheduledTask(
   const activation = await activateScheduledTask({
     env: activationEnv,
     stdout: args.stdout,
+    warn: args.warn,
     scriptPath: staged.scriptPath,
     taskLaunchPath: staged.taskLaunchPath,
     description: staged.taskDescription,
+    definitionTransaction: args.definitionTransaction,
   });
   if (activation !== "scheduled-task") {
     return { scriptPath: staged.scriptPath };

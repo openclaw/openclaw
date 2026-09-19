@@ -2,20 +2,25 @@ import { expect, vi } from "vitest";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as pluginDiscovery from "../../plugins/discovery.js";
 import * as authProfileStore from "../auth-profiles/store-runtime.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 
 export function guardModelFixtureAuth(root: string) {
   const violations: Array<string | undefined> = [];
-  const ensureAuthProfileStore = authProfileStore.ensureAuthProfileStore;
+  const loadAuthProfileStoreForRuntimeAsync = authProfileStore.loadAuthProfileStoreForRuntimeAsync;
   const spy = vi
-    .spyOn(authProfileStore, "ensureAuthProfileStore")
-    .mockImplementation((dir, options) => {
+    .spyOn(authProfileStore, "loadAuthProfileStoreForRuntimeAsync")
+    .mockImplementation(async (dir, options) => {
       // Any necessary native auth reads must remain inside the fixture's owned state.
       // Record even swallowed violations before the owner can inspect the path.
       if (!dir || !isPathInside(root, dir)) {
         violations.push(dir);
         throw new Error("Auth profile request escaped the model fixture");
       }
-      return ensureAuthProfileStore(dir, options);
+      if (options?.readOnly !== true) {
+        violations.push(dir);
+        throw new Error("Model fixture auth request must be read-only");
+      }
+      return loadAuthProfileStoreForRuntimeAsync(dir, options);
     });
   return { spy, verify: () => expect(violations).toEqual([]) };
 }
@@ -32,4 +37,25 @@ export function guardModelFixtureWorkspace(root: string) {
     return discoverOpenClawPlugins(params);
   });
   return { spy, verify: () => expect(violations).toEqual([]) };
+}
+
+export function createEmptyPreparedModelRuntimeFixture(
+  input: Pick<
+    PreparedModelRuntimeSnapshot,
+    "agentDir" | "config" | "metadataSnapshot" | "createStores"
+  >,
+): PreparedModelRuntimeSnapshot {
+  return {
+    catalogOwner: undefined,
+    ...input,
+    activeProjectKeys: [],
+    allowGatewaySubagentBinding: false,
+    observationConfig: input.config,
+    isCurrent: () => true,
+    authModes: {},
+    modelCatalog: { entries: [], routeVariants: [] },
+    configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
+    inlineProviderModels: [],
+  };
 }

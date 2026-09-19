@@ -9,6 +9,7 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
@@ -174,6 +175,17 @@ async function resolveDiscordSendTarget(
 }
 
 export async function sendMessageDiscord(
+  to: string,
+  text: string,
+  opts: DiscordSendOpts,
+): Promise<DiscordSendResult> {
+  // The REST scheduler can retry after this sender's last handoff check.
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
+    sendMessageDiscordInternal(to, text, opts),
+  );
+}
+
+async function sendMessageDiscordInternal(
   to: string,
   text: string,
   opts: DiscordSendOpts,
@@ -445,6 +457,16 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
+    sendStickerDiscordInternal(to, stickerIds, opts),
+  );
+}
+
+async function sendStickerDiscordInternal(
+  to: string,
+  stickerIds: string[],
+  opts: DiscordSendOpts & { content?: string },
+): Promise<DiscordSendResult> {
   const context = await resolveDiscordStructuredSendContext(to, opts);
   const { rewrittenContent, suppressEmbeds } = context;
   const stickers = normalizeStickerIds(stickerIds);
@@ -460,6 +482,16 @@ export async function sendStickerDiscord(
 }
 
 export async function sendPollDiscord(
+  to: string,
+  poll: PollInput,
+  opts: DiscordSendOpts & { content?: string },
+): Promise<DiscordSendResult> {
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
+    sendPollDiscordInternal(to, poll, opts),
+  );
+}
+
+async function sendPollDiscordInternal(
   to: string,
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string },

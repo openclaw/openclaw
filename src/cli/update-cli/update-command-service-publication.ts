@@ -21,14 +21,10 @@ import { probePortUsage } from "../../infra/ports-probe.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { UpdatePreMutationError } from "./shared.js";
-import { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
-
-export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
-  const uid = state.runtime?.systemd?.managerUid;
-  return typeof uid === "number" && Number.isInteger(uid) && uid >= 0 && uid < 0xffffffff
-    ? uid
-    : undefined;
-}
+import {
+  observedSystemdManagerUid,
+  resolveUpdatedGatewayRestartPort,
+} from "./update-command-service-plan.js";
 
 export async function isManagedGatewayServiceOffline(
   service: ReturnType<typeof resolveGatewayService>,

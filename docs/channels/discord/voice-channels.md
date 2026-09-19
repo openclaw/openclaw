@@ -116,8 +116,11 @@ speaker-start interruption. Microphone audio remains admitted during playback
 so GPT-Live can hear and handle interruptions itself. Delegated tasks use the routed OpenClaw agent with
 the originating speaker's Discord identity and tool permissions.
 The Gateway paces microphone input continuously, including silence between
-speaker captures. Playback preserves pauses in queued speech while idle
-transport silence lets other speakers' replies use the room player.
+speaker captures. Playback preserves quiet PCM within an active stream, including
+pauses delivered after earlier speech has already played. When no unheard speech
+remains for the player's two-second idle grace, accepted audio drains before the
+room player is released. Speech arriving during that retirement queues under a
+fresh resource so it is not discarded with the old stream.
 Continuous playback builds a 120 ms startup buffer to absorb brief delivery
 gaps. A 120 ms startup deadline keeps short replies from waiting for a completed
 response event.
@@ -156,6 +159,7 @@ Notes:
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - When OpenClaw joins a voice channel, the routed agent session receives a silent system event with the current participant roster. Later participant joins and leaves update that session without triggering an unsolicited spoken reply; Discord display names are treated as untrusted labels. Authorized voice turns also receive a fresh roster snapshot.
 - Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
+- Authorized speakers can ask the agent to list or change the current realtime call's voice with `talk_voice`, without command-owner configuration. The change applies to the shared room and keeps saved voice defaults unchanged. Voice control remains bound to the admitted turn and stops when the call ends, the turn finishes or is canceled, or its access policy changes; other owner-only tools retain their usual permissions.
 - Canceled or revoked voice turns are not retried as new agent requests. Leaving prevents pending batch turns from starting agent work or speech synthesis. Work already running can finish; transcript recording is managed separately.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.autoJoin[].whenOccupied` defaults to `false`. Set it to `true` for an auto-managed room that should contain the bot only while at least one human is present. OpenClaw joins on the first human arrival and leaves after the last human departs; the OpenClaw bot and other bots do not count. Startup, fresh gateway sessions, and resumed gateway sessions reconcile from Discord's voice-state roster.

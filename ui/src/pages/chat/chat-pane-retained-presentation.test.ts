@@ -8,12 +8,8 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "./attachment-payload-store.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -24,7 +20,6 @@ import {
 } from "./chat-pane-attachment-handoff.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
-  clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
   focusChatComposerFromPrintableKeydown,
   preparePaneSessionHandoff,
@@ -52,6 +47,53 @@ describe("chat pane retained presentation lifecycle", () => {
     resetChatComposerState();
     vi.unstubAllGlobals();
   });
+
+  it.each(["connection", "pane"] as const)(
+    "releases reply preview objects at the %s retirement boundary",
+    async (boundary) => {
+      class ReplyPreviewMessage {
+        role = "assistant";
+        content = "Previous connection's answer";
+      }
+      let preview: WeakRef<ReplyPreviewMessage> | undefined;
+      let requests = 0;
+      const client = createGatewayBrowserClientFixture({
+        request: async (method) => {
+          if (method !== "chat.message.get") {
+            return {};
+          }
+          requests += 1;
+          const message = new ReplyPreviewMessage();
+          preview = new WeakRef(message);
+          return { ok: true, message };
+        },
+      });
+      const { pane } = createTestChatPane({ client });
+      pane.requestReplyMessage("source-message");
+      await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBeDefined());
+
+      pane.resetOlderMessagesViewport();
+      pane.presented = false;
+      pane.presented = true;
+      const retainedControl = new WeakRef({ unowned: true });
+      await collectGarbageForTest();
+      expect(retainedControl.deref()).toBeUndefined();
+      expect(preview!.deref()).toBeDefined();
+      pane.requestReplyMessage("source-message");
+      expect(requests).toBe(1);
+
+      if (boundary === "connection") {
+        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "stopped" });
+      } else {
+        pane.disconnectedCallback();
+      }
+      const retiredControl = new WeakRef({ unowned: true });
+      await collectGarbageForTest();
+      expect(retiredControl.deref()).toBeUndefined();
+      expect(preview!.deref()).toBeUndefined();
+      expect(pane.readReplyMessage("source-message")).toBeUndefined();
+    },
+  );
 
   it.each([false, true])(
     "restores dormant sidebar tabs for compact=%s without replacing saved task preferences",
@@ -160,63 +202,6 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
-  it("expires abandoned eviction payload ownership", () => {
-    vi.useFakeTimers();
-    const id = "expired-retained-attachment";
-    try {
-      const { pane } = createTestChatPane({
-        client: {} as GatewayBrowserClient,
-        sessions: {} as SessionCapability,
-      });
-      const attachment = registerChatAttachmentPayload({
-        attachment: { id, mimeType: "image/png" },
-        dataUrl: "data:image/png;base64,ZXhwaXJlZA==",
-        file: new File(["expired"], "expired.png", { type: "image/png" }),
-      });
-      preparePaneSessionHandoff(pane.context, "p1", "agent:main:expired", {
-        attachments: [attachment],
-        draft: "",
-        restore: true,
-      });
-
-      vi.advanceTimersByTime(30_000);
-
-      expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:expired")).toBeNull();
-      expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-    } finally {
-      releaseChatAttachmentPayload(id);
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears every unmounted eviction handoff for a permanently discarded pane", () => {
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const attachment = registerChatAttachmentPayload({
-      attachment: { id: "permanently-discarded-attachment", mimeType: "image/png" },
-      dataUrl: "data:image/png;base64,ZGlzY2FyZGVk",
-      file: new File(["discarded"], "discarded.png", { type: "image/png" }),
-    });
-    preparePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-a", {
-      attachments: [attachment],
-      draft: "evicted a",
-      restore: true,
-    });
-    preparePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-b", {
-      attachments: [],
-      draft: "evicted b",
-      restore: true,
-    });
-
-    clearPaneSessionHandoffs(pane.context, "p1");
-
-    expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-a")).toBeNull();
-    expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-b")).toBeNull();
-    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-  });
-
   it("restores draft attachments and memory fallbacks after LRU eviction", () => {
     const source = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -241,7 +226,7 @@ describe("chat pane retained presentation lifecycle", () => {
 
     source.pane.prepareForEviction();
     const owner = source.pane.context.gateway.snapshot.client;
-    preparePaneStagedAttachments(source.pane.context, source.pane.paneId, source.state, owner);
+    preparePaneStagedAttachments(source.pane.context, source.pane.paneId, source.state, owner, 0);
 
     const destination = createTestChatPane({
       client: {} as GatewayBrowserClient,

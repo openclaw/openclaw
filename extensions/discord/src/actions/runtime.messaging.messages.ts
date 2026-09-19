@@ -101,15 +101,28 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = ctx.resolveChannelId();
       await ctx.assertReadTargetAllowed({ channelId });
+      const messageId = readStringParam(ctx.params, "messageId");
       const query = {
         limit: readPositiveIntegerParam(ctx.params, "limit"),
         before: readStringParam(ctx.params, "before"),
         after: readStringParam(ctx.params, "after"),
         around: readStringParam(ctx.params, "around"),
       };
-      const messages = assertDiscordMessageListResult(
-        await discordMessagingActionRuntime.readMessagesDiscord(channelId, query, ctx.withOpts()),
-      );
+      const messages = messageId
+        ? [
+            await discordMessagingActionRuntime.fetchMessageDiscord(
+              channelId,
+              messageId,
+              ctx.withOpts(),
+            ),
+          ]
+        : assertDiscordMessageListResult(
+            await discordMessagingActionRuntime.readMessagesDiscord(
+              channelId,
+              query,
+              ctx.withOpts(),
+            ),
+          );
       return jsonResult({
         ok: true,
         channelId,

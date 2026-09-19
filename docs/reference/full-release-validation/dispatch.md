@@ -166,12 +166,15 @@ required coverage, gate results, reuse identity, the original parent attempt,
 the fresh candidate request plus producer and publisher evidence when preparation ran, and
 every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
-verifier consume the artifact for their current attempt. Collector retries
-use the exact run-ID cache as an acceleration. If that cache is unavailable,
-they restore the same immutable plan from the parent-run artifact, validate it,
-and upload the artifact again for the retry; they never rebuild the plan or
-redispatch tests. A missing or invalid artifact fails closed, so start a new
-validation instead of retrying that stale parent.
+verifier consume the artifact for their current attempt. After the original
+guarded upload succeeds, the sealer records the plan digest in its job log.
+Collector retries restore the exact run-ID cache before publication admission,
+authenticate its bytes against that original upload and digest, and re-upload
+the unchanged plan and admission for the current attempt. GitHub removes prior
+parent artifacts on a full rerun, so retain the cache and original job logs.
+If the cache is unavailable, an accessible plan artifact can supply the same
+authenticated bytes. Missing or invalid evidence fails closed; retries never
+rebuild the plan, recollect registry observations, or redispatch tests.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child

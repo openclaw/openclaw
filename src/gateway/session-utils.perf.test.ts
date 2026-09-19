@@ -4,39 +4,38 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, test, expect, vi } from "vitest";
-import {
-  readAcpSessionMetaBatch,
-  readAcpSessionMetaForEntry,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
+import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import * as sessionModelRef from "../agents/session-model-ref.js";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
-import { listSessionFixture, sessionStoreTargetsFixture } from "./session-list.test-support.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import * as sessionOrder from "./session-list-order.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
+import * as projectionWork from "./session-projection-work.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import * as titleReader from "./session-transcript-title-reader.js";
 import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
-import {
-  filterAndSortSessionEntries,
-  listSessionsFromStoreAsync,
-  type SessionListProjectionTiming,
-} from "./session-utils-list.js";
+import { filterAndSortSessionEntries, listProjectedSessions } from "./session-utils-list.js";
 import {
   projectSessionPatchResult,
   resolveGatewaySessionThinkingProjectionInternal,
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
+import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -50,6 +49,46 @@ import * as rowProjection from "./session-utils-row.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test("bounds first-page comparisons while preserving the latest-row order", async () => {
+    await withStateDirEnv("openclaw-list-order-work-", async () => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" } },
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot(cfg);
+      const count = 256;
+      const store = Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `agent:main:ordered-${index}`,
+          { sessionId: `ordered-${index}`, updatedAt: ((index * 71) % count) + 1 },
+        ]),
+      );
+      writeResidentEntries(store);
+      const projection = await createSessionRowProjection({ cfg });
+      try {
+        await projection.ensureMaterialized();
+        const compare = vi.spyOn(sessionOrder, "compareSessionEntryPairs");
+        try {
+          const result = await listProjectedSessions({ projection, opts: { limit: 5 } });
+          expect(result.sessions.map((row) => row.key)).toEqual(
+            Object.entries(store)
+              .toSorted((a, b) => b[1].updatedAt - a[1].updatedAt)
+              .slice(0, 5)
+              .map(([key]) => key),
+          );
+          expect(result.totalCount).toBe(count);
+          expect(compare.mock.calls.length).toBeLessThanOrEqual(count * 4);
+        } finally {
+          compare.mockRestore();
+        }
+      } finally {
+        projection.dispose();
+      }
+    });
+  });
+
   test.each(["entries", "list"] as const)(
     "bounds owner roster traversal for %s and observes the next request's roster",
     (kind) => {
@@ -87,7 +126,12 @@ describe("session list resolver cache", () => {
       const select = () =>
         filterAndSortSessionEntries({
           cfg,
-          store,
+          entries: Object.entries(store),
+          getTarget: (key) => ({
+            agentId: "agent-29",
+            selection: readSessionListSelectionFacts(key, store[key]),
+          }),
+          getRowContext: () => buildSessionListRowMetadataContext({ now: 100 }),
           now: 100,
           opts: { ownerId: "agent-29", limit: 10 },
         });
@@ -103,101 +147,218 @@ describe("session list resolver cache", () => {
     },
   );
 
-  test("reuses roster facts within preparation chunks and refreshes them across a real yield", async () => {
-    await withStateDirEnv("openclaw-roster-chunks-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      let rosterReads = 0;
-      const agents = Array.from({ length: 30 }, (_, index) => ({
-        identity: { name: `Agent ${index}` },
-      }));
-      const entries = Object.fromEntries(agents.map((entry, index) => [`agent-${index}`, entry]));
-      agents.forEach((_, index) => {
-        Object.defineProperty(entries, `agent-${index}`, {
-          get: () => {
-            rosterReads++;
-            return agents[index]!;
-          },
-        });
-      });
-      const cfg: OpenClawConfig = { agents: { entries } };
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      let workMs = 0;
-      const store = Object.fromEntries(
-        Array.from({ length: 80 }, (_, index) => [
-          `agent:agent-29:dashboard:${index}`,
-          {
-            sessionId: `chunk-${index}`,
-            updatedAt: index + 1,
-            get createdActor() {
-              // Charge the real owner projection, after the roster index has been needed.
-              workMs++;
-              return { type: "agent" as const, id: index < 40 ? "agent-28" : "agent-29" };
-            },
-          },
-        ]),
-      );
-      const storePath = path.join(stateDir, "sessions.json");
-      const targetsBySessionKey = sessionStoreTargetsFixture({ cfg, store, storePath });
-      const projectionTiming: SessionListProjectionTiming = {
-        prepareSyncMs: 0,
-        rowSyncMs: 0,
-        yieldWaitMs: 0,
-        yieldCount: 0,
-      };
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
-      const buildRow = rowProjection.buildGatewaySessionRow;
-      let preparationReads: number | undefined;
-      let preparationYields: number | undefined;
-      const rows = vi
-        .spyOn(rowProjection, "buildGatewaySessionRow")
-        .mockImplementation((params) => {
-          preparationReads ??= rosterReads;
-          preparationYields ??= projectionTiming.yieldCount;
-          return buildRow(params);
-        });
-      let identityDuringPause: string | undefined;
-      let pauseProbeReads = 0;
-      const control = new Promise<void>((resolve) => {
-        setImmediate(() => {
-          // Replace the whole entry: mutating a shared nested object could hide a leaked cache.
-          agents[29] = { identity: { name: "Refreshed owner" } };
-          const readsBeforeProbe = rosterReads;
-          identityDuringPause = resolveAgentIdentity(cfg, "agent-29")?.name;
-          pauseProbeReads = rosterReads - readsBeforeProbe;
-          resolve();
-        });
-      });
-      rosterReads = 0;
-      try {
-        const result = await listSessionsFromStoreAsync({
-          cfg,
-          store,
-          storePath,
-          targetsBySessionKey,
-          workStartedAt: 0,
-          projectionTiming,
-          opts: { limit: 1 },
-        });
-        expect(identityDuringPause).toBe("Refreshed owner");
-        expect(result.totalCount).toBe(80);
-        expect(result.sessions.map((row) => row.key)).toEqual(["agent:agent-29:dashboard:79"]);
-        // This owner is first encountered after the pause, so its facet proves preparation freshness.
-        expect(result.owners?.find((owner) => owner.id === "agent-29")?.label).toBe(
-          "Refreshed owner",
+  test.each([
+    { phase: "startup", rosterSize: 30 },
+    { phase: "dirty refresh", rosterSize: 32 },
+  ])(
+    "bounds $phase roster work and observes config publication across a yield",
+    async ({ phase, rosterSize }) => {
+      await withStateDirEnv("openclaw-roster-chunks-", async () => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const rowCount = 80;
+        const ownerId = `agent-${rosterSize - 1}`;
+        const entries = Object.fromEntries(
+          Array.from({ length: rosterSize }, (_, index) => [
+            `agent-${index}`,
+            { identity: { name: `Agent ${index}` }, fastModeDefault: false },
+          ]),
         );
-        const yields = expectDefined(preparationYields, "row projection reached");
-        expect(yields).toBeGreaterThan(0);
-        const reads = expectDefined(preparationReads, "preparation reads recorded");
-        expect(reads - pauseProbeReads).toBeLessThanOrEqual(agents.length * (yields + 4));
-      } finally {
-        rows.mockRestore();
-        clock.mockRestore();
-        await control;
-      }
-    });
-  });
+        let insideRow = false;
+        let rowReads = 0;
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: new Proxy(entries, {
+              get(target, key, receiver) {
+                if (insideRow && typeof key === "string" && Object.hasOwn(target, key)) {
+                  rowReads++;
+                }
+                return Reflect.get(target, key, receiver);
+              },
+            }),
+            defaults: { model: { primary: "example/roster-model" }, thinkingDefault: "off" },
+          },
+        };
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const store = Object.fromEntries(
+          Array.from({ length: rowCount }, (_, index) => [
+            `agent:${ownerId}:dashboard:${index}`,
+            {
+              sessionId: `row-chunk-${index}`,
+              updatedAt: index + 1,
+              createdActor: { type: "agent" as const, id: ownerId },
+            },
+          ]),
+        );
+        writeResidentEntries(store);
+        let projection: SessionRowProjection | undefined;
+        if (phase === "dirty refresh") {
+          projection = await createSessionRowProjection({ cfg });
+        }
+        let projectedRows = 0;
+        let rowsBeforePause = 0;
+        let identityDuringPause: string | undefined;
+        let control: Promise<void> | undefined;
+        let completedYields = 0;
+        const rowChunks = new Set<number>();
+        const yieldWork = projectionWork.yieldSessionListWork;
+        const yields = vi
+          .spyOn(projectionWork, "yieldSessionListWork")
+          .mockImplementation(async () => {
+            await yieldWork();
+            completedYields++;
+          });
+        const buildRow = rowProjection.readSessionRowInputs;
+        const rows = vi
+          .spyOn(rowProjection, "readSessionRowInputs")
+          .mockImplementation((params) => {
+            rowChunks.add(completedYields);
+            insideRow = true;
+            try {
+              return buildRow(params);
+            } finally {
+              insideRow = false;
+              projectedRows++;
+              if (projectedRows === 1) {
+                control = new Promise<void>((resolve) => {
+                  setImmediate(() => {
+                    rowsBeforePause = projectedRows;
+                    entries[ownerId] = {
+                      identity: { name: "Refreshed owner" },
+                      fastModeDefault: true,
+                    };
+                    sessionChanges.emit({ all: true, scope: "config" });
+                    identityDuringPause = resolveAgentIdentity(cfg, ownerId)?.name;
+                    resolve();
+                  });
+                });
+              }
+            }
+          });
+        try {
+          if (projection) {
+            writeResidentEntries(store, 1);
+            await projection.ensureMaterialized();
+          } else {
+            projection = await createSessionRowProjection({ cfg });
+          }
+          const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
+          expect(result.count).toBe(rowCount);
+          expect(result.totalCount).toBe(rowCount);
+          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(rowsBeforePause).toBeGreaterThan(0);
+          expect(rowsBeforePause).toBeLessThan(rowCount);
+          expect(identityDuringPause).toBe("Refreshed owner");
+          expect(result.sessions.every((row) => row.effectiveFastMode === true)).toBe(true);
+          expect(result.owners?.find((owner) => owner.id === ownerId)?.label).toBe(
+            "Refreshed owner",
+          );
+          expect(rowChunks.size).toBeGreaterThan(1);
+          expect(rowReads).toBeLessThanOrEqual(rosterSize * rowChunks.size * 3);
+          rows.mockClear();
+          await listProjectedSessions({ projection, opts: { limit: rowCount } });
+          expect(rows).not.toHaveBeenCalled();
+        } finally {
+          rows.mockRestore();
+          yields.mockRestore();
+          await control;
+          projection?.dispose();
+        }
+      });
+    },
+  );
+
+  test.each([
+    { phase: "startup", cost: "acquisition" },
+    { phase: "startup", cost: "materialization" },
+    { phase: "dirty refresh", cost: "acquisition" },
+    { phase: "dirty refresh", cost: "materialization" },
+  ])(
+    "yields during expensive $phase $cost without reacquiring unchanged rows",
+    async ({ phase, cost }) => {
+      await withStateDirEnv("openclaw-row-work-budget-", async () => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg: OpenClawConfig = {
+          agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" } },
+        };
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const rowCount = 96;
+        const store = Object.fromEntries(
+          Array.from({ length: rowCount }, (_, index) => [
+            `agent:main:budget-${index}`,
+            { sessionId: `budget-${index}`, updatedAt: index + 1 },
+          ]),
+        );
+        writeResidentEntries(store);
+        let projection: SessionRowProjection | undefined;
+        if (phase === "dirty refresh") {
+          projection = await createSessionRowProjection({ cfg });
+        }
+        let workMs = 0;
+        let projectedRows = 0;
+        let acquiredRows = 0;
+        let rowsAtControl = 0;
+        let control: Promise<void> | undefined;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const readEntryCache = entryCache.readCommittedSessionEntryCache;
+        const acquisitions = vi
+          .spyOn(entryCache, "readCommittedSessionEntryCache")
+          .mockImplementation((...args) => {
+            acquiredRows++;
+            if (cost === "acquisition") {
+              workMs += 20;
+            }
+            return readEntryCache(...args);
+          });
+        const readInputs = rowProjection.readSessionRowInputs;
+        const rows = vi
+          .spyOn(rowProjection, "readSessionRowInputs")
+          .mockImplementation((params) => {
+            const result = readInputs(params);
+            if (cost === "materialization") {
+              workMs += 20;
+            }
+            projectedRows++;
+            if (projectedRows === 1) {
+              control = new Promise<void>((resolve) => {
+                setImmediate(() => {
+                  rowsAtControl = projectedRows;
+                  resolve();
+                });
+              });
+            }
+            return result;
+          });
+        try {
+          if (projection) {
+            writeResidentEntries(store, 1);
+            await projection.ensureMaterialized();
+          } else {
+            projection = await createSessionRowProjection({ cfg });
+          }
+          await control;
+          await projection.ensureMaterialized();
+          expect(rowsAtControl).toBeGreaterThan(0);
+          expect(rowsAtControl).toBeLessThan(rowCount);
+          expect(projectedRows).toBe(rowCount);
+          expect(acquiredRows).toBeLessThanOrEqual(rowCount * 2);
+          rows.mockClear();
+          const result = await listProjectedSessions({ projection, opts: { limit: rowCount } });
+          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(rows).not.toHaveBeenCalled();
+        } finally {
+          rows.mockRestore();
+          acquisitions.mockRestore();
+          clock.mockRestore();
+          await control;
+          projection?.dispose();
+        }
+      });
+    },
+  );
 
   test("restores an enclosing roster batch after nested selection and failure", () => {
     let ownerEntry = { identity: { name: "Outer owner" } };
@@ -226,12 +387,27 @@ describe("session list resolver cache", () => {
       const identity = resolveAgentIdentity(cfg, "owner");
       for (const selectionConfig of [cfg, nested]) {
         expect(
-          filterAndSortSessionEntries({ cfg: selectionConfig, store, now: 2, opts: {} }),
+          filterAndSortSessionEntries({
+            cfg: selectionConfig,
+            entries: Object.entries(store),
+            getTarget: (key) => ({
+              agentId: "owner",
+              selection: readSessionListSelectionFacts(key),
+            }),
+            getRowContext: () => buildSessionListRowMetadataContext({ now: 2 }),
+            now: 2,
+            opts: {},
+          }),
         ).toEqual(Object.entries(store));
         expect(() =>
           filterAndSortSessionEntries({
             cfg: selectionConfig,
-            store,
+            entries: Object.entries(store),
+            getTarget: (key) => ({
+              agentId: "owner",
+              selection: readSessionListSelectionFacts(key),
+            }),
+            getRowContext: () => buildSessionListRowMetadataContext({ now: 2 }),
             now: 2,
             opts: {},
             entryFilter: () => {
@@ -254,7 +430,7 @@ describe("session list resolver cache", () => {
   test.each([undefined, "unmatched-model-search"])(
     "resolves configured defaults once per agent for search %s",
     async (search) => {
-      await withStateDirEnv("openclaw-perf-default-model-", async ({ stateDir }) => {
+      await withStateDirEnv("openclaw-perf-default-model-", async () => {
         resetPluginRuntimeStateForTest();
         setActivePluginRegistry(createEmptyPluginRegistry());
         const cfg: OpenClawConfig = {
@@ -282,29 +458,36 @@ describe("session list resolver cache", () => {
             ];
           }),
         );
-        const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRef");
+        writeResidentEntries(store);
+        const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRefCore");
+        let projection: SessionRowProjection | undefined;
         try {
-          const result = await listSessionFixture({
-            cfg,
-            store,
-            storePath: path.join(stateDir, "sessions.json"),
-            opts: { limit: 40, ...(search ? { search } : {}) },
-          });
-          expect(result.count).toBe(search ? 0 : 40);
-          for (const row of result.sessions) {
-            expect([row.modelProvider, row.model]).toEqual(
-              row.agentId === "main" ? ["openai", "gpt-5"] : ["anthropic", "claude-sonnet-4-6"],
-            );
-          }
+          projection = await createSessionRowProjection({ cfg });
+          await projection.ensureMaterialized();
           expect(resolver).toHaveBeenCalledTimes(2);
+          resolver.mockClear();
+          for (let request = 0; request < 2; request++) {
+            const result = await listProjectedSessions({
+              projection,
+              opts: { limit: 40, ...(search ? { search } : {}) },
+            });
+            expect(result.count).toBe(search ? 0 : 40);
+            for (const row of result.sessions) {
+              expect([row.modelProvider, row.model]).toEqual(
+                row.agentId === "main" ? ["openai", "gpt-5"] : ["anthropic", "claude-sonnet-4-6"],
+              );
+            }
+          }
+          expect(resolver).not.toHaveBeenCalled();
         } finally {
+          projection?.dispose();
           resolver.mockRestore();
         }
       });
     },
   );
 
-  test("bounds catalog lookups per response while preserving each agent's model metadata", async () => {
+  test("bounds catalog acquisition per publication and reuses each agent's model metadata", async () => {
     await withStateDirEnv("openclaw-perf-catalog-", async ({ stateDir }) => {
       resetPluginRuntimeStateForTest();
       const pluginRegistry = createEmptyPluginRegistry();
@@ -363,7 +546,9 @@ describe("session list resolver cache", () => {
           ];
         }),
       );
+      writeResidentEntries(store);
       const catalogSpy = vi.spyOn(modelCatalogLookup, "findModelCatalogEntry");
+      let projection: SessionRowProjection | undefined;
       try {
         for (const revision of [1, 2]) {
           for (const [agentId, catalog] of modelCatalog) {
@@ -377,13 +562,17 @@ describe("session list resolver cache", () => {
             });
           }
           catalogSpy.mockClear();
-          const result = await listSessionFixture({
-            cfg,
-            store,
-            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-            modelCatalog,
-            opts: { limit: 80 },
-          });
+          if (projection) {
+            notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+            await projection.ensureMaterialized();
+          } else {
+            projection = await createSessionRowProjection({
+              cfg,
+              modelCatalog,
+              getModelCatalog: async () => modelCatalog,
+            });
+          }
+          const result = await listProjectedSessions({ projection, opts: { limit: 80 } });
           expect(result.count).toBe(80);
           const catalogRows = result.sessions.filter(
             (row) => row.model?.toLowerCase() === "model-hit",
@@ -397,9 +586,15 @@ describe("session list resolver cache", () => {
             );
             expect(row).not.toHaveProperty("catalogEntry");
           }
-          // Hits and misses are shared within a response, including runtime/context projection.
-          // Defaults can make a few additional lookups outside the row context.
+          // Acquisition shares both hits and misses; defaults retain their separate lookup.
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(10);
+          const inputs = vi.spyOn(rowProjection, "readSessionRowInputs");
+          try {
+            await listProjectedSessions({ projection, opts: { limit: 80 } });
+            expect(inputs).not.toHaveBeenCalled();
+          } finally {
+            inputs.mockRestore();
+          }
           catalogSpy.mockClear();
           const key = "agent:main:dashboard:catalog-0";
           const patch = projectSessionPatchResult({
@@ -418,6 +613,7 @@ describe("session list resolver cache", () => {
           expect(catalogSpy.mock.calls.length).toBeLessThanOrEqual(2);
         }
       } finally {
+        projection?.dispose();
         catalogSpy.mockRestore();
       }
     });
@@ -426,84 +622,51 @@ describe("session list resolver cache", () => {
   test.each([
     {
       name: "cheap rows",
-      rowWorkMs: 0,
-      storeWorkMs: 0,
-      preparationWorkMs: 0,
-      orderingWorkMs: 0,
-      keepRows: true,
-      limit: 100,
-      shouldYield: false,
     },
     {
       name: "expensive rows",
       rowWorkMs: 20,
-      storeWorkMs: 0,
-      preparationWorkMs: 0,
-      orderingWorkMs: 0,
-      keepRows: true,
-      limit: 100,
-      shouldYield: true,
     },
     {
       name: "one row after expensive preparation",
-      rowWorkMs: 0,
-      storeWorkMs: 0,
       preparationWorkMs: 1,
-      orderingWorkMs: 0,
-      keepRows: true,
       limit: 1,
-      shouldYield: true,
     },
     {
       name: "an empty page after expensive preparation",
-      rowWorkMs: 0,
-      storeWorkMs: 0,
       preparationWorkMs: 1,
-      orderingWorkMs: 0,
       keepRows: false,
       limit: 1,
-      shouldYield: true,
     },
     {
       name: "one row after combined loading and preparation",
-      rowWorkMs: 0,
       storeWorkMs: 8,
       preparationWorkMs: 0.25,
-      orderingWorkMs: 0,
-      keepRows: true,
       limit: 1,
-      shouldYield: true,
     },
     {
       name: "one row after expensive store loading",
-      rowWorkMs: 0,
       storeWorkMs: 20,
-      preparationWorkMs: 0,
-      orderingWorkMs: 0,
-      keepRows: true,
       limit: 1,
-      shouldYield: true,
     },
     {
       name: "wide ordering",
-      rowWorkMs: 0,
-      storeWorkMs: 0,
-      preparationWorkMs: 0,
       orderingWorkMs: 1,
-      keepRows: true,
       limit: 300,
-      shouldYield: true,
     },
+    { name: "wide ACP metadata preparation", metadataWorkMs: 1, limit: 600 },
+    { name: "runtime-search ACP metadata", metadataWorkMs: 1, search: "unmatched", limit: 1 },
   ])(
-    "shares the event loop for $name",
+    "reuses resident input facts for $name without a request-time yield",
     async ({
-      rowWorkMs,
-      storeWorkMs,
-      preparationWorkMs,
-      orderingWorkMs,
-      keepRows,
-      limit,
-      shouldYield,
+      rowWorkMs = 0,
+      storeWorkMs = 0,
+      preparationWorkMs = 0,
+      orderingWorkMs = 0,
+      metadataWorkMs = 0,
+      search,
+      keepRows = true,
+      limit = 100,
     }) => {
       await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
         resetPluginRuntimeStateForTest();
@@ -511,78 +674,53 @@ describe("session list resolver cache", () => {
         const cfg: OpenClawConfig = {};
         resetConfigRuntimeState();
         setRuntimeConfigSnapshot(cfg);
-        let workMs = storeWorkMs;
-        let orderingCalls = 0;
-        let orderingCallsAtControl = 0;
-        let orderingCallsBeforeRows: number | undefined;
+        const entryCount = orderingWorkMs > 0 ? 2051 : metadataWorkMs > 0 ? 600 : 32;
         const store = Object.fromEntries(
-          Array.from({ length: orderingWorkMs > 0 ? 2051 : 32 }, (_, index) => [
+          Array.from({ length: entryCount }, (_, index) => [
             `agent:main:budget-${index}`,
-            {
-              sessionId: `budget-${index}`,
-              updatedAt: index + 1,
-              // Pin reads charge ordering work before any row is projected.
-              get pinnedAt() {
-                orderingCalls++;
-                workMs += orderingWorkMs;
-                return undefined;
-              },
-            },
+            { sessionId: `budget-${index}`, updatedAt: index + 1 },
           ]),
         );
-        let controlBeforePreparation: boolean | undefined;
-        let preparationCalls = 0;
-        let preparationCallsAtControl = 0;
-        const buildRow = rowProjection.buildGatewaySessionRow;
+        const projection = createSessionRowProjectionFixture({
+          cfg,
+          store,
+          storePath: path.join(stateDir, "sessions.json"),
+        });
+        let workMs = 0;
         const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const readInputs = rowProjection.readSessionRowInputs;
         const rows = vi
-          .spyOn(rowProjection, "buildGatewaySessionRow")
+          .spyOn(rowProjection, "readSessionRowInputs")
           .mockImplementation((params) => {
-            orderingCallsBeforeRows ??= orderingCalls;
-            const row = buildRow(params);
-            workMs += rowWorkMs;
-            return row;
+            // The former acquisition charges must never be incurred by a clean request.
+            workMs += rowWorkMs + storeWorkMs + preparationWorkMs + metadataWorkMs + orderingWorkMs;
+            return readInputs(params);
           });
         let controlRan = false;
-        const controlCallback = new Promise<void>((resolve) => {
+        const control = new Promise<void>((resolve) => {
           setImmediate(() => {
             controlRan = true;
-            preparationCallsAtControl = preparationCalls;
-            orderingCallsAtControl = orderingCalls;
             resolve();
           });
         });
         try {
-          const result = await listSessionFixture({
-            cfg,
-            workStartedAt: 0,
-            storePath: path.join(stateDir, "sessions.json"),
-            store,
-            entryFilter: () => {
-              controlBeforePreparation ??= controlRan;
-              preparationCalls++;
-              workMs += preparationWorkMs;
-              return keepRows;
-            },
-            opts: { limit },
-          });
-          expect(result.sessions.map((row) => row.key)).toEqual(
-            keepRows ? Object.keys(store).toReversed().slice(0, limit) : [],
-          );
-          expect(controlRan).toBe(shouldYield);
-          expect(controlBeforePreparation).toBe(false);
-          if (preparationWorkMs > 0 && shouldYield) {
-            expect(preparationCallsAtControl).toBeLessThan(preparationCalls);
-          }
-          if (orderingWorkMs > 0) {
-            expect(orderingCallsAtControl).toBeLessThan(
-              expectDefined(orderingCallsBeforeRows, "row projection started"),
+          for (let request = 0; request < 2; request++) {
+            const result = await listProjectedSessions({
+              projection,
+              opts: { limit, search: search ?? (keepRows ? undefined : "unmatched-budget") },
+            });
+            expect(result.sessions.map((row) => row.key)).toEqual(
+              keepRows && !search ? Object.keys(store).toReversed().slice(0, limit) : [],
             );
+            expect(controlRan).toBe(false);
+            expect(rows).not.toHaveBeenCalled();
+            expect(workMs).toBe(0);
           }
         } finally {
           rows.mockRestore();
           clock.mockRestore();
-          await controlCallback;
+          projection.dispose();
+          await control;
         }
       });
     },
@@ -702,160 +840,6 @@ describe("session list resolver cache", () => {
     }
   });
 
-  test("batches ACP metadata reads once per list without changing row results", async () => {
-    await withStateDirEnv("openclaw-perf-acp-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5" },
-            models: { "openai/gpt-5": { agentRuntime: { id: "openclaw" } } },
-            thinkingDefault: "off",
-          },
-        },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-
-      const stateKey = "agent:default:webchat:dm:state";
-      const missingKey = "agent:default:webchat:dm:missing";
-      const markerKey = "agent:default:webchat:dm:marker";
-      const stateEntry: SessionEntry = {
-        sessionId: "state-session",
-        updatedAt: 3,
-        modelProvider: "openai",
-        model: "gpt-5",
-      };
-      const missingEntry: SessionEntry = {
-        sessionId: "missing-session",
-        updatedAt: 2,
-        modelProvider: "openai",
-        model: "gpt-5",
-      };
-      const staleAliasEntry: SessionEntry = {
-        sessionId: "stale-alias-session",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5",
-      };
-      const markerMeta = {
-        backend: "marker",
-        agent: "marker-agent",
-        runtimeSessionName: markerKey,
-        mode: "persistent" as const,
-        state: "idle" as const,
-        lastActivityAt: 1,
-      };
-      const markerEntry: SessionEntry = {
-        sessionId: "marker-session",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-5",
-        acp: markerMeta,
-      };
-      const stateMeta = {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: stateKey,
-        mode: "persistent" as const,
-        state: "idle" as const,
-        lastActivityAt: 2,
-      };
-      writeAcpSessionMetaForMigration({
-        sessionKey: stateKey,
-        sessionId: stateEntry.sessionId,
-        meta: stateMeta,
-      });
-
-      const perRowState = readAcpSessionMetaForEntry({ sessionKey: stateKey, entry: stateEntry });
-      const perRowMissing = readAcpSessionMetaForEntry({
-        sessionKey: missingKey,
-        entry: missingEntry,
-      });
-      expect(
-        readAcpSessionMetaBatch({
-          entries: [
-            { sessionKey: stateKey, entry: stateEntry },
-            { sessionKey: stateKey, entry: staleAliasEntry },
-            { sessionKey: missingKey, entry: missingEntry },
-            { sessionKey: markerKey, entry: markerEntry },
-          ],
-        }),
-      ).toEqual(
-        new Map<SessionEntry, ReturnType<typeof readAcpSessionMetaForEntry>>([
-          [markerEntry, markerMeta],
-          [stateEntry, perRowState],
-          [staleAliasEntry, undefined],
-          [missingEntry, perRowMissing],
-        ]),
-      );
-
-      const database = openOpenClawStateDatabase();
-      const originalPrepare = database.db.prepare.bind(database.db);
-      let acpSelects = 0;
-      const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
-        if (/^select\b.*\bacp_sessions\b/is.test(sql)) {
-          acpSelects += 1;
-        }
-        return originalPrepare(sql);
-      });
-      try {
-        // Composite and legacy identities share the production 500-key chunks.
-        // Cross two boundaries without materializing tens of thousands of rows.
-        const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
-          sessionKey: `agent:default:webchat:dm:missing-${index}`,
-          entry: {
-            sessionId: `missing-session-${index}`,
-            updatedAt: index,
-          } satisfies SessionEntry,
-        }));
-        const chunkedBatch = readAcpSessionMetaBatch({ entries: aboveBatchChunkSize });
-        expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
-        expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
-        expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
-        expect(acpSelects).toBe(3);
-
-        acpSelects = 0;
-        const result = await listSessionFixture({
-          cfg,
-          storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
-          store: {
-            [stateKey]: stateEntry,
-            [missingKey]: missingEntry,
-            [markerKey]: markerEntry,
-          },
-          opts: { limit: 3 },
-        });
-        expect(result.sessions).toHaveLength(3);
-        expect(acpSelects).toBe(1);
-        for (const search of ["openclaw", "unmatched-runtime"]) {
-          acpSelects = 0;
-          const rows = vi.spyOn(rowProjection, "buildGatewaySessionRow");
-          try {
-            const searched = await listSessionFixture({
-              cfg,
-              storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
-              store: Object.fromEntries(
-                aboveBatchChunkSize
-                  .slice(0, 55)
-                  .map(({ sessionKey, entry }) => [sessionKey, entry]),
-              ),
-              opts: { search, limit: 1 },
-            });
-            expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
-            expect(rows).toHaveBeenCalledTimes(searched.count);
-            expect(acpSelects).toBe(1);
-          } finally {
-            rows.mockRestore();
-          }
-        }
-      } finally {
-        prepareSpy.mockRestore();
-      }
-    });
-  });
-
   test.each([
     { name: "ordinary", count: 30, owned: 0, limit: 30, rows: 30, enriched: 30, sharedTail: 29 },
     {
@@ -867,77 +851,123 @@ describe("session list resolver cache", () => {
       enriched: 160,
       sharedTail: 99,
     },
-  ])("batches $name transcript hydration without starving shared rows", async (scenario) => {
-    await withStateDirEnv("openclaw-perf-title-batch-", async () => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
-        agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      const storePath = "/tmp/sessions.json";
-      const store: Record<string, SessionEntry> = {};
-      const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
-      for (let index = 0; index < scenario.count; index += 1) {
-        const sessionId = `title-batch-${index}`;
-        const sessionKey = `agent:main:${sessionId}`;
-        const entry: SessionEntry = {
-          sessionId,
-          updatedAt: 1_000 - index,
-          ...(ownerId && index >= scenario.count - scenario.owned
-            ? {
-                createdVia: "operator",
-                createdActor: { type: "human", source: "profile", id: ownerId },
-              }
-            : {}),
-        };
-        store[sessionKey] = entry;
-      }
+  ])(
+    "bounds $name transcript fields without starving shared rows or rereading transcripts",
+    async (scenario) => {
+      await withStateDirEnv("openclaw-perf-title-batch-", async ({ stateDir }) => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg = {
+          agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
+        } as OpenClawConfig;
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const storePath = path.join(stateDir, "sessions.json");
+        const store: Record<string, SessionEntry> = {};
+        const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
+        for (let index = 0; index < scenario.count; index += 1) {
+          const sessionId = `title-batch-${index}`;
+          const sessionKey = `agent:main:${sessionId}`;
+          const entry: SessionEntry = {
+            sessionId,
+            updatedAt: 1_000 - index,
+            ...(ownerId && index >= scenario.count - scenario.owned
+              ? {
+                  createdVia: "operator",
+                  createdActor: { type: "human", source: "profile", id: ownerId },
+                }
+              : {}),
+          };
+          store[sessionKey] = entry;
+        }
 
-      const titleBatchSpy = vi
-        .spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch")
-        .mockImplementation((scopes) =>
-          scopes.map((scope) => ({
+        const titleSpy = vi
+          .spyOn(titleReader, "readSessionTitleFieldsFromTranscript")
+          .mockImplementation((scope) => ({
             firstUserMessage: `title ${scope.sessionId.slice("title-batch-".length)}`,
             lastMessagePreview: `last ${scope.sessionId.slice("title-batch-".length)}`,
-          })),
-        );
-      try {
-        const result = await listSessionFixture({
-          cfg,
-          storePath,
-          store,
-          ownerFirstActorId: ownerId,
-          opts: { includeDerivedTitles: true, includeLastMessage: true, limit: scenario.limit },
-        });
+          }));
+        let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
+        const client: GatewayClient | undefined = ownerId
+          ? {
+              connect: {
+                minProtocol: 1,
+                maxProtocol: 1,
+                client: {
+                  id: "openclaw-control-ui",
+                  version: "test",
+                  platform: "test",
+                  mode: "webchat",
+                },
+                role: "operator",
+                scopes: ["operator.admin"],
+              },
+              authenticatedUserProfile: {
+                profileId: ownerId,
+                displayName: ownerId,
+                hasAvatar: false,
+                updatedAt: 1,
+              },
+              preparedSessionProfile: {
+                profileId: ownerId,
+                aliases: new Set([ownerId]),
+                role: null,
+              },
+            }
+          : undefined;
+        try {
+          projection = createSessionRowProjectionFixture({ cfg, storePath, store });
+          titleSpy.mockClear();
+          const result = await listProjectedSessions({
+            projection,
+            client,
+            opts: {
+              ownerFirst: Boolean(ownerId),
+              includeDerivedTitles: true,
+              includeLastMessage: true,
+              limit: scenario.limit,
+            },
+          });
 
-        expect(result.sessions).toHaveLength(scenario.rows);
-        expect(titleBatchSpy).toHaveBeenCalledOnce();
-        expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(scenario.enriched);
-        const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
-        expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
-          derivedTitle: "Title 0",
-          lastMessagePreview: "last 0",
-        });
-        expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
-          derivedTitle: `Title ${scenario.sharedTail}`,
-          lastMessagePreview: `last ${scenario.sharedTail}`,
-        });
+          expect(result.sessions).toHaveLength(scenario.rows);
+          expect(titleSpy).not.toHaveBeenCalled();
+          expect(result.sessions.filter((row) => row.derivedTitle !== undefined)).toHaveLength(
+            scenario.enriched,
+          );
+          expect(
+            result.sessions.filter((row) => row.lastMessagePreview !== undefined),
+          ).toHaveLength(scenario.enriched);
+          const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
+          expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
+            derivedTitle: "Title 0",
+            lastMessagePreview: "last 0",
+          });
+          expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
+            derivedTitle: `Title ${scenario.sharedTail}`,
+            lastMessagePreview: `last ${scenario.sharedTail}`,
+          });
 
-        titleBatchSpy.mockClear();
-        await listSessionFixture({
-          cfg,
-          storePath,
-          store,
-          ownerFirstActorId: ownerId,
-          opts: { includeDerivedTitles: false, includeLastMessage: false, limit: scenario.limit },
-        });
-        expect(titleBatchSpy).toHaveBeenCalledOnce();
-        expect(titleBatchSpy).toHaveBeenCalledWith([]);
-      } finally {
-        titleBatchSpy.mockRestore();
-      }
-    });
-  });
+          const withoutTranscriptFields = await listProjectedSessions({
+            projection,
+            client,
+            opts: {
+              ownerFirst: Boolean(ownerId),
+              includeDerivedTitles: false,
+              includeLastMessage: false,
+              limit: scenario.limit,
+            },
+          });
+          expect(titleSpy).not.toHaveBeenCalled();
+          expect(withoutTranscriptFields.sessions).toHaveLength(scenario.rows);
+          for (const row of withoutTranscriptFields.sessions) {
+            expect(row.derivedTitle).toBeUndefined();
+            expect(row.lastMessagePreview).toBeUndefined();
+          }
+        } finally {
+          projection?.dispose();
+          titleSpy.mockRestore();
+        }
+      });
+    },
+  );
 });

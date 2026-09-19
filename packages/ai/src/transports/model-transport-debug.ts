@@ -67,13 +67,9 @@ function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env)
   );
 }
 
-function isModelFetchMetadataMessage(message: string): boolean {
-  return message.startsWith("[model-fetch]");
-}
-
-/** Emits model-fetch metadata at info level by default; other diagnostics require debug env. */
+/** Emits transport diagnostics at debug, promoted to info by explicit debug flags. */
 export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
-  if (isModelFetchMetadataMessage(message) || isModelTransportDebugEnabled()) {
+  if (isModelTransportDebugEnabled()) {
     log.info(message);
     return;
   }

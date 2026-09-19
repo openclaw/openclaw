@@ -148,6 +148,45 @@ it("deduplicates concurrent discovery without retaining caller environment", asy
   expect(execFileUtf8).toHaveBeenCalledOnce();
 });
 
+it.each([
+  { busctl: "ENOENT", systemctl: "ENOENT", reason: "service-manager-unavailable" },
+  { busctl: "ENOENT", systemctl: undefined, reason: "systemd-busctl-unavailable" },
+  { busctl: "EACCES", systemctl: undefined, reason: "service-manager-access-denied" },
+  { busctl: undefined, systemctl: undefined, reason: "systemd-user-bus-unavailable" },
+  { busctl: undefined, systemctl: "offline", reason: "service-manager-unavailable" },
+  { busctl: undefined, systemctl: "not-booted", reason: "service-manager-unavailable" },
+] as const)(
+  "distinguishes missing native tools from $reason ($busctl, $systemctl)",
+  async ({ busctl, systemctl, reason }) => {
+    const home = dirs.make("openclaw-missing-manager-");
+    vi.mocked(execFileUtf8).mockImplementation(async (command) => {
+      const errorCode =
+        command === "busctl" ? busctl : systemctl === "ENOENT" ? systemctl : undefined;
+      if (command === "systemctl" && systemctl === "offline") {
+        return { ...missing, stdout: "offline\n", stderr: "" };
+      }
+      if (command === "systemctl" && systemctl === "not-booted") {
+        return {
+          ...missing,
+          stderr: "System has not been booted with systemd as init system (PID 1). Can't operate.",
+        };
+      }
+      return errorCode
+        ? { ...missing, termination: "error", errorCode }
+        : command === "systemctl"
+          ? success("running")
+          : missing;
+    });
+    await expect(
+      resolveSystemdUserTransport({
+        HOME: home,
+        XDG_RUNTIME_DIR: home,
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus`,
+      }),
+    ).rejects.toMatchObject({ reason });
+  },
+);
+
 it("does not let a short failed discovery poison the next caller", async () => {
   const home = dirs.make("openclaw-short-transport-");
   const env = {

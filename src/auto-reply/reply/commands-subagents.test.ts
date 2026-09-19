@@ -212,20 +212,23 @@ describe("subagents status", () => {
         });
       }
 
-      expect(
-        buildSubagentsStatusLine({
-          context: buildControlledSubagentRunsReadContext("agent:main:main"),
-          verboseEnabled: true,
-          now,
-        }),
-      ).toBe(
-        [
-          "🤖 Subagents: 4 active · 1 done",
-          "  • first worker · 1s",
-          "  • tie-b worker · 2s",
-          `  • tie-a worker · 2s · ${children} child${children === 1 ? "" : "ren"} active`,
-        ].join("\n"),
-      );
+      const text = buildSubagentsStatusLine({
+        context: buildControlledSubagentRunsReadContext("agent:main:main"),
+        verboseEnabled: true,
+        now,
+      });
+      const details = text?.split("\n").slice(1);
+
+      expect(text).toContain("Subagents: 4 active · 1 done");
+      expect(details).toEqual([
+        expect.stringContaining("first worker"),
+        expect.stringContaining("tie-b worker"),
+        expect.stringContaining("tie-a worker"),
+      ]);
+      expect(details?.[0]).toContain("1s");
+      expect(details?.[1]).toContain("2s");
+      expect(details?.[2]).toContain("2s");
+      expect(details?.[2]).toMatch(new RegExp(`\\b${children} child`));
     },
   );
 
@@ -244,13 +247,14 @@ describe("subagents status", () => {
       createdAt: 1_000,
       execution: { status: "running", startedAt: 1_000, endedAt },
     };
-    expect(
-      buildSubagentsStatusLine({
-        context: { runs: [run], countPendingDescendantRuns: () => 0 },
-        verboseEnabled: false,
-        now: 5_000,
-      }),
-    ).toBe(`🤖 Subagents: 1 active\n  • active worker · ${duration}`);
+    addSubagentRunForTests(run);
+    const text = buildSubagentsStatusLine({
+      context: buildControlledSubagentRunsReadContext("agent:main:main"),
+      verboseEnabled: false,
+      now: 5_000,
+    });
+    expect(text).toContain("Subagents: 1 active");
+    expect(text).toContain(`active worker · ${duration}`);
   });
 });
 

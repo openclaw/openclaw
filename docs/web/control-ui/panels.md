@@ -92,9 +92,19 @@ The main terminal page at `/terminal` is also available as a [focus presentation
 
 ## Browser panel
 
+Ask your agent to "open the browser sidebar" or "show the browser side panel"
+to reveal this panel. When the `screen` tool is available, the agent uses
+`browser_show` (`browser_hide` to hide it). `sidebar_show` and `sidebar_hide`
+control the session list instead. Opening the Browser panel does not create or
+expand a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your-agent).
+
 The Control UI ships a **Browser** tab in the unified Chat side panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears in the panel's **+** menu when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe action in **Files** toggles it. In a regular web browser, choosing **Browser** again while its panel tab is already open creates another Agent browser tab. The panel shows a live screencast, with screenshot fallback when streaming is unavailable, plus tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, and forwards clicks, wheel scrolling, and basic typing to the remote page. The remote page follows the shared panel: opening it, resizing it, or switching tabs resizes the remote browser viewport to the panel's available space, so the snapshot fills the panel instead of rendering at whatever size an agent last used.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
+
+While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
+
+To paste into an Agent browser tab or Browser dashboard, click the page's input field and press **⌘V** on macOS or **Ctrl+V** on Windows/Linux, or right-click the field and choose **Paste**. Plain text is inserted at the remote cursor, including password fields and fields inside frames. Pasting does not submit the form or copy your clipboard to the Gateway's system clipboard. This requires a managed browser; Chrome MCP existing-session profiles do not support it.
 
 In the macOS app, the same panel also hosts **Mac tabs**, rendered natively by WebKit, alongside **Agent browser tabs** from the Gateway. Mac tabs are available without `browser.request`; Agent browser tabs retain the Gateway and operator-access requirements above. External links clicked in the dashboard open as Mac tabs in the chat side panel, or in the shell-level Browser dock on non-chat routes. While Settings is open, external links open in the default browser because the Browser panel is hidden. Mac tabs have a tab strip, URL bar, back/forward/reload/stop, open-in-default-browser, and close controls. Mac tabs show the page’s own icon. Mac tabs belong to the chat session that opened them: another session starts with its own empty Browser panel, and returning restores the original session’s tabs. The window retains those tabs until they are closed or the window ends. Opening the same link reuses its existing tab only within that session, including a retained original URL after a redirect. The non-chat Browser dock has its own tabs. Login cookies remain shared within the window. Selecting another tab while a link is opening keeps your selection when the open request completes.
 
@@ -118,3 +128,37 @@ Two capture modes package page context for the agent. For Mac tabs, either mode 
 One composer accepts up to four browser annotation cards and 8,000 total characters of generated annotation context. When it reaches either limit, the browser panel keeps the current capture so you can remove a card and retry; Undo also preserves the limit instead of evicting another card.
 
 Staged images, files, pasted images, large pasted text, browser annotations, and mixed attachment packages stay with their composer and session across route changes, split-pane remounts, hard reloads, and application restarts. The browser-local retention, scope, and disposal rules described under [New session page](/web/control-ui/sessions-and-sidebar#new-session-page) also apply to existing-session composers. If attachments exceed the durable cap, the current tab keeps them and shows the storage warning; the text remains restart-recoverable, but those attachments do not. If the browser refuses storage entirely, the current tab keeps the live composer and shows the same warning, but that draft cannot be recovered after restart.
+
+## GitHub side panel
+
+The bundled [GitHub plugin](/plugins/github) contributes this reader and its
+hover previews. It is enabled by default. Disabling the plugin removes these
+contributions and leaves GitHub links as ordinary external links. Other plugins
+can contribute the same docked reader surface through the
+[Plugin SDK](/plugins/sdk-overview).
+
+Click a GitHub issue, pull request, or commit link to read it in a browser-style
+tab beside the conversation. Each tab has a GitHub icon, a title, and a close
+control; the address bar and **Open on GitHub** link stay visible. Opening the
+same item from chat selects its existing tab. Links inside the reader and URLs
+entered in the address bar navigate the current tab, with independent Back and
+Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
+including their loaded documents while you switch between them.
+
+The reader shows descriptions, issue and pull-request discussion comments,
+commit comments, published inline PR review comments with file/line and diff
+context, and expandable file diffs. Comment timestamps link to their source on
+GitHub. Markdown images and standalone HTML image attachments display inline;
+full-size links remain available when an image cannot load. Inline image
+requests omit cross-origin credentials and referrers, so the image host must
+support anonymous CORS. Scripts and embedded app widgets never run in these
+documents.
+
+The resizable panel is read-only and supports public repositories. Long
+discussions and large patches are bounded and marked as incomplete. Refresh
+fetches the current item again. On phones, the reader follows the shared panel’s
+responsive layout and expansion controls. Use **Open on GitHub** for the full page, private repositories, or
+actions such as posting a comment and merging. Cmd/Ctrl-click and middle-click
+on document links retain normal browser behavior; middle-clicking a tab closes
+it. Connections that do not advertise the detail capability keep opening links
+normally.

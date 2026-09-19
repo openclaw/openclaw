@@ -20,6 +20,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -110,6 +111,93 @@ describe("post-plugin update readiness", () => {
       stderr: "",
     }));
   });
+
+  it("keeps a fresh Doctor requester refusal terminal when later checks would pass", async () => {
+    const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const opts: UpdateCommandOptions = {
+      run: {
+        runId: "live-run",
+        env: {},
+        executorFence: { assertCurrent: vi.fn() },
+        requesterAuthority: { requester: {}, isCurrent },
+      },
+    };
+    await expect(completePostCorePluginUpdate({ ...updateOptions, opts })).rejects.toThrow(
+      "requester-revoked",
+    );
+    expect(isCurrent).toHaveBeenCalledTimes(1);
+    expect(mocks.runExec).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "  "])(
+    "never downgrades a present run with invalid id %j to legacy Doctor",
+    async (runId) => {
+      const opts: UpdateCommandOptions = {
+        run: { runId, env: {}, executorFence: { assertCurrent: vi.fn() } },
+      };
+      await expect(
+        runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, opts, phase: "post-plugin" }),
+      ).rejects.toThrow("original update executor");
+      expect(mocks.runExec).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { phase: "pre-plugin", operatorPolicy: "external" },
+    { phase: "post-plugin", operatorPolicy: "external" },
+    { phase: "pre-plugin", operatorPolicy: undefined },
+    { phase: "post-plugin", operatorPolicy: undefined },
+  ] as const)(
+    "keeps service authority with the parent in the $phase child (operator policy: $operatorPolicy)",
+    async ({ phase, operatorPolicy }) => {
+      vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", operatorPolicy);
+      const { runExec } =
+        await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
+        const result = await runExec(
+          process.execPath,
+          [
+            "-e",
+            "process.stdout.write(JSON.stringify({ policy: process.env.OPENCLAW_SERVICE_REPAIR_POLICY, repair: process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR, activation: process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION }))",
+          ],
+          options,
+        );
+        expect(JSON.parse(result.stdout)).toEqual({
+          policy: "external",
+          repair: "0",
+          activation: "0",
+        });
+        return result;
+      });
+
+      await runUpdateFinalizationDoctorInFreshProcess({
+        ...updateOptions,
+        phase,
+        root: tempDirs.make("fresh-doctor-policy-"),
+      });
+    },
+  );
+
+  it.each([
+    { phase: "pre-plugin", timeout: undefined, expected: undefined },
+    { phase: "post-plugin", timeout: undefined, expected: undefined },
+    { phase: "pre-plugin", timeout: "3", expected: 3_000 },
+    { phase: "post-plugin", timeout: "3", expected: 3_000 },
+  ] as const)(
+    "uses the operator deadline for $phase Doctor ($timeout)",
+    async ({ phase, timeout, expected }) => {
+      await runUpdateFinalizationDoctorInFreshProcess({
+        ...updateOptions,
+        phase,
+        opts: { timeout },
+      });
+      expect(mocks.runExec).toHaveBeenCalledExactlyOnceWith(
+        "/usr/bin/node",
+        expect.arrayContaining(["doctor", "--repair"]),
+        expect.objectContaining({ timeoutMs: expected }),
+      );
+    },
+  );
 
   it.each([undefined, 5_000])("propagates the primary Doctor timeout %s", async (timeoutMs) => {
     await runUpdateFinalizationDoctorInFreshProcess({
@@ -399,7 +487,7 @@ describe("post-plugin update readiness", () => {
         result: { status: "error", failureFacts },
       });
       throw Object.assign(new Error("Doctor exited"), {
-        exitCode: 1,
+        exitCode: 23,
         stderr: "Last cleanup message",
       });
     });
@@ -408,7 +496,7 @@ describe("post-plugin update readiness", () => {
         ...updateOptions,
         phase: "pre-plugin",
       }),
-    ).rejects.toMatchObject({ failureFacts });
+    ).rejects.toMatchObject({ failureFacts, exitCode: 23 });
     const result = await completePostCorePluginUpdate(updateOptions);
     expect(result.pluginUpdate).toMatchObject({ status: "error", failureFacts });
   });
@@ -541,37 +629,51 @@ describe("post-plugin update readiness", () => {
     });
   });
 
-  it("retains posture warnings while accepting post-plugin readiness", async () => {
-    mocks.runExec.mockImplementation(async (_command, args: string[]) => ({
-      stdout: args.includes("--lint")
-        ? JSON.stringify({
-            ok: true,
-            checksRun: 1,
-            findings: [],
-            warnings: [
-              {
-                checkId: "core/doctor/security",
-                severity: "warning",
-                message: "Open group policy permits mention-gated requests.",
-                fixHint: "Review the group allowlist.",
-              },
-            ],
-          })
-        : "",
-      stderr: "",
-    }));
-    const result = await completePostCorePluginUpdate(updateOptions);
-    expect(result.pluginUpdate).toMatchObject({
-      status: "warning",
-      warnings: [
-        {
-          reason: "doctor-advisory",
-          message: "Open group policy permits mention-gated requests.",
-          guidance: ["Review the group allowlist."],
-        },
-      ],
-    });
-  });
+  it.each([
+    {
+      checkId: "core/doctor/security",
+      message: "Open group policy permits mention-gated requests.",
+      fixHint: "Review the group allowlist.",
+    },
+    {
+      checkId: "core/doctor/lint-state-inspection",
+      message: "Temporary doctor lint state snapshot cleanup did not complete.",
+      fixHint: "Rerun doctor after the update.",
+    },
+  ])(
+    "retains $checkId warnings while accepting post-plugin readiness",
+    async ({ checkId, message, fixHint }) => {
+      mocks.runExec.mockImplementation(async (_command, args: string[]) => ({
+        stdout: args.includes("--lint")
+          ? JSON.stringify({
+              ok: true,
+              checksRun: 1,
+              findings: [],
+              warnings: [
+                {
+                  checkId,
+                  severity: "warning",
+                  message,
+                  fixHint,
+                },
+              ],
+            })
+          : "",
+        stderr: "",
+      }));
+      const result = await completePostCorePluginUpdate(updateOptions);
+      expect(result.pluginUpdate).toMatchObject({
+        status: "warning",
+        warnings: [
+          {
+            reason: "doctor-advisory",
+            message,
+            guidance: [fixHint],
+          },
+        ],
+      });
+    },
+  );
 
   it.each([
     {

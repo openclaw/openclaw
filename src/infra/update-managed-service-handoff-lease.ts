@@ -6,7 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
-import { isPidDefinitelyDead, getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import type { SqliteTransactionOptions } from "./sqlite-transaction.js";
@@ -20,6 +19,7 @@ import {
   type LeaseTable,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
+import { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import { assertNoRetainedSourceBorrower } from "./update-managed-service-handoff-retained-custody.js";
 import {
   isRetiredManagedHandoffLeasePayload,
@@ -67,6 +67,7 @@ export function createManagedHandoffLeaseStore(
     databasePath: string;
     serviceManagerEnv: NodeJS.ProcessEnv;
     existingIdentity?: ManagedUpdateLeaseDatabaseIdentity;
+    onProcessIdentityWarning?: (pid: number, message: string) => void;
   } = {
     databasePath: resolveManagedUpdateLeaseDatabasePath(),
     serviceManagerEnv: resolveServiceManagerEnv(),
@@ -84,32 +85,19 @@ export function createManagedHandoffLeaseStore(
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
     });
-  // Lease reclamation needs ESRCH evidence; other probe errors cannot prove absence.
-  const isPidAlive = (pid: number) => !isPidDefinitelyDead(pid);
+  const {
+    isPidAlive,
+    readProcessStartIdentity,
+    processIdentity,
+    processState,
+    isProcessIdentityCurrent,
+    acceptSelfIdentity,
+  } = createManagedHandoffProcessIdentityReader({
+    env: serviceManagerEnv,
+    onWarning:
+      options.onProcessIdentityWarning ?? ((pid, message) => logger?.warn(message, { pid })),
+  });
 
-  function readProcessStartIdentity(pid: number): string | null {
-    const start = getFileLockProcessStartTime(pid, {
-      ...serviceManagerEnv,
-      LC_ALL: "C",
-      TZ: "UTC",
-    });
-    return start === null ? null : String(start);
-  }
-
-  function processState(value: HandoffProcessIdentity) {
-    if (!isPidAlive(value.pid)) {
-      return "dead";
-    }
-    const start = readProcessStartIdentity(value.pid);
-    return start === null ? "unknown" : start === value.startIdentity ? "live" : "dead";
-  }
-  function processIdentity(pid = process.pid): HandoffProcessIdentity {
-    const startIdentity = readProcessStartIdentity(pid);
-    if (!startIdentity) {
-      throw new Error("managed handoff process start identity is unavailable");
-    }
-    return { pid, startIdentity };
-  }
   function properties(stdout: string | Buffer | null | undefined): Record<string, string> {
     return Object.fromEntries(
       String(stdout || "")
@@ -130,6 +118,26 @@ export function createManagedHandoffLeaseStore(
     ]);
     const scope = properties(result.stdout);
     return !result.error && (result.status === 0 || scope.LoadState === "not-found") ? scope : null;
+  }
+  function isInNativeScope(life: HandoffNativeLifetime, scope = nativeScope(life)) {
+    if (
+      !scope ||
+      scope.Id !== life.scope ||
+      scope.LoadState !== "loaded" ||
+      !scope.ControlGroup ||
+      (life.placement.kind === "attached" && scope.InvocationID !== life.placement.invocation)
+    ) {
+      return false;
+    }
+    // Match the manager's complete path, not a unit-name suffix or the last
+    // controller record. Keep the sealed handoff's v1/v2 membership semantics.
+    return fs
+      .readFileSync("/proc/self/cgroup", "utf8")
+      .split("\n")
+      .some((line) => {
+        const systemd = /^[1-9][0-9]*:name=systemd:(.*)$/.exec(line);
+        return line === "0::" + scope.ControlGroup || systemd?.[1] === scope.ControlGroup;
+      });
   }
   function nativeClosed(life: HandoffNativeLifetime, scope = nativeScope(life)) {
     // systemd retains populated cgroups even after failed/reset-failed. Its
@@ -405,8 +413,19 @@ export function createManagedHandoffLeaseStore(
         ["closing", "closed", "uncertain"].includes(lease.action.phase)
       ) &&
       lease[role].pid === process.pid &&
-      processState(lease.helper) === "live" &&
-      (role === "helper" || processState(lease.executor) === "live")
+      isProcessIdentityCurrent(lease.helper) &&
+      acceptSelfIdentity(lease[role])
+    );
+  }
+  function acceptParentBoundExecutor(lease: ManagedHandoffLease) {
+    return (
+      current(lease) &&
+      lease.version === 2 &&
+      lease.action.kind === "update" &&
+      lease.helper.pid === process.ppid &&
+      lease.executor.pid === process.pid &&
+      isProcessIdentityCurrent(lease.helper) &&
+      acceptSelfIdentity(lease.executor, true)
     );
   }
   function cas(
@@ -438,7 +457,12 @@ export function createManagedHandoffLeaseStore(
       }),
     );
   }
-  function bind(lease: ManagedHandoffLease, pid: number, action = lease.action) {
+  function bind(
+    lease: ManagedHandoffLease,
+    pid: number,
+    action = lease.action,
+    argv?: readonly string[],
+  ) {
     if (!owns(lease)) {
       return null;
     }
@@ -464,7 +488,7 @@ export function createManagedHandoffLeaseStore(
     } else if (action.kind !== "update") {
       return null;
     }
-    return cas(lease, action, processIdentity(pid));
+    return cas(lease, action, processIdentity(pid, argv));
   }
   function retarget(
     lease: ManagedHandoffLease,
@@ -638,18 +662,15 @@ export function createManagedHandoffLeaseStore(
     ) {
       return false;
     }
+    const scope = nativeScope(life);
     if (
       ownPlacement &&
       (![lease.helper.pid, lease.executor.pid].includes(process.pid) ||
         processState(lease.helper.pid === process.pid ? lease.helper : lease.executor) !== "live" ||
-        !fs
-          .readFileSync("/proc/self/cgroup", "utf8")
-          .trim()
-          .endsWith("/" + life.scope))
+        !isInNativeScope(life, scope))
     ) {
       return false;
     }
-    const scope = nativeScope(life);
     if (nativeClosed(life, scope)) {
       return true;
     }
@@ -676,13 +697,17 @@ export function createManagedHandoffLeaseStore(
     retarget,
     activate,
     owns,
+    hasUnsettledChildren,
+    acceptParentBoundExecutor,
     current,
     readGeneration,
     settle,
     release,
     assertSourceUnborrowed,
     stopNative,
+    isInNativeScope,
     processIdentity,
+    isProcessIdentityCurrent,
     readProcessStartIdentity,
     isPidAlive,
     bootIdentity,

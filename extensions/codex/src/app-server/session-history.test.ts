@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { readCodexSessionContext } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -415,7 +416,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     },
   );
 
-  it("reads incognito native history from the process-held SQLite store", async () => {
+  it("reads incognito model context from the process-held SQLite store", async () => {
     const { marker, sessionTarget } = await writeSqliteSession({ incognito: true });
     const result = await readCodexMirroredSessionHistoryMessages({
       ...sessionTarget,
@@ -429,7 +430,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
   });
 
-  it("preserves native prompt evidence across explicit model-only reads", async () => {
+  it("preserves native prompt evidence across model-context reads", async () => {
     const { marker, sessionTarget } = await writeSqliteSession();
     const upstreamUserText = "synthetic-native-prompt:" + "x".repeat(1024 * 1024);
     const message = {
@@ -449,13 +450,11 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       createHash("sha256")
         .update(text ?? "")
         .digest("hex");
-    const before = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
+    const before = readCodexSessionContext(sessionTarget, (messages) => Array.from(messages)).at(
+      -1,
+    )!;
     expect(hash(readUpstreamUserText(before))).toBe(hash(upstreamUserText));
-    const model = (await readCodexMirroredSessionHistoryMessages(
-      target,
-      undefined,
-      "model-context",
-    ))!.at(-1)!;
+    const model = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
     expect(readUpstreamUserText(model)).toBeUndefined();
     expect(readMirrorIdentity(model)).toBe("synthetic-native-turn");
     expect(model).toMatchObject({
@@ -463,7 +462,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       timestamp: 3,
       __openclaw: { mirrorOrigin: "codex", turnTainted: true },
     });
-    const after = (await readCodexMirroredSessionHistoryMessages(target))!.at(-1)!;
+    const after = readCodexSessionContext(sessionTarget, (messages) => Array.from(messages)).at(
+      -1,
+    )!;
     expect(hash(readUpstreamUserText(after))).toBe(hash(upstreamUserText));
     expect(readMirrorIdentity(after)).toBe("synthetic-native-turn");
   });
@@ -885,3 +886,48 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ]);
   });
 });
+
+it.each([false, true])(
+  "bounds prepared Codex history without truncating native evidence (incognito=%s)",
+  async (incognito) => {
+    const fixture = await writeSqliteSession({ incognito });
+    const source = SessionManager.open(fixture.sessionTarget);
+    for (let index = 0; index < 30; index += 1) {
+      source.appendMessage({
+        role: "user",
+        content: `old-${index}:` + "x".repeat(2048),
+        timestamp: index + 3,
+      });
+    }
+    source.appendMessage({ role: "user", content: "latest question", timestamp: 40 });
+    const target = {
+      sessionFile: fixture.marker,
+      sessionId: fixture.sessionTarget.sessionId,
+      sessionKey: fixture.sessionKey,
+      sessionTarget: fixture.sessionTarget,
+    };
+    const prepared = await readCodexMirroredSessionHistoryMessages(
+      target,
+      undefined,
+      undefined,
+      128,
+    );
+    expect(prepared).toMatchObject([{ role: "user", content: "latest question" }]);
+    const native = readCodexSessionContext(fixture.sessionTarget, (messages) =>
+      Array.from(messages),
+    );
+    expect(native).toHaveLength(33);
+    expect(native?.[2]).toMatchObject({ content: "old-0:" + "x".repeat(2048) });
+    source.appendMessage({
+      role: "user",
+      content: "oversized latest:" + "x".repeat(2048),
+      timestamp: 41,
+    });
+    await expect(
+      readCodexMirroredSessionHistoryMessages(target, undefined, undefined, 128),
+    ).rejects.toThrow(/model-context limit/);
+    expect(
+      readCodexSessionContext(fixture.sessionTarget, (messages) => Array.from(messages)),
+    ).toHaveLength(34);
+  },
+);

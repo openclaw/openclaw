@@ -10,8 +10,8 @@ import { getRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ManagedRun } from "../process/supervisor/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const baseConfig: OpenClawConfig = {
   agents: {
@@ -19,7 +19,7 @@ const baseConfig: OpenClawConfig = {
     entries: { operator: {}, assistant: {} },
   },
 };
-const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+const runtime = createTestRuntime();
 const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
 
 afterEach(() => vi.restoreAllMocks());

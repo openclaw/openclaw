@@ -1,4 +1,7 @@
 // Qa Lab tests cover discord live plugin behavior.
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
@@ -9,6 +12,77 @@ describe("discord live qa runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("forwards Discord Requests through the guarded QA endpoint and preserves null responses", async () => {
+    const received: Array<{ authorization?: string; body: string; method?: string; url?: string }> =
+      [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          authorization: request.headers.authorization,
+          body: Buffer.concat(chunks).toString("utf8"),
+          method: request.method,
+          url: request.url,
+        });
+        if (request.method === "DELETE") {
+          response.writeHead(204).end();
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const endpointFetch = testing.createDiscordQaEndpointFetcher(
+      `http://127.0.0.1:${port}/api/v10`,
+    );
+
+    try {
+      const writeResponse = await endpointFetch(
+        new Request("https://discord.com/api/v10/channels/123/messages", {
+          body: JSON.stringify({ content: "hello" }),
+          headers: {
+            authorization: "Bot qa-token",
+            "content-type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+      await expect(writeResponse.json()).resolves.toEqual({ ok: true });
+
+      const deleteResponse = await endpointFetch(
+        new Request("https://discord.com/api/v10/channels/123/messages/456", {
+          headers: { authorization: "Bot qa-token" },
+          method: "DELETE",
+        }),
+      );
+      expect(deleteResponse.status).toBe(204);
+      expect(deleteResponse.body).toBeNull();
+      expect(received).toEqual([
+        {
+          authorization: "Bot qa-token",
+          body: JSON.stringify({ content: "hello" }),
+          method: "POST",
+          url: "/api/v10/channels/123/messages",
+        },
+        {
+          authorization: "Bot qa-token",
+          body: "",
+          method: "DELETE",
+          url: "/api/v10/channels/123/messages/456",
+        },
+      ]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("resolves required Discord QA env vars", () => {
@@ -222,6 +296,7 @@ describe("discord live qa runtime", () => {
     expect(
       account?.guilds?.["123456789012345678"]?.channels?.["523456789012345678"]?.users,
     ).toEqual(["323456789012345678"]);
+    expect(account?.guilds?.["123456789012345678"]?.users).toEqual(["423456789012345678"]);
     expect(next.tools?.alsoAllow).toContain("transcripts");
     expect(next.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
   });

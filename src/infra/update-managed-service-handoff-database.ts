@@ -314,15 +314,17 @@ export function createManagedHandoffLeaseDatabase(
     recoverDirectoryMode(dir);
     const directoryIdentity = fs.lstatSync(dir);
     assertPath(directoryIdentity, "directory");
+    // syncDirectorySync verifies ordinary realpath spelling. Windows native
+    // realpath can expand an 8.3 alias differently without changing the directory.
     recoverUnadoptableStore(databasePath, {
       path: dir,
-      realPath: fs.realpathSync.native(dir),
+      realPath: fs.realpathSync(dir),
       identity: directoryIdentity,
     });
     if (write && !fs.existsSync(databasePath)) {
       createMissingDatabaseFile(databasePath, {
         path: dir,
-        realPath: fs.realpathSync.native(dir),
+        realPath: fs.realpathSync(dir),
         identity: directoryIdentity,
       });
     }

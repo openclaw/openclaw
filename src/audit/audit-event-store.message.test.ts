@@ -1,7 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { listAuditEvents, recordAuditEvent } from "./audit-event-store.js";
@@ -146,7 +148,8 @@ function runInput(
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -381,7 +384,7 @@ describe("message audit persistence", () => {
     expect(event?.conversationRef).not.toBe(event?.targetRef);
   });
 
-  it("rejects persisted message terminal combinations outside the closed contract", () => {
+  it("rejects persisted message terminal combinations outside the closed contract", async () => {
     const database = createDatabaseOptions();
     recordAuditEvent(messageInput(), database);
     const { db } = openOpenClawStateDatabase(database);
@@ -389,12 +392,12 @@ describe("message audit persistence", () => {
       "message_processing_failed",
     );
 
-    expect(() =>
+    await expect(
       listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
-    ).toThrow("corrupt audit event row 1: unexpected error_code");
+    ).rejects.toThrow("corrupt audit event row 1: unexpected error_code");
   });
 
-  it("rejects delivery kind on terminals where no payload was proven delivered", () => {
+  it("rejects delivery kind on terminals where no payload was proven delivered", async () => {
     const database = createDatabaseOptions();
     recordAuditEvent(
       outboundMessageInput({
@@ -407,23 +410,44 @@ describe("message audit persistence", () => {
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("UPDATE audit_events SET delivery_kind = 'text' WHERE kind = 'message'").run();
 
-    expect(() =>
+    await expect(
       listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
-    ).toThrow("corrupt audit event row 1: unexpected delivery_kind");
+    ).rejects.toThrow("corrupt audit event row 1: unexpected delivery_kind");
   });
 
-  it("rejects a persisted channel-sender actor without a keyed reference", () => {
+  it("rejects a persisted channel-sender actor without a keyed reference", async () => {
     const database = createDatabaseOptions();
     recordAuditEvent(messageInput(), database);
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("UPDATE audit_events SET actor_id = ? WHERE kind = 'message'").run("raw-sender");
 
-    expect(() =>
+    await expect(
       listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
-    ).toThrow("corrupt audit event row 1: invalid actorId");
+    ).rejects.toThrow("corrupt audit event row 1: invalid actorId");
   });
 
-  it("keeps message rows opt-in while supporting message filters", () => {
+  it("excludes transitional outbound rows before paginating terminal activity", async () => {
+    const database = createDatabaseOptions();
+    const terminal = recordAuditEvent(
+      outboundMessageInput({ status: "succeeded", outcome: "sent" }),
+      database,
+    );
+    const transitional = recordAuditEvent(
+      outboundMessageInput(
+        { status: "succeeded", outcome: "sent" },
+        { sourceId: "transitional-outbound" },
+      ),
+      database,
+    );
+    openOpenClawStateDatabase(database)
+      .db.prepare("UPDATE audit_events SET action = 'message.outbound.queued' WHERE event_id = ?")
+      .run(expectDefined(transitional, "transitional fixture").eventId);
+    const page = await listAuditEvents({ database, limit: 1, filters: { includeMessages: true } });
+    expect(page.events.map((event) => event.eventId)).toEqual([terminal?.eventId]);
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it("keeps message rows opt-in while supporting message filters", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
     recordAuditEvent(runInput({ occurredAt: now }), database);
@@ -441,25 +465,27 @@ describe("message audit persistence", () => {
       database,
     );
 
-    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.kind)).toEqual([
-      "agent_run",
-    ]);
     expect(
-      listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }).events.map(
-        (event) => event.kind,
-      ),
+      (await listAuditEvents({ database, limit: 10 })).events.map((event) => event.kind),
+    ).toEqual(["agent_run"]);
+    expect(
+      (
+        await listAuditEvents({ database, limit: 10, filters: { includeMessages: true } })
+      ).events.map((event) => event.kind),
     ).toEqual(["message", "message", "agent_run"]);
     expect(
-      listAuditEvents({
-        database,
-        limit: 10,
-        filters: {
-          kind: "message",
-          includeMessages: false,
-          direction: "inbound",
-          channel: "telegram",
-        },
-      }).events,
+      (
+        await listAuditEvents({
+          database,
+          limit: 10,
+          filters: {
+            kind: "message",
+            includeMessages: false,
+            direction: "inbound",
+            channel: "telegram",
+          },
+        })
+      ).events,
     ).toEqual([expect.objectContaining({ direction: "inbound", channel: "telegram" })]);
   });
 });

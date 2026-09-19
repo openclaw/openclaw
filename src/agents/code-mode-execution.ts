@@ -27,14 +27,11 @@ import {
   cancelPendingBridgeStates,
   cancelPendingBridgeStatesById,
   codeModeAbortedResult,
-  codeModeWaitingReason,
   createCodeModeBridgeDispatchState,
   createCodeModeRunOwner,
   createPendingBridgeStates,
-  disposeCodeModeRun,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
-  pendingToolCalls,
   removeExpiredRuns,
   reserveActiveRunSlot,
   resumingRunIds,
@@ -585,6 +582,9 @@ export async function runWait(params: {
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
+  if (resumingRunIds.has(params.runId)) {
+    throw new ToolInputError("code mode run is already being resumed.");
+  }
   const state = activeRuns.get(params.runId);
   if (!state) {
     throw new ToolInputError("code mode run is unavailable or expired.");
@@ -599,9 +599,6 @@ export async function runWait(params: {
   ) {
     throw new ToolInputError("code mode run belongs to a different session.");
   }
-  if (resumingRunIds.has(state.runId)) {
-    throw new ToolInputError("code mode run is already being resumed.");
-  }
   params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
   // One wait call shares a single monotonic deadline across draining the prior
@@ -615,6 +612,8 @@ export async function runWait(params: {
   );
   let releaseActiveRunSlot: (() => void) | undefined;
   try {
+    // Active waits own their slot and call deadline; idle expiry applies only after parking.
+    releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
     const ready = await waitForPending(
       state.pending,
       state.settlementMode,
@@ -626,34 +625,13 @@ export async function runWait(params: {
       ? usableResumeBudgetMs(budget.deadlineMs, state.config)
       : undefined;
     if (!ready || resumeBudgetMs === undefined) {
-      // An aborted wait drops the suspended run: nothing will resume it, and
-      // parking it would pin a process-global active-run slot until TTL expiry.
       if (signal.aborted) {
-        disposeCodeModeRun(state.runId);
         return { ...codeModeAbortedResult(state), failurePhase: "bridge" as const };
       }
-      // Not ready, or ready without a usable resume budget: keep the snapshot
-      // so the next wait can resume with a fresh deadline instead of losing
-      // the run to a restore-only interrupt timeout.
-      const pending = state.pending.filter((entry) => !entry.settled);
-      return state.output.takeResult(
-        {
-          status: "waiting" as const,
-          runId: state.runId,
-          reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
-          pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
-          replaySafe: state.replaySafe,
-          telemetry: telemetry(state.runtime),
-        },
-        {},
-        state.runtime.hasNetworkContent(),
-      );
+      return storeSnapshotState(state);
     }
 
     const pending = state.pending.filter((entry) => !entry.settled);
-    // Keep the run's existing slot reserved while its live sibling calls and
-    // snapshot move through the worker; a new exec must not claim this slot.
-    releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
     const delivery = takeSettledBridgeRequests(state.pending);
     // The resumed guest inherits only the remaining shared budget as its QuickJS
     // interrupt deadline; the extra host margin is watchdog grace only.

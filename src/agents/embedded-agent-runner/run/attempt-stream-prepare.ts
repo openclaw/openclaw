@@ -133,10 +133,9 @@ export function prepareEmbeddedAttemptStream(input: {
     typeof createEmbeddedAttemptDeferredLifecycleOwner
   >[0]["trajectoryRecorder"];
 }) {
-  const attempt = input.attempt;
+  const { attempt, hookRunner } = input;
   const activityScope = randomUUID();
   let nestedStartOrder = 0;
-  const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let acceptingSteerMessages = true;
@@ -296,6 +295,7 @@ export function prepareEmbeddedAttemptStream(input: {
     lifecycleGeneration: attempt.lifecycleGeneration,
     messageChannel: input.runtimeChannel,
     initialReplayState: attempt.initialReplayState,
+    assistantErrorTranscript: attempt.assistantErrorTranscript,
     hookRunner: getGlobalHookRunner() ?? undefined,
     verboseLevel: attempt.verboseLevel,
     reasoningMode: attempt.reasoningLevel ?? "off",

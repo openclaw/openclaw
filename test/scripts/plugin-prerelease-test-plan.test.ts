@@ -314,9 +314,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(assertionsScript).toContain("assertCutoverPreinstalled");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
-    expect(assertionsScript).toContain("record.clawpackSha256");
     expect(assertionsScript).toContain("record.artifactKind");
-    expect(assertionsScript).toContain("record.npmIntegrity");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
     expect(assertionsScript).toContain(
@@ -797,7 +795,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       check_name: "check-dependencies",
       task: "dependencies",
       // Concurrent Knip scans need cores and memory headroom.
-      runner: "blacksmith-32vcpu-ubuntu-2404",
+      runner: "blacksmith-16vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find(

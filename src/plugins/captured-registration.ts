@@ -375,7 +375,7 @@ export function createCapturedPluginRegistration(params?: {
         },
         unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerTool(tool) {
-          if (typeof tool !== "function") {
+          if (typeof tool !== "function" && !("contextVersion" in tool)) {
             tools.push(tool);
           }
         },

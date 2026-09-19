@@ -2,8 +2,9 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
+import type { AgentSelect } from "./agent-select.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
 import "./tooltip.ts";
 
@@ -19,6 +20,27 @@ const saveIndicator = () => ({
   onSave: vi.fn(),
   onReload: vi.fn(),
   onApply: vi.fn(),
+});
+
+const sidebarAgentProps = () => ({
+  agents: [
+    { id: "main", name: "Main" },
+    { id: "research", name: "Research" },
+  ],
+  agentIdentity: {
+    get: () => null,
+    entries: () => [],
+    ensure: async () => {},
+    invalidate: () => {},
+    subscribe: () => () => {},
+  },
+  settingsAgentSelection: {
+    state: { selectedId: "main", scopeId: "main" },
+    intentRevision: 0,
+    set: vi.fn(),
+    setScope: vi.fn(),
+    subscribe: () => () => {},
+  },
 });
 
 const inactiveRefresh = {
@@ -43,6 +65,7 @@ describe("settings sidebar search", () => {
     const onRetry = vi.fn();
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         presentation: "embed-page",
         basePath: "",
         activeRouteId: "appearance",
@@ -77,6 +100,7 @@ describe("settings sidebar search", () => {
   it("keeps Models selected while its setup flow is open", () => {
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "model-setup",
         offline: false,
@@ -109,6 +133,7 @@ describe("settings sidebar search", () => {
     const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
@@ -140,6 +165,7 @@ describe("settings sidebar search", () => {
   it("does not match the middle of a word for a short query", () => {
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
@@ -179,6 +205,7 @@ describe("settings sidebar search", () => {
     const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
@@ -237,6 +264,7 @@ describe("settings sidebar search", () => {
     const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
@@ -286,6 +314,7 @@ describe("settings sidebar search", () => {
   it("finds Agent Defaults by page name after its sidebar demotion", () => {
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "agents",
         offline: false,
@@ -315,6 +344,7 @@ describe("settings sidebar search", () => {
   it("excludes admin-only pages and config blocks from non-admin search", () => {
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
@@ -352,6 +382,7 @@ describe("settings sidebar search", () => {
     const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "/ui",
         activeRouteId: "memory",
         activePathname: "/ui/settings/memory/settings",
@@ -400,6 +431,7 @@ describe("settings sidebar search", () => {
     const rerender = () => {
       render(
         renderSettingsSidebar({
+          ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
           offline: false,
@@ -484,6 +516,7 @@ describe("settings sidebar search", () => {
     const rerender = () => {
       render(
         renderSettingsSidebar({
+          ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
           offline: false,
@@ -538,6 +571,7 @@ describe("settings sidebar search", () => {
 
     render(
       renderSettingsSidebar({
+        ...sidebarAgentProps(),
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
@@ -577,6 +611,7 @@ describe("settings sidebar search", () => {
     ) =>
       render(
         renderSettingsSidebar({
+          ...sidebarAgentProps(),
           basePath: "",
           activeRouteId: "appearance",
           offline,
@@ -636,5 +671,99 @@ describe("settings sidebar search", () => {
       "Restarting…",
     );
     expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
+  });
+});
+
+describe("Settings agent selector", () => {
+  const renderSidebar = (overrides: Partial<Parameters<typeof renderSettingsSidebar>[0]> = {}) => {
+    const props = {
+      ...sidebarAgentProps(),
+      basePath: "",
+      activeRouteId: "model-providers" as const,
+      offline: false,
+      lastError: null,
+      gatewayVersion: "",
+      updateAvailable: null,
+      updateBusy: false,
+      onUpdate: vi.fn(),
+      ...inactiveRefresh,
+      searchQuery: "",
+      onExit: vi.fn(),
+      onRetryConnect: vi.fn(),
+      onNavigate: vi.fn(),
+      onSearchQueryChange: vi.fn(),
+      preloadTimers: new Map(),
+      saveIndicator: saveIndicator(),
+      ...overrides,
+    };
+    render(renderSettingsSidebar(props), container);
+    return props;
+  };
+
+  it.each(["sidebar", "embed-list", "embed-page"] as const)(
+    "uses the shared selection in the %s presentation",
+    async (presentation) => {
+      const props = renderSidebar({ presentation });
+      expect(container.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
+      const selector = container.querySelector<AgentSelect>("openclaw-agent-select")!;
+      await selector.updateComplete;
+      expect(
+        selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
+      ).toContain("Main");
+      const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
+      research.click();
+      expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research");
+      expect(props.onNavigate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, 1])(
+    "keeps a disabled shared selector visible with %i selectable agents",
+    async (count) => {
+      renderSidebar({
+        agents: [
+          ...[{ id: "main", name: "Main" }].slice(0, count),
+          { id: "system", name: "System", kind: "system" },
+        ],
+        settingsAgentSelection: {
+          ...sidebarAgentProps().settingsAgentSelection,
+          state: { selectedId: count ? "main" : null, scopeId: count ? "main" : null },
+        },
+      });
+      const selector = container.querySelector<AgentSelect>("openclaw-agent-select")!;
+      await selector.updateComplete;
+      expect(selector.querySelector<HTMLButtonElement>(".agent-select__trigger")?.disabled).toBe(
+        true,
+      );
+      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(count);
+      expect(selector.options.some((option) => option.value === "system")).toBe(false);
+    },
+  );
+
+  it("preserves creator grouping without hiding dangling or cyclic agents", async () => {
+    renderSidebar({
+      agents: [
+        { id: "main", name: "Main" },
+        { id: "orphan", name: "Orphan", creatorAgentId: "deleted" },
+        { id: "research", name: "Research", creatorAgentId: "main" },
+        { id: "cycle-a", creatorAgentId: "cycle-b" },
+        { id: "cycle-b", creatorAgentId: "cycle-a" },
+        { id: "system", kind: "system" },
+      ],
+    });
+    const selector = container.querySelector<AgentSelect>("openclaw-agent-select")!;
+    await selector.updateComplete;
+    expect(selector.options.map((option) => option.value)).toEqual([
+      "main",
+      "research",
+      "orphan",
+      "cycle-a",
+      "cycle-b",
+    ]);
+    const rows = selector.querySelectorAll("[data-agent-option]");
+    expect(rows[1]?.querySelector(".agent-select__option-description")?.textContent?.trim()).toBe(
+      t("agents.createdBy", { id: "main" }),
+    );
+    expect(rows[2]?.querySelector(".agent-select__option-description")).toBeNull();
   });
 });

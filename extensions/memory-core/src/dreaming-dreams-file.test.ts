@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dedupeDreamDiaryEntries,
+  readDreamsFile,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
   updateDeepDreamsFile,
@@ -178,6 +179,42 @@ describe("dream diary file behavior", () => {
     await expect(
       readRecentDreamDiaryEntries({ workspaceDir: directoryWorkspace, limit: 3 }),
     ).resolves.toEqual([]);
+  });
+
+  it.each(["EACCES", "EPERM"])("only optional diary context suppresses %s", async (code) => {
+    const workspaceDir = await createTempWorkspace("dreaming-diary-read-permission-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n");
+    const error = Object.assign(new Error("read denied"), { code });
+    vi.spyOn(fs, "open").mockRejectedValue(error);
+
+    await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
+    await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
+  });
+
+  it("propagates unexpected diary read failures through both public readers", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-diary-read-error-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n");
+    const error = Object.assign(new Error("read failed"), { code: "EIO" });
+    vi.spyOn(fs, "open").mockRejectedValue(error);
+
+    await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
+    await expect(readRecentDreamDiaryEntries({ workspaceDir })).rejects.toBe(error);
+  });
+
+  it("preserves an undefined error code across optional context handling", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-diary-error-code-");
+    const code = vi
+      .fn()
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue("ENOENT");
+    const error = Object.defineProperty(new Error("read failed"), "code", { get: code });
+    vi.spyOn(fs, "access").mockRejectedValueOnce(error);
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir })).rejects.toBe(error);
+    expect(code).toHaveBeenCalledTimes(2);
   });
 
   it("keeps existing content intact when the atomic replace fails", async () => {

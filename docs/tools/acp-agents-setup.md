@@ -38,17 +38,21 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
 | `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
 | `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
+| `grok-build` | Grok Build (`grok agent stdio`)                                                                        |
 | `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
 | `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
 | `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
 | `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
+| `mcode`      | MiniMax Code (`mcode acp`; install and authenticate its CLI on the Gateway host)                       |
 | `mux`        | [Mux](https://mux.coder.com)                                                                           |
 | `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
 | `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
 | `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `pool`       | Pool (`pool acp`)                                                                                      |
 | `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
 | `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
 | `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
+| `zeroclaw`   | ZeroClaw (`zeroclaw acp`)                                                                              |
 
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
@@ -291,6 +295,8 @@ openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 ```
 
 Runtime turns use OpenClaw agent/run timeouts, including `/acp timeout`.
+An interactive turn can continue beyond the plugin operation limit until its
+turn budget expires, the harness finishes, or you cancel it.
 `sessions_spawn` does not accept per-call timeout overrides; the operator path
 is `agents.defaults.subagents.runTimeoutSeconds`. With the default hybrid reload
 mode, changing `timeoutSeconds` automatically reloads the plugin. See

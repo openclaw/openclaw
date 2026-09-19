@@ -20,10 +20,12 @@ import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 import {
+  clearNativeGitHubTokenCache,
   createGitHubReadIdentity,
   GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES as PROFILE_OUTPUT_LIMIT_BYTES,
   GitHubIdentityError,
   normalizeGitHubToken as normalizeManagedGitHubToken,
+  readCachedNativeGitHubToken,
   readNativeGitHubToken,
   runGitHubIdentityCommand as runIdentityCommand,
   startGitHubIdentityOperation,
@@ -498,6 +500,7 @@ async function prepareSharedGitHubIdentity(
     startCurrent?: GitHubReadIdentityStarter;
     allowAnonymous?: boolean;
   },
+  readNativeToken = readNativeGitHubToken,
 ) {
   const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
@@ -509,7 +512,7 @@ async function prepareSharedGitHubIdentity(
   const readToken = () =>
     managed
       ? readManagedGitHubToken(identity.profileDir)
-      : readNativeGitHubToken(currentEnvironment(), params.allowAnonymous === true);
+      : readNativeToken(currentEnvironment(), params.allowAnonymous === true);
   const token = await startGitHubIdentityOperation(readToken, params);
   if (!token) {
     return startGitHubIdentityOperation(() => {
@@ -547,6 +550,17 @@ export async function prepareGitHubPublicationIdentity(
   return prepared;
 }
 
+/** Options expose account facts only; publication obtains its own live credential. */
+export async function prepareGitHubPublicationOptionsIdentity(
+  params: GitHubIdentityPreparation,
+): Promise<Pick<PreparedGitHubPublicationIdentity, "source" | "account">> {
+  const { prepared } = await prepareSharedGitHubIdentity(params, readCachedNativeGitHubToken);
+  if (!prepared) {
+    throw new GitHubIdentityError("unavailable");
+  }
+  return { source: prepared.source, account: prepared.account };
+}
+
 export function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation & { allowAnonymous: true },
 ): Promise<PreparedGitHubSourceReadIdentity>;
@@ -574,10 +588,10 @@ export async function prepareGitHubReadIdentity(
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
   await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();
-  const { token, readToken, prepared } = await prepareSharedGitHubIdentity({
-    ...params,
-    ...caller,
-  });
+  const { token, readToken, prepared } = await prepareSharedGitHubIdentity(
+    { ...params, ...caller },
+    readCachedNativeGitHubToken,
+  );
   assertSelected();
   return createGitHubReadIdentity({
     assertSelected,
@@ -598,6 +612,7 @@ export async function prepareGitHubReadIdentity(
 
 export async function removeManagedGitHubProfile(profileDir: string): Promise<void> {
   await fs.rm(profileDir, { recursive: true, force: true });
+  clearNativeGitHubTokenCache();
 }
 
 async function stageManagedGitHubProfile(parent: string, token: string) {
@@ -691,6 +706,7 @@ export async function refreshManagedGitHubProfile(params: {
     await fs.chmod(replacementHosts, 0o600);
     params.assertCurrent?.();
     await fs.rename(replacementHosts, targetHosts);
+    clearNativeGitHubTokenCache();
     params.assertCurrent?.();
     return staged.account;
   } finally {
@@ -717,6 +733,7 @@ export async function installManagedGitHubProfile(params: {
     published = true;
     params.assertCurrent?.();
     await params.commitConfig(staged.account);
+    clearNativeGitHubTokenCache();
     committed = true;
     return staged.account;
   } finally {

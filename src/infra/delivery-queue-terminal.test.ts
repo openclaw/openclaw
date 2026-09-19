@@ -1,20 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  completeDeliveryQueueEntry,
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import {
   countFailedDeliveryQueueEntries,
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
-  moveDeliveryQueueEntryToFailed,
   pruneExpiredDeliveryQueueTombstones,
   terminalizePendingDeliveryQueueEntry,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
+import {
+  completeDeliveryQueueEntryInDatabase,
+  prepareDeliveryQueueTerminalEntry,
+  terminalizePendingDeliveryQueueEntryInDatabase,
+} from "./delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 describe("delivery queue pending terminal transition", () => {
@@ -31,12 +38,15 @@ describe("delivery queue pending terminal transition", () => {
     maxAgeMs: 60_000,
     maxEntries: 2,
   } as const;
-  const enqueueRetained = (ownerQueue: string, id: string, enqueuedAt: number) =>
+  const enqueueRetained = (ownerQueue: string, id: string, enqueuedAt: number) => {
+    const entry = { id, enqueuedAt, retryCount: 0, retainOnFailure: true as const };
     upsertDeliveryQueueEntry({
       queueName: ownerQueue,
-      entry: { id, enqueuedAt, retryCount: 0, retainOnFailure: true },
+      entry,
       stateDir,
     });
+    return entry;
+  };
 
   beforeEach(() => {
     rootDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-terminal-"));
@@ -44,7 +54,8 @@ describe("delivery queue pending terminal transition", () => {
     fs.mkdirSync(stateDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
@@ -120,7 +131,15 @@ describe("delivery queue pending terminal transition", () => {
       ) => {
         const entry = { id, enqueuedAt: Date.now(), retryCount: 0, completionRetention };
         upsertDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
-        moveDeliveryQueueEntryToFailed(ownerQueue, id, stateDir);
+        const database = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        });
+        expect(
+          terminalizePendingDeliveryQueueEntryInDatabase(
+            database,
+            prepareDeliveryQueueTerminalEntry({ queueName: ownerQueue, id, entry }),
+          ).status,
+        ).toBe("terminalized");
       };
       const firstId = `${producerRetention.idPrefix}failed-a`;
       const secondId = `${producerRetention.idPrefix}failed-b`;
@@ -157,7 +176,13 @@ describe("delivery queue pending terminal transition", () => {
         },
         stateDir,
       });
-      completeDeliveryQueueEntry(queueName, triggerId, stateDir);
+      completeDeliveryQueueEntryInDatabase(
+        openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        }),
+        queueName,
+        triggerId,
+      );
 
       expect(getDeliveryQueueEntryStatus(queueName, secondId, stateDir)).toBeUndefined();
       expect(getDeliveryQueueEntryStatus(queueName, thirdId, stateDir)).toBe("failed");
@@ -214,7 +239,7 @@ describe("delivery queue pending terminal transition", () => {
     expect(getDeliveryQueueEntryStatus(queueName, ids[1], stateDir)).toBe("failed");
   });
 
-  it("keeps health reads immutable and expires tombstones during maintenance", () => {
+  it("keeps health reads immutable and expires tombstones during maintenance", async () => {
     const retention = { idPrefix: "health:", maxAgeMs: 1_000, maxEntries: 1 } as const;
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -276,7 +301,7 @@ describe("delivery queue pending terminal transition", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(10_000);
-      expect(countFailedDeliveryQueueEntries(stateDir)).toEqual([
+      expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
         { queueName, count: 5, oldestFailedAt: 1_000 },
       ]);
       expect(
@@ -308,44 +333,58 @@ describe("delivery queue pending terminal transition", () => {
     ]);
   });
 
-  it("reports no failed queues when retained entries are pending", () => {
+  it("reports no failed queues when retained entries are pending", async () => {
     enqueueRetained("outbound", "pending-1", 1_000);
-    expect(countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
+    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
   });
 
-  it("counts failed rows per queue with their oldest failure", () => {
-    enqueueRetained("outbound", "dead-1", 1_000);
-    enqueueRetained("outbound", "dead-2", 2_000);
+  it("counts failed rows per queue with their oldest failure", async () => {
+    const first = enqueueRetained("outbound", "dead-1", 1_000);
+    const second = enqueueRetained("outbound", "dead-2", 2_000);
     enqueueRetained("outbound", "still-pending", 3_000);
-    enqueueRetained("session", "dead-3", 4_000);
+    const third = enqueueRetained("session", "dead-3", 4_000);
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
     vi.useFakeTimers();
     try {
-      vi.setSystemTime(50_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
-      vi.setSystemTime(60_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
-      vi.setSystemTime(70_000);
-      moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
+      for (const [ownerQueue, entry, failedAt] of [
+        ["outbound", first, 50_000],
+        ["outbound", second, 60_000],
+        ["session", third, 70_000],
+      ] as const) {
+        vi.setSystemTime(failedAt);
+        expect(
+          terminalizePendingDeliveryQueueEntryInDatabase(
+            database,
+            prepareDeliveryQueueTerminalEntry({ queueName: ownerQueue, id: entry.id, entry }),
+          ).status,
+        ).toBe("terminalized");
+      }
     } finally {
       vi.useRealTimers();
     }
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const { db } = database;
     db.prepare(
       "UPDATE delivery_queue_entries SET failed_at = NULL WHERE queue_name = 'session'",
     ).run();
 
-    const counts = countFailedDeliveryQueueEntries(stateDir);
-    expect(counts.find((queue) => queue.queueName === "outbound")).toEqual({
-      queueName: "outbound",
-      count: 2,
-      oldestFailedAt: 50_000,
-    });
-    expect(counts.find((queue) => queue.queueName === "session")).toEqual({
-      queueName: "session",
-      count: 1,
-    });
+    const prepare = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "prepare");
+    try {
+      const counts = await countFailedDeliveryQueueEntries(stateDir);
+      expect(counts.find((queue) => queue.queueName === "outbound")).toEqual({
+        queueName: "outbound",
+        count: 2,
+        oldestFailedAt: 50_000,
+      });
+      expect(counts.find((queue) => queue.queueName === "session")).toEqual({
+        queueName: "session",
+        count: 1,
+      });
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      prepare.mockRestore();
+    }
     expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
       "still-pending",
     ]);

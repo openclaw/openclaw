@@ -5,6 +5,23 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 type GroupMember = { pid: number; pgid: number; state: string };
 
+/** Only kernel absence, observed outside the owned group, confirms extinction. */
+export function isOwnedProcessGroupGone(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return false;
+  } catch (error) {
+    const code = extractErrorCode(error);
+    if (code === "ESRCH") {
+      return true;
+    }
+    if (code === "EPERM") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function* readProcessGroupMembers(timeoutMs: number): Generator<GroupMember> {
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;

@@ -259,6 +259,18 @@ function maxLineBytes(bodies: string[]): number {
 }
 
 describe("irc client privmsg byte-limit chunking", () => {
+  it("rejects text that becomes empty after transport sanitization", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      await expect(collectPrivmsgBodies(server, String.raw`\u0001`)).rejects.toThrow(
+        "Message must be non-empty for IRC sends",
+      );
+      expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("splits multi-byte text so every line fits the 512-byte IRC limit", async () => {
     const server = await startLoopbackIrcServer();
     try {

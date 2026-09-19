@@ -17,6 +17,7 @@ title: "Configuration — agent sessions"
     scope: "per-sender",
     dmScope: "main", // main | per-peer | per-channel-peer | per-account-channel-peer
     groupScope: "per-group", // main | per-group
+    notifyOnCreate: true, // notify Home about new sessions (default)
     identityLinks: {
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
@@ -80,7 +81,9 @@ title: "Configuration — agent sessions"
 - **`groupScope`**: how groups, rooms, and channels are grouped.
   - `per-group` (default): keep each non-direct peer in its channel-scoped session.
   - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
+- **`notifyOnCreate`**: queue a system notice in the owning agent's Home conversation for each new session (default: `true`). Includes available title, creator, and creation source, without copying messages. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. Notices are bounded and in memory, so they do not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`resetTriggers`**: explicit commands or phrases that reset the session. Matching is case-insensitive; list each desired spelling because command aliases are not added automatically. For example, `["/tell"]` resets `/tell` messages, while `/steer` keeps its normal steering behavior. Follow-up text after a matching trigger is preserved, including later lines.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.

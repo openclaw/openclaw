@@ -69,6 +69,11 @@ type SessionNavigationTarget = {
   options: ApplicationNavigationOptions & { pathname: string };
 };
 
+export function isSessionKeyAddressable(sessionKey: string, globalScope: boolean): boolean {
+  // Home addresses raw global only in global scope; raw unknown has no exact URL.
+  return sessionKey !== "unknown" && (sessionKey !== "global" || globalScope);
+}
+
 export function resolveSessionPreferredFace(
   row: Pick<GatewaySessionRow, "boardFace"> | null | undefined,
 ): BoardFace {

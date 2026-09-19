@@ -120,6 +120,7 @@ function createPage(pageSize = 2) {
     return () => eventListeners.delete(listener);
   };
   const agentSelection: ApplicationContext["agentSelection"] = {
+    intentRevision: 0,
     state: { selectedId: "harbor", scopeId: null },
     set: () => undefined,
     setScope: () => undefined,
@@ -245,10 +246,9 @@ describe("AgentsHomePage", () => {
     );
     request.mockClear();
     emitChange();
-    await vi.waitFor(() => {
-      expect(page.textContent).toContain("Activity 299");
-      expect(second.textContent).toContain("Activity 299");
-    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(page.textContent).toContain("Activity 299");
+    expect(second.textContent).toContain("Activity 299");
     expect(calls("sessions.list")).toHaveLength(3);
     expect(calls("sessions.subscribe")).toHaveLength(0);
     expect(page.textContent).not.toContain("Activity 300");
@@ -257,7 +257,8 @@ describe("AgentsHomePage", () => {
     expect(rosterListenerCount()).toBe(1);
     request.mockClear();
     emitChange();
-    await vi.waitFor(() => expect(calls("sessions.list")).toHaveLength(3));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls("sessions.list")).toHaveLength(3);
     emitChange();
     second.remove();
     expect(rosterListenerCount()).toBe(0);

@@ -296,16 +296,19 @@ describe("truncateToolResultText", () => {
     ).toBe("[100");
   });
 
-  it("keeps both head and tail cuts on complete code points", () => {
-    const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
-    const text = `${"a".repeat(6)}😀${"m".repeat(100)}😀${"x".repeat(22)} Error`;
-    expect(
-      truncateToolResultText(text, 100, {
-        suffix: "!",
-        minKeepChars: 1,
-      }),
-    ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
-  });
+  it.each(["m", "你𠀀😀"])(
+    "keeps both head and tail cuts on complete code points (%s)",
+    (middle) => {
+      const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+      const text = `${"a".repeat(6)}😀${middle.repeat(100)}😀${"x".repeat(22)} Error`;
+      expect(
+        truncateToolResultText(text, 100, {
+          suffix: "!",
+          minKeepChars: 1,
+        }),
+      ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
+    },
+  );
 });
 
 describe("getToolResultTextLength", () => {

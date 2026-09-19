@@ -7,6 +7,7 @@ import { resolveExecutablePath } from "../infra/executable-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
 const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 vi.mock("../process/exec.js", () => ({ runCommandBuffered: mocks.runCommandBuffered }));
@@ -279,6 +280,7 @@ describe("native GitHub identity absence", () => {
 
 describe("prepared GitHub read authority", () => {
   beforeEach(() => {
+    clearGitHubCredentialVerificationCache();
     mocks.runCommandBuffered.mockReset();
     vi.stubEnv("GH_TOKEN", undefined);
     vi.stubEnv("GITHUB_TOKEN", undefined);
@@ -296,6 +298,89 @@ describe("prepared GitHub read authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  const nativeReadOptions = (env: NodeJS.ProcessEnv = {}) => ({
+    config: {},
+    agentId: "main",
+    env,
+    getCurrentConfig: () => ({}),
+    assertActive: () => {},
+    refresh: async () => {},
+  });
+
+  it("reuses the native credential across consecutive read preparations until invalidation", async () => {
+    mocks.runCommandBuffered.mockImplementation(async () => commandResult("native-cached-read"));
+    const options = nativeReadOptions();
+    const first = await prepareGitHubReadIdentity(options);
+    const second = await prepareGitHubReadIdentity(options);
+    expect(second.selection).toEqual(first.selection);
+    await first.revalidate();
+    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+    clearGitHubCredentialVerificationCache();
+    await prepareGitHubReadIdentity(options);
+    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+  });
+
+  it("observes host token rotation after 60 seconds while publication always reads it live", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let token = "native-before-ttl";
+    mocks.runCommandBuffered.mockImplementation(async () => commandResult(token));
+    const options = nativeReadOptions();
+    const identity = await prepareGitHubReadIdentity(options);
+    token = "native-after-ttl";
+    now += 59_999;
+    await expect(identity.revalidate()).resolves.toBeUndefined();
+    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+    const publication = await prepareGitHubPublicationIdentity(options);
+    expect(publication.env.GH_TOKEN).toBe(token);
+    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    now += 1;
+    await expect(identity.revalidate()).rejects.toMatchObject({ reason: "changed" });
+    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(3);
+    expect((await prepareGitHubReadIdentity(options)).token).toBe(token);
+  });
+
+  it("shares concurrent native reads without letting an invalidated in-flight read refill the cache", async () => {
+    const pending = createDeferredCore<ReturnType<typeof commandResult>>();
+    const entered = createDeferredCore();
+    mocks.runCommandBuffered
+      .mockImplementationOnce(() => {
+        entered.resolve();
+        return pending.promise;
+      })
+      .mockImplementation(async () => commandResult("native-new-generation"));
+    const options = nativeReadOptions();
+    const readers = Array.from({ length: 15 }, () => prepareGitHubReadIdentity(options));
+    await entered.promise;
+    // Let all admitted callers reach the shared pending native read.
+    await Promise.resolve();
+    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+    clearGitHubCredentialVerificationCache();
+    expect((await prepareGitHubReadIdentity(options)).token).toBe("native-new-generation");
+    pending.resolve(commandResult("native-old-generation"));
+    await Promise.all(readers);
+    expect((await prepareGitHubReadIdentity(options)).token).toBe("native-new-generation");
+    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+  });
+
+  it("separates native command environments and immediately observes environment token changes", async () => {
+    mocks.runCommandBuffered.mockImplementation(async (_argv, { env }) =>
+      commandResult(`native-${env.GH_CONFIG_DIR}`),
+    );
+    const env: NodeJS.ProcessEnv = { GH_CONFIG_DIR: "first-profile", GH_TOKEN: undefined };
+    const first = await prepareGitHubReadIdentity(nativeReadOptions(env));
+    const other = await prepareGitHubReadIdentity(
+      nativeReadOptions({ GH_CONFIG_DIR: "second-profile" }),
+    );
+    expect(other.token).not.toBe(first.token);
+    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    env.GH_TOKEN = "native-from-environment";
+    await expect(first.revalidate()).rejects.toMatchObject({ reason: "changed" });
+    expect((await prepareGitHubReadIdentity(nativeReadOptions(env))).token).toBe(env.GH_TOKEN);
+    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
   });
 
   it.each(["refresh", "credential", "probe", "delivery"] as const)(
@@ -391,6 +476,7 @@ describe("prepared GitHub read authority", () => {
         },
         refresh: async () => {},
       });
+      clearGitHubCredentialVerificationCache();
       mocks.runCommandBuffered.mockClear();
       phase = "before";
       const checking = identity.revalidate();

@@ -74,7 +74,7 @@ function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
   ];
 }
 
-async function repairInstalledNpmOpenClawHostLinks(params: {
+async function repairInstalledOpenClawHostLinks(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
   beforePersistentEffect?: () => void;
@@ -124,7 +124,7 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
       }
       repaired += result.value.repaired;
     }
-    // Legacy npm-owned installs live under extensions/, outside every managed npm project root.
+    // Registered npm and ClawHub installs also live under extensions/, outside managed npm roots.
     const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
       installRecords: params.installRecords,
       extensionsDir: resolveDefaultPluginExtensionsDir(params.env),
@@ -142,7 +142,7 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
           : []),
         ...(registeredRepair.repaired > 0
           ? [
-              `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered npm plugin package(s).`,
+              `Repaired OpenClaw host peer link(s) for ${registeredRepair.repaired} registered plugin package(s).`,
             ]
           : []),
       ],
@@ -154,7 +154,7 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
       throw effectFailure.error;
     }
     beforePersistentEffect?.();
-    const message = `Failed to repair managed npm OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
+    const message = `Failed to repair installed OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
     return {
       changes: [],
       warnings: [
@@ -170,7 +170,7 @@ async function repairInstalledNpmOpenClawHostLinks(params: {
 }
 
 function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCoreConvergenceWarning {
-  const message = `Failed to repair managed npm OpenClaw host peer links: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}`;
+  const message = `Failed to repair installed OpenClaw host peer links: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}`;
   return {
     reason: message,
     message,
@@ -256,7 +256,7 @@ async function runPostCorePluginConvergenceWithLease(
   });
   params.beforePersistentEffect?.();
 
-  const peerLinkRepair = await repairInstalledNpmOpenClawHostLinks({
+  const peerLinkRepair = await repairInstalledOpenClawHostLinks({
     env,
     installRecords: repair.records,
     beforePersistentEffect: params.beforePersistentEffect,
@@ -301,8 +301,7 @@ async function runPostCorePluginConvergenceWithLease(
     left.packageDir.localeCompare(right.packageDir),
   )) {
     // A typed smoke failure owns this exact package and startup quarantines it.
-    // Re-emitting the repair error without that owner would turn it back into
-    // an unknown warning and incorrectly block gateway readiness.
+    // Keep the typed diagnostic instead of duplicating it as an unowned warning.
     const packageDir = path.resolve(failure.packageDir);
     const hasTypedFailure = smokeFailureInstallPaths.has(packageDir);
     const belongsToInactivePlugin =

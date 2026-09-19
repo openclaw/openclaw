@@ -1,4 +1,10 @@
-import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import {
+  emitAgentEvent,
+  emitAgentEventForRunContext,
+  emitAgentRunOutputTokens,
+} from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import type { AssistantMessage, Usage } from "../llm/types.js";
 import {
   createUsageAccumulator,
@@ -66,6 +72,36 @@ export function createEmbeddedModelState(
   let lastUsage: NormalizedUsage | undefined;
   let retryUsage: NormalizedUsage | undefined;
   let completed: AssistantMessage | undefined;
+  let successfulModelResponse = false;
+  let publishedMessageModel: string | undefined;
+  const runContext = getAgentRunContext(params.runId);
+
+  const publishMessageModel = (message: AssistantMessage, reset: boolean) => {
+    if (reset) {
+      publishedMessageModel = undefined;
+    }
+    const provider = message.provider?.trim();
+    const model = message.responseModel?.trim() || message.model?.trim();
+    const identity = provider && model ? `${provider}\0${model}` : undefined;
+    if (!identity || identity === publishedMessageModel) {
+      return;
+    }
+    const event = {
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      lifecycleGeneration: params.lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "model", provider, model },
+    } as const;
+    if (runContext) {
+      emitAgentEventForRunContext(event, runContext);
+    } else {
+      emitAgentEvent(event);
+    }
+    publishedMessageModel = identity;
+  };
 
   const recordPendingUsage = (raw: Usage) => {
     const usage = normalizeUsage(raw);
@@ -120,7 +156,8 @@ export function createEmbeddedModelState(
       if (
         evt.type !== "message_start" &&
         evt.type !== "message_update" &&
-        evt.type !== "message_end"
+        evt.type !== "message_end" &&
+        evt.type !== "turn_end"
       ) {
         return;
       }
@@ -131,7 +168,14 @@ export function createEmbeddedModelState(
       ) {
         return;
       }
+      publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
+        case "turn_end":
+          // Async tool fragments emit message_end before the provider response finishes.
+          successfulModelResponse ||=
+            (message.stopReason === "stop" || message.stopReason === "toolUse") &&
+            !isProviderRefusalAssistantError(message);
+          return;
         case "message_start":
           pending = undefined;
           return;
@@ -170,5 +214,6 @@ export function createEmbeddedModelState(
     getUsageTotals: () => toNormalizedUsage(totals),
     getLastAssistantUsage: () => normalizeUsage(lastUsage),
     getCurrentAttemptAssistant: () => (completed ? structuredClone(completed) : undefined),
+    hasSuccessfulModelResponse: () => successfulModelResponse,
   };
 }

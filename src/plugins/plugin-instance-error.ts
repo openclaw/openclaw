@@ -1,3 +1,5 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
 /** A retired instance cannot admit a fresh invocation. */
 export class PluginInstanceUnavailableError extends Error {
   constructor(pluginId?: string) {
@@ -9,3 +11,21 @@ export class PluginInstanceUnavailableError extends Error {
     this.name = "PluginInstanceUnavailableError";
   }
 }
+
+// Source Gateway owners and compiled SDK instances share this diagnostic identity.
+export const PluginInstanceDrainTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginInstanceDrainTimeoutError"),
+  () =>
+    class DrainTimeoutError extends Error {
+      constructor(
+        message: string,
+        readonly settled: Promise<void>,
+        options: ErrorOptions,
+      ) {
+        super(message, options);
+        this.name = "PluginInstanceDrainTimeoutError";
+      }
+    },
+);
+
+export type PluginInstanceDrainTimeoutError = InstanceType<typeof PluginInstanceDrainTimeoutError>;

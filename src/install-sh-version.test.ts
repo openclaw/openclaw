@@ -7,6 +7,8 @@ import { cleanupTempDirs, makeTempDir } from "../test/helpers/temp-dir.js";
 
 const tempRoots: string[] = [];
 const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+// The stdin installer cannot re-exec before its invoking shell materializes the heredoc.
+const installerBash = process.platform === "darwin" ? "/bin/bash" : "bash";
 const installerSource = fs.readFileSync(installerPath, "utf-8");
 const versionHelperStart = installerSource.indexOf("load_install_version_helpers() {");
 const versionHelperEnd = installerSource.indexOf("\nis_gateway_daemon_loaded() {");
@@ -19,7 +21,7 @@ const versionHelperSource = installerSource.slice(versionHelperStart, versionHel
 
 function resolveInstallerVersionCases(params: { stdinCwd: string }): string[] {
   const output = execFileSync(
-    "bash",
+    installerBash,
     [
       "-c",
       `${versionHelperSource}

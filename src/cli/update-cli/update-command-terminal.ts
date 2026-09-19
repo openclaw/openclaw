@@ -6,6 +6,7 @@ import { normalizeUpdateFailureFacts } from "../../infra/update-failure-facts.js
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -51,7 +52,7 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
-  opts: Pick<UpdateCommandOptions, "json"> = {},
+  opts: Pick<UpdateCommandOptions, "json" | "onResult"> = {},
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
   let run: Run | undefined;
@@ -101,6 +102,7 @@ export async function withUpdateCommandTerminalResult<T>(
   }
   if (owner.publish) {
     const result = await owner.publish("error" in outcome ? outcome.error : undefined);
+    opts.onResult?.(result);
     if ("error" in outcome) {
       const failure = outcome.error;
       if (
@@ -144,22 +146,23 @@ export async function resolveSettledUpdateCommandResult(
   const activationTimeout = collectNestedErrorCandidates(failure).find(
     (error): error is UpdateActivationTimeoutError => error instanceof UpdateActivationTimeoutError,
   );
-  const result: UpdateRunResult = settlementFailed
+  const failedStep: UpdateStepResult | undefined = settlementFailed
+    ? {
+        name: "update executor settlement",
+        command: "openclaw update",
+        cwd: pendingResult.root ?? params.root,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
+      }
+    : undefined;
+  const result: UpdateRunResult = failedStep
     ? {
         ...pendingResult,
         status: "error",
         reason: activationTimeout?.reason ?? "update-executor-settlement-failed",
-        steps: [
-          ...pendingResult.steps,
-          {
-            name: "update executor settlement",
-            command: "openclaw update",
-            cwd: pendingResult.root ?? params.root,
-            durationMs: 0,
-            exitCode: 1,
-            stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
-          },
-        ],
+        failedStep,
+        steps: [...pendingResult.steps, failedStep],
       }
     : failure instanceof UpdateCommandFailure
       ? failure.result
@@ -186,14 +189,28 @@ export async function resolveSettledUpdateCommandResult(
   return { result, settlementFailed };
 }
 
-/** Caller verification permits completion; only the producer can qualify a cleanup warning. */
-export async function recordVerifiedUpdatePackageCleanup(
+/** Share verified retirement and unverified recovery retention across finalizers. */
+export async function recordUpdatePackageCompletion(
   params: Pick<FinishUpdateParams, "packageTransaction" | "root">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
   const transaction = params.packageTransaction;
   if (!transaction) {
+    return;
+  }
+  if (isUpdateGatewayReadinessPending(result)) {
+    assertCurrent();
+    const message = `Gateway readiness is pending; backup retirement deferred for ${transaction.backupRoot}. Verify readiness before cleanup.`;
+    result.steps.push({
+      name: "global install backup retention",
+      command: "openclaw update",
+      cwd: result.root ?? params.root,
+      durationMs: 0,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance", message },
+    });
+    defaultRuntime.error(message);
     return;
   }
   let cleanupFailure: unknown;
@@ -218,14 +235,27 @@ export async function recordVerifiedUpdatePackageCleanup(
   if (!retained) {
     return;
   }
-  result.steps = [...result.steps, retained];
-  if (retained.exitCode !== 0 && retained.advisory?.kind !== "recoverable-maintenance") {
+  const step = { ...retained, stderrTail: retained.stderrTail };
+  if (step.exitCode !== 0 && !step.stderrTail?.includes(transaction.backupRoot)) {
+    step.stderrTail = [
+      step.stderrTail,
+      `Recovery transaction backup path: ${transaction.backupRoot}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+  result.steps = [...result.steps, step];
+  if (result.status !== "ok" && !result.recovery?.packageRollbackVerified) {
+    defaultRuntime.error(step.stderrTail);
+    return;
+  }
+  if (step.exitCode !== 0 && step.advisory?.kind !== "recoverable-maintenance") {
     // A caller's successful activation does not establish recovery/cleanup safety.
     // Unknown exceptions and unqualified completion refusals must fail the command.
     return new UpdateCommandFailure(
-      { ...result, status: "error", reason: "package-backup-retention-failed" },
+      { ...result, status: "error", reason: "package-backup-retention-failed", failedStep: step },
       1,
-      retained.stderrTail ?? "Package backup completion was not verified.",
+      step.stderrTail ?? "Package backup completion was not verified.",
       { cause: cleanupFailure },
     );
   }
@@ -281,6 +311,9 @@ export async function reportPreMutationUpdateResult(
         }
       : {}),
   }));
+  if (!params.opts.run && params.opts.dryRun && params.reason === "invalid-dev-target") {
+    return exitCliAfterOutput(defaultRuntime, 1);
+  }
   throw new UpdateCommandFailure(
     result,
     params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
@@ -298,35 +331,41 @@ async function publishPreMutationUpdateOutcome(
     recordUpdateRunPhase(
       run.runId,
       active.phase,
-      { origin: { nextAction: params.message } },
+      {
+        origin: { nextAction: params.message },
+        ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
+      },
       { env: run.env },
     );
   }
   const outcome = await prepareOutcome();
+  const failedStep: UpdateStepResult | undefined =
+    outcome.status === "error" || params.failureFacts?.length
+      ? {
+          // A skipped admission adds facts to its phase, not evidence of update work.
+          name: outcome.status === "skipped" ? (active?.phase ?? "requested") : params.reason,
+          command: "openclaw update",
+          cwd: params.root,
+          durationMs: 0,
+          exitCode: outcome.status === "error" ? 1 : 0,
+          stderrTail: params.message,
+          ...(params.recoverySteps ? { recoverySteps: params.recoverySteps } : {}),
+          failureFacts: normalizeUpdateFailureFacts(
+            params.failureFacts ?? [
+              { check: params.reason, code: params.reason, message: params.message },
+            ],
+            run?.env,
+          ),
+        }
+      : undefined;
   const result = completeUpdateCommandRun(
     {
       ...outcome,
-      mode: params.installKind === "git" ? "git" : "unknown",
+      mode: params.mode ?? (params.installKind === "git" ? "git" : "unknown"),
       root: params.root,
       reason: params.reason,
-      steps:
-        outcome.status === "error"
-          ? [
-              {
-                name: params.reason,
-                command: "openclaw update",
-                cwd: params.root,
-                durationMs: 0,
-                exitCode: 1,
-                failureFacts: normalizeUpdateFailureFacts(
-                  params.failureFacts ?? [
-                    { check: params.reason, code: params.reason, message: params.message },
-                  ],
-                  run?.env,
-                ),
-              },
-            ]
-          : [],
+      failedStep: outcome.status === "error" ? failedStep : undefined,
+      steps: failedStep ? [failedStep] : [],
       ...(outcome.status === "skipped"
         ? { before: { version: await readPackageVersion(params.root) } }
         : {}),
@@ -339,7 +378,13 @@ async function publishPreMutationUpdateOutcome(
       meta: params.controlPlaneUpdateSentinelMeta,
       result,
       jsonMode: Boolean(params.opts.json),
+      env: run?.env,
     });
+  }
+  // Existing runs and dry runs keep the legacy stderr-only target refusal.
+  if ((run || params.opts.dryRun) && params.reason === "invalid-dev-target" && params.message) {
+    defaultRuntime.error(params.message);
+    return result;
   }
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);

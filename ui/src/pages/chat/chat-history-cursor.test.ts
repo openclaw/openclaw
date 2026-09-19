@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -280,7 +281,22 @@ describe("chat history cursor revalidation", () => {
     expect(current.runs).toBe(projection.runs);
   });
 
-  it("keeps cached paint while replay updates an existing tool message in place", async () => {
+  it.each<{ name: string; items: AgentActivityItem[] }>([
+    { name: "authoritative quiet", items: [] },
+    {
+      name: "prepared completion",
+      items: [
+        {
+          itemId: "call-1",
+          toolCallId: "call-1",
+          kind: "tool",
+          phase: "end",
+          title: "Read file",
+          status: "completed",
+        },
+      ],
+    },
+  ])("keeps cached paint while replay hydrates $name in place", async ({ items }) => {
     const cached = message(
       "assistant",
       [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
@@ -309,6 +325,7 @@ describe("chat history cursor revalidation", () => {
     );
     response.resolve({
       kind: "delta",
+      activity: [{ messageId: "assistant-tool", items }],
       messages: [
         {
           sessionKey: "main",
@@ -327,10 +344,11 @@ describe("chat history cursor revalidation", () => {
     });
     await load;
 
-    expect(state.chatMessages).toEqual([replayed]);
+    const hydrated = { ...replayed, activity: items };
+    expect(state.chatMessages).toEqual([hydrated]);
     expect(readChatSessionSnapshot(cache, state, { sessionKey: state.sessionKey })).toMatchObject({
       deltaCursor: "cursor-2",
-      messages: [replayed],
+      messages: [hydrated],
     });
   });
 

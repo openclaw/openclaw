@@ -30,6 +30,7 @@ vi.mock("./mcp.js", () => ({
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  hasRegisteredNodeHostCommandActiveWork: vi.fn(() => false),
   isRegisteredNodeHostCommandDuplex: vi.fn(() => false),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
@@ -37,6 +38,7 @@ vi.mock("./plugin-node-host.js", () => ({
     nodePluginTools: [],
   })),
   watchRegisteredNodeHostCommandAvailability: vi.fn(() => () => {}),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => undefined),
   invokeRegisteredNodeHostCommand: vi.fn(async () => null),
 }));
 
@@ -114,6 +116,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
       expect(store.get(input.launchId)?.state).toBe("running");
       releaseLaunchResponse();
       await launching;
+      expect(runtime.tryPauseForUpdate()).toBe(false);
 
       await runtime.invoke({
         id: "invoke-status",

@@ -331,18 +331,17 @@ function adaptStepForBaseline(
       throw new Error(`config recipe step ${step.id} is missing its JSON value`);
     }
     const agents = JSON.parse(agentsJson);
-    // Explicit ownership was introduced in beta.2; beta.1 requires a
-    // legacy default marker, so this boundary must compare prereleases too.
+    // Keyed rosters shipped before explicit ownership; those baselines still
+    // require the legacy default marker.
     if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
-      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) => {
-        entry.id = id;
-        if (id === "main") {
-          entry.default = true;
-        }
-        return entry;
-      });
-      delete agents.entries;
+      agents.entries.main.default = true;
       delete agents.ownership;
+    }
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1) {
+      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) =>
+        Object.assign(entry, { id }),
+      );
+      delete agents.entries;
     }
     if (isReleaseBefore(baselineVersion, "2026.4.0")) {
       delete agents.defaults?.skills;

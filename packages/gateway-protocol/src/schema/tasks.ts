@@ -2,6 +2,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
 
@@ -32,6 +33,40 @@ const TaskDeliveryStatusSchema = Type.Union([
   Type.Literal("not_applicable"),
 ]);
 const TaskTerminalOutcomeSchema = Type.Union([Type.Literal("succeeded"), Type.Literal("blocked")]);
+const TaskExecutionSchema = closedObject({
+  state: Type.Union([
+    Type.Literal("queued"),
+    Type.Literal("running"),
+    Type.Literal("waiting"),
+    Type.Literal("finished"),
+    Type.Literal("unknown"),
+  ]),
+  currentTool: Type.Optional(closedObject({ name: Type.String(), startedAt: TimestampSchema })),
+  lastActivityAt: Type.Optional(TimestampSchema),
+  wait: Type.Optional(
+    closedObject({
+      kind: Type.Union([
+        Type.Literal("children"),
+        Type.Literal("external"),
+        Type.Literal("agent_messages"),
+        Type.Literal("approval"),
+        Type.Literal("user_input"),
+      ]),
+      dependencies: Type.Optional(
+        Type.Array(
+          closedObject({
+            runId: NonEmptyString,
+            sessionKey: Type.Optional(Type.String()),
+            taskId: Type.Optional(Type.String()),
+            label: Type.Optional(Type.String()),
+          }),
+          { maxItems: 100 },
+        ),
+      ),
+      pendingCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    }),
+  ),
+});
 const TaskListSortBySchema = Type.Unsafe<"updatedAt" | "endedAt">({
   type: "string",
   enum: ["updatedAt", "endedAt"],
@@ -68,6 +103,7 @@ export const TaskSummarySchema = closedObject({
   endedAt: Type.Optional(TimestampSchema),
   toolUseCount: Type.Optional(Type.Integer({ minimum: 0 })),
   lastToolName: Type.Optional(Type.String()),
+  execution: Type.Optional(withSince("2026.9", TaskExecutionSchema)),
   lastActivity: Type.Optional(withSince("2026.8", Type.String({ maxLength: 200 }))),
   diffStat: Type.Optional(TaskDiffStatSchema),
   progressSummary: Type.Optional(Type.String()),
@@ -119,6 +155,7 @@ export const TasksHistoryParamsSchema = closedObject({
 export const TasksHistoryResultSchema = closedObject({
   /** Stable messageId or __openclaw.id anchors refreshes; entry IDs can have sibling rows. */
   messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
   nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
 });
 

@@ -293,8 +293,16 @@ export async function resolveCommandsSystemPromptBundle(
         },
       }
     : { enabled: false };
+  const { getPreparedModelCatalogOwnerSnapshot } =
+    await import("../../agents/prepared-model-catalog.js");
+  const preparedModelRuntime = getPreparedModelCatalogOwnerSnapshot({
+    config: params.cfg,
+    agentId: sessionAgentId,
+    workspaceDir,
+  });
   const systemPrompt = buildConfiguredAgentSystemPrompt({
     config: params.cfg,
+    preparedModelRuntime,
     agentId: sessionAgentId,
     workspaceDir,
     reasoningLevel: params.resolvedReasoningLevel,

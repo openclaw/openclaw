@@ -1,8 +1,5 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
-import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber as resolvePositiveContextTokens,
-} from "@openclaw/normalization-core/number-coercion";
+import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
@@ -15,18 +12,12 @@ import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
-import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
   resolveProjectedSessionContextTokens,
   resolveTrustedSessionContextTokens,
 } from "../../config/sessions/context-token-provenance.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import {
-  createChildDiagnosticTraceContext,
-  freezeDiagnosticTraceContext,
-} from "../../infra/diagnostic-trace-context.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -36,6 +27,7 @@ import {
 } from "../run-diagnostics.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
+import type { DispatchCronDeliveryState } from "./delivery-dispatch-types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
@@ -44,6 +36,7 @@ import {
   setCronSessionAgentHarnessId,
   setCronSessionRuntimeModel,
 } from "./run-session-state.js";
+import { resolveCronRunUsage } from "./run-usage.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
   deriveSessionTotalTokens,
@@ -62,6 +55,7 @@ export async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
+  settleUsage: (contextTokens: number) => Promise<CronRunTelemetry["usage"]>;
   markCronRunSessionCleanupHandled: () => void;
   beforeSessionDelete: () => void;
 }): Promise<RunCronAgentTurnResult> {
@@ -104,18 +98,11 @@ export async function finalizeCronRun(params: {
       });
     }
   }
-  const usage = finalRunResult.meta?.agentMeta?.usage;
-  const diagnosticUsage = finalRunResult.meta?.agentMeta?.diagnosticUsage ?? usage;
+  const usage = resolveCronRunUsage(execution.completedPromptRuns);
   const lastCallUsage = finalRunResult.meta?.agentMeta?.lastCallUsage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
-  const modelUsed =
-    finalRunResult.meta?.agentMeta?.model ??
-    execution.fallbackModel ??
-    execution.liveSelection.model;
-  const providerUsed =
-    finalRunResult.meta?.agentMeta?.provider ??
-    execution.fallbackProvider ??
-    execution.liveSelection.provider;
+  const modelUsed = finalRunResult.meta?.agentMeta?.model ?? execution.fallbackModel;
+  const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? execution.fallbackProvider;
   const runtimeContextTokens = resolvePositiveContextTokens(
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
@@ -170,37 +157,12 @@ export async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
   }
-  let telemetry: CronRunTelemetry = { model: modelUsed, provider: providerUsed };
-  if (hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const cacheRead = usage.cacheRead ?? 0;
-    const cacheWrite = usage.cacheWrite ?? 0;
-    const lastCallTotalTokens = deriveSessionTotalTokens({
+  if (hasNonzeroUsage(usage) || hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)) {
+    const totalTokens = deriveSessionTotalTokens({
       usage: lastCallUsage,
       contextTokens,
       promptTokens,
     });
-    const totalTokens =
-      typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
-        ? lastCallTotalTokens
-        : undefined;
-    prepared.cronSession.sessionEntry.inputTokens = input;
-    prepared.cronSession.sessionEntry.outputTokens = output;
-    const bucketTotalTokens = input + output + cacheRead + cacheWrite;
-    // Keep telemetry totals consistent when a provider reports only a partial
-    // aggregate alongside the normalized billing buckets.
-    const aggregateTotalTokens =
-      typeof usage.total === "number" && Number.isFinite(usage.total)
-        ? Math.max(bucketTotalTokens, usage.total)
-        : bucketTotalTokens;
-    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
-      input_tokens: input,
-      output_tokens: output,
-      ...(aggregateTotalTokens > 0 ? { total_tokens: aggregateTotalTokens } : {}),
-      ...(cacheRead > 0 ? { cache_read_tokens: cacheRead } : {}),
-      ...(cacheWrite > 0 ? { cache_write_tokens: cacheWrite } : {}),
-    };
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
@@ -210,85 +172,12 @@ export async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
       prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
     }
-    prepared.cronSession.sessionEntry.cacheRead = cacheRead;
-    prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
-    telemetry = {
-      model: modelUsed,
-      provider: providerUsed,
-      usage: telemetryUsage,
-    };
   }
-  if (hasBillableUsage(usage) || hasBillableUsage(diagnosticUsage)) {
-    const { estimateAggregateUsageCost, resolveModelCostConfig } =
-      await import("../../utils/usage-format.js");
-    const costConfig = resolveModelCostConfig({
-      provider: providerUsed,
-      model: modelUsed,
-      config: prepared.cfgWithAgentDefaults,
-      agentDir: prepared.agentDir,
-    });
-    if (hasBillableUsage(usage)) {
-      // Monetary facts do not establish token/context counters; unknown cost clears old dollars.
-      prepared.cronSession.sessionEntry.estimatedCostUsd = asNonNegativeFiniteNumber(
-        estimateAggregateUsageCost({ usage, cost: costConfig }),
-      );
-    }
-    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults) && hasBillableUsage(diagnosticUsage)) {
-      const diagnosticInput = diagnosticUsage?.input ?? 0;
-      const diagnosticOutput = diagnosticUsage?.output ?? 0;
-      const diagnosticCacheRead = diagnosticUsage?.cacheRead ?? 0;
-      const diagnosticCacheWrite = diagnosticUsage?.cacheWrite ?? 0;
-      const usagePromptTokens = diagnosticInput + diagnosticCacheRead + diagnosticCacheWrite;
-      const diagnosticBucketTotalTokens = usagePromptTokens + diagnosticOutput;
-      const diagnosticTotalTokens =
-        typeof diagnosticUsage?.total === "number" && Number.isFinite(diagnosticUsage.total)
-          ? Math.max(diagnosticBucketTotalTokens, diagnosticUsage.total)
-          : diagnosticBucketTotalTokens;
-      const diagnosticEstimatedCostUsd = asNonNegativeFiniteNumber(
-        estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
-      );
-      const contextUsedTokens = deriveContextPromptTokens({
-        lastCallUsage,
-        promptTokens,
-        usage,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "model.usage",
-        ...(finalRunResult.diagnosticTrace
-          ? {
-              trace: freezeDiagnosticTraceContext(
-                createChildDiagnosticTraceContext(finalRunResult.diagnosticTrace),
-              ),
-            }
-          : {}),
-        sessionKey: prepared.runSessionKey,
-        sessionId: prepared.currentRunSessionId(),
-        channel: "cron",
-        agentId: prepared.agentId,
-        provider: providerUsed,
-        model: modelUsed,
-        usage: {
-          input: diagnosticInput,
-          output: diagnosticOutput,
-          cacheRead: diagnosticCacheRead,
-          cacheWrite: diagnosticCacheWrite,
-          promptTokens: usagePromptTokens,
-          total: diagnosticTotalTokens,
-        },
-        lastCallUsage,
-        context: {
-          limit: contextTokens,
-          ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
-        },
-        ...(diagnosticEstimatedCostUsd !== undefined
-          ? { costUsd: diagnosticEstimatedCostUsd }
-          : {}),
-        durationMs: execution.runEndedAt - execution.runStartedAt,
-      });
-    }
-  }
-  await prepared.persistSessionEntry();
-  await prepared.runContinuationSession?.seal({ basePersisted: true });
+  const telemetry: CronRunTelemetry = {
+    model: modelUsed,
+    provider: providerUsed,
+    usage: await params.settleUsage(contextTokens),
+  };
 
   if (params.isAborted()) {
     return prepared.withRunSession({
@@ -353,42 +242,52 @@ export async function finalizeCronRun(params: {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
   const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
-  const resolveRunOutcome = (result?: {
-    deliveryState?: RunCronAgentTurnResult["deliveryState"];
-    delivered?: boolean;
-    deliveryAttempted?: boolean;
-    deliveryError?: string;
-    deliverySuppressionReason?: RunCronAgentTurnResult["deliverySuppressionReason"];
-    delivery?: CronDeliveryTrace;
-  }) =>
-    prepared.withRunSession({
-      status: hasFatalErrorPayload ? "error" : "ok",
-      ...(hasFatalErrorPayload
-        ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
-        : {}),
-      summary,
-      outputText,
+  const resolveRunOutcome = (
+    result?: Partial<DispatchCronDeliveryState> & { delivery?: CronDeliveryTrace },
+  ) => {
+    const disposition = result?.disposition;
+    const failure = disposition?.kind === "error" ? disposition : undefined;
+    // A failed handoff wins; a non-error delivery stop must retain the run's fatal outcome.
+    const useRunFailure = hasFatalErrorPayload && !failure;
+    const runError = embeddedRunError ?? "cron isolated run returned an error payload";
+    const deliveryError = disposition && useRunFailure ? undefined : result?.deliveryError;
+    const deliveryDiagnosticError = deliveryError ?? failure?.error;
+    const output =
+      failure && failure.errorKind !== "delivery-target"
+        ? {}
+        : disposition && !useRunFailure
+          ? { summary: result?.summary, outputText: result?.outputText }
+          : { summary, outputText };
+    return prepared.withRunSession({
+      status: failure || hasFatalErrorPayload ? "error" : "ok",
+      ...(failure
+        ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
+        : hasFatalErrorPayload
+          ? { error: runError }
+          : {}),
+      ...output,
       replyDisposition,
       deliveryState: result?.deliveryState,
-      delivered: result?.delivered,
+      delivered:
+        useRunFailure && disposition?.kind === "pending"
+          ? undefined
+          : (failure?.delivered ?? result?.delivered),
       deliveryAttempted: result?.deliveryAttempted,
-      deliveryError: result?.deliveryError,
+      deliveryError,
       deliverySuppressionReason: result?.deliverySuppressionReason,
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
-        hasFatalErrorPayload && !hasTerminalToolFailure
-          ? createCronRunDiagnosticsFromError(
-              "agent-run",
-              embeddedRunError ?? "cron isolated run returned an error payload",
-            )
+        useRunFailure && !hasTerminalToolFailure
+          ? createCronRunDiagnosticsFromError("agent-run", runError)
           : undefined,
-        result?.deliveryError
-          ? createCronRunDiagnosticsFromError("delivery", result.deliveryError)
+        deliveryDiagnosticError
+          ? createCronRunDiagnosticsFromError("delivery", deliveryDiagnosticError)
           : undefined,
       ),
       ...telemetry,
     });
+  };
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
     if (pendingPresentationWarningError && delivered !== true) {
       hasFatalErrorPayload = true;
@@ -494,7 +393,6 @@ export async function finalizeCronRun(params: {
   params.markCronRunSessionCleanupHandled();
   const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
-    cfg: prepared.input.cfg,
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
     deps: prepared.input.deps,
     job: prepared.input.job,
@@ -508,7 +406,6 @@ export async function finalizeCronRun(params: {
     sessionUpdatedAt: prepared.cronSession.sessionEntry.updatedAt,
     beforeSessionDelete: params.beforeSessionDelete,
     runStartedAt: execution.runStartedAt,
-    runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryPlan: prepared.deliveryPlan,
@@ -529,11 +426,9 @@ export async function finalizeCronRun(params: {
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,
     outputText,
-    telemetry,
     abortSignal: prepared.input.abortSignal ?? prepared.input.signal,
     isAborted: params.isAborted,
     abortReason: params.abortReason,
-    withRunSession: prepared.withRunSession,
   });
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
@@ -545,54 +440,10 @@ export async function finalizeCronRun(params: {
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
   });
-  if (deliveryResult.result) {
-    const deliveryError = deliveryResult.result.deliveryError ?? deliveryResult.deliveryError;
-    const deliveryDiagnosticError =
-      deliveryError ??
-      (deliveryResult.result.status === "error" ? deliveryResult.result.error : undefined);
-    const resultWithDeliveryMeta: RunCronAgentTurnResult = {
-      ...deliveryResult.result,
-      replyDisposition,
-      deliveryState: deliveryResult.deliveryState,
-      delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
-      deliveryAttempted:
-        deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
-      deliveryError,
-      delivery: deliveryTrace,
-      diagnostics: mergeCronRunDiagnostics(
-        runDiagnostics,
-        deliveryResult.result.diagnostics,
-        deliveryDiagnosticError
-          ? createCronRunDiagnosticsFromError("delivery", deliveryDiagnosticError)
-          : undefined,
-      ),
-    };
-    failPendingPresentationWarningUnlessDelivered(
-      resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
-    );
-    if (!hasFatalErrorPayload) {
-      return resultWithDeliveryMeta;
-    }
-    if (deliveryResult.result.status !== "ok") {
-      return resultWithDeliveryMeta;
-    }
-    return resolveRunOutcome({
-      deliveryState: deliveryResult.deliveryState,
-      delivered: deliveryResult.result.delivered,
-      deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
-      deliverySuppressionReason: resultWithDeliveryMeta.deliverySuppressionReason,
-      delivery: deliveryTrace,
-    });
+  if (!deliveryResult.disposition) {
+    summary = deliveryResult.summary;
+    outputText = deliveryResult.outputText;
   }
-  summary = deliveryResult.summary;
-  outputText = deliveryResult.outputText;
   failPendingPresentationWarningUnlessDelivered(deliveryResult.delivered);
-  return resolveRunOutcome({
-    deliveryState: deliveryResult.deliveryState,
-    delivered: deliveryResult.delivered,
-    deliveryAttempted: deliveryResult.deliveryAttempted,
-    deliveryError: deliveryResult.deliveryError,
-    deliverySuppressionReason: deliveryResult.deliverySuppressionReason,
-    delivery: deliveryTrace,
-  });
+  return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

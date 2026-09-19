@@ -13,10 +13,7 @@ import {
   exportTranscriptSummary,
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
-import {
-  persistTranscriptSummary,
-  readTranscriptSummary,
-} from "../../transcripts/capture-summary.js";
+import { persistTranscriptSummary } from "../../transcripts/capture-summary.js";
 import {
   activeSessions,
   authorizeTranscriptSource,
@@ -192,25 +189,21 @@ async function summarizeExisting(params: {
   }
   const { session, selector } = selection;
   const sessionId = session.sessionId;
-  const summary = await readTranscriptSummary({ ...params, cfg: params.ctx.config, session });
-  // Reading yields; a retired capture cannot write into its same-tuple replacement.
-  params.ctx.assertCallerActive?.();
-  if (!(await canWriteSummary())) {
-    return transcriptSelectionNoLongerActive(selection);
-  }
-  let intendedPath: string;
+  let persisted: Awaited<ReturnType<typeof persistTranscriptSummary>>;
   try {
-    intendedPath = await params.store.writeSummary(
-      summary,
+    persisted = await persistTranscriptSummary({
+      ...params,
+      cfg: params.ctx.config,
       session,
-      selection.historicalRevision,
-      () => {
+      expectedInputRevision: selection.historicalRevision,
+      allowAppends: Boolean(selection.selectedActive),
+      assertCurrent: () => {
         params.ctx.assertCallerActive?.();
         if (!ownsSummary()) {
           throw new TranscriptsSummaryChangedError();
         }
       },
-    );
+    });
   } catch (error) {
     if (error instanceof TranscriptsSummaryChangedError) {
       return transcriptSelectionNoLongerActive(selection);
@@ -224,8 +217,9 @@ async function summarizeExisting(params: {
   const { summaryPath, intendedSummaryPath, summaryExportError } = await exportTranscriptSummary(
     params.store,
     session,
-    { summary, intendedSummaryPath: intendedPath },
+    persisted,
   );
+  const { summary } = persisted;
   return toolText(
     `Transcripts summarized: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {

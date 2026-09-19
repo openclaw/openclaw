@@ -26,6 +26,15 @@ export type VitestRuntimeTestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "src/gateway/setup-inference.first-signin.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
+  {
     file: "src/plugins/loader.test.ts",
     configs: ["test/vitest/vitest.bundled.config.ts"],
     mode: "runtime",
@@ -49,14 +58,18 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
-  ...["src/node-host/linux-node-plugin.integration.test.ts", "src/entry.memory-json.test.ts"].map(
-    (file) => ({
-      file,
-      configs: ["test/vitest/vitest.unit.config.ts", "test/vitest/vitest.unit-src.config.ts"],
-      mode: "runtime" as const,
-      dir: "",
-    }),
-  ),
+  {
+    file: "src/node-host/linux-node-plugin.integration.test.ts",
+    configs: ["test/vitest/vitest.unit.config.ts", "test/vitest/vitest.unit-src.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
+  {
+    file: "src/entry.memory-json.test.ts",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    mode: "runtime",
+    dir: "",
+  },
   ...[
     "test/openai-model-discovery-auth-order.test.ts",
     "test/plugin-npm-runtime-build.test.ts",
@@ -95,6 +108,7 @@ const runtimeConsumers = [
     dir: "src",
   },
   ...[
+    "src/agents/agent-command-local.test.ts",
     "src/agents/simple-completion-runtime.plugin-scope.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/runtime-plugins.context-engine.integration.test.ts",
@@ -110,18 +124,33 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src/plugins",
   },
-  ...[
-    "test/plugins/codex-model-catalog.gateway.test.ts",
-    "src/gateway/server-methods/models-list.freshness.integration.test.ts",
-  ].map((file) => ({
-    file,
+  {
+    file: "test/plugins/codex-model-catalog.gateway.test.ts",
     configs: [
       "test/vitest/vitest.gateway-methods.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
-    mode: "runtime" as const,
+    mode: "runtime",
     dir: "",
-  })),
+  },
+  {
+    file: "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
+  {
+    file: "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
   ...["src/config/config-startup-corpus.test.ts", "src/config/state-startup-corpus.test.ts"].map(
     (file) => ({
       file,
@@ -190,6 +219,7 @@ const runtimeConsumers = [
     dir: "src",
   })),
   ...[
+    "src/commands/doctor-config-flow.legacy-composition.test.ts",
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
     "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
@@ -218,15 +248,23 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src",
   },
-  {
-    file: "src/gateway/server.chat-cli-auth.test.ts",
+  ...[
+    "src/gateway/server.chat-cli-auth.test.ts",
+    "src/gateway/server.chat-recovered-output.test.ts",
+    "src/gateway/server.chat.canonical-publication.test.ts",
+    "src/gateway/server.cli-watchdog.test.ts",
+    "src/gateway/server.codex-failure-recovery.test.ts",
+    "src/gateway/server.message-buffer-caption.test.ts",
+    "src/gateway/server.xai-fallback.test.ts",
+  ].map((file) => ({
+    file,
     configs: [
       "test/vitest/vitest.gateway-server-isolated.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "",
-  },
+  })),
   ...[
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
@@ -241,13 +279,24 @@ const runtimeConsumers = [
   })),
   ...[
     "src/gateway/gateway-active-memory.test.ts",
-    "src/gateway/gateway-auth-recovery.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
-    "src/gateway/gateway-cron-process-identity.windows.test.ts",
-    "src/gateway/gateway-route-model-reuse.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/gateway",
+  })),
+  ...[
+    "src/gateway/gateway-auth-recovery.test.ts",
+    "src/gateway/gateway-cron-process-identity.windows.test.ts",
+    "src/gateway/gateway-route-model-reuse.test.ts",
+    "src/gateway/gateway-ssh-upload-signal.test.ts",
+  ].map((file) => ({
+    file,
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
     mode: "runtime" as const,
     dir: "src/gateway",
   })),
@@ -266,11 +315,11 @@ function includesRuntimeConfig(configs: readonly string[] | undefined, config: s
 }
 
 export function resolveVitestRuntimeConfigScopes(config: string) {
-  return runtimeConsumers.flatMap(({ configs, dir }) => {
+  return runtimeConsumers.flatMap(({ file, configs, dir }) => {
     // Preserve the matched project scope; broad roots must not apply another
     // consumer's directory to scoped exclusions.
     const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
-    return selected.length ? [{ configs: selected, dir }] : [];
+    return selected.length ? [{ file, configs: selected, dir }] : [];
   });
 }
 

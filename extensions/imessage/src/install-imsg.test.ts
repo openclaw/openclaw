@@ -1,9 +1,8 @@
-// iMessage tests cover imsg CLI install behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 const { resolveBrewExecutableMock, runPluginCommandWithTimeoutMock } = vi.hoisted(() => ({
   resolveBrewExecutableMock: vi.fn(),
@@ -47,7 +46,7 @@ describe("installIMessageCli", () => {
         .mockResolvedValueOnce({ code: 0, stdout: `${brewPrefix}\n`, stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "0.13.0\n", stderr: "" });
 
-      const result = await installIMessageCli({ log: vi.fn() } as unknown as RuntimeEnv);
+      const result = await installIMessageCli(createRuntimeSpies());
 
       expect(result).toEqual({
         ok: true,
@@ -85,7 +84,7 @@ describe("installIMessageCli", () => {
         .mockResolvedValueOnce({ code: 0, stdout: `${brewPrefix}\n`, stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: "0.13.1\n", stderr: "" });
 
-      const result = await installIMessageCli({ log: vi.fn() } as unknown as RuntimeEnv, {
+      const result = await installIMessageCli(createRuntimeSpies(), {
         upgrade: true,
       });
 
@@ -114,7 +113,7 @@ describe("installIMessageCli", () => {
       stderr: "",
     });
 
-    const result = await installIMessageCli({ log: vi.fn() } as unknown as RuntimeEnv, {
+    const result = await installIMessageCli(createRuntimeSpies(), {
       upgrade: true,
     });
 
@@ -144,7 +143,7 @@ describe("installIMessageCli", () => {
         .mockResolvedValueOnce({ code: 0, stdout: `${cliPath}\n`, stderr: "" })
         .mockResolvedValueOnce({ code: 0, stdout: `${cellar}\n`, stderr: "" });
 
-      const result = await installIMessageCli({ log: vi.fn() } as unknown as RuntimeEnv, {
+      const result = await installIMessageCli(createRuntimeSpies(), {
         upgrade: true,
       });
 
@@ -162,7 +161,7 @@ describe("installIMessageCli", () => {
     setProcessPlatform("darwin");
     resolveBrewExecutableMock.mockReturnValue(null);
 
-    const result = await installIMessageCli({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installIMessageCli(createRuntimeSpies());
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Homebrew is required for imsg setup");
@@ -172,7 +171,7 @@ describe("installIMessageCli", () => {
   it("does not auto-install imsg on non-macOS hosts", async () => {
     setProcessPlatform("linux");
 
-    const result = await installIMessageCli({ log: vi.fn() } as unknown as RuntimeEnv);
+    const result = await installIMessageCli(createRuntimeSpies());
 
     expect(result).toEqual({
       ok: false,

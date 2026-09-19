@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -11,13 +12,12 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  listOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { hasPendingCronSessionCleanupForAgent } from "./service/locked.js";
 
 const gatewayTestState = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -245,6 +245,7 @@ describe("CronService.remove session cleanup", () => {
 
     try {
       await vi.advanceTimersByTimeAsync(50);
+      await unrelatedAdd;
       expect(unrelatedAdded).toBe(true);
     } finally {
       releaseWriter.resolve();
@@ -334,9 +335,21 @@ describe("CronService.remove session cleanup", () => {
       { agentId: "main", storePath: sessionStorePath, sessionKey },
       { sessionId: "late-session", updatedAt: Date.now() },
     );
+    const cleanup = createDeferred<unknown>();
+    const deleteSession = expectDefined(
+      gatewayTestState.callGateway.getMockImplementation(),
+      "Gateway session deletion handler",
+    );
+    gatewayTestState.callGateway.mockImplementationOnce((...args) => {
+      const pending = deleteSession(...args);
+      cleanup.resolve(pending);
+      return pending;
+    });
     clearCronJobActive(job.id, marker);
 
+    await cleanup.promise;
     await vi.waitFor(() => {
+      expect(hasPendingCronSessionCleanupForAgent("main")).toBe(false);
       expect(loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })).toBeUndefined();
     });
   });

@@ -441,20 +441,26 @@ export async function aggregateQaProfileEvidenceShards(params: {
 
     const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    for (const entry of rebasedSummary.entries) {
-      for (const artifact of entry.execution?.artifacts ?? []) {
-        let relativePath = resolvedArtifacts.get(artifact.path);
-        if (!relativePath) {
-          relativePath = await resolveChildArtifactPath({
-            artifactPath: artifact.path,
-            evidencePath,
-            payloadRoot,
-            shardId: shard.id,
-          });
-          resolvedArtifacts.set(artifact.path, relativePath);
-        }
-        artifact.path = `shards/${shard.id}/${relativePath}`;
+    const artifacts = [
+      ...rebasedSummary.entries.flatMap((entry) => entry.execution?.artifacts ?? []),
+      ...(rebasedSummary.schemaVersion === 3
+        ? rebasedSummary.occurrences.flatMap((occurrence) =>
+            occurrence.receipts.map((receipt) => receipt.artifact),
+          )
+        : []),
+    ];
+    for (const artifact of artifacts) {
+      let relativePath = resolvedArtifacts.get(artifact.path);
+      if (!relativePath) {
+        relativePath = await resolveChildArtifactPath({
+          artifactPath: artifact.path,
+          evidencePath,
+          payloadRoot,
+          shardId: shard.id,
+        });
+        resolvedArtifacts.set(artifact.path, relativePath);
       }
+      artifact.path = `shards/${shard.id}/${relativePath}`;
     }
     seenShardIds.add(shard.id);
     summaries.push(rebasedSummary);
@@ -471,6 +477,7 @@ export async function aggregateQaProfileEvidenceShards(params: {
     excludedScenarios: executionSelection.excludedScenarios,
     expectedCells,
     observedCells,
+    proofRequirements: membership.profile.proofRequirements,
   });
   const merged = mergeQaEvidenceSummaries({
     evidenceSummaries: summaries,

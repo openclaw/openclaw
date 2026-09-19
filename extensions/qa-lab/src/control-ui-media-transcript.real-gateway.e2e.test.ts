@@ -136,16 +136,19 @@ suite.define(() => {
     const omittedSessionKey = "agent:qa:omitted-image-history";
     const retainedSessionKey = "agent:qa:retained-image-history";
     const retainedImageUrl = "https://example.invalid/retained-history-image.png";
-    await seed(omittedSessionKey, "omitted-image-history", [
-      {
-        type: "image",
-        mimeType: "image/png",
-        data: Buffer.from("omitted inline image").toString("base64"),
-      },
-    ]);
-    await seed(retainedSessionKey, "retained-image-history", [
-      { type: "image", mimeType: "image/png", source: { type: "url", url: retainedImageUrl } },
-    ]);
+    // Startup admits the fixture rows into the child Gateway's resident projection.
+    await gateway.gateway.restartAfterStateMutation(async () => {
+      await seed(omittedSessionKey, "omitted-image-history", [
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: Buffer.from("omitted inline image").toString("base64"),
+        },
+      ]);
+      await seed(retainedSessionKey, "retained-image-history", [
+        { type: "image", mimeType: "image/png", source: { type: "url", url: retainedImageUrl } },
+      ]);
+    });
     try {
       const omittedHistory = await gateway.gateway.call("chat.history", {
         sessionKey: omittedSessionKey,
@@ -261,6 +264,15 @@ suite.define(() => {
           controlUiEnabled: false,
         });
         await writeFile(path.join(gateway.gateway.workspaceDir, "slides.pptx"), await createPptx());
+        expect(await gateway.gateway.call("config.get", {})).toMatchObject({
+          config: {
+            agents: {
+              entries: {
+                qa: { model: { primary: "mock-openai/gpt-5.6-luna" } },
+              },
+            },
+          },
+        });
 
         await suite.withPage(
           {
@@ -282,7 +294,7 @@ suite.define(() => {
               },
               { gatewayUrl: gateway.gateway.wsUrl, token: gateway.gateway.token },
             );
-            await page.goto(new URL("chat", suite.server.baseUrl).href);
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:qa:main"));
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill("Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
             await page.getByRole("button", { name: "Send message" }).click();

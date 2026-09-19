@@ -84,7 +84,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       initialAuthoredConfig: {},
       initialSnapshotValid: true,
       initialSnapshotIssues: [],
-      initialInternalWriteHash: null,
       watchPath: "/tmp/openclaw.json",
       readSnapshot: vi.fn() as never,
       promoteSnapshot: vi.fn(async () => true) as never,

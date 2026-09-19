@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
@@ -79,7 +80,7 @@ describe("delivery-queue storage", () => {
           {
             channel: "directchat",
             to: "+1555",
-            payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+            payloads: [{ text: "x".repeat(64 * 1024), mediaUrl: artifact, audioAsVoice: true }],
             completionRetention: {
               idPrefix: "cron-direct-delivery:v1:",
               maxAgeMs: 24 * 60 * 60_000,
@@ -160,14 +161,68 @@ describe("delivery-queue storage", () => {
           lostClaim,
         );
         expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
-        expect(await loadPendingDelivery(id, stateDir)).toMatchObject({
+        const pending = await loadPendingDelivery(id, stateDir);
+        if (!pending) {
+          throw new Error("Expected the replacement platform owner to remain pending");
+        }
+        expect(pending).toMatchObject({
           recoveryState: "send_attempt_started",
           platformSendAttemptId: secondAttemptId,
           platformSendStartedAt: sameStartedAt,
         });
         expect(readStatus(id)).toBe("pending");
 
-        await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        });
+        const retryCount = db.prepare(
+          "UPDATE delivery_queue_entries SET retry_count = ? WHERE queue_name = ? AND id = ?",
+        );
+        retryCount.run(9007199254740992n, OUTBOUND_DELIVERY_QUEUE_NAME, id);
+        try {
+          let readError: unknown;
+          try {
+            await loadPendingDelivery(id, stateDir);
+          } catch (error) {
+            readError = error;
+          }
+          if (!(readError instanceof Error)) {
+            throw new Error("Expected the full pending reader to reject the unsafe integer");
+          }
+          expect(readError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+          let ackError: unknown;
+          try {
+            await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+          } catch (error) {
+            ackError = error;
+          }
+          expect(ackError).toBeInstanceOf(Error);
+          expect(ackError).toMatchObject({
+            code: "ERR_OUT_OF_RANGE",
+            name: readError.name,
+            message: readError.message,
+          });
+          expect(readStatus(id)).toBe("pending");
+          expect(await fs.readFile(artifact, "utf8")).toBe("newer owner still needs these bytes");
+        } finally {
+          retryCount.run(pending.retryCount, OUTBOUND_DELIVERY_QUEUE_NAME, id);
+        }
+        const entryTextBytes = Buffer.byteLength(JSON.stringify(readQueuedEntry(stateDir, id)));
+        const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
+          /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+            ? "queue"
+            : null,
+        );
+        try {
+          await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+          expect(reads.rowCounts.queue).toBeGreaterThan(0);
+          expect(reads.textBytes.queue).toBeGreaterThan(0);
+          expect.soft(reads.counts.queue).toBeLessThanOrEqual(3);
+          // One full pending row plus the existing compact receipt ownership reads.
+          expect.soft(reads.textBytes.queue).toBeLessThan(entryTextBytes + 4096);
+        } finally {
+          reads.restore();
+        }
         expect(readStatus(id)).toBe("completed");
         await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {

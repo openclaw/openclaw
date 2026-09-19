@@ -17,17 +17,6 @@ export OPENCLAW_PLUGINS_TMP_DIR
 OPENCLAW_PLUGINS_CLI_TIMEOUT="${OPENCLAW_PLUGINS_CLI_TIMEOUT:-180s}"
 mkdir -p "$OPENCLAW_PLUGINS_TMP_DIR"
 
-plugins_lifecycle_trace_enabled() {
-  case "${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" in
-    1 | true | TRUE | yes | YES)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 # Redact complete stderr before truncation so a split credential can never expose its suffix.
 print_plugins_stderr_log() {
   local error_file="$1"
@@ -70,7 +59,7 @@ run_plugins_command_logged() {
   }
   local status=0
   if "$@" >"$output_file" 2>"$error_file"; then
-    if plugins_lifecycle_trace_enabled; then
+    if docker_e2e_lifecycle_trace_enabled; then
       print_plugins_stderr_log "$error_file" || status=$?
     fi
   else

@@ -58,6 +58,116 @@ function catalogFixture() {
 }
 
 describe("session-share receiver catalog", () => {
+  it("does not invoke nodes when the owner retires during discovery", async () => {
+    const fixture = catalogFixture();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const controller = new AbortController();
+    const original = fixture.list.getMockImplementation()!;
+    fixture.list.mockImplementation(async (query) => {
+      entered.resolve();
+      await release.promise;
+      return original(query);
+    });
+    const pending = fixture.catalog.list({ signal: controller.signal });
+    await entered.promise;
+    const reason = new Error("catalog owner retired");
+    controller.abort(reason);
+    release.resolve();
+    await expect(pending).rejects.toBe(reason);
+
+    expect(fixture.invoke).not.toHaveBeenCalled();
+  });
+
+  it("delivers owner retirement to an active node invocation", async () => {
+    const fixture = catalogFixture();
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const controller = new AbortController();
+    let transportRetired = false;
+    fixture.invoke.mockImplementation(async ({ signal }) => {
+      const retire = () => {
+        transportRetired = true;
+        release.resolve();
+      };
+      signal?.addEventListener("abort", retire, { once: true });
+      entered.resolve();
+      try {
+        await release.promise;
+        return { sessions: [] };
+      } finally {
+        signal?.removeEventListener("abort", retire);
+      }
+    });
+    const pending = fixture.catalog.list({ signal: controller.signal });
+    try {
+      await entered.promise;
+      controller.abort(new Error("catalog owner retired"));
+      expect(transportRetired).toBe(true);
+    } finally {
+      release.resolve();
+      await pending.catch(() => []);
+    }
+  });
+
+  it.each(["retirement", "publication failure"] as const)(
+    "joins all started node work before rejecting on %s",
+    async (failure) => {
+      const fixture = catalogFixture();
+      const entered = createDeferred<void>();
+      const fast = createDeferred<void>();
+      const slow = createDeferred<void>();
+      const reason = new Error(failure);
+      const controller = new AbortController();
+      fixture.list.mockResolvedValue({
+        nodes: ["fast", "slow"].map((nodeId) => ({ nodeId, connected: true, commands })),
+      });
+      let started = 0;
+      fixture.invoke.mockImplementation(async ({ nodeId }) => {
+        if (++started === 2) {
+          entered.resolve();
+        }
+        await (nodeId === "fast" ? fast.promise : slow.promise);
+        return { sessions: [] };
+      });
+      const onHost = vi.fn((host: { hostId: string }) => {
+        if (failure === "publication failure" && host.hostId === "node:fast") {
+          throw reason;
+        }
+      });
+      let settled = false;
+      const pending = fixture.catalog.list({ signal: controller.signal, onHost });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await entered.promise;
+        if (failure === "retirement") {
+          controller.abort(reason);
+        }
+        fast.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        if (failure === "retirement") {
+          expect(onHost).not.toHaveBeenCalled();
+        }
+        slow.resolve();
+        await expect(pending).rejects.toBe(reason);
+      } finally {
+        fast.resolve();
+        slow.resolve();
+        await pending.catch(() => []);
+      }
+    },
+  );
+
   it.each(["openclaw", "node:alpha"])(
     "namespaces colliding profile claims by the invoked node, not wire domain %s",
     async (domain) => {

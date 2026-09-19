@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import {
   hostGroupedNativeCatalogs,
   resumableClaudeCatalog,
@@ -604,9 +605,7 @@ suite.define(() => {
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
-    const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
-    await showEarlier.waitFor();
-    expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
+    await expectHistoryBoundaryState(catalogPane, true);
     const anchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, anchor);
     let paintResult: VirtualRowPaintResult;
@@ -766,7 +765,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2]);
-      await pane.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
+      await expectHistoryBoundaryState(pane, true);
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -788,7 +787,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2, 6]);
-      await pane.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
+      await expectHistoryBoundaryState(pane, true);
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -808,6 +807,7 @@ suite.define(() => {
       await expect
         .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
         .toBe(0);
+      await expectHistoryBoundaryState(pane, false);
       expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
       if (artifactDir) {
         await writeFile(
@@ -825,6 +825,9 @@ suite.define(() => {
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
       ).toEqual([2, 6, 22]);
+      for (const request of await gateway.getRequests("chat.history")) {
+        expect(request.params).toMatchObject({ limit: 1000, maxBytes: 512 * 1024 });
+      }
     } finally {
       await suite.closeBrowserContext(context);
       if (artifactDir && proofVideo) {
@@ -833,7 +836,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the earlier-history action fixed while loading and preserves the reader after retry", async () => {
+  it("keeps the earlier-history action vertically stable while loading and preserves the reader after retry", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -917,23 +920,12 @@ suite.define(() => {
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll"));
     });
-    await showEarlier.waitFor();
-    const idleHistoryAction = await showEarlier.boundingBox();
-    expect(idleHistoryAction).not.toBeNull();
-    if (artifactDir) {
-      await page.screenshot({
-        path: path.join(artifactDir, "00-native-history-available.png"),
-        fullPage: true,
-      });
-    }
-    await thread.evaluate((element) => {
-      element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
-    });
     // Pin each wait past the earlier chat.history traffic so a slow runner
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
-    const loadingHistoryAction = await showEarlier.boundingBox();
+    const loadingEarlier = await expectHistoryBoundaryState(page, true);
+    const loadingHistoryAction = await loadingEarlier.boundingBox();
     if (artifactDir) {
       await page.screenshot({
         path: path.join(artifactDir, "01-native-history-loading.png"),
@@ -941,19 +933,35 @@ suite.define(() => {
       });
     }
     expect(loadingHistoryAction).not.toBeNull();
-    expect(loadingHistoryAction?.x).toBeCloseTo(idleHistoryAction?.x ?? 0, 0);
-    expect(loadingHistoryAction?.width).toBeCloseTo(idleHistoryAction?.width ?? 0, 0);
     await gateway.rejectDeferred("chat.history", {
       code: "UNAVAILABLE",
       message: "history unavailable",
       retryable: true,
     });
     await expect.poll(() => showEarlier.getAttribute("aria-busy")).toBe("false");
+    await expectHistoryBoundaryState(page, false);
+    // Upward scrolling already starts the load; rejection provides a stable
+    // idle action in the same viewport for the geometry comparison.
+    const idleHistoryAction = await showEarlier.boundingBox();
+    expect(idleHistoryAction).not.toBeNull();
+    expect(loadingHistoryAction?.y).toBeCloseTo(idleHistoryAction?.y ?? 0, 0);
+    expect(loadingHistoryAction?.height).toBeCloseTo(idleHistoryAction?.height ?? 0, 0);
+    expect((loadingHistoryAction?.x ?? 0) + (loadingHistoryAction?.width ?? 0) / 2).toBeCloseTo(
+      (idleHistoryAction?.x ?? 0) + (idleHistoryAction?.width ?? 0) / 2,
+      0,
+    );
+    if (artifactDir) {
+      await page.screenshot({
+        path: path.join(artifactDir, "02-native-history-retry-ready.png"),
+        fullPage: true,
+      });
+    }
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
     await showEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
     await page.locator('.chat-history-boundary__action[aria-busy="true"]').waitFor();
+    await expectHistoryBoundaryState(page, true);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     const readerAnchor = await captureTopVisibleVirtualRow(thread);
     await startVirtualRowPaintProbe(thread, readerAnchor);
@@ -976,11 +984,12 @@ suite.define(() => {
           ),
       )
       .toBe(1100);
+    await expectHistoryBoundaryState(page, false);
     await waitForPaintedVirtualRowAnchor(thread, readerAnchor);
     expectPaintedVirtualRowAnchor(readerAnchor, await stopVirtualRowPaintProbe(thread));
     if (artifactDir) {
       await page.screenshot({
-        path: path.join(artifactDir, "02-native-history-prepended-visible.png"),
+        path: path.join(artifactDir, "03-native-history-prepended-visible.png"),
         fullPage: true,
       });
     }

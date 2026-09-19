@@ -2,6 +2,7 @@
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -379,6 +380,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
+  GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */
   GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */

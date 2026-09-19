@@ -43,6 +43,7 @@ const {
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
+  registerRealtimeVoiceSelectionMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   createRealtimeSessionMock,
@@ -54,10 +55,9 @@ const {
   isSecretOwnerAvailableMock,
   canonicalizeRealtimeVoiceProviderIdMock,
 } = voiceTestMocks;
-const [managerModule, realtimeModule] = await Promise.all([
-  import("./voice-runtime.js"),
-  import("./realtime-session.runtime.js"),
-]);
+// Parallel entry points can race Vitest's async audio mock and capture different exports.
+const managerModule = await import("./voice-runtime.js");
+const realtimeModule = await import("./realtime-session.runtime.js");
 
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
   createDiscordVoiceTestHelpers(updateVoiceStateMock);
@@ -161,6 +161,7 @@ function buildVoiceTestHarness() {
       suppress: false,
     });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
+    registerRealtimeVoiceSelectionMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
       provider: { id: "openai" },
       capabilities: { supportsActivationNameGating: true },
@@ -677,6 +678,7 @@ function buildVoiceTestHarness() {
     loggerWarnMock,
     loggerErrorMock,
     resolveConfiguredRealtimeVoiceProviderMock,
+    registerRealtimeVoiceSelectionMock,
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,
     createRealtimeSessionMock,
@@ -740,7 +742,5 @@ export type DiscordVoiceTestHarness = ReturnType<typeof buildVoiceTestHarness>;
 export function defineDiscordVoiceTests(
   register: (harness: DiscordVoiceTestHarness) => void,
 ): void {
-  describe("DiscordVoiceManager", () => {
-    register(buildVoiceTestHarness());
-  });
+  describe("DiscordVoiceManager", () => register(buildVoiceTestHarness()));
 }

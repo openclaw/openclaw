@@ -10,6 +10,7 @@ type EventEmitterLike = {
 
 export async function cleanupDiscordProviderStartup(params: {
   deactivateMessageHandler?: () => void | Promise<void>;
+  stopMonitorListeners?: () => Promise<void>;
   autoPresenceController?: { stop: () => void } | null;
   setStatus?: DiscordMonitorStatusSink;
   onEarlyGatewayDebug?: ((msg: unknown) => void) | undefined;
@@ -20,7 +21,12 @@ export async function cleanupDiscordProviderStartup(params: {
   threadBindings: ThreadBindingManager;
   runtime: RuntimeEnv;
 }) {
-  await params.deactivateMessageHandler?.();
+  const listenersStopped = params.stopMonitorListeners?.();
+  try {
+    await params.deactivateMessageHandler?.();
+  } finally {
+    await listenersStopped;
+  }
   params.autoPresenceController?.stop();
   params.setStatus?.({ connected: false });
   if (params.onEarlyGatewayDebug) {

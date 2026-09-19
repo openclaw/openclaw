@@ -12,7 +12,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -187,7 +186,7 @@ test.each(
     ),
   ),
 )(
-  "two synchronous writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
+  "two foreground writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
   async ({ operation, rejected, alias }) => {
     const { databaseOptions, plan, scopes } = createFixture(alias);
     const workers: Array<{ worker: Worker; id: number }> = [];
@@ -208,13 +207,15 @@ test.each(
     let commitChecks = 0;
     let commitRequested = false;
     let checksDuringWriters = 0;
+    let workerAuthorizationChecked = false;
+    const boardWriteOrder: string[] = [];
     const owner = new AsyncLocalStorage<string>();
     hooks.beforeAuthorization = () =>
       owner.run("transcript-writer", () => {
         commitRequested = true;
         const checksBeforeWriters = commitChecks;
-        // The worker owns BEGIN IMMEDIATE and is waiting for the parent. Both sync
-        // runtimes must service that request before its queued handler can return.
+        // Synchronous writers service the worker's pending authorization request;
+        // asynchronous board writes retain their FIFO place until the worker settles.
         for (const scope of scopes) {
           try {
             if (operation === "entry") {
@@ -223,7 +224,6 @@ test.each(
               continue;
             }
             if (operation === "board") {
-              // First use enters the board's schema transaction before its canonical writer.
               boardAppends.push(
                 board
                   .putWidget({
@@ -233,6 +233,8 @@ test.each(
                   })
                   .then(
                     (snapshot) => {
+                      expect(workerAuthorizationChecked).toBe(true);
+                      boardWriteOrder.push(scope.sessionId);
                       appends.push(snapshot.revision);
                     },
                     (error: unknown) => {
@@ -253,6 +255,14 @@ test.each(
           }
         }
         checksDuringWriters = commitChecks - checksBeforeWriters;
+        if (operation === "board") {
+          const stored = withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              db.prepare("SELECT name FROM board_widgets WHERE name = 'writer-proof'").all(),
+            databaseOptions,
+          );
+          expect(stored).toEqual({ found: true, value: [] });
+        }
       });
     const reclamation = owner.run("reclamation-owner", () =>
       runSqliteSessionReclamation({
@@ -262,6 +272,9 @@ test.each(
         assertCommitAllowed: () => {
           commitChecks += 1;
           expect(owner.getStore()).toBe("reclamation-owner");
+          if (commitRequested) {
+            workerAuthorizationChecked = true;
+          }
           if (rejected && commitRequested) {
             throw new Error("reclamation owner retired");
           }
@@ -286,7 +299,12 @@ test.each(
     expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
     await closeOpenClawAgentDatabasesAsync();
     expect(workers[0]?.worker.threadId).toBe(-1);
-    expect(checksDuringWriters).toBeGreaterThan(0);
+    if (operation === "board") {
+      expect(checksDuringWriters).toBe(0);
+      expect(boardWriteOrder).toEqual(scopes.map((scope) => scope.sessionId));
+    } else {
+      expect(checksDuringWriters).toBeGreaterThan(0);
+    }
     expect(appendErrors).toEqual([]);
     expect(appends).toEqual(
       operation === "entry"
@@ -545,73 +563,6 @@ test.runIf(process.platform !== "win32")(
   },
 );
 
-test.each([false, true])(
-  "periodic vacuum services reclamation approval (rejected: %s)",
-  async (rejected) => {
-    const { database, databaseOptions } = createFixture();
-    // sqlite-allow-raw -- Disposable free pages exercise the real incremental vacuum.
-    database.db.exec(`CREATE TABLE reclamation_fixture (payload BLOB);
-      INSERT INTO reclamation_fixture VALUES (zeroblob(8388608));
-      DROP TABLE reclamation_fixture;`);
-    const freePages = () =>
-      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
-    const before = freePages();
-    expect(before).toBeGreaterThan(512);
-    const plan = createLifecycleArtifactReclamationPlan({
-      agentId: databaseOptions.agentId,
-      databaseOptions,
-      entries: [],
-      materializedPlans: [],
-    });
-    const maintenanceErrors: unknown[] = [];
-    let commitChecks = 0;
-    let commitRequested = false;
-    let checksDuringMaintenance = 0;
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const maintenance = configureSqliteWalMaintenance(database.db, {
-      busyTimeoutMs: 1_000,
-      checkpointIntervalMs: 1,
-      onCheckpointError: (error) => maintenanceErrors.push(error),
-    });
-    hooks.beforeAuthorization = () => {
-      // The worker holds the writer lock and cannot commit until this thread approves it.
-      commitRequested = true;
-      const checksBeforeMaintenance = commitChecks;
-      vi.advanceTimersByTime(1);
-      checksDuringMaintenance = commitChecks - checksBeforeMaintenance;
-    };
-    try {
-      const reclamation = runSqliteSessionReclamation({
-        forceInProcess: false,
-        plan,
-        assertCommitAllowed: () => {
-          commitChecks += 1;
-          if (rejected && commitRequested) {
-            throw new Error("reclamation owner retired");
-          }
-        },
-      });
-      if (rejected) {
-        await expect(reclamation).rejects.toThrow("reclamation owner retired");
-      } else {
-        await expect(reclamation).resolves.toMatchObject({
-          kind: "lifecycle-artifacts",
-          value: { removedEntries: 0 },
-        });
-      }
-      expect(maintenanceErrors).toEqual([]);
-      expect(checksDuringMaintenance).toBeGreaterThan(0);
-      const reclaimed = before - freePages();
-      expect(reclaimed).toBeGreaterThan(0);
-      expect(reclaimed).toBeLessThanOrEqual(512);
-    } finally {
-      maintenance.close({ checkpointMode: "PASSIVE" });
-      vi.useRealTimers();
-    }
-  },
-  20_000,
-);
-
 test("one reclamation pass leaves a large freelist for bounded later maintenance", async () => {
   const { database, plan, scopes } = createFixture();
   // sqlite-allow-raw -- synthetic disposable pages exercise the real vacuum boundary.
@@ -651,7 +602,16 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
       });
     }
   });
-  await Promise.all([reclaimSqliteFreePages(databaseOptions), duringDrain]);
+  // Production retains writer admission across every yielded pass. In particular,
+  // retiring the old handle must queue its Worker checkpoint behind this drain.
+  await Promise.all([
+    runExclusiveSqliteSessionWrite(
+      databaseOptions,
+      () => reclaimSqliteFreePages(databaseOptions),
+      "session.history.free-pages",
+    ),
+    duringDrain,
+  ]);
   const reopened = openOpenClawAgentDatabase(databaseOptions);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });

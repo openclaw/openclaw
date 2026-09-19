@@ -1,4 +1,3 @@
-// Voice Call plugin module implements cli metadata behavior.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { VOICE_CALL_CLI_DESCRIPTOR } from "./cli-output-mode.js";
 

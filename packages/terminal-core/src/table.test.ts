@@ -729,11 +729,18 @@ console.log(JSON.stringify({
     },
   );
 
-  it("shortens only exact home paths and child paths in table cells", () => {
-    const home = path.resolve("test-home", "alice");
-    vi.stubEnv("HOME", home);
+  it.each([
+    ["", path.resolve("/home/other"), "~"],
+    ["undefined", path.resolve("/home/other"), "~"],
+    ["null", path.resolve("/home/other"), "~"],
+    [" undefined ", path.resolve("/home/other"), "~"],
+    ["\tnull\t", path.resolve("/home/other"), "~"],
+    ["/srv/openclaw-home", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"],
+    [" /srv/openclaw-home ", path.resolve("/srv/openclaw-home"), "$OPENCLAW_HOME"],
+  ])("shortens home paths in table cells for OPENCLAW_HOME=%j", (override, home, prefix) => {
+    vi.stubEnv("HOME", "/home/other");
     vi.stubEnv("USERPROFILE", "");
-    vi.stubEnv("OPENCLAW_HOME", "");
+    vi.stubEnv("OPENCLAW_HOME", override);
 
     const out = renderTable({
       border: "none",
@@ -746,11 +753,11 @@ console.log(JSON.stringify({
       ],
     });
 
-    expect(out).toContain("~\n");
-    expect(out).toContain("~/project");
+    expect(out).toContain(`${prefix}\n`);
+    expect(out).toContain(`${prefix}/project`);
     expect(out).toContain(`${home}2/project`);
-    expect(out).toContain("Workspace: ~/project");
-    expect(out).not.toContain("~2/project");
+    expect(out).toContain(`Workspace: ${prefix}/project`);
+    expect(out).not.toContain(`${prefix}2/project`);
   });
 
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {

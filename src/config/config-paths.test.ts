@@ -1,9 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  parseConcreteConfigPath,
+  parseConcreteConfigPathTokens,
+  parseConcreteConfigPathWithProvenance,
+  tokenizeConcreteConfigPath,
+} from "../shared/dot-path.js";
+import {
   getConfigValueAtPath,
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
+
+describe("concrete config path readers and mutation guards", () => {
+  it.each(["constructor", "prototype", "__proto__"])(
+    "reads diagnostic %s keys while all mutation parsers reject them",
+    (key) => {
+      const path = `tools.media.audio.request.headers.${key}`;
+      expect(tokenizeConcreteConfigPath(path).tokens).toEqual([
+        "tools",
+        "media",
+        "audio",
+        "request",
+        "headers",
+        key,
+      ]);
+      for (const parse of [
+        parseConcreteConfigPath,
+        parseConcreteConfigPathTokens,
+        parseConcreteConfigPathWithProvenance,
+      ]) {
+        expect(() => parse(path)).toThrow(`Invalid path segment: ${key}`);
+      }
+    },
+  );
+
+  it("retains quoted keys and array-index provenance through the shared grammar", () => {
+    const parsed = tokenizeConcreteConfigPath('entries["123"].headers["X.Trace"][0]');
+    expect(parsed.tokens).toEqual(["entries", "123", "headers", "X.Trace", 0]);
+    expect(parsed.quotedNumericSegments).toEqual(new Set([1]));
+    expect(parseConcreteConfigPathWithProvenance('entries["123"].headers["X.Trace"][0]')).toEqual(
+      parsed,
+    );
+  });
+});
 
 describe("config path own-property traversal", () => {
   for (const key of ["toString", "valueOf", "hasOwnProperty"]) {

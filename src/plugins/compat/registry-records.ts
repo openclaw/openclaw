@@ -54,6 +54,8 @@ export const PLUGIN_COMPAT_RECORDS = [
       "api.runtime.state.openSyncKeyedStore",
       "PluginStateSyncKeyedStore",
       "createPluginStateSyncKeyedStore",
+      "PluginStateKeyedStore.update",
+      "PluginStateKeyedStore.deleteIf",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations and state-store migration documentation",

@@ -376,7 +376,10 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     };
   }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
-    return { changes: [], warnings: [], completed: true, touchedConfig: !updateInProgress };
+    // No configured plugins or channels means no backfill happened, so there is nothing to stamp.
+    // The Doctor state runner persists config whenever touchedConfig is true, which would rewrite
+    // an operator's authored file - or create one that never existed - for zero repair work.
+    return { changes: [], warnings: [], completed: true, touchedConfig: false };
   }
   const repaired = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,

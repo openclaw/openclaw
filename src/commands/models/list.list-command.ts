@@ -130,7 +130,10 @@ export async function modelsListCommand(
       },
     );
   }
-  if (opts.refresh && result.providerOutcomes?.some((outcome) => outcome.status !== "ready")) {
+  if (
+    result.refreshFailed ||
+    (opts.refresh && result.providerOutcomes?.some((outcome) => outcome.status !== "ready"))
+  ) {
     runtime.error(
       "Model discovery could not refresh all providers. Showing the available published model list.",
     );

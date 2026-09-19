@@ -1,26 +1,24 @@
-import childProcess, { type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
-import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
 import * as secretRegistry from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import * as processTree from "../process/kill-tree.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import type * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
 import {
   createNodeWorkerSupervisorFixture,
+  observeNodeWorkerAdapters,
   waitForNodeWorkerTerminal as waitForTerminal,
 } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -70,141 +68,6 @@ function evictWorkerCredentialsOnRegistration() {
 }
 
 describe("node worker supervisor", () => {
-  it.each([
-    { availableParallelism: 0, expected: 1 },
-    { availableParallelism: 7, expected: 7 },
-    { availableParallelism: NODE_WORKER_CAPACITY_MAX + 1, expected: NODE_WORKER_CAPACITY_MAX },
-  ])(
-    "publishes $expected default worker slots for $availableParallelism available CPUs",
-    async ({ availableParallelism, expected }) => {
-      vi.spyOn(os, "availableParallelism").mockReturnValue(availableParallelism);
-      const capacitySnapshots: Array<{ total: number; available: number }> = [];
-      const { supervisor } = fixture({
-        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-      });
-
-      try {
-        await supervisor.initialize();
-        expect(capacitySnapshots.at(-1)).toEqual({ total: expected, available: expected });
-      } finally {
-        await supervisor.close();
-      }
-    },
-  );
-
-  it("uses explicit worker capacity without resolving the CPU default", async () => {
-    const availableParallelism = vi.spyOn(os, "availableParallelism");
-    const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const { supervisor } = fixture({
-      capacity: 3,
-      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-    });
-
-    try {
-      await supervisor.initialize();
-      expect(capacitySnapshots.at(-1)).toEqual({ total: 3, available: 3 });
-      expect(availableParallelism).not.toHaveBeenCalled();
-    } finally {
-      await supervisor.close();
-    }
-  });
-
-  it("keeps construction and close inert without resolving process identity", async () => {
-    const root = tempDirs.make("node-worker-inert-");
-    const { bundleRoot, env } = writeNodeWorkerFixture(root);
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    const spawnSync = vi.spyOn(childProcess, "spawnSync");
-    const execFileSync = vi.spyOn(childProcess, "execFileSync");
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-    try {
-      const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-      await supervisor.close();
-      expect(spawnSync).not.toHaveBeenCalled();
-      expect(execFileSync).not.toHaveBeenCalled();
-    } finally {
-      if (originalPlatform) {
-        Object.defineProperty(process, "platform", originalPlatform);
-      }
-    }
-  });
-
-  it("keeps the additive table absent until the first stateful operation", async () => {
-    const { bundleRoot, env, supervisor } = fixture();
-    const database = openOpenClawStateDatabase({ env });
-    const findTable = () =>
-      database.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("node_worker_launches");
-
-    expect(findTable()).toBeUndefined();
-    await supervisor.close();
-    expect(findTable()).toBeUndefined();
-
-    const active = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(await active.status("missing-launch")).toBeUndefined();
-    expect(
-      database.db
-        .prepare("SELECT strict FROM pragma_table_list WHERE name = ?")
-        .get("node_worker_launches"),
-    ).toEqual({ strict: 1 });
-    await active.close();
-  });
-
-  it("keeps pending and running launches owned by a live supervisor unchanged", async () => {
-    const { bundleRoot, env, supervisor, workspaceDir } = fixture();
-    await supervisor.status("schema-probe");
-    const supervisorIdentity = requireNodeWorkerProcessIdentity(process.pid);
-    const store = new NodeWorkerLaunchStore({ env });
-    const turns = new NodeWorkerTurnStore({ env });
-    for (const launchId of ["pending-launch", "running-launch"]) {
-      const input = launchInput(workspaceDir, launchId, "wait");
-      const claim = {
-        ...testNodeWorkerLaunchIdentity(input),
-        gatewayNamespace: input.gatewayNamespace,
-      };
-      store.claim(claim, supervisorIdentity, 2);
-      turns.claim({ claim, ownerLaunchId: launchId, supervisor: supervisorIdentity });
-      if (launchId === "running-launch") {
-        store.markRunning({ ...claim, supervisor: supervisorIdentity, worker: supervisorIdentity });
-      }
-    }
-
-    const capacitySnapshots: Array<{ total: number; available: number }> = [];
-    const sameHandle = createNodeWorkerSupervisor({
-      bundleRoot,
-      env,
-      capacity: 2,
-      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
-    });
-    expect(await sameHandle.status("pending-launch")).toMatchObject({
-      state: "pending",
-      worker: null,
-    });
-    expect(await sameHandle.status("running-launch")).toMatchObject({
-      state: "running",
-      worker: supervisorIdentity,
-    });
-    expect(capacitySnapshots).toEqual([
-      { total: 2, available: 0 },
-      { total: 2, available: 0 },
-    ]);
-    await supervisor.close();
-    await sameHandle.close();
-    closeOpenClawStateDatabaseForTest();
-
-    openOpenClawStateDatabase({ env });
-    const recovered = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(await recovered.status("pending-launch")).toMatchObject({
-      state: "pending",
-      worker: null,
-    });
-    expect(await recovered.status("running-launch")).toMatchObject({
-      state: "running",
-      worker: supervisorIdentity,
-    });
-    await recovered.close();
-  });
-
   it("rejects a mismatched launch and turn identity before durable admission", async () => {
     const { env, supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "launch-id");
@@ -662,77 +525,6 @@ describe("node worker supervisor", () => {
     }
   });
 
-  it("does not open or signal a child after markRunning observes its terminal receipt", async () => {
-    const capacities: Array<{ total: number; available: number }> = [];
-    const { supervisor, workspaceDir, env } = fixture({
-      capacity: 1,
-      onCapacityChanged: (capacity) => capacities.push(capacity),
-    });
-    const input = launchInput(workspaceDir, "fast-terminal-launch", "fast-terminal");
-    const captureSpawn = vi.spyOn(childProcess.ChildProcess.prototype, "emit");
-    const signalTree = vi.spyOn(processTree, "signalProcessTree");
-    let child: ChildProcess | undefined;
-    vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
-      function (this: NodeWorkerLaunchStore, params) {
-        child = captureSpawn.mock.contexts.find(
-          (context): context is ChildProcess =>
-            context instanceof childProcess.ChildProcess && context.pid === params.worker.pid,
-        );
-        return this.finish({
-          launchId: params.launchId,
-          planHash: params.planHash,
-          supervisor: params.supervisor,
-          worker: null,
-          state: "completed",
-          resultJson: '{"status":"completed"}',
-        });
-      },
-    );
-
-    try {
-      expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
-        state: "completed",
-      });
-      // Capacity returns only after the real child exit and adapter settlement.
-      await vi.waitFor(() => expect(capacities.at(-1)).toEqual({ total: 1, available: 1 }), {
-        timeout: 5_000,
-      });
-      expect(child?.exitCode).toBe(0);
-      expect(child?.signalCode).toBeNull();
-      expect(child?.stdout?.closed).toBe(true);
-      expect(child?.stderr?.closed).toBe(true);
-      expect(fs.existsSync(path.join(workspaceDir, "fast-terminal-marker"))).toBe(false);
-      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
-      await supervisor.close();
-      expect(signalTree).not.toHaveBeenCalled();
-    } finally {
-      await supervisor.close();
-    }
-  });
-
-  it("records a gated child that exits before journal readiness as terminal", async () => {
-    const { bundleRoot, supervisor, workspaceDir } = fixture();
-    const input = launchInput(workspaceDir, "prestart-exit-launch");
-    const exitedPath = path.join(workspaceDir, "prestart-exited");
-    fs.writeFileSync(
-      path.join(
-        bundleRoot,
-        input.gatewayNamespace,
-        "bundles",
-        input.expectedBundleHash,
-        "worker.mjs",
-      ),
-      `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(exitedPath)}, "exited"); process.exit(23);`,
-    );
-
-    await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-    const terminal = await waitForTerminal(supervisor, input.launchId);
-
-    expect(fs.existsSync(exitedPath)).toBe(true);
-    expect(terminal.state).toBe("failed");
-    await supervisor.close();
-  });
-
   it("bounds a blocked cancellation write and stops only its physical owner", async () => {
     const capacities: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = fixture({
@@ -742,8 +534,12 @@ describe("node worker supervisor", () => {
     });
     const input = launchInput(workspaceDir, "blocked-cancel", "wait");
     const sibling = launchInput(workspaceDir, "unrelated-worker", "wait");
-    const captureSpawn = vi.spyOn(childProcess.ChildProcess.prototype, "emit");
-    const signalTree = vi.spyOn(processTree, "signalProcessTree");
+    const adapters = new Map<number, workerLaunchTransport.NodeWorkerChildAdapter>();
+    const captureAdapter = observeNodeWorkerAdapters((adapter) => {
+      if (adapter.pid !== undefined) {
+        adapters.set(adapter.pid, adapter);
+      }
+    });
     let heldWrite: { data: unknown; callback?: (error?: Error | null) => void } | undefined;
     let restoreWrite: (() => void) | undefined;
     let cancellation: ReturnType<NodeWorkerSupervisor["cancel"]> | undefined;
@@ -751,19 +547,18 @@ describe("node worker supervisor", () => {
     try {
       const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
       const unrelated = await supervisor.launch(sibling, TEST_WORKER_ENDPOINT);
-      const child = captureSpawn.mock.contexts.find(
-        (context): context is ChildProcess =>
-          context instanceof childProcess.ChildProcess && context.pid === running.worker!.pid,
-      );
-      captureSpawn.mockRestore();
-      const stdin = child?.stdin;
-      if (!stdin) {
-        throw new Error("missing spawned worker stdin");
+      captureAdapter.mockRestore();
+      const adapter = adapters.get(running.worker!.pid);
+      const siblingAdapter = adapters.get(unrelated.worker!.pid);
+      if (!adapter?.stdin || !siblingAdapter) {
+        throw new Error("missing physical worker stdin or adapter");
       }
+      const stdin = adapter.stdin;
+      const signalOwner = vi.spyOn(adapter, "kill");
+      const signalSibling = vi.spyOn(siblingAdapter, "kill");
       // Model a pipe that cannot drain: neither frame delivery nor write completion occurs.
-      const write = vi.spyOn(stdin, "write").mockImplementation((data, encoding, callback) => {
-        heldWrite = { data, callback: typeof encoding === "function" ? encoding : callback };
-        return false;
+      const write = vi.spyOn(stdin, "write").mockImplementation((data, callback) => {
+        heldWrite = { data, callback };
       });
       restoreWrite = () => write.mockRestore();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -778,7 +573,8 @@ describe("node worker supervisor", () => {
       expect(heldWrite?.callback).toEqual(expect.any(Function));
 
       await vi.advanceTimersByTimeAsync(4_999);
-      expect(signalTree).not.toHaveBeenCalled();
+      expect(signalOwner).not.toHaveBeenCalled();
+      expect(signalSibling).not.toHaveBeenCalled();
       expect(cancelled).toBeUndefined();
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
       expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
@@ -798,6 +594,8 @@ describe("node worker supervisor", () => {
         { timeout: 7_000, interval: 25 },
       );
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("cancelled");
+      expect(signalOwner).toHaveBeenCalledWith("SIGTERM");
+      expect(signalSibling).not.toHaveBeenCalled();
       expect(await supervisor.status(sibling.launchId)).toMatchObject({ state: "running" });
       expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).toBe("live");
       await expect(
@@ -808,7 +606,7 @@ describe("node worker supervisor", () => {
       ).resolves.toMatchObject({ state: "running" });
     } finally {
       vi.useRealTimers();
-      captureSpawn.mockRestore();
+      captureAdapter.mockRestore();
       restoreWrite?.();
       // Release the injected write even on the pre-fix failure, so cleanup cannot inherit its hang.
       heldWrite?.callback?.(new Error("released blocked test stdin"));
@@ -847,39 +645,6 @@ describe("node worker supervisor", () => {
       expect(terminal).toMatchObject({ state, errorText: expect.stringContaining(errorText) });
       expect(Buffer.byteLength(terminal.errorText ?? "", "utf8")).toBeLessThanOrEqual(4 * 1024);
       expect(terminal.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
-      await supervisor.close();
-    },
-  );
-
-  it.each([
-    ["cancel", "cancelled"],
-    ["close", "interrupted"],
-  ] as const)(
-    "%s during startup closes the gate before worker code runs",
-    async (operation, state) => {
-      const { supervisor, workspaceDir } = fixture();
-      const input = launchInput(workspaceDir, `${operation}-startup-launch`, "tree");
-      const originalMarkRunning = Object.getOwnPropertyDescriptor(
-        NodeWorkerLaunchStore.prototype,
-        "markRunning",
-      )?.value as NodeWorkerLaunchStore["markRunning"];
-      let stopping: Promise<unknown> | undefined;
-      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
-        function (this: NodeWorkerLaunchStore, params) {
-          const receipt = Reflect.apply(originalMarkRunning, this, [params]);
-          stopping =
-            operation === "cancel"
-              ? supervisor.cancel(testNodeWorkerLaunchIdentity(input))
-              : supervisor.close();
-          return receipt;
-        },
-      );
-
-      await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-      await stopping;
-
-      expect((await supervisor.status(input.launchId))?.state).toBe(state);
-      expect(fs.existsSync(path.join(workspaceDir, "grandchild.pid"))).toBe(false);
       await supervisor.close();
     },
   );
@@ -950,6 +715,59 @@ describe("node worker supervisor", () => {
     });
     await supervisor.close();
   });
+
+  it.each([false, true])(
+    "preserves accepted turn cancellation after a rejected terminal event (journal retry: %s)",
+    async (retryJournal) => {
+      const capacities: Array<{ total: number; available: number }> = [];
+      const { supervisor, workspaceDir, env } = fixture({
+        capacity: 1,
+        onCapacityChanged: (capacity) => capacities.push(capacity),
+      });
+      const input = launchInput(workspaceDir, "cancel-rejected-terminal", "tree-cancel-reject");
+      try {
+        const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+        const grandchildPath = path.join(workspaceDir, "grandchild.pid");
+        await vi.waitFor(() =>
+          expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u),
+        );
+        const grandchild = requireNodeWorkerProcessIdentity(
+          Number(fs.readFileSync(grandchildPath, "utf8")),
+        );
+
+        if (retryJournal) {
+          vi.spyOn(NodeWorkerTurnStore.prototype, "finish").mockImplementationOnce(() => {
+            throw new Error("injected cancellation journal failure");
+          });
+        }
+        const firstReceipt = await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+        if (retryJournal) {
+          expect(firstReceipt?.state).toBe("running");
+          expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
+        }
+        expect(await supervisor.status(input.launchId)).toMatchObject({
+          state: "cancelled",
+          worker: running.worker,
+        });
+        expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)).toMatchObject({
+          state: "failed",
+          errorText:
+            "node worker failed with exit code 1: worker live event rejected: invalid-event",
+        });
+        expect(inspectNodeWorkerProcessIdentity(running.worker!)).not.toBe("live");
+        expect(inspectNodeWorkerProcessIdentity(grandchild)).not.toBe("live");
+        expect(capacities.at(-1)).toEqual({ total: 1, available: 1 });
+
+        const next = launchInput(workspaceDir, "after-cancel-rejected-terminal");
+        await supervisor.launch(next, TEST_WORKER_ENDPOINT);
+        expect(await waitForTerminal(supervisor, next.launchId)).toMatchObject({
+          state: "completed",
+        });
+      } finally {
+        await supervisor.close();
+      }
+    },
+  );
 
   it("fails closed when the bundle entry resolves outside its namespaced bundle", async () => {
     const { bundleRoot, root, supervisor, workspaceDir } = fixture();

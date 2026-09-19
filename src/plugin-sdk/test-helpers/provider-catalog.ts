@@ -1,6 +1,13 @@
 /**
  * Provider catalog contract assertions and expected Codex catalog fixtures.
  */
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, vi } from "vitest";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import * as jitiFactory from "../../plugins/jiti-factory.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+
 export {
   expectAugmentedCodexCatalog,
   expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
@@ -8,6 +15,23 @@ export {
   expectCodexMissingAuthHint,
 } from "../../plugins/provider-runtime.test-support.js";
 export type { ProviderPlugin } from "../provider-model-shared.js";
+
+/** Supplies manifest facts without cold runtime discovery in provider catalog tests. */
+export function useProviderCatalogMetadata(pluginRoot: URL): void {
+  const loaded = loadPluginManifest(fileURLToPath(pluginRoot));
+  if (!loaded.ok) {
+    throw new Error(loaded.error);
+  }
+  const snapshot = createPluginMetadataSnapshotFixture({ plugins: [loaded.manifest] });
+  beforeEach(() => {
+    setCurrentPluginMetadataSnapshot(snapshot);
+    const loader = vi.spyOn(jitiFactory, "createJiti").mockImplementation(() => {
+      throw new Error("Provider catalog tests must use prepared metadata without Jiti");
+    });
+    return () => loader.mockRestore();
+  });
+  afterEach(() => setCurrentPluginMetadataSnapshot(undefined));
+}
 
 type ProviderRuntimeCatalogModule = Pick<
   typeof import("openclaw/plugin-sdk/provider-catalog-runtime"),

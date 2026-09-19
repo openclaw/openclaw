@@ -6,7 +6,10 @@ import {
   SessionGoalOperationError,
 } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntryCandidates,
+  readSessionSubmittedInput,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -14,6 +17,7 @@ import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -26,13 +30,15 @@ import {
   descendantAbortError,
 } from "./chat-abort-runtime.js";
 import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";
+import {
+  ACTIVE_LEAF_CHANGED_ERROR_REASON,
+  assertExpectedLeafActive,
+} from "./chat-send-active-leaf.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { SESSION_SETTINGS_CHANGED_ERROR_REASON } from "./chat-send-session-settings.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
@@ -97,6 +103,7 @@ type ChatSendPreAdmissionParams = {
 };
 
 type ChatSendRetryParams = {
+  assertCurrent?: () => void;
   request: Pick<
     NormalizedChatSendRequest,
     "goalOperation" | "requestIdentity" | "rawMessage" | "mentions"
@@ -217,6 +224,7 @@ export function resolveChatSendRequestConflict({
 
 /** Recheck at each admission yield before accepting a cached or concurrent request. */
 export function respondChatSendRetry(params: ChatSendRetryParams): boolean {
+  params.assertCurrent?.();
   const { session, context, respond } = params;
   const { clientRunId, pendingChatSendKey } = session;
   const conflict = resolveChatSendRequestConflict(params);
@@ -267,7 +275,9 @@ export function inspectGoalChatSendRetry({
   respond,
   context,
   durableClaimAccepted,
+  assertCurrent,
 }: ChatSendPreAdmissionParams & { durableClaimAccepted?: boolean }) {
+  assertCurrent?.();
   const { sessionKey, storePath, entry, clientRunId, pendingChatSendKey } = session;
   if (!request.goalOperation) {
     return { kind: "new" } as const;
@@ -334,6 +344,7 @@ export function inspectGoalChatSendRetry({
 export async function runChatSendPreAdmission(
   params: ChatSendPreAdmissionParams,
 ): Promise<boolean> {
+  params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { stopCommand } = request;
   const {
@@ -385,6 +396,7 @@ export async function runChatSendPreAdmission(
         recoveryRuntime: context.recoveryRuntime,
         warn: (message) => context.logGateway.warn(message),
       });
+      params.assertCurrent?.();
       if (claim.kind === "pending" || claim.kind === "rejected") {
         respond(
           false,
@@ -413,24 +425,76 @@ export async function runChatSendPreAdmission(
       selectedAgentId: selectedAgent.agentId,
       sessionKey,
     });
-    const res = await abortChatRunsForSessionKeyWithPartials({
-      context,
-      ops: createChatAbortOps(context),
-      sessionKey,
-      sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
-      agentId: stopOwnerScope.agentId,
-      sessionId: entry?.sessionId,
-      session: {
-        ok: true,
-        value: { cfg, storePath, entry, canonicalKey: sessionKey, agentId: session.agentId },
-      },
-      defaultAgentId: stopOwnerScope.defaultAgentId,
-      abortOrigin: "stop-command",
-      stopReason: "stop",
-      requester: resolveChatAbortRequester(client),
-      assertCurrent: params.assertCurrent,
-      cascadeDescendants: true,
-    });
+    const stopStorePath = session.readSource?.path ?? storePath;
+    const guard: { failure?: { error: unknown } } = {};
+    const assertCurrent = () => {
+      if (guard.failure) {
+        throw guard.failure.error;
+      }
+      try {
+        params.assertCurrent?.();
+        if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
+          assertExpectedLeafActive(
+            {
+              canonicalKey: sessionKey,
+              storePath: stopStorePath,
+              entry: loadExactSessionEntryCandidates({
+                ...(session.readSource
+                  ? { readSource: session.readSource }
+                  : { storePath: stopStorePath, agentId: session.agentId }),
+                sessionKeys: [sessionKey],
+                readOnly: true,
+              })[0]?.entry,
+            },
+            session.agentId,
+            session.expectedLeafEntryId,
+            session.requestedSessionId,
+          );
+        }
+      } catch (error) {
+        guard.failure = { error };
+        throw error;
+      }
+    };
+    let res: Awaited<ReturnType<typeof abortChatRunsForSessionKeyWithPartials>>;
+    try {
+      assertCurrent();
+      res = await abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context),
+        sessionKey,
+        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
+        agentId: stopOwnerScope.agentId,
+        sessionId: entry?.sessionId,
+        session: {
+          ok: true,
+          value: {
+            cfg,
+            storePath: stopStorePath,
+            entry,
+            canonicalKey: sessionKey,
+            agentId: session.agentId,
+          },
+        },
+        defaultAgentId: stopOwnerScope.defaultAgentId,
+        abortOrigin: "stop-command",
+        stopReason: "stop",
+        requester: resolveChatAbortRequester(client),
+        assertCurrent,
+        cascadeDescendants: true,
+      });
+      // Descendant cancellation aggregates errors; preserve the admission reason.
+      if (guard.failure) {
+        throw guard.failure.error;
+      }
+    } catch (error) {
+      const admissionError = guard.failure ? guard.failure.error : error;
+      if (admissionError instanceof SessionMutationAuthorizationChangedError) {
+        throw admissionError;
+      }
+      respondChatSendAdmissionError(admissionError, respond);
+      return false;
+    }
     const error = res.unauthorized
       ? errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized")
       : (res.error ?? descendantAbortError(res.descendants, "Session"));
@@ -458,6 +522,7 @@ export async function runChatSendPreAdmission(
     warn: (message) =>
       context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
   });
+  params.assertCurrent?.();
   const retrySession = {
     ...session,
     entry:

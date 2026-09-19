@@ -20,6 +20,27 @@ export function buildNodeInvokeRequest(params: {
   };
 }
 
+export function buildNodeInvokeCancel(params: { invokeId: string; nodeId: string }) {
+  return {
+    invokeId: params.invokeId,
+    nodeId: params.nodeId,
+  };
+}
+
+export function buildNodeInvokeInput(params: {
+  invokeId: string;
+  nodeId: string;
+  seq: number;
+  payloadJSON: string;
+}) {
+  return {
+    id: params.invokeId,
+    nodeId: params.nodeId,
+    seq: params.seq,
+    payloadJSON: params.payloadJSON,
+  };
+}
+
 /** Measure the same outer encoding sent to nodes, including paramsJSON escaping. */
 export function serializeNodeEvent(event: string, payload: unknown): string {
   return JSON.stringify({ type: "event", event, payload });

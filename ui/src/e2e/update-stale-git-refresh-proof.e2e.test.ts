@@ -69,10 +69,10 @@ suite.define(() => {
         });
         await gateway.waitForRequest("update.status");
         const staleStatus = page.locator(".settings-status", { hasText: "12 commits behind" });
-        await staleStatus.waitFor();
+        await page.locator(".settings-status", { hasText: "Checking for updates…" }).waitFor();
         await page.screenshot({
           animations: "disabled",
-          path: path.join(proofDir, "01-stale-update-status.png"),
+          path: path.join(proofDir, "01-checking-update-status.png"),
         });
         const refreshRequest = (await gateway.getRequests("update.status")).at(-1);
         const refreshCheckoutRequested =

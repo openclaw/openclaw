@@ -19,7 +19,7 @@ import { createManagedHandoffLeaseStore } from "../../infra/update-managed-servi
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -332,6 +332,8 @@ async function scenario(
   });
   let repeatedCompletion: UpdateStepResult | void = undefined;
   let repeatedFailure: string | undefined;
+  const observedResults: UpdateRunResult[] = [];
+  const observationLeases: string[] = [];
   let failure: unknown;
   const execute = () =>
     withUpdateCommandExecutor(run.runId, async (executor) => {
@@ -409,10 +411,18 @@ async function scenario(
     });
   try {
     if (deferred) {
-      await withUpdateCommandTerminalResult((registerRun) => {
-        registerRun(run);
-        return execute();
-      });
+      await withUpdateCommandTerminalResult(
+        (registerRun) => {
+          registerRun(run);
+          return execute();
+        },
+        {
+          onResult: (result) => {
+            observedResults.push(result);
+            observationLeases.push(createManagedHandoffLeaseStore().read(swap.packageRoot).kind);
+          },
+        },
+      );
     } else {
       await execute();
     }
@@ -464,6 +474,8 @@ async function scenario(
     package: JSON.parse(await fs.readFile(path.join(swap.packageRoot, "package.json"), "utf8")),
     launcher: await fs.readFile(swap.launcher, "utf8"),
     jsonOutput,
+    observedResults,
+    observationLeases,
     sentinel: preparedRecovery ? await readRestartSentinel(run.env) : undefined,
     humanOutput,
     history,
@@ -500,7 +512,13 @@ describe("composed cleanup and terminal outcome", () => {
       expect(value.exitCode).toBe(1);
       expect(value.jsonOutput).toHaveLength(1);
       const report = value.jsonOutput[0];
-      expect(report).toMatchObject({ status: "error", reason });
+      expect(report).toMatchObject({
+        status: "error",
+        reason,
+        failedStep: {
+          name: settlementFailed ? "update executor settlement" : "global install backup retention",
+        },
+      });
       expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
       expect(value.history?.status).toBe("failed");
       expect.soft(value.history?.downtimeMs).toBe(settlementFailed ? null : 0);
@@ -682,6 +700,8 @@ describe("composed cleanup and terminal outcome", () => {
       expect(value.retainedExists).toBe(false);
       expect(value.history?.status).toBe("succeeded");
       expect(value.lease).toBe("absent");
+      expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+      expect(value.observationLeases).toEqual(["absent"]);
       if (json) {
         expect(value.jsonOutput).toHaveLength(1);
         expect(value.jsonOutput[0]).toMatchObject({ status: "ok" });

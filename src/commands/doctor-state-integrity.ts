@@ -9,6 +9,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { isSharedAuthStoreOwner } from "../agents/agent-delete-safety.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveDefaultAgentDir,
@@ -782,9 +783,11 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json, so a
+  // channel id with no effective plugin owner can never pair and must not require the dir.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
-    if (channelId === "defaults" || channelId === "modelByChannel") {
+    const scopedChannelId = normalizeOptionalLowercaseString(channelId);
+    if (!scopedChannelId || !withPersistedAuth.has(scopedChannelId)) {
       continue;
     }
     if (hasPairingPolicy(channelCfg)) {
@@ -1326,12 +1329,14 @@ export async function noteStateIntegrity(
 
   const orphanAgentDirs = listOrphanAgentDirs(cfg, stateDir);
   if (orphanAgentDirs.length > 0) {
+    const authoredAgentRosterPath =
+      readAgentRosterProperty(cfg)?.kind === "list" ? "agents.list" : "agents.entries";
     warnings.push(
       [
-        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching agents.list entry.`,
+        `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
         `  Examples: ${formatOrphanAgentDirPreview(orphanAgentDirs)}`,
-        `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
+        `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
   }

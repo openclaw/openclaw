@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -200,25 +208,21 @@ describe("maybeRestartService", () => {
         await expect(verification).resolves.toMatchObject({ ok: false });
         expect(onVerified).not.toHaveBeenCalled();
         const failingCheck =
-          change === "initial-readyz-error" || rollback
-            ? {
-                check: "readyz",
-                code: "readyz-unhealthy",
-                message: "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
-              }
-            : change === "initial-version-error"
-              ? { check: "versionMatch", code: "version-mismatch" }
-              : change === "initial-build-error"
-                ? { check: "versionMatch", code: "build-id-mismatch" }
-                : change === "initial-channel-error"
-                  ? {
-                      check: "channelsReady",
-                      code: "channel-errors",
-                      pluginId: "fixture-channel",
-                      message: "connection failed",
-                    }
+          change === "initial-version-error"
+            ? { check: "versionMatch", code: "version-mismatch" }
+            : change === "initial-build-error"
+              ? { check: "versionMatch", code: "build-id-mismatch" }
+              : change === "initial-channel-error"
+                ? {
+                    check: "channelsReady",
+                    code: "channel-errors",
+                    pluginId: "fixture-channel",
+                    message: "connection failed",
+                  }
+                : change === "initial-readyz-error" || rollback
+                  ? { check: "readyz", code: "readyz-unhealthy" }
                   : change === "initial-settle-error"
-                    ? { check: "settled", code: "timeout", message: "Gateway did not settle" }
+                    ? { check: "settled", code: "timeout" }
                     : { check: "service", code: "service-not-running" };
         expect(updateResult.steps).toContainEqual(
           expect.objectContaining({
@@ -259,8 +263,11 @@ describe("maybeRestartService", () => {
             expect.objectContaining({
               name: "gateway verification",
               exitCode: 1,
-              failureFacts: expect.arrayContaining([expect.objectContaining(failingCheck)]),
+              failureFacts: expect.arrayContaining([
+                expect.objectContaining({ code: "readyz-unhealthy" }),
+              ]),
             }),
+            expect.objectContaining({ name: "rollback gateway verification", exitCode: 0 }),
           ]);
         } else {
           expect(updateResult.steps).toEqual([
@@ -268,6 +275,8 @@ describe("maybeRestartService", () => {
           ]);
           expect(updateResult.steps[0]?.failureFacts).toBeUndefined();
         }
+        expect(updateResult.steps.at(-1)?.advisory).toBeUndefined();
+        expect(updateResult.steps.at(-1)?.termination).toBeUndefined();
         expect(recordUpdateRunStep).toHaveBeenLastCalledWith(
           admitted.runId,
           expect.objectContaining({
@@ -387,6 +396,61 @@ describe("maybeRestartService", () => {
     },
   );
 
+  it("records changed-key warnings before health verification and retains them in the outcome and report", async () => {
+    const home = tempDirs.make("service-warning-history-");
+    const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+    const liveRun = { ...run, runId: admitted.runId, env: options.env };
+    const ledger = await vi.importActual<typeof import("../../infra/update-run-ledger.js")>(
+      "../../infra/update-run-ledger.js",
+    );
+    const warning = "Reconciled Gateway service definition: Service.KillMode. Backup retained.";
+    mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(async (params) => {
+      params.onWarnings?.([warning]);
+      return "unverified";
+    });
+    const healthy = await mocks.waitForGatewayHealthyRestart();
+    let observedDuringHealth: ReturnType<typeof getUpdateRun>;
+    mocks.waitForGatewayHealthyRestart.mockImplementationOnce(async () => {
+      observedDuringHealth = getUpdateRun(admitted.runId, options);
+      return healthy;
+    });
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "npm",
+      after: { version: gateway.version, buildId: gateway.buildId },
+      steps: [],
+      durationMs: 0,
+    };
+    await vi
+      .mocked(recordUpdateRunStep)
+      .withImplementation(ledger.recordUpdateRunStep, async () => {
+        await expect(
+          maybeRestartService({
+            shouldRestart: true,
+            result,
+            opts: { json: true, run: liveRun },
+            refreshServiceEnv: true,
+            serviceEnv: { HOME: "/home/operator" },
+            serviceInstallEnv: {},
+            gatewayPort: 18789,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toBe("ok");
+      });
+    expect(observedDuringHealth?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:managed-service-reconciliation",
+        status: "completed",
+        detail: warning,
+      }),
+    );
+    expect(result.steps).toContainEqual(expect.objectContaining({ warnings: [warning] }));
+    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+      warning,
+    );
+  });
+
   it.each(["new-build", undefined])(
     "enforces the available Git identity after restart: %s",
     async (buildId) => {
@@ -496,13 +560,11 @@ describe("maybeRestartService", () => {
         refreshServiceEnv ? 1 : 0,
       );
       expect(onVerified).toHaveBeenCalledTimes(verified ? 1 : 0);
+      expect(onVerificationFailure).toHaveBeenCalledTimes(verified ? 0 : 1);
       if (verified) {
         const verifiedAtMs = onVerified.mock.calls[0]?.[0];
         expect(verifiedAtMs).toBeGreaterThanOrEqual(startedAtMs);
         expect(verifiedAtMs).toBeLessThanOrEqual(Date.now());
-        expect(onVerificationFailure).not.toHaveBeenCalled();
-      } else {
-        expect(onVerificationFailure).toHaveBeenCalledWith("readyz-unhealthy");
       }
     },
   );

@@ -484,6 +484,9 @@ esac
 FOLLOWTHROUGH_PROMPT="$(cat <<PROMPT
 Live release follow-through check.
 
+This is a Node.js test container: use node for any inline scripting needed for
+the workspace work below. Do not assume a python executable is installed.
+
 First call message(action=send) $FOLLOWTHROUGH_PROGRESS_INSTRUCTION and send exactly
 $FOLLOWTHROUGH_PROGRESS_MARKER to this conversation. Make this progress send
 your only tool call in this step,

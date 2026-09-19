@@ -1,4 +1,4 @@
-import type { Virtualizer } from "@tanstack/virtual-core";
+import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 function transcriptScrollMargin(element: Element | null): number {
@@ -61,8 +61,49 @@ export function measureConnectedTranscriptRows(
   }
 }
 
+export function measureTranscriptRow(
+  element: HTMLElement,
+  entry: ResizeObserverEntry | undefined,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): number {
+  const size = measureElement(element, entry, virtualizer);
+  if (size === 0 && virtualizer.scrollElement?.clientHeight === 0) {
+    // A hidden panel has no row geometry. Retain the last measurement instead
+    // of replacing it with zero and moving the restored viewport.
+    const index = virtualizer.indexFromElement(element);
+    return (
+      virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index)) ??
+      virtualizer.options.estimateSize(index)
+    );
+  }
+  return size;
+}
+
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element ? Math.max(0, element.scrollHeight - element.clientHeight) : null;
+  return element && element.clientHeight > 0
+    ? Math.max(0, element.scrollHeight - element.clientHeight)
+    : null;
+}
+
+export function reconcileInitialTranscriptOffset(
+  element: HTMLDivElement | null,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+): "pending" | "settled" | "corrected" {
+  const maxOffset = maxTranscriptScrollOffset(element);
+  const offset = virtualizer.scrollOffset;
+  if (maxOffset === null || offset === null) {
+    return "pending";
+  }
+  if (offset >= 0 && offset <= maxOffset) {
+    return "settled";
+  }
+  if (maxOffset !== 0) {
+    return "pending";
+  }
+  // An underfilled end anchor clamps to zero without a native scroll event.
+  virtualizer.scrollOffset = 0;
+  virtualizer.scrollToOffset(0);
+  return "corrected";
 }
 
 export class PositionRailGutterController implements ReactiveController {
@@ -104,6 +145,9 @@ export class PositionRailGutterController implements ReactiveController {
     }
     const left = viewport.getBoundingClientRect().left + viewport.clientLeft;
     const gutter = inner.getBoundingClientRect().left - left;
+    // The conversation region stays fixed when its composer resizes the scrollport.
+    const region = viewport.closest<HTMLElement>(".chat-main__conversation") ?? viewport;
+    viewport.style.setProperty("--chat-position-rail-viewport-height", `${region.clientHeight}px`);
     // Reserve room for the compact left rail and breathing space, including
     // when a saved width fills the pane.
     viewport.toggleAttribute("data-position-rail-gutter", gutter >= 68);

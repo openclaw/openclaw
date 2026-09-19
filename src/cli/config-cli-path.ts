@@ -1,6 +1,6 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   formatConcreteConfigPath,

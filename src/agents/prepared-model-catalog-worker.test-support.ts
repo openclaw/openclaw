@@ -37,7 +37,10 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import {
+  refreshNativeCatalogDuringBoundedRead,
+  writeSyntheticAuthDiscoveryFixture,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
 export const HARNESS_ID = "worker-catalog-fixture-harness";
@@ -339,6 +342,7 @@ export function createCatalogFixture(
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
     codexNativeOwner?: boolean;
+    codexNativeHomeScope?: "agent" | "user";
     builtPluginVersion?: string;
     asyncSyntheticAuth?: boolean;
   },
@@ -383,7 +387,15 @@ export function createCatalogFixture(
         ...(options?.codexNativeOwner
           ? {
               openai: { enabled: true },
-              codex: { enabled: true, config: { discovery: { enabled: false } } },
+              codex: {
+                enabled: true,
+                config: {
+                  discovery: { enabled: false },
+                  ...(options.codexNativeHomeScope
+                    ? { appServer: { homeScope: options.codexNativeHomeScope } }
+                    : {}),
+                },
+              },
             }
           : {}),
       },
@@ -444,6 +456,7 @@ async function expectNativeHarnessModelsPublished(params: {
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   snapshot: PreparedModelRuntimeSnapshot;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
 }): Promise<void> {
   const registry = params.snapshot.pluginRegistry;
   if (!registry) {
@@ -455,7 +468,10 @@ async function expectNativeHarnessModelsPublished(params: {
     expect(params.snapshot.modelCatalog.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "configured-dynamic-model" }),
     );
-    const catalog = await params.snapshot.loadFullModelCatalog?.();
+    const catalog = await refreshNativeCatalogDuringBoundedRead({
+      ...params,
+      harnessId: HARNESS_ID,
+    });
     expect(catalog?.staticEntries).toContainEqual(
       expect.objectContaining({
         provider: PROVIDER_ID,
@@ -549,7 +565,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void) => void;
 }): Promise<void> {
-  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory"> = {};
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance"> = {
+    provenance: "standalone",
+  };
   const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -652,6 +670,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   };
   await expectNativeHarnessModelsPublished({
     config,
+    inventoryOwner,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });

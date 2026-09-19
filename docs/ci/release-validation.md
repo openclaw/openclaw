@@ -9,6 +9,11 @@ read_when:
 This page is an index. Release validation is documented on five pages, one
 per reader job. Open the page that matches your task.
 
+Full Release Validation retains Docker seed survivor, QA Smoke, and Control UI
+performance through its normal CI child, independently of PR/main owner paths.
+See [full release coverage](/ci/release-validation/full-release-validation)
+for the exact survivor contract and target compatibility limits.
+
 | Page                                                                                | Read it when                                                                                                   |
 | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | [Full Release Validation](/ci/release-validation/full-release-validation)           | The release umbrella: Validation/Tooling SHA binding, release publish, Docker Release, profiles, and recovery. |
@@ -16,6 +21,8 @@ per reader job. Open the page that matches your task.
 | [Package Acceptance](/ci/release-validation/package-acceptance)                     | Validating one installable tarball: jobs, candidate sources, suite profiles, and examples.                     |
 | [Install smoke and Docker E2E](/ci/release-validation/install-smoke-and-docker-e2e) | Install Smoke coverage, the local Docker E2E aggregate and tunables, and release-path chunks.                  |
 | [Plugin Prerelease](/ci/release-validation/plugin-prerelease)                       | The separate, more expensive plugin product/package suite and when it is dispatched.                           |
+
+The [bounded hybrid hosted offload](/ci/capacity#bounded-hybrid-hosted-offload) applies only to automatic CI first attempts. Full Release Validation, candidate/artifact workflows, and frozen-target workloads retain their existing coverage and runner routes.
 
 ## Where each section moved
 

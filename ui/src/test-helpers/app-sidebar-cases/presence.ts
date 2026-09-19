@@ -1,13 +1,13 @@
 import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { selectSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessions,
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
-import { selectSessionMenuValue } from "./session-ownership.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");

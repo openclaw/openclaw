@@ -18,6 +18,7 @@ import {
   createFirstRunContext,
   detection,
   mountPage,
+  waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 
@@ -99,7 +100,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
           "openclaw.setup.detect",
         ]),
       );
-      await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
+      await waitForModelSetupDetection(page);
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
       expect(context.navigate).not.toHaveBeenCalled();
       if (configured) {
@@ -118,8 +119,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
           page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
             .disabled,
         ).toBe(true);
-        const deadline = JSON.parse(receipt!).deadlineMs;
-        vi.spyOn(Date, "now").mockReturnValue(deadline + 1);
+        vi.spyOn(Date, "now").mockReturnValue(JSON.parse(receipt!).deadlineMs + 1);
         checkAgain().click();
         await waitForFast(() =>
           expect(
@@ -559,6 +559,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       context: () => context,
       routeData: () => routeData,
       pageState: () => routeData.state,
+      activationState: () => ({ phase: "idle" }),
       actionsDisabled: () => false,
       canUseSetup: () => true,
       canVerify: () => true,

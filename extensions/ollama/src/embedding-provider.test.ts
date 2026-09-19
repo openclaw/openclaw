@@ -156,22 +156,6 @@ function expectEmbeddingFetch(
 }
 
 describe("ollama embedding provider", () => {
-  it("calls /api/embed and returns normalized vectors", async () => {
-    const fetchMock = mockEmbeddingFetch([3, 4]);
-
-    const { provider } = await createEmbeddingProvider({ model: "unknown-embedder" });
-
-    const vector = await provider.embed("hi", { inputType: "query" });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
-      model: "unknown-embedder",
-      input: "hi",
-    });
-    expect(vector[0]).toBeCloseTo(0.6, 5);
-    expect(vector[1]).toBeCloseTo(0.8, 5);
-  });
-
   it("applies outputDimensionality before normalizing vectors", async () => {
     mockEmbeddingFetch([3, 4, 12]);
 
@@ -347,8 +331,8 @@ describe("ollama embedding provider", () => {
           provider: providerId,
         }),
       ).rejects.toThrow(
-        `models.providers.${providerId}.${
-          surface === "headers" ? "headers.X-Proxy-Auth" : "apiKey"
+        `models.providers["${providerId}"].${
+          surface === "headers" ? 'headers["X-Proxy-Auth"]' : "apiKey"
         }`,
       );
       expect(fetchMock).not.toHaveBeenCalled();

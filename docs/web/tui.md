@@ -138,7 +138,7 @@ Core:
 
 - `/help`
 - `/status` (Gateway-forwarded, shows session/model summary)
-- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and sessions directly.
+- `/gateway-status` (alias `/gwstatus`) shows Gateway version, channel configuration summaries, and stored session inventory, including archived sessions.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model|default>` (or `/models`). `default` clears the session override.

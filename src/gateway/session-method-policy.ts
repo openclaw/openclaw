@@ -22,6 +22,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["session.discussion.open", ["sessionKey"]],
   ["sessions.abort", ["key"]],
   ["sessions.assignOwner", ["key"]],
+  ["sessions.setInvolvement", ["key"]],
   ["sessions.companion.ask", ["sessionKey"]],
   ["sessions.companion.reset", ["sessionKey"]],
   ["sessions.companion.state", ["sessionKey"]],
@@ -46,6 +47,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.send", ["key"]],
   ["sessions.steer", ["key"]],
   ["sessions.branches.switch", ["sessionKey"]],
+  ["talk.voice.set", ["sessionKey"]],
   ...(
     [
       "taskSuggestions.create",
@@ -118,6 +120,8 @@ const APPROVAL_SESSION_TARGET_METHODS = new Set([
 ]);
 
 const READ_ONLY_SESSION_TARGET_METHODS = new Set([
+  // This changes a personal list preference, not the shared session.
+  "sessions.setInvolvement",
   "sessions.companion.ask",
   "sessions.companion.state",
 ]);

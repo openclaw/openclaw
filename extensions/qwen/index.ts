@@ -273,6 +273,7 @@ export default defineSingleProviderPluginEntry({
       staticRun: async () => ({ provider: buildQwenProvider() }),
     },
     wrapStreamFn: wrapQwenProviderStream,
+    wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
     resolveThinkingProfile: ({ modelId }) => resolveQwenThinkingProfile(modelId),
     normalizeConfig: ({ providerConfig }) => {
       if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
@@ -316,6 +317,7 @@ export default defineSingleProviderPluginEntry({
         }),
       },
       wrapStreamFn: wrapQwenProviderStream,
+      wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
       resolveThinkingProfile: ({ modelId }) => resolveQwenTokenPlanThinkingProfile(modelId),
     });
     api.registerProvider({
@@ -324,6 +326,7 @@ export default defineSingleProviderPluginEntry({
       docsPath: "/providers/qwen",
       auth: [],
       wrapStreamFn: wrapQwenProviderStream,
+      wrapSimpleCompletionStreamFn: wrapQwenProviderStream,
     });
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());
     api.registerVideoGenerationProvider(qwenVideoGenerationProvider);

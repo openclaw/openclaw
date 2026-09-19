@@ -1,4 +1,3 @@
-// Discord plugin module implements components.parse behavior.
 import { ButtonStyle, TextInputStyle } from "discord-api-types/v10";
 import {
   normalizeLowercaseStringOrEmpty,

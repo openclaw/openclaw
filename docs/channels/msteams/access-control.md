@@ -64,6 +64,15 @@ Example:
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow) and logs the mapping. Unresolved names are kept as typed but ignored for routing unless `channels.msteams.dangerouslyAllowNameMatching: true` is set.
 
+With compatible core and Teams versions, verified official npm and ClawHub installations
+can use the existing `read`, `search`, `reactions`, `list-pins`, `member-info`,
+`channel-info`, and `channel-list` actions under these access rules. Agent reads from
+an installed plugin require trusted current Teams conversation and account context.
+Listing a team's channels requires access to the whole team; access to one channel
+does not grant that permission. [Member lookups](/channels/msteams/cards-and-actions#member-info-action)
+retain their standard-channel and current-requester restrictions. Subsequent Graph
+requests and results are rejected when the originating call or plugin loses authority.
+
 Example:
 
 ```json5

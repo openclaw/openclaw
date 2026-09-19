@@ -26,7 +26,7 @@ export function inspectPluginSourceDependencies(
     seenEntries.add(source);
     const root = fs.realpathSync(entry.rootDir);
     // This scope grants source acquisition only. No module evaluation or registration runs here.
-    const artifact = capturePluginGenerationArtifact(root, source, root, (run) => run());
+    const artifact = capturePluginGenerationArtifact(root, source, (run) => run());
     try {
       const pending = [artifact.resolve(source)];
       const visited = new Set<string>();

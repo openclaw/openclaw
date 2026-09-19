@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements capture saved view behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CaptureSavedView } from "./ui-render.js";
 

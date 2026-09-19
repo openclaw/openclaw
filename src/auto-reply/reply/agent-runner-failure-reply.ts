@@ -17,7 +17,10 @@ import {
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
-import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderFormatErrorCopy,
+} from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -55,10 +58,10 @@ import type { ReplyPayload } from "../types.js";
 
 export function resolveReplyFailoverFacts(error: unknown, message: string) {
   const described = describeFailoverError(error);
-  const status = extractErrorHttpStatus(described.rawError ?? message)?.code ?? described.status;
+  const rawError = described.rawError ?? message;
+  const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
   const reason =
-    described.reason ??
-    classifyFailoverReason(described.rawError ?? message, { provider: described.provider });
+    described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
   const classification = reason ? ({ kind: "reason", reason } as const) : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
@@ -67,11 +70,12 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     model: described.model,
     status,
     authMode: described.authMode,
+    formatFailureText: reason === "format" ? renderFormatErrorCopy(rawError) : undefined,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
         status,
-        message: described.rawError ?? message,
+        message: rawError,
       }),
       status,
       technicalMessage: message,
@@ -387,7 +391,8 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
-  const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
+  const classifiedFailure =
+    failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
     return { text: classifiedFailure, isGenericRunnerFailure: false };
   }

@@ -29,6 +29,15 @@ function requireMockArg(mock: { mock: { calls: unknown[][] } }, label: string): 
 }
 
 describe("readServiceStatusSummary", () => {
+  it.each(["user", "system"] as const)("labels the observed %s manager", async (scope) => {
+    const summary = await readServiceStatusSummary(
+      createService({
+        readRuntime: vi.fn(async () => ({ status: "running", systemd: { scope } })),
+      }),
+      "Daemon",
+    );
+    expect(summary.label).toBe(`systemd ${scope}`);
+  });
   it("marks OpenClaw-managed services as installed", async () => {
     const summary = await readServiceStatusSummary(
       createService({

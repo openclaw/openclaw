@@ -1,5 +1,5 @@
 /** Remote-shell transport operations shared by SSH and provider-owned execution. */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -71,6 +71,7 @@ export function createRemoteShellSandboxSession(
     if (checkCurrent) {
       options.assertCurrent?.();
     }
+    params.signal?.throwIfAborted();
     const result = await spawnCommand(command.argv, {
       baseEnv: command.env,
       cwd: command.cwd,
@@ -185,7 +186,7 @@ async function uploadDirectoryToRemoteCommand(
   params: RemoteShellUploadParams,
   options: RemoteShellSessionOptions,
 ): Promise<void> {
-  await assertSafeUploadSymlinks(params.localDir);
+  await assertSafeUploadSymlinks(params.localDir, params.signal);
   const remoteCommand = buildRemoteCommand([
     "/bin/sh",
     "-c",
@@ -202,12 +203,13 @@ async function uploadDirectoryToRemoteCommand(
   const tarEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
     options.assertCurrent?.();
-    const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
+    params.signal?.throwIfAborted();
+    const tar: ChildProcess = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       env: tarEnv,
       signal: params.signal,
     });
-    const remote = spawn(executable, args, {
+    const remote: ChildProcess = spawn(executable, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: command.env,
       cwd: command.cwd,
@@ -218,15 +220,19 @@ async function uploadDirectoryToRemoteCommand(
     const remoteStderr: Buffer[] = [];
     let tarClosed = false;
     let remoteClosed = false;
-    let tarCode = 0;
-    let remoteCode = 0;
+    let tarCode: number | null = 0;
+    let remoteCode: number | null = 0;
+    let tarSignal: NodeJS.Signals | null = null;
+    let remoteSignal: NodeJS.Signals | null = null;
+    let failure: Error | undefined;
     let settled = false;
 
     const fail = (error: unknown) => {
-      if (settled) {
+      if (settled || failure) {
         return;
       }
-      settled = true;
+      // Abort and stream errors can precede close; cleanup must still join both children.
+      failure = toErrorObject(error, "Non-Error rejection");
       for (const child of [tar, remote]) {
         try {
           child.kill("SIGKILL");
@@ -234,43 +240,61 @@ async function uploadDirectoryToRemoteCommand(
           // Preserve the pipeline error while still terminating the peer.
         }
       }
-      reject(toErrorObject(error, "Non-Error rejection"));
+      maybeResolve();
     };
-
-    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    tar.stderr.on("error", fail);
-    tar.stdout.on("error", fail);
-    remote.stdout.on("data", (chunk) => remoteStdout.push(Buffer.from(chunk)));
-    remote.stdout.on("error", fail);
-    remote.stderr.on("data", (chunk) => remoteStderr.push(Buffer.from(chunk)));
-    remote.stderr.on("error", fail);
-    remote.stdin?.on("error", fail);
 
     tar.on("error", fail);
     remote.on("error", fail);
 
-    tar.on("close", (code) => {
+    tar.on("close", (code, signal) => {
       tarClosed = true;
-      tarCode = code ?? 0;
+      tarCode = code;
+      tarSignal = signal;
       maybeResolve();
     });
-    remote.on("close", (code) => {
+    remote.on("close", (code, signal) => {
       remoteClosed = true;
-      remoteCode = code ?? 0;
+      remoteCode = code;
+      remoteSignal = signal;
       maybeResolve();
     });
+
+    // EMFILE/ENFILE can leave streams absent; native error and close still settle the child.
+    tar.stderr?.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
+    tar.stderr?.on("error", fail);
+    tar.stdout?.on("error", fail);
+    remote.stdout?.on("data", (chunk) => remoteStdout.push(Buffer.from(chunk)));
+    remote.stdout?.on("error", fail);
+    remote.stderr?.on("data", (chunk) => remoteStderr.push(Buffer.from(chunk)));
+    remote.stderr?.on("error", fail);
+    remote.stdin?.on("error", fail);
 
     function maybeResolve() {
       if (settled || !tarClosed || !remoteClosed) {
         return;
       }
       settled = true;
+      if (failure) {
+        reject(failure);
+        return;
+      }
+      // A null code means the process died from a signal (OOM kill, dropped
+      // connection, supervisor teardown) without reporting a status. An
+      // unknown outcome is not evidence of a completed transfer.
+      if (tarCode === null) {
+        reject(new Error(`tar exited from signal ${tarSignal ?? "unknown"}`));
+        return;
+      }
       if (tarCode !== 0) {
         reject(
           new Error(
             Buffer.concat(tarStderr).toString("utf8").trim() || `tar exited with code ${tarCode}`,
           ),
         );
+        return;
+      }
+      if (remoteCode === null) {
+        reject(new Error(`remote exited from signal ${remoteSignal ?? "unknown"}`));
         return;
       }
       if (remoteCode !== 0) {
@@ -287,20 +311,24 @@ async function uploadDirectoryToRemoteCommand(
 
     try {
       // Readable pipe errors do not close the writable peer automatically.
-      tar.stdout.pipe(remote.stdin);
+      if (tar.stdout && remote.stdin) {
+        tar.stdout.pipe(remote.stdin);
+      }
     } catch (error) {
       fail(error);
     }
   });
 }
 
-async function assertSafeUploadSymlinks(localDir: string): Promise<void> {
+async function assertSafeUploadSymlinks(localDir: string, signal?: AbortSignal): Promise<void> {
   const rootDir = path.resolve(localDir);
   await walkDirectory(rootDir);
 
   async function walkDirectory(currentDir: string): Promise<void> {
+    signal?.throwIfAborted();
     const entries = await fs.readdir(currentDir, { withFileTypes: true });
     for (const entry of entries) {
+      signal?.throwIfAborted();
       const entryPath = path.join(currentDir, entry.name);
       if (entry.isSymbolicLink()) {
         // The remote tar extract should not recreate links that escape the

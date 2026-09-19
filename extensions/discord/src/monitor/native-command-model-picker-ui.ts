@@ -1,4 +1,3 @@
-// Discord plugin module implements native command model picker ui behavior.
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveEffectiveAgentRuntime,
@@ -132,7 +131,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       channel: interaction.channel,
       client: interaction.client,
       hasGuild: Boolean(interaction.guild),
-      channelIdFallback: "unknown",
+      channelIdFallback: interaction.rawData.channel_id ?? "unknown",
     });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)

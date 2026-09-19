@@ -63,6 +63,16 @@ function createManifestPlugin(id: string): PluginManifestRecord {
   };
 }
 
+function configureCapturedRuntimeManifest() {
+  mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["fixture"]);
+  const manifest = createManifestPlugin("fixture");
+  manifest.modelCatalog = { discovery: { fixture: "runtime" } };
+  mocks.loadPluginMetadataSnapshot.mockReturnValue({
+    index: { plugins: [] },
+    manifestRegistry: { plugins: [manifest], diagnostics: [] },
+  });
+}
+
 function createManifestPluginWithModelCatalog(
   id: string,
   discovery: "static" | "refreshable" | "runtime" = "static",
@@ -649,6 +659,102 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(providers[0]).toMatchObject({ id: "claude-cli", pluginId: "deepseek" });
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "retains discovery-only auth beside captured runtime siblings (empty: %s)",
+    (emptyRuntime) => {
+      const auth = { apiKey: "fixture-key", source: "fixture", mode: "api-key" as const };
+      const authProvider: ProviderPlugin = {
+        id: "fixture-login",
+        label: "Fixture login",
+        auth: [],
+        prepareSyntheticAuth: vi.fn(async () => auth),
+      };
+      const runtimeProvider = {
+        ...createProvider({ id: "fixture-static", mode: "static" }),
+        pluginId: "fixture",
+      };
+      configureCapturedRuntimeManifest();
+      mocks.loadSource.mockReturnValue(authProvider);
+      const unrelatedAuth = {
+        id: "runtime-only-login",
+        pluginId: "fixture",
+        label: "Runtime-only login",
+        auth: [],
+        resolveSyntheticAuth: vi.fn(() => ({
+          ...auth,
+          apiKey: "unselected-key",
+          source: "runtime",
+        })),
+      };
+      mocks.resolvePluginProvidersCore.mockReturnValue(
+        emptyRuntime ? [] : [runtimeProvider, unrelatedAuth],
+      );
+
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        onlyPluginIds: ["fixture"],
+        includeSyntheticAuthProviders: true,
+      });
+
+      expect(providers.map(({ id }) => id)).toEqual(
+        emptyRuntime ? ["fixture-login"] : ["fixture-login", "fixture-static"],
+      );
+      expect(providers[0]?.prepareSyntheticAuth).toBe(authProvider.prepareSyntheticAuth);
+      expect(providers[0]?.staticCatalog).toBeUndefined();
+      expect(unrelatedAuth.resolveSyntheticAuth).not.toHaveBeenCalled();
+      expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
+      expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["fixture"]);
+    },
+  );
+
+  it.each(["none", "sync", "async"] as const)(
+    "composes lightweight auth with runtime catalog replacement (runtime auth: %s)",
+    async (runtimeAuth) => {
+      const entryAuth = { apiKey: "entry-key", source: "entry", mode: "api-key" as const };
+      const runtimeAuthResult = { ...entryAuth, apiKey: "runtime-key", source: "runtime" };
+      const entryProvider: ProviderPlugin = {
+        ...createProvider({ id: "fixture", mode: "static" }),
+        ...(runtimeAuth === "async"
+          ? { resolveSyntheticAuth: vi.fn(() => entryAuth) }
+          : { prepareSyntheticAuth: vi.fn(async () => entryAuth) }),
+      };
+      const runtimeProvider: ProviderPlugin = {
+        ...createProvider({ id: "fixture", mode: "static" }),
+        pluginId: "fixture",
+        pluginRoot: "/tmp/fixture",
+        ...(runtimeAuth === "sync" ? { resolveSyntheticAuth: vi.fn(() => runtimeAuthResult) } : {}),
+        ...(runtimeAuth === "async"
+          ? { prepareSyntheticAuth: vi.fn(async () => runtimeAuthResult) }
+          : {}),
+      };
+      configureCapturedRuntimeManifest();
+      mocks.loadSource.mockReturnValue(entryProvider);
+      mocks.resolvePluginProvidersCore.mockReturnValue([runtimeProvider]);
+
+      const providers = resolvePluginDiscoveryProvidersRuntime({
+        onlyPluginIds: ["fixture"],
+        includeSyntheticAuthProviders: true,
+      });
+
+      expect(providers).toHaveLength(1);
+      const provider = providers[0]!;
+      expect(provider.staticCatalog).toBe(runtimeProvider.staticCatalog);
+      await expect(
+        prepareSyntheticAuthWithProvider(provider, { config: {}, provider: "fixture" }),
+      ).resolves.toEqual(runtimeAuth === "none" ? entryAuth : runtimeAuthResult);
+      if (runtimeAuth !== "none") {
+        expect(
+          entryProvider.prepareSyntheticAuth ?? entryProvider.resolveSyntheticAuth,
+        ).not.toHaveBeenCalled();
+      }
+      expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledTimes(1);
+      expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["fixture"]);
+
+      expect(resolvePluginDiscoveryProvidersRuntime({ onlyPluginIds: ["fixture"] })).toEqual([
+        runtimeProvider,
+      ]);
+    },
+  );
 
   it("returns manifest model catalogs as static discovery entries", async () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);

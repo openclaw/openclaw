@@ -169,6 +169,14 @@ export class AgentSelect extends OpenClawLightDomElement {
         aria-label=${this.accessibleLabel || triggerLabel}
         @wa-select=${this.handleSelect}
         @wa-after-show=${this.handleAfterShow}
+        @keydown=${(event: KeyboardEvent) => {
+          // SAFETY: This handler is bound to the wa-dropdown host.
+          const dropdown = event.currentTarget as HTMLElement & { open: boolean };
+          if (event.key === "Escape" && dropdown.open) {
+            // Web Awesome closes at document; claim the key before the shell's earlier listener.
+            event.preventDefault();
+          }
+        }}
       >
         <button
           slot="trigger"
@@ -188,9 +196,7 @@ export class AgentSelect extends OpenClawLightDomElement {
               ? html`<span class="agent-select__badge">${selectedBadge}</span>`
               : nothing
           }
-          <span class="agent-select__chevron" aria-hidden="true"
-            >${this.variant === "compact" ? icons.chevronsUpDown : icons.chevronDown}</span
-          >
+          <span class="agent-select__chevron" aria-hidden="true">${icons.chevronDown}</span>
         </button>
         ${
           this.menuLabel

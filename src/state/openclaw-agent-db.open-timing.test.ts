@@ -192,11 +192,13 @@ describe("agent database open timings", () => {
       const canonicalIndex = database.db
         .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_agent_session_nodes_updated_at'")
         .get();
-      const canonicalIndexCount = database.db
+      const canonicalIndexNames = database.db
         .prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes' AND sql IS NOT NULL",
+          "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes' AND sql IS NOT NULL ORDER BY name",
         )
-        .all().length;
+        .all()
+        .map((row) => row.name);
+      const canonicalIndexCount = canonicalIndexNames.length;
       database.db.exec(`
       INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES ('session-one', 'window-one', '{}', 1);
@@ -230,7 +232,22 @@ describe("agent database open timings", () => {
       expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
       });
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining(
+          `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
+        ),
+        {
+          agentId: options.agentId,
+          path: pathname,
+          indexes:
+            drift === "physical" ? canonicalIndexNames : ["idx_agent_session_nodes_updated_at"],
+          elapsedMs: 1_000,
+        },
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        2,
         "slow OpenClaw agent database open",
         expect.objectContaining({
           elapsedMs: drift === "physical" ? 1_310 : 1_150,
@@ -348,6 +365,9 @@ describe("agent database open timings", () => {
         thresholdMs: 1_000,
         integrityGateMs: 1_000,
         integrityGateOutcome: "healthy",
+        integrityWorkerCheckMs: expect.any(Number),
+        integrityWorkerLifetimeMs: 0,
+        integrityOutsideWorkerMs: 1_000,
         canonicalIndexMs: 0,
         repairedIndexCount: 0,
         phaseDurationsMs: {

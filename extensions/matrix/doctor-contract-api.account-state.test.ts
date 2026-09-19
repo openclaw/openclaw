@@ -199,7 +199,7 @@ describe("Matrix account state Doctor migration", () => {
     fs.writeFileSync(archivedDatabasePath, rawFixture);
 
     const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
-    const staleStore = new SqliteBackedMatrixSyncStore(storageRootDir);
+    const staleStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
     await expect(staleStore.getSavedSyncToken()).resolves.toBe("cursor-a");
     await staleStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
     await expect(staleStore.flush()).rejects.toMatchObject({
@@ -235,13 +235,13 @@ describe("Matrix account state Doctor migration", () => {
     expect(matrixStateRowsSha256(databasePath)).toBe(beforeRepairRowsSha256);
     expect(fs.readFileSync(archivedDatabasePath)).toEqual(rawFixture);
 
-    const repairedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
+    const repairedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
     await expect(repairedStore.getSavedSyncToken()).resolves.toBe("cursor-a");
     await repairedStore.setSyncData(matrixSyncResponse("cursor-after-repair"));
     await repairedStore.flush();
     resetPluginStateStoreForTests();
 
-    const reopenedStore = new SqliteBackedMatrixSyncStore(storageRootDir);
+    const reopenedStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
     await expect(reopenedStore.getSavedSyncToken()).resolves.toBe("cursor-after-repair");
   });
 });

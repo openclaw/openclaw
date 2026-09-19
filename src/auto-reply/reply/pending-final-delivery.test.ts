@@ -162,8 +162,17 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
       ]),
     ).toBe("Rendered chart\nMEDIA:/tmp/chart.png");
     expect(
-      buildRecoverablePendingFinalDeliveryText([{ mediaUrls: ["/tmp/a.png", "/tmp/b.png"] }]),
-    ).toBe("MEDIA:/tmp/a.png\nMEDIA:/tmp/b.png");
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "MEDIA:/tmp/c.png",
+          mediaUrls: [" /tmp/a.png ", "/tmp/b.png", "/tmp/a.png", " "],
+          mediaUrl: " /tmp/b.png ",
+        },
+      ]),
+    ).toBe("MEDIA:/tmp/a.png\nMEDIA:/tmp/b.png\nMEDIA:/tmp/c.png");
+    expect(buildRecoverablePendingFinalDeliveryText([{ text: "Visible", mediaUrl: " " }])).toBe(
+      "Visible",
+    );
   });
 
   it("refuses payload shapes the text marker cannot replay without loss", () => {

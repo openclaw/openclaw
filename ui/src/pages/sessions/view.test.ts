@@ -337,7 +337,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
-      "/dashboard/main/12345678",
+      "/dashboard/main/1234567890abcdef1234567890abcdef",
     );
   });
 
@@ -395,6 +395,7 @@ describe("sessions view", () => {
         transcriptSearchQuery: "launch code",
         transcriptSearch: {
           status: "results",
+          sessions: [{ key: "agent:main:launch", kind: "direct", label: "Launch planning" }],
           results: [
             {
               sessionKey: "agent:main:launch",

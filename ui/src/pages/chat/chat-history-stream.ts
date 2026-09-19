@@ -14,6 +14,7 @@ import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
   getChatSessionProjection,
+  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   setChatRunOwner,
@@ -74,6 +75,25 @@ function resolveInFlightAssistantText(bufferedText: unknown): string | null {
     !isHiddenAssistantStreamText(bufferedText)
     ? bufferedText
     : null;
+}
+
+function replayedCommentaryItemIds(
+  run: NonNullable<ChatHistoryResult["inFlightRun"]>,
+): ReadonlySet<string> {
+  const itemIds = new Set<string>();
+  for (const event of run.events ?? []) {
+    const itemId = event.data.itemId;
+    if (
+      event.runId === run.runId &&
+      event.stream === "item" &&
+      event.data.kind === "preamble" &&
+      typeof itemId === "string" &&
+      itemId.trim()
+    ) {
+      itemIds.add(itemId.trim());
+    }
+  }
+  return itemIds;
 }
 
 function onlyInFlightRunProjectionChanged(
@@ -254,10 +274,14 @@ export function applyHistoryRun(params: {
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
       sameRunContinued);
   if (canAdoptInFlightRun) {
+    const recoveringRun = !state.chatRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; deltas from this same live run must still merge.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
+    if (recoveringRun && sessionInfo) {
+      observeChatRunModel(state, inFlightRunId, sessionInfo);
+    }
     state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
@@ -286,6 +310,7 @@ export function applyHistoryRun(params: {
           state.chatStream,
           inFlightRunId,
           boundary?.index,
+          replayedCommentaryItemIds(run),
         );
   const prefix = state.chatStream?.slice(0, state.chatStream.length - (tail?.length ?? 0)) ?? "";
   const accumulated = accumulatedStreamText(state.chatStreamSegments ?? []);

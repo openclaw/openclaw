@@ -154,7 +154,7 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
     apiKey: auth.apiKey,
     discoveryApiKey: auth.discoveryApiKey,
     profileId: auth.profileId,
-    modelDiscovery: buildMinimaxModelDiscovery("api_key", providerConfig.api),
+    modelDiscovery: buildMinimaxModelDiscovery(providerConfig),
   });
 }
 
@@ -215,7 +215,10 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext): Promise<Provid
     apiKey,
     discoveryApiKey: auth.discoveryApiKey,
     profileId: auth.profileId,
-    modelDiscovery: buildMinimaxModelDiscovery(usesPortalBearerAuth ? "oauth" : "api_key"),
+    modelDiscovery: buildMinimaxModelDiscovery(
+      providerConfig,
+      usesPortalBearerAuth ? "oauth" : "api_key",
+    ),
   });
 }
 
@@ -234,6 +237,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         progress,
         region,
         ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(ctx.assertCurrent ? { assertCurrent: ctx.assertCurrent } : {}),
       });
 
       progress.stop("MiniMax OAuth complete");

@@ -215,7 +215,7 @@ impl TunnelManager {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteGatewayRequest {
     pub transport: String,
@@ -1013,9 +1013,14 @@ pub(crate) fn start_tunnel(
         Some(port) => port,
         None => available_port(remote_port, raw_target)?,
     };
-    let executable = ["/usr/bin/ssh", "/bin/ssh"]
-        .iter()
-        .find(|candidate| Path::new(candidate).is_file())
+    #[cfg(target_os = "windows")]
+    let mut candidates = env::var_os("SystemRoot")
+        .into_iter()
+        .map(|root| PathBuf::from(root).join("System32/OpenSSH/ssh.exe"));
+    #[cfg(not(target_os = "windows"))]
+    let mut candidates = [PathBuf::from("/usr/bin/ssh"), PathBuf::from("/bin/ssh")].into_iter();
+    let executable = candidates
+        .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
             "OpenSSH is not installed. Install your system's OpenSSH client.".to_string()
         })?;

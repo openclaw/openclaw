@@ -19,8 +19,10 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const sessionCount = scenario === "batch" ? 256 : 1;
-  const eventCount = scenario === "public" ? 100_000 : scenario === "batch" ? 64 : 8;
-  const payloadBytes = scenario === "public" ? 4096 : scenario === "batch" ? 32768 : 256;
+  // Keep 390.625 MiB of public payload above the child heap cap, with a deep
+  // ancestry chain but fewer per-event SQLite writes and projection entries.
+  const eventCount = scenario === "public" ? 25_000 : scenario === "batch" ? 64 : 8;
+  const payloadBytes = scenario === "public" ? 16_384 : scenario === "batch" ? 32768 : 256;
   const sessionsDir = path.join(stateDir, "agents/main/sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   fs.mkdirSync(sessionsDir, { recursive: true });

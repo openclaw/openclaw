@@ -8,7 +8,10 @@ import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../src/state/openclaw-state-db.js";
 import { activeSessions } from "../src/transcripts/capture.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
@@ -85,6 +88,7 @@ describe("transcripts tool with the registered Discord provider", () => {
     }
     managers.clear();
     setActivePluginRegistry(createEmptyPluginRegistry(), "discord-transcripts-tool-test-cleanup");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   });

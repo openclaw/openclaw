@@ -1,16 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import "../../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveLifecycleCoordinatorPath } from "../../infra/state-database-coordinator-paths.js";
+import { resolveStateLifecycleRuntimeDirectory } from "../../infra/state-database-coordinator.js";
+import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { resolveAuthProfileDatabasePath } from "../auth-profiles/sqlite.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/store-runtime.js";
+import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
@@ -322,6 +335,153 @@ describe("model runtime generation scope", () => {
       });
     },
   );
+
+  it.each([
+    "explicit-snapshot",
+    "explicit-config",
+    "mutable-process",
+    "mutable-scope",
+    "unowned",
+  ] as const)("preserves metadata compatibility for %s discovery", async (mode) => {
+    const config = { plugins: { enabled: false } } satisfies OpenClawConfig;
+    await state.writeConfig(config);
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "compatibility",
+    });
+    if (mode === "mutable-process" || mode === "explicit-config") {
+      publishCurrentModelGeneration(generation);
+    }
+    const resolve = () =>
+      resolveModelPluginMetadataSnapshot({
+        useRuntimeConfig: true,
+        workspaceDir: state.workspaceDir,
+        ...(mode === "explicit-config" ? { config } : {}),
+        ...(mode === "explicit-snapshot"
+          ? { pluginMetadataSnapshot: generation.metadataSnapshot, config }
+          : {}),
+      });
+    const snapshot =
+      mode === "mutable-scope"
+        ? withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
+            config: generation.preparedModelRuntime.config,
+          })
+        : resolve();
+    if (mode === "explicit-snapshot") {
+      expect(snapshot).toBe(generation.metadataSnapshot);
+    } else {
+      expect(snapshot).toBeDefined();
+      expect(snapshot).not.toBe(generation.metadataSnapshot);
+      expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
+    }
+    if (mode === "explicit-config" || mode === "explicit-snapshot") {
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+    } else {
+      expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
+    }
+  });
+
+  it("selects from a prepared generation without reading or publishing ambient config", async () => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "cold-owned",
+    });
+    await state.writeConfig({ gateway: { mode: "local" } });
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "generation-missing:selected": {
+          type: "api_key",
+          provider: "generation-missing",
+          key: "synthetic-missing-generation-key",
+        },
+        [`${generation.provider}:selected`]: {
+          type: "api_key",
+          provider: generation.provider,
+          key: "synthetic-owned-generation-key",
+        },
+      },
+    });
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const coordinatorPath = resolveLifecycleCoordinatorPath("state-handles", {
+      databasePath: resolveAuthProfileDatabasePath(state.agentDir()),
+      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+      uid: process.getuid?.(),
+    });
+    const preparedPaths: Array<string | null> = [];
+    const execPaths: Array<string | null> = [];
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    DatabaseSync.prototype.prepare = function (this: DatabaseSync, query) {
+      preparedPaths.push(this.location());
+      return prepare.call(this, query);
+    };
+    DatabaseSync.prototype.exec = function (this: DatabaseSync, query) {
+      execPaths.push(this.location());
+      return exec.call(this, query);
+    };
+    const rowReads = [
+      prepare,
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      ),
+    ];
+    // Calibrate on the real root database before measuring the complete selection.
+    const negative = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        negative.prepare("SELECT role FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toMatchObject({ role: "global" });
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(preparedPaths).toEqual([databasePath]);
+      negative.exec("SELECT 1");
+      expect(execPaths).toEqual([databasePath]);
+      expect(databasePath).not.toBe(coordinatorPath);
+    } finally {
+      negative.close();
+    }
+    for (const spy of rowReads) {
+      spy.mockClear();
+    }
+    preparedPaths.length = 0;
+    execPaths.length = 0;
+    const before = await fs.readFile(databasePath);
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    try {
+      const { resolution } = await resolveTieredModel({
+        provider: "generation-missing",
+        fallbackProvider: generation.provider,
+        modelId: generation.modelId,
+        agentDir: state.agentDir(),
+        config: generation.preparedModelRuntime.config,
+        workspaceDir: state.workspaceDir,
+        preparedModelRuntime: generation.preparedModelRuntime,
+      });
+      expect(resolution.model).toMatchObject({
+        provider: generation.provider,
+        id: generation.modelId,
+        name: "Runtime COLD-OWNED",
+      });
+      for (const spy of rowReads) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+      // Auth retains its exact agent source through the separate coordination database.
+      expect(execPaths.length).toBeGreaterThan(0);
+      expect(execPaths.every((pathname) => pathname === coordinatorPath)).toBe(true);
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+      expect(await fs.readFile(databasePath)).toEqual(before);
+    } finally {
+      for (const spy of rowReads) {
+        spy.mockRestore();
+      }
+      exec.mockRestore();
+    }
+  });
 
   it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {
     const config = {} satisfies OpenClawConfig;

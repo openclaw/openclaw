@@ -129,6 +129,9 @@ describe("AppSidebar footer identity menu", () => {
 
     const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identity?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(identity?.getAttribute("aria-expanded")).toBe("false");
+    expect(identity?.getAttribute("aria-label")).toContain(fullName);
+    expect(identity?.querySelector("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
     vi.spyOn(identity!, "getBoundingClientRect").mockReturnValue({
       left: 12,
       right: 224,
@@ -156,7 +159,7 @@ describe("AppSidebar footer identity menu", () => {
     const footerName = identity?.querySelector(".sidebar-identity-card__name");
     const menuName = menu?.querySelector(".sidebar-identity-menu__name");
     expect(footerName?.textContent?.trim()).toBe(fullName);
-    expect(footerName?.getAttribute("title")).toBe(fullName);
+    expect(footerName?.hasAttribute("title")).toBe(false);
     expect(menuName?.textContent?.trim()).toBe(fullName);
     expect(menuName?.getAttribute("title")).toBe(fullName);
     const menuEmail = menu?.querySelector(".sidebar-identity-menu__email");

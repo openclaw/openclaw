@@ -18,6 +18,8 @@ import type { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 
 type BoundaryController = Awaited<ReturnType<typeof createQaGatewayProcessBoundaryController>>;
 type PreparedSpawn = Awaited<ReturnType<BoundaryController["prepare"]>>;
+const QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS = 1_000;
+
 export type QaGatewayStopResult = {
   process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
   errors: unknown[];
@@ -32,6 +34,7 @@ type OwnedProcess = {
   settlement?: Promise<QaGatewayStopResult>;
   stopResult?: QaGatewayStopResult;
   completion?: Promise<void>;
+  closed: Promise<void>;
   ready: boolean;
   checkFailure: () => void;
 };
@@ -71,11 +74,16 @@ export class QaGatewayChildLifecycle {
     prepared: PreparedSpawn | null,
     kind: OwnedProcess["kind"] = "gateway",
   ) {
+    // Capture close synchronously; even a failed spawn must settle its pipes
+    // before teardown can finalize their log sinks.
     const owned: OwnedProcess = {
       child,
       prepared,
       kind,
       identity: null,
+      closed: new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
+      }),
       ready: false,
       checkFailure: () => {},
     };
@@ -88,6 +96,25 @@ export class QaGatewayChildLifecycle {
     this.spawned ||= child.pid !== undefined;
     this.processes.add(owned);
     return owned;
+  }
+
+  async waitForClose(owned: OwnedProcess) {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        owned.closed,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            const label = owned.kind === "cli" ? "CLI" : "child";
+            reject(
+              new Error(`qa gateway ${label} stdio did not close after process-tree shutdown`),
+            );
+          }, QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   completeCli(owned: OwnedProcess, operation: Promise<string>) {
@@ -169,6 +196,11 @@ export class QaGatewayChildLifecycle {
               }
             : undefined,
         );
+        if (current.kind === "gateway") {
+          // Group quiescence can precede the owned child's pipe drain. Join it
+          // before replacement, log finalization, or state removal can proceed.
+          await this.waitForClose(current);
+        }
         return { process: "confirmed-stopped", errors };
       } catch (error) {
         const failure = current.kind === "cli" ? createQaGatewayCliError(error) : error;

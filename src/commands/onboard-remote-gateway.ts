@@ -60,6 +60,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
       label: candidate.label,
       detail: candidate.detail,
       modelRef: candidate.modelRef,
+      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
       ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
       ...(candidate.website !== undefined ? { website: candidate.website } : {}),
       // Gateway ordering is authoritative; the guided candidate shape no
@@ -71,6 +72,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
       id: provider.id,
       ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
       label: provider.label,
+      ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
       ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
       ...(provider.website !== undefined ? { website: provider.website } : {}),
@@ -83,6 +85,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
           label: option.label,
           kind: option.kind,
           featured: option.featured,
+          ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
         },
         option.hint !== undefined ? { hint: option.hint } : {},
         option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
@@ -97,6 +100,7 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
               {
                 id: option.id,
                 label: option.label,
+                ...(option.modelTarget ? { modelTarget: option.modelTarget } : {}),
               },
               option.brandId !== undefined ? { brandId: option.brandId } : {},
               option.hint !== undefined ? { hint: option.hint } : {},
@@ -115,6 +119,8 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
     })),
     workspace: result.workspace,
     ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
+    ...(result.setupModel !== undefined ? { setupModel: result.setupModel } : {}),
+    ...(result.utilityModel !== undefined ? { utilityModel: result.utilityModel } : {}),
     setupComplete: result.setupComplete,
   };
 }
@@ -185,8 +191,14 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
 function toVerifiedActivationResult(params: {
   activation: NonNullable<WizardNextResult["modelActivation"]>;
   requestedModelRef?: string;
+  requestedModelTarget?: "utility";
   verification: SystemAgentSetupVerifyResult;
 }): ActivateSetupInferenceResult {
+  if (params.activation.modelTarget !== params.requestedModelTarget) {
+    throw new Error(
+      "Gateway activated a different model role than the selected connection. Refresh model setup and try again.",
+    );
+  }
   if (
     params.requestedModelRef &&
     params.activation.modelRef.trim() !== params.requestedModelRef.trim()
@@ -202,6 +214,9 @@ function toVerifiedActivationResult(params: {
     throw new Error(
       `Gateway verified ${params.verification.modelRef}, not the activated ${params.activation.modelRef}.`,
     );
+  }
+  if (params.verification.modelTarget !== params.activation.modelTarget) {
+    throw new Error("Gateway verified a different model role than the activated connection.");
   }
   return { ok: true, ...params.activation, latencyMs: params.verification.latencyMs, lines: [] };
 }
@@ -274,6 +289,8 @@ export async function runRemoteGatewayInferenceOnboarding(
         params: {
           sessionId,
           kind: params.kind,
+          ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
           ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
           ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
@@ -353,7 +370,10 @@ export async function runRemoteGatewayInferenceOnboarding(
       try {
         const verification = await request<SystemAgentSetupVerifyResult>({
           method: "openclaw.setup.verify",
-          params: {},
+          params: {
+            ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          },
           timeoutMs: restartBootId
             ? Math.min(GATEWAY_SETUP_VERIFY_TIMEOUT_MS, remainingBeforeAttemptMs)
             : GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
@@ -375,6 +395,7 @@ export async function runRemoteGatewayInferenceOnboarding(
             activation,
             verification,
             ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
+            ...(params.modelTarget ? { requestedModelTarget: params.modelTarget } : {}),
           });
         }
       } catch (error) {

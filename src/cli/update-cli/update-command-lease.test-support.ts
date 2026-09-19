@@ -18,6 +18,8 @@ export type LeaseScenario = {
   writerConfig?: OpenClawConfig;
   writerRecords?: Record<string, PluginInstallRecord>;
   runtimeRoot?: string;
+  verifyRepairOwner?: boolean;
+  verifyServiceCustody?: boolean;
 };
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
@@ -103,6 +105,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.equal(scenario.lane, "fresh-process");
     const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
     assert.ok(resultPath && scenario.pluginUpdate);
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(path.join(path.dirname(resultPath), "handoff.json"), "utf8")),
+      {
+        completionOwner: "parent",
+        timeout: { version: 1, serialized: "15", operator: null },
+      },
+    );
     await withPluginLifecycleLease({ waitMs: 0 }, async () => record("packages-acquired"));
     await record("packages-released");
     const { readConfigFileSnapshot } = await import("../../config/config.js");
@@ -129,6 +138,43 @@ export async function runUpdateLeaseChild(): Promise<void> {
       assert.equal(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION, scenario.hostVersion);
     }
     await record(`${phase}-attempt`);
+    if (scenario.verifyServiceCustody) {
+      assert.equal(
+        await fs.readFile(path.join(stateDir, "managed-service-state"), "utf8"),
+        "stopped",
+        "The update parent must park the service before its Doctor child runs",
+      );
+    }
+    if (scenario.verifyRepairOwner) {
+      const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
+      assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
+      const { DatabaseSync } = await import("node:sqlite");
+      const { readUpdateRunRecord } = await import("../../infra/update-run-reader.js");
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../../state/openclaw-state-db.paths.js");
+      const { inspectUpdateRepairDriverAdmission } =
+        await import("../../infra/update-run-activity.js");
+      const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
+      const run = (() => {
+        try {
+          return readUpdateRunRecord(database, runId);
+        } finally {
+          database.close();
+        }
+      })();
+      assert.ok(run, "Doctor lost its invoking repair run");
+      const admission = inspectUpdateRepairDriverAdmission([run], runId);
+      assert.equal(
+        admission.kind,
+        "continuation",
+        admission.kind === "conflict" ? admission.message : "Doctor lost its invoking driver",
+      );
+      assert.ok(
+        admission.kind === "continuation" &&
+          admission.run.steps.some((step) => step.step === "finalize:repair-continuation"),
+        "Doctor must receive the explicit repair continuation",
+      );
+    }
     // One real acquisition attempt makes the regression fail promptly, without changing parent budgets.
     await withPluginLifecycleLease({ waitMs: 0 }, async () => {
       await record(`${phase}-acquired`);

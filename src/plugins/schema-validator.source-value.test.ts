@@ -86,6 +86,10 @@ describe.each([true, false])("source-aware schema validation (cache=%s)", (cache
         sourceValue: { ...params.sourceValue, enabled: true },
       }).ok,
     ).toBe(false);
+    expect(validateJsonSchemaValue(params)).toEqual({
+      ok: true,
+      value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+    });
   });
 
   it.each([null, { credential: "invalid-plaintext-fixture" }])(

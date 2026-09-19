@@ -3,6 +3,7 @@ import {
   ErrorCodes,
   errorShape,
   validatePluginsInspectParams,
+  validatePluginsSkillsReadParams,
   validatePluginsCatalogBrowseParams,
   validatePluginsCatalogCategoriesParams,
   validatePluginsCatalogGetParams,
@@ -17,6 +18,7 @@ import {
   type ClawHubPluginCatalogEntry,
   type ClawHubPluginCategory,
 } from "../../infra/clawhub-plugin-catalog.js";
+import { fetchClawHubPluginSkill } from "../../infra/clawhub-plugin-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   encodePluginDiscoveryId,
@@ -30,13 +32,61 @@ import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-regis
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
+import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
+import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const pluginsHandlers: GatewayRequestHandlers = {
+  ...pluginCredentialHandlers,
+  "plugins.skills.read": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(params, validatePluginsSkillsReadParams, "plugins.skills.read", respond)
+    ) {
+      return;
+    }
+    try {
+      if (params.source === "installed") {
+        respond(
+          true,
+          await readManagedPluginSkill({
+            config: context.getRuntimeConfig(),
+            pluginId: params.pluginId,
+            skillName: params.skillName,
+          }),
+          undefined,
+        );
+        return;
+      }
+      const identity = resolvePluginDiscoveryIdentity(params.catalogId);
+      if (!identity || identity.origin !== "clawhub") {
+        throw new ManagedPluginLifecycleError("Unknown ClawHub plugin identity.");
+      }
+      respond(
+        true,
+        await fetchClawHubPluginSkill({
+          packageName: identity.identity,
+          version: params.version,
+          skillName: params.skillName,
+        }),
+        undefined,
+      );
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          error instanceof ManagedPluginLifecycleError && error.kind === "invalid-request"
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatErrorMessage(error),
+        ),
+      );
+    }
+  },
   "plugins.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validatePluginsListParams, "plugins.list", respond)) {
       return;
@@ -198,6 +248,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             ? { items: [] }
             : await fetchClawHubPluginCatalog({
                 query,
+                ...(params.searchSource ? { searchSource: params.searchSource } : {}),
                 intent,
                 category: params.category,
                 cursor: params.cursor,

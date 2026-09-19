@@ -4,6 +4,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -14,6 +15,8 @@ import {
   resolveExecutablePath,
   resolveExecutablePathCandidate,
 } from "./executable-path.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   clearExecutablePathCache();
@@ -68,6 +71,40 @@ describe("executable path helpers", () => {
       expect(resolveExecutablePath("missing", { env: { PATH: binDir } })).toBeUndefined();
     });
   });
+
+  it.skipIf(process.platform === "win32").each([
+    ["absolute", "actual"],
+    ["relative", "actual"],
+    ["absolute", "decoy"],
+    ["relative", "decoy"],
+  ])(
+    "preserves filesystem traversal in %s PATH entries with an %s executable",
+    async (form, location) => {
+      const root = tempDirs.make("openclaw-path-traversal-");
+      const configured = path.join(root, "configured");
+      const actual = path.join(root, "actual");
+      await fs.mkdir(configured);
+      await fs.mkdir(path.join(actual, "bin"), { recursive: true });
+      await fs.symlink(path.join(actual, "bin"), path.join(configured, "alias"));
+      await fs.writeFile(path.join(location === "actual" ? actual : configured, "runner"), "", {
+        mode: 0o755,
+      });
+      const rawEntry = form === "absolute" ? `${configured}/alias/..` : "configured/alias/..";
+      const resolved = resolveExecutableFromPathEnv("runner", rawEntry, undefined, {
+        cwd: root,
+        useCache: false,
+      });
+
+      if (location === "actual") {
+        expect(resolved).toBe(`${configured}/alias/../runner`);
+        expect(nodeFs.realpathSync.native(`${configured}/alias/../runner`)).toBe(
+          nodeFs.realpathSync.native(path.join(actual, "runner")),
+        );
+      } else {
+        expect(resolved).toBeUndefined();
+      }
+    },
+  );
 
   it("memoizes PATH hits and misses until explicit invalidation", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {

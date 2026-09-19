@@ -26,7 +26,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
     "openclaw.attemptExecutionHelpersTestApi",
   ),
-  "src/agents/compaction.ts": Symbol.for("openclaw.compactionTestApi"),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
@@ -66,13 +65,9 @@ const publications: Record<string, string | symbol> = {
     "openclaw.replyRunRegistryTestApi",
   ),
   "src/auto-reply/usage-bar/template.ts": Symbol.for("openclaw.usageBarTemplateTestApi"),
-  "src/cli/command-secret-gateway.ts": Symbol.for("openclaw.commandSecretGatewayTestApi"),
   "src/cli/gateway-cli/run.ts": Symbol.for("openclaw.gatewayRunTestApi"),
   "src/commands/doctor-auth-migration-receipts.ts": Symbol.for(
     "openclaw.authProfileMigrationReceiptsTestApi",
-  ),
-  "src/commands/doctor-heartbeat-main-session-repair.ts": Symbol.for(
-    "openclaw.doctorHeartbeatMainSessionRepairTestApi",
   ),
   "src/commands/doctor-session-snapshots.ts": Symbol.for("openclaw.doctorSessionSnapshotsTestApi"),
   "src/commands/doctor/shared/codex-native-assets.ts": Symbol.for(
@@ -84,9 +79,6 @@ const publications: Record<string, string | symbol> = {
   "src/commands/doctor/shared/stale-auth-order.ts": Symbol.for("openclaw.staleAuthOrderTestApi"),
   "src/commands/doctor/shared/stale-oauth-profile-shadows.ts": Symbol.for(
     "openclaw.staleOAuthProfileShadowsTestApi",
-  ),
-  "src/commands/onboard-non-interactive/local.ts": Symbol.for(
-    "openclaw.onboardNonInteractiveLocalTestApi",
   ),
   "src/cron/service/active-run-cancellation.ts": Symbol.for("openclaw.activeCronTaskRunTestApi"),
   "src/cron/service/timer.ts": Symbol.for("openclaw.cronTimerTestApi"),
@@ -100,19 +92,14 @@ const publications: Record<string, string | symbol> = {
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
   "src/model-catalog/remote-overlay.ts": Symbol.for("openclaw.remoteModelCatalogOverlayTestApi"),
-  "src/node-host/invoke.ts": Symbol.for("openclaw.nodeHostInvokeTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
-  "src/plugin-state/plugin-state-store.sqlite.ts": Symbol.for("openclaw.pluginStateSqliteTestApi"),
-  "src/plugin-state/plugin-state-store.ts": Symbol.for("openclaw.pluginStateStoreTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
   "src/sessions/session-lifecycle-admission.ts": Symbol.for(
     "openclaw.sessionLifecycleAdmissionTestApi",
   ),
   "src/sessions/session-upstream-monitor.ts": Symbol.for("openclaw.sessionUpstreamMonitorTestApi"),
   "src/sessions/user-turn-transcript.ts": Symbol.for("openclaw.userTurnTranscriptTestApi"),
-  "src/skills/lifecycle/install.ts": Symbol.for("openclaw.skillsInstallTestApi"),
   "src/skills/lifecycle/upload-store.ts": Symbol.for("openclaw.skillUploadStoreTestApi"),
-  "src/skills/runtime/refresh.ts": Symbol.for("openclaw.skillsRefreshTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
   "src/system-agent/assistant-timeout.ts": Symbol.for("openclaw.systemAgentTimeoutTestApi"),

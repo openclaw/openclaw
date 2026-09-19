@@ -1,22 +1,83 @@
 import { DeleteQueryNode } from "kysely";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { getNodeSqliteKysely } from "./kysely-sync.js";
+import { registerSqliteAuditRecordAsync } from "./sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 
+function withAuditStoreFixture(
+  options: { prefix: string },
+  run: (stateDir: string) => Promise<void>,
+): Promise<void> {
+  return withTestDir(options, async (stateDir) => {
+    try {
+      await run(stateDir);
+    } finally {
+      vi.restoreAllMocks();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+}
+
 describe("SQLite audit record store", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    closeOpenClawStateDatabase();
+  it("rolls back async insertion and retention together, preserving sibling scopes", async () => {
+    await withAuditStoreFixture({ prefix: "openclaw-async-audit-rollback-" }, async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const options = { env, scope: "async-rollback", maxEntries: 2 };
+      const store = createSqliteAuditRecordStore<{ value: number }>(options);
+      const sibling = createSqliteAuditRecordStore<{ value: number }>({
+        ...options,
+        scope: "sibling",
+      });
+      store.register("one", { value: 1 }, 3);
+      store.register("two", { value: 2 }, 2);
+      sibling.register("one", { value: 9 }, 1);
+      const before = store.latest({ limit: 3 });
+      // Admit the worker before installing a cross-connection transaction fault.
+      await registerSqliteAuditRecordAsync(options, {
+        key: "two",
+        value: { value: 2 },
+        createdAt: 2,
+      });
+      const { db } = openOpenClawStateDatabase({ env });
+      db.exec(`
+        CREATE TRIGGER reject_async_audit_pruning BEFORE DELETE ON diagnostic_events
+        WHEN OLD.scope = 'async-rollback' AND OLD.event_key = 'one'
+        BEGIN SELECT RAISE(ABORT, 'async audit pruning refused'); END;
+      `);
+      await expect(
+        registerSqliteAuditRecordAsync(options, {
+          key: "three",
+          value: { value: 3 },
+          createdAt: 1,
+        }),
+      ).rejects.toThrow("async audit pruning refused");
+      expect(store.latest({ limit: 3 })).toEqual(before);
+      expect(sibling.entries()).toEqual([{ key: "one", value: { value: 9 }, createdAt: 1 }]);
+      db.exec("DROP TRIGGER reject_async_audit_pruning");
+      const value = { value: 3 };
+      const pending = registerSqliteAuditRecordAsync(options, {
+        key: "three",
+        value,
+        createdAt: 1,
+      });
+      value.value = 99;
+      await pending;
+      expect(store.latest({ limit: 3 })).toEqual([
+        { key: "three", value: { value: 3 }, createdAt: 1, sequence: 3 },
+        before[0],
+      ]);
+      expect(sibling.entries()).toEqual([{ key: "one", value: { value: 9 }, createdAt: 1 }]);
+    });
   });
 
   it("keeps the newest configured number of rows per scope", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-" }, async (stateDir) => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-store-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({
         scope: "bounded-test",
         maxEntries: 2,
@@ -33,7 +94,7 @@ describe("SQLite audit record store", () => {
   });
 
   it("reads bounded newest-first pages by sequence", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-latest-" }, async (stateDir) => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-store-latest-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({
         scope: "latest-test",
         maxEntries: 10,
@@ -55,7 +116,7 @@ describe("SQLite audit record store", () => {
   });
 
   it("preserves insertion order and prunes the oldest row when timestamps tie", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-ties-" }, async (stateDir) => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-store-ties-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({
         scope: "tied-timestamps",
         maxEntries: 2,
@@ -72,23 +133,26 @@ describe("SQLite audit record store", () => {
   });
 
   it("prunes by insertion order when wall-clock timestamps move", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-clock-skew-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
-        scope: "clock-skew",
-        maxEntries: 2,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+    await withAuditStoreFixture(
+      { prefix: "openclaw-audit-store-clock-skew-" },
+      async (stateDir) => {
+        const store = createSqliteAuditRecordStore<{ value: number }>({
+          scope: "clock-skew",
+          maxEntries: 2,
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        });
 
-      store.register("future-first", { value: 1 }, 4_000_000_000_000);
-      store.register("past-second", { value: 2 }, 1);
-      store.register("current-third", { value: 3 }, 2_000_000_000_000);
+        store.register("future-first", { value: 1 }, 4_000_000_000_000);
+        store.register("past-second", { value: 2 }, 1);
+        store.register("current-third", { value: 3 }, 2_000_000_000_000);
 
-      expect(store.entries().map((entry) => entry.key)).toEqual(["past-second", "current-third"]);
-    });
+        expect(store.entries().map((entry) => entry.key)).toEqual(["past-second", "current-third"]);
+      },
+    );
   });
 
   it("prunes a legacy batch with one delete while preserving runtime rows and other scopes", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-batch-" }, async (stateDir) => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-store-batch-" }, async (stateDir) => {
       const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
       const store = createSqliteAuditRecordStore<{ value: number }>({
         ...options,
@@ -130,42 +194,45 @@ describe("SQLite audit record store", () => {
   it.each(["register", "upsert", "compareAndSet"] as const)(
     "protects the oldest key during %s without changing its insertion age",
     async (operation) => {
-      await withTestDir({ prefix: "openclaw-audit-store-protected-" }, async (stateDir) => {
-        const options = {
-          scope: "protected-test",
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-        };
-        const seed = createSqliteAuditRecordStore<{ value: number }>({
-          ...options,
-          maxEntries: 4,
-        });
-        for (const [index, key] of ["old\0key", "second", "third", "newest"].entries()) {
-          seed.register(key, { value: index }, 1);
-        }
-        const store = createSqliteAuditRecordStore<{ value: number }>({
-          ...options,
-          maxEntries: 2,
-        });
-        if (operation === "compareAndSet") {
-          expect(store.compareAndSet("old\0key", { value: 0 }, { value: 9 }, 0)).toBe(true);
-        } else {
-          store[operation]("old\0key", { value: 9 }, 0);
-        }
-        expect(store.latest({ limit: 4 })).toEqual([
-          { key: "newest", value: { value: 3 }, createdAt: 1, sequence: 4 },
-          {
-            key: "old\0key",
-            value: { value: operation === "register" ? 0 : 9 },
-            createdAt: operation === "register" ? 1 : 0,
-            sequence: 1,
-          },
-        ]);
-      });
+      await withAuditStoreFixture(
+        { prefix: "openclaw-audit-store-protected-" },
+        async (stateDir) => {
+          const options = {
+            scope: "protected-test",
+            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          };
+          const seed = createSqliteAuditRecordStore<{ value: number }>({
+            ...options,
+            maxEntries: 4,
+          });
+          for (const [index, key] of ["old\0key", "second", "third", "newest"].entries()) {
+            seed.register(key, { value: index }, 1);
+          }
+          const store = createSqliteAuditRecordStore<{ value: number }>({
+            ...options,
+            maxEntries: 2,
+          });
+          if (operation === "compareAndSet") {
+            expect(store.compareAndSet("old\0key", { value: 0 }, { value: 9 }, 0)).toBe(true);
+          } else {
+            store[operation]("old\0key", { value: 9 }, 0);
+          }
+          expect(store.latest({ limit: 4 })).toEqual([
+            { key: "newest", value: { value: 3 }, createdAt: 1, sequence: 4 },
+            {
+              key: "old\0key",
+              value: { value: operation === "register" ? 0 : 9 },
+              createdAt: operation === "register" ? 1 : 0,
+              sequence: 1,
+            },
+          ]);
+        },
+      );
     },
   );
 
   it("rolls back failed pruning and lets a caller-owned transaction continue", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-rollback-" }, async (stateDir) => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-store-rollback-" }, async (stateDir) => {
       const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
       const store = createSqliteAuditRecordStore<{ value: number }>({
         ...options,
@@ -200,7 +267,7 @@ describe("SQLite audit record store", () => {
   });
 
   it("keeps keyed mutations atomic without changing insertion age", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-upsert-" }, async (stateDir) => {
+    await withAuditStoreFixture({ prefix: "openclaw-audit-store-upsert-" }, async (stateDir) => {
       const store = createSqliteAuditRecordStore<{ value: number }>({
         scope: "upsert-test",
         maxEntries: 2,
@@ -248,24 +315,27 @@ describe("SQLite audit record store", () => {
   });
 
   it("orders legacy batches before existing runtime rows", async () => {
-    await withTestDir({ prefix: "openclaw-audit-store-legacy-order-" }, async (stateDir) => {
-      const store = createSqliteAuditRecordStore<{ value: number }>({
-        scope: "legacy-order",
-        maxEntries: 4,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+    await withAuditStoreFixture(
+      { prefix: "openclaw-audit-store-legacy-order-" },
+      async (stateDir) => {
+        const store = createSqliteAuditRecordStore<{ value: number }>({
+          scope: "legacy-order",
+          maxEntries: 4,
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        });
 
-      store.register("runtime", { value: 3 }, 3);
-      store.registerLegacyMany([
-        { key: "legacy-one", value: { value: 1 }, createdAt: 1 },
-        { key: "legacy-two", value: { value: 2 }, createdAt: 2 },
-      ]);
+        store.register("runtime", { value: 3 }, 3);
+        store.registerLegacyMany([
+          { key: "legacy-one", value: { value: 1 }, createdAt: 1 },
+          { key: "legacy-two", value: { value: 2 }, createdAt: 2 },
+        ]);
 
-      expect(store.entries().map((entry) => entry.key)).toEqual([
-        "legacy-one",
-        "legacy-two",
-        "runtime",
-      ]);
-    });
+        expect(store.entries().map((entry) => entry.key)).toEqual([
+          "legacy-one",
+          "legacy-two",
+          "runtime",
+        ]);
+      },
+    );
   });
 });

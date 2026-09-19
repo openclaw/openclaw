@@ -1,19 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
+  getNodeSqliteKysely,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-session-participants-schema.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import {
-  getSessionKysely,
-  resolveSqliteReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
 import {
   readParticipantIdentity,
   type SessionParticipantIdentity,
@@ -30,7 +25,7 @@ export type SessionParticipantRecord = {
 type SessionParticipantRow = Selectable<OpenClawAgentKyselyDatabase["session_participants"]>;
 
 function selectParticipantRows(database: DatabaseSync) {
-  return getSessionKysely(database)
+  return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database)
     .selectFrom("session_participants")
     .selectAll()
     .orderBy("session_key")
@@ -81,7 +76,7 @@ function readParticipantRecord(row: SessionParticipantRow): SessionParticipantRe
   };
 }
 
-function participantRecordsBySessionKey(
+export function participantRecordsBySessionKey(
   database: DatabaseSync,
   sessionKeys?: readonly string[],
 ): Map<string, SessionParticipantRecord[]> {
@@ -97,18 +92,29 @@ function participantRecordsBySessionKey(
   return records;
 }
 
+function participantProjection(
+  records: readonly SessionParticipantRecord[],
+): Pick<SessionEntry, "participants" | "participantCount"> {
+  if (records.length === 0) {
+    return {};
+  }
+  return {
+    participants: records.map(({ identity }) => ({ identity })),
+    participantCount: records.length,
+  };
+}
+
 function withProjectedParticipants(
   entry: SessionEntry,
   records: readonly SessionParticipantRecord[],
 ): SessionEntry {
-  if (records.length === 0) {
-    return entry;
-  }
-  return {
-    ...entry,
-    participants: records.map(({ identity }) => ({ identity })),
-    participantCount: records.length,
-  };
+  return records.length ? { ...entry, ...participantProjection(records) } : entry;
+}
+
+export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
+  return participantProjection(
+    participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
+  );
 }
 
 export function projectSqliteSessionParticipants(
@@ -169,22 +175,4 @@ export function projectSqliteSessionParticipantsBatch(
     }
   }
   return projected;
-}
-
-export function listSessionParticipantsReadOnly(scope: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-  sessionKey?: string;
-  storePath?: string;
-}): Map<string, SessionParticipantRecord[]> {
-  const resolved = resolveSqliteReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      participantRecordsBySessionKey(
-        database.db,
-        scope.sessionKey ? [scope.sessionKey] : undefined,
-      ),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : new Map();
 }

@@ -6,10 +6,12 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { selectStoredGitHubIdentities } from "../state/user-profile-github-identity.js";
+import { getUserProfileDisplays } from "../state/user-profile-list.js";
 import { getUserProfileDisplay, UserProfileNotFoundError } from "../state/user-profiles.js";
 import { projectSessionActor, projectSessionParticipant } from "./session-identity-projection.js";
 
@@ -28,25 +30,35 @@ function verifiedGitHubIdentities(profileIds?: readonly string[]) {
   );
 }
 
-/** Converts local attribution into a portable claim, never a remote access grant. */
-export function projectSessionCatalogSourceParticipant(
-  params: CatalogSourceIdentity & { identity: TranscriptSenderIdentity; label?: string },
+function readSourceProfileFacts(id: string) {
+  let profile: ReturnType<typeof getUserProfileDisplay> | undefined;
+  try {
+    profile = getUserProfileDisplay(id);
+  } catch (error) {
+    if (!(error instanceof UserProfileNotFoundError)) {
+      throw error;
+    }
+  }
+  const profileId = profile?.id ?? id;
+  const github = verifiedGitHubIdentities([profileId])?.get(profileId)?.primary;
+  return { profileId, profile, github };
+}
+
+type SourceParticipantParams = CatalogSourceIdentity & {
+  identity: TranscriptSenderIdentity;
+  label?: string;
+};
+
+function projectSourceParticipant(
+  params: SourceParticipantParams,
+  resolveProfile: typeof readSourceProfileFacts,
 ): SessionParticipant {
   const { identity } = params;
   if (identity.type !== "profile") {
     const label = sourceLabel(params.label);
     return { identity, ...(label ? { label } : {}) };
   }
-  let profile: ReturnType<typeof getUserProfileDisplay> | undefined;
-  try {
-    profile = getUserProfileDisplay(identity.id);
-  } catch (error) {
-    if (!(error instanceof UserProfileNotFoundError)) {
-      throw error;
-    }
-  }
-  const profileId = profile?.id ?? identity.id;
-  const github = verifiedGitHubIdentities([profileId])?.get(profileId);
+  const { profileId, profile, github } = resolveProfile(identity.id);
   const label = sourceLabel(profile?.displayName ?? github?.login ?? params.label);
   return {
     identity: {
@@ -60,9 +72,23 @@ export function projectSessionCatalogSourceParticipant(
   };
 }
 
-/** Only source-qualified creators may resolve a local profile before publication. */
-export function projectSessionCatalogSourceActor(
+/** A synchronous page reuses first-read display facts; later pages read fresh state. */
+export function createSessionCatalogSourceParticipantProjector() {
+  const profiles = new Map<string, ReturnType<typeof readSourceProfileFacts>>();
+  return (params: SourceParticipantParams): SessionParticipant =>
+    projectSourceParticipant(params, (id) => {
+      let facts = profiles.get(id);
+      if (!facts) {
+        facts = readSourceProfileFacts(id);
+        profiles.set(id, facts);
+      }
+      return facts;
+    });
+}
+
+function projectSourceActor(
   params: CatalogSourceIdentity & { actor: StoredSessionActor | undefined },
+  resolveProfile: typeof readSourceProfileFacts,
 ): SessionCreatedActor | undefined {
   const { actor } = params;
   if (!actor) {
@@ -70,11 +96,14 @@ export function projectSessionCatalogSourceActor(
   }
   const profileId = sessionCreatorProfileId(actor);
   const participant = profileId
-    ? projectSessionCatalogSourceParticipant({
-        ...params,
-        identity: { type: "profile", id: profileId },
-        label: actor.label,
-      })
+    ? projectSourceParticipant(
+        {
+          ...params,
+          identity: { type: "profile", id: profileId },
+          label: actor.label,
+        },
+        resolveProfile,
+      )
     : undefined;
   const label = sourceLabel(actor.label);
   return {
@@ -85,19 +114,62 @@ export function projectSessionCatalogSourceActor(
   };
 }
 
+/** Prepare portable creator claims for one synchronous page; claims never grant access. */
+export function createSessionCatalogSourceActorProjector(
+  params: CatalogSourceIdentity & { actors: readonly (StoredSessionActor | undefined)[] },
+): (actor: StoredSessionActor | undefined) => SessionCreatedActor | undefined {
+  const ids = [
+    ...new Set(
+      params.actors.flatMap((actor) => {
+        const id = sessionCreatorProfileId(actor);
+        return id ? [id] : [];
+      }),
+    ),
+  ];
+  let facts: Map<string, ReturnType<typeof readSourceProfileFacts>> | undefined;
+  let attempted = false;
+  return (actor) =>
+    projectSourceActor({ ...params, actor }, (requestedId) => {
+      if (!attempted) {
+        attempted = true;
+        try {
+          const profiles = getUserProfileDisplays(ids);
+          const canonicalIds = [...new Set(ids.map((id) => profiles.get(id)?.id ?? id))];
+          const identities = verifiedGitHubIdentities(canonicalIds);
+          facts = new Map(
+            ids.map((id) => {
+              const profile = profiles.get(id);
+              const profileId = profile?.id ?? id;
+              return [id, { profileId, profile, github: identities?.get(profileId)?.primary }];
+            }),
+          );
+        } catch (error) {
+          // Corruption has already reached the database lifecycle owner; never retry a poisoned read.
+          if (isSqliteCorruptionError(error)) {
+            throw error;
+          }
+          // Nonterminal conversion/parse failures replay in the original scalar and actor-label order.
+        }
+      }
+      return facts?.get(requestedId) ?? readSourceProfileFacts(requestedId);
+    });
+}
+
 /** Snapshot attribution links once per catalog page; claims never grant access. */
 export function createSessionCatalogGitHubLinker() {
   const profilesByAccountId = new Map<string, string>();
   const profilesByLogin = new Map<string, string>();
   const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();
-  for (const [profileId, github] of verifiedGitHubIdentities() ?? []) {
-    const accountId = String(github.accountId);
-    const login = github.login.toLowerCase();
-    if (!profilesByAccountId.has(accountId)) {
-      profilesByAccountId.set(accountId, profileId);
-    }
-    if (!profilesByLogin.has(login)) {
-      profilesByLogin.set(login, profileId);
+  for (const [profileId, { accounts }] of verifiedGitHubIdentities() ?? []) {
+    for (const github of accounts) {
+      const accountId = String(github.accountId);
+      const login = github.login.toLowerCase();
+      if (!profilesByAccountId.has(accountId)) {
+        profilesByAccountId.set(accountId, profileId);
+      }
+      if (!profilesByLogin.has(login)) {
+        profilesByLogin.set(login, profileId);
+      }
     }
   }
   return {

@@ -131,6 +131,7 @@ public enum OpenClawChatGatewayPayloadCodec {
             name: name.isEmpty ? model.id : model.name,
             provider: model.provider,
             available: model.available,
+            manualSelectionAllowed: model.manualselectionallowed,
             unavailableReason: model.unavailablereason?.value as? String,
             unavailableUntil: model.unavailableuntil,
             contextWindow: model.contextwindow,

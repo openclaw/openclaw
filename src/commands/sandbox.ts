@@ -67,7 +67,7 @@ export async function sandboxListCommand(
     displayContainers(containers, runtime);
   }
 
-  displaySummary(containers, browsers, runtime);
+  displaySummary(opts.browser ? browsers : containers, opts.browser, runtime);
 }
 
 /** Stops and removes sandbox runtimes matching the requested scope. */
@@ -83,7 +83,7 @@ export async function sandboxRecreateCommand(
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
     runtime.log(
-      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes.`,
+      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes.`,
     );
     return;
   }
@@ -99,6 +99,9 @@ export async function sandboxRecreateCommand(
   displayRecreateResult(result, runtime);
 
   if (result.failCount > 0) {
+    runtime.error(
+      `Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect what remains.`,
+    );
     runtime.exit(1);
   }
 }
@@ -106,7 +109,7 @@ export async function sandboxRecreateCommand(
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
     runtime.error(
-      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes first.`,
+      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand(`openclaw sandbox list${opts.browser ? " --browser" : ""}`)} to inspect active runtimes first.`,
     );
     runtime.exit(1);
     return false;
@@ -204,9 +207,7 @@ async function removeContainer(
     runtime.log(`✓ Removed ${containerName}`);
     return { success: true };
   } catch (err) {
-    runtime.error(
-      `Failed to remove ${containerName}: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw sandbox list")} to inspect what remains.`,
-    );
+    runtime.error(`Failed to remove ${containerName}: ${formatErrorMessage(err)}.`);
     return { success: false };
   }
 }

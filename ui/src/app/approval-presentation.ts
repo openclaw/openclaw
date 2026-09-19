@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
   normalizeAgentId,
@@ -56,4 +57,9 @@ export function sessionHasPendingApproval(
 ): boolean {
   const normalizedSessionKey = normalizeSessionKeyForUiComparison(sessionKey);
   return normalizedSessionKey ? snapshot.sessionKeys.has(normalizedSessionKey) : false;
+}
+
+export function compactApprovalCommand(command: string): string {
+  const singleLine = command.replace(/\s+/g, " ").trim();
+  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }

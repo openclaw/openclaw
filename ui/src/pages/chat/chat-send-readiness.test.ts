@@ -1,18 +1,21 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
-import { enqueueChatMessage, removeQueuedMessageWithoutReleasing } from "./chat-queue.ts";
+import {
+  enqueueChatMessage,
+  enqueuePendingRunMessage,
+  removeQueuedMessageWithoutReleasing,
+} from "./chat-queue.ts";
 import {
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { applyChatCacheSnapshot, type ChatSessionSnapshot } from "./session-message-cache.ts";
 
 function cachedTranscript(sessionId: string, displayedLeafEntryId: string): ChatSessionSnapshot {
@@ -24,17 +27,65 @@ function cachedTranscript(sessionId: string, displayedLeafEntryId: string): Chat
   };
 }
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
+useChatSendBrowserFixture();
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+it.each(["same run", "new run", "new session", "different terminal", "still active"])(
+  "reconciles queued input against terminal history (%s)",
+  async (scenario) => {
+    const sessionKey = "agent:main:dashboard:missed-completion";
+    const history = createDeferred<ChatHistoryResult>();
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: "current-session",
+      chatRunId: "finished-run",
+      chatStream: "The previous answer is complete.",
+      chatMessage: "Continue with the next change",
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
+      },
+    });
+    await handleSendChat(host, undefined, { followUpMode: "queue" });
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toHaveLength(1);
+    enqueuePendingRunMessage(host, "Command joined to the previous run", "finished-run");
+
+    const draining = resumeStoredChatOutboxes(host);
+    await vi.waitFor(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+    );
+    if (scenario === "new run") {
+      host.chatRunId = "newer-run";
+    } else if (scenario === "new session") {
+      host.currentSessionId = "replacement-session";
+    }
+    history.resolve({
+      messages: [],
+      sessionInfo: {
+        key: sessionKey,
+        sessionId: "current-session",
+        kind: "direct",
+        status: scenario === "still active" ? "running" : "done",
+        lastRunId: scenario === "different terminal" ? "older-run" : "finished-run",
+        updatedAt: 2,
+      },
+    });
+    await draining;
+
+    if (scenario !== "same run") {
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatQueue).toHaveLength(2);
+      expect(host.chatRunId).toBe(scenario === "new run" ? "newer-run" : "finished-run");
+      return;
+    }
+    expect(findChatSendPayload(host)).toMatchObject({
+      sessionKey,
+      message: "Continue with the next change",
+    });
+    expect(host.chatRunId).toBe("next-run");
+    expect(host.chatQueue).toEqual([]);
+  },
+);
 
 it.each(
   [

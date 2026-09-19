@@ -11,9 +11,17 @@ import {
   readCanvasContentPreview,
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
+  normalizeMessage,
 } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
+import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import {
+  messageRecoveryKey,
+  resolveCappedMessageId,
+  resolveSourceMessageId,
+  type ChatMessageRecovery,
+} from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -53,12 +61,29 @@ export function appendCanvasBlockToAssistantMessage(
   };
 }
 
-export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
+export function messageMatchesSearchQuery(
+  message: unknown,
+  query: string,
+  recovery?: ChatMessageRecovery,
+): boolean {
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
-  return (
-    !normalizedQuery ||
-    normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
-  );
+  if (!normalizedQuery) {
+    return true;
+  }
+  const messageId = recovery && resolveSourceMessageId(message);
+  const expansion =
+    recovery && messageId
+      ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
+      : undefined;
+  if (expansion?.status === "loaded") {
+    const role = normalizeRoleForGrouping(normalizeMessage(message).role);
+    if (resolveCappedMessageId(message, role)) {
+      return normalizeLowercaseStringOrEmpty(
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
+      ).includes(normalizedQuery);
+    }
+  }
+  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
 }
 
 type ChatMessagePreview = {

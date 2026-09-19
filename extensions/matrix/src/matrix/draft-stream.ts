@@ -1,4 +1,3 @@
-// Matrix plugin module implements draft stream behavior.
 import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
@@ -26,31 +25,6 @@ function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
   };
 }
 
-type MatrixDraftStream = {
-  /** Update the draft with the latest accumulated text for the current block. */
-  update: (text: string) => void;
-  /** Ensure the last pending update has been sent. */
-  flush: () => Promise<void>;
-  /** Flush and mark this block as done. Returns the event ID if a message was sent. */
-  stop: () => Promise<string | undefined>;
-  /** Cancel pending draft updates without creating a new preview event. */
-  discardPending: () => Promise<void>;
-  /** Retract the current preview without ending this text block. */
-  deleteCurrentMessage: () => Promise<void>;
-  /** Clear the MSC4357 live marker in place when the draft is kept as final text. */
-  finalizeLive: () => Promise<boolean>;
-  /** Reset state for the next text block (after tool calls). */
-  reset: () => void;
-  /** The event ID of the current draft message, if any. */
-  eventId: () => string | undefined;
-  /** The last content accepted for the current draft event, if any. */
-  content: () => string | undefined;
-  /** True when the provided text matches the last rendered draft payload. */
-  matchesPreparedText: (text: string) => boolean;
-  /** True when preview streaming must fall back to normal final delivery. */
-  mustDeliverFinalNormally: () => boolean;
-};
-
 export function createMatrixDraftStream(params: {
   roomId: string;
   client: MatrixClient;
@@ -62,7 +36,7 @@ export function createMatrixDraftStream(params: {
   preserveReplyId?: boolean;
   accountId?: string;
   log?: (message: string) => void;
-}): MatrixDraftStream {
+}) {
   const { roomId, client, cfg, threadId, accountId, log } = params;
   const preview = resolveDraftPreviewOptions(params.mode ?? "partial");
   // MSC4357 live markers are only useful for "partial" mode where users see

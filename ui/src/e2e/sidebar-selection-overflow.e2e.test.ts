@@ -96,4 +96,60 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+
+  it("keeps a focused session outline inside the sidebar clip", async () => {
+    const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    const context = await suite.newBrowserContext({ viewport: { height: 500, width: 1280 } });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:dashboard:focused-session";
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+          path: "",
+          sessions: [{ key: sessionKey, kind: "direct", label: "Focused session", updatedAt: 1 }],
+          ts: Date.now(),
+        },
+      },
+      sessionKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const link = page.locator(
+        `.sidebar-recent-session[data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
+      );
+      await link.focus();
+      const geometry = await link.evaluate((element) => {
+        const linkRect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        let clipLeft = Number.NEGATIVE_INFINITY;
+        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+          const ancestorStyle = getComputedStyle(ancestor);
+          if (["auto", "clip", "hidden", "scroll"].includes(ancestorStyle.overflowX)) {
+            clipLeft = Math.max(clipLeft, ancestor.getBoundingClientRect().left);
+          }
+        }
+        return {
+          clipLeft,
+          outlineLeft:
+            linkRect.left -
+            Number.parseFloat(style.outlineWidth) -
+            Number.parseFloat(style.outlineOffset),
+        };
+      });
+
+      expect(geometry.outlineLeft, JSON.stringify(geometry)).toBeGreaterThanOrEqual(
+        geometry.clipLeft,
+      );
+      if (captureProof) {
+        const artifactDir = path.join(suite.artifactDir, "sidebar-selection-overflow");
+        await fs.mkdir(artifactDir, { recursive: true });
+        await page.screenshot({ path: path.join(artifactDir, "focused-session-outline.png") });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

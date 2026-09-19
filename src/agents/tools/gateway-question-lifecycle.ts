@@ -29,18 +29,23 @@ const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_NOT_FOUND",
 ]);
 
-/** Reads the Gateway's structured failure reason from a question RPC rejection. */
-export function readQuestionErrorReason(error: unknown): string | undefined {
+/** Reads the Gateway's structured failure from a question RPC rejection. */
+export function readQuestionRejection(
+  error: unknown,
+): { code: unknown; reason?: string } | undefined {
   const requestError = asNullableRecord(error);
   if (requestError?.name !== "GatewayClientRequestError") {
     return undefined;
   }
   const reason = asNullableRecord(requestError.details)?.reason;
-  return typeof reason === "string" ? reason : undefined;
+  return {
+    code: requestError.gatewayCode,
+    reason: typeof reason === "string" ? reason : undefined,
+  };
 }
 
-function isTerminalQuestionResolveError(error: unknown): boolean {
-  const reason = readQuestionErrorReason(error);
+export function isTerminalQuestionResolveError(error: unknown): boolean {
+  const reason = readQuestionRejection(error)?.reason;
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 

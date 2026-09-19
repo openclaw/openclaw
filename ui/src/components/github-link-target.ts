@@ -1,8 +1,5 @@
 const GITHUB_URL_PREFIX = "https://github.com/";
 
-export const GITHUB_HOVERCARD_OPEN_DELAY_MS = 250;
-export const GITHUB_HOVERCARD_PROVIDER_TAG = "openclaw-github-link-hovercard-provider";
-
 type GitHubItemTarget = {
   kind: "issue" | "pull";
   number: number;
@@ -50,24 +47,4 @@ export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
   }
   const target = parseGitHubItemPath(url);
   return target ? { ...target, href: url.href } : null;
-}
-
-export function gitHubPreviewKey(target: GitHubLinkTarget): string {
-  return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
-}
-
-export function gitHubProfileUrl(login: string): string {
-  return `${GITHUB_URL_PREFIX}${encodeURIComponent(login)}`;
-}
-
-export function githubLinkAnchorFromEvent(event: Event): HTMLAnchorElement | null {
-  for (const candidate of event.composedPath()) {
-    if (candidate instanceof HTMLAnchorElement) {
-      return candidate;
-    }
-    if (candidate === event.currentTarget) {
-      break;
-    }
-  }
-  return null;
 }

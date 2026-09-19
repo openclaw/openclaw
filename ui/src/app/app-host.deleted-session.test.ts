@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -20,6 +19,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
+import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationContext } from "./context.ts";
 import "./app-host.ts";
 
@@ -51,6 +51,8 @@ function createSessionRecoveryShell(params: {
     context: {
       basePath: "",
       chatAttachmentHandoff: createChatAttachmentHandoff(),
+      chatSubmissions: createChatSubmissions(),
+      placementStartup: { get: () => null },
       agents: {
         state: {
           agentsList: {
@@ -91,6 +93,34 @@ afterEach(() => {
 });
 
 describe("OpenClaw shell deleted-session recovery", () => {
+  it("keeps an interrupted first prompt visible after temporary-session cleanup", () => {
+    const { shell, replace, setSessionKey } = createSessionRecoveryShell({
+      activeSessionKey: deletedKey,
+      sessionKeys: [mainKey],
+      deletedSessionKeys: [deletedKey],
+    });
+    const context = shell.runtime.context;
+    const get = vi.spyOn(context.placementStartup, "get").mockReturnValue({
+      sessionKey: deletedKey,
+      phase: "cancelled",
+      startedAt: 1,
+      initialTurn: {
+        id: "unsent",
+        text: "keep this interrupted task",
+        createdAt: 1,
+        sendState: "failed",
+      },
+      retryable: false,
+    });
+    shell.recoverDeletedActiveSession(context.sessions.state);
+    expect(shell.activeSessionKey).toBe(deletedKey);
+    expect(replace).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    get.mockReturnValue(null);
+    shell.recoverDeletedActiveSession(context.sessions.state);
+    expect(shell.activeSessionKey).toBe(mainKey);
+    expect(replace).toHaveBeenCalledOnce();
+  });
   it.each(["rejection", "batch interruption", "different-client batch rejection"] as const)(
     "navigates on delete intent and visibly reports %s without replacing newer navigation",
     async (failure) => {
@@ -362,6 +392,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       context: {
         agents: { state: { agentsList: null } },
         chatAttachmentHandoff: createChatAttachmentHandoff(),
+        chatSubmissions: createChatSubmissions(),
         gateway: {
           snapshot: {
             assistantAgentId: "main",

@@ -159,7 +159,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       });
       expect(onTerminal).toHaveBeenCalledOnce();
       expect(onSucceeded).toHaveBeenCalledTimes(stopReason === "stop" ? 1 : 0);
-      expect(events.filter((event) => event.type === "model.call.completed")).toHaveLength(1);
+      // Deferred terminal classification reports model.call.error for an explicit
+      // error result instead of the superseded model.call.completed; both stop
+      // reasons still produce exactly one terminal event.
+      const expectedTerminalType =
+        stopReason === "error" ? "model.call.error" : "model.call.completed";
+      expect(events.filter((event) => event.type === expectedTerminalType)).toHaveLength(1);
     },
   );
 

@@ -18,6 +18,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -96,7 +97,8 @@ describe("transcripts CLI", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;

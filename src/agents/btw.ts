@@ -34,6 +34,7 @@ import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
+import { buildBtwCliPrompt, buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
@@ -109,18 +110,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)
     .join("");
-}
-
-function buildBtwSystemPrompt(): string {
-  return [
-    "You are answering an ephemeral /btw side question about the current conversation.",
-    "Use the conversation only as background context.",
-    "Answer only the side question in the last user message.",
-    "Do not continue, resume, or complete any unfinished task from the conversation.",
-    "Do not emit tool calls, pseudo-tool calls, shell commands, file writes, patches, or code unless the side question explicitly asks for them.",
-    "Do not say you will continue the main task after answering.",
-    "If the question can be answered briefly, answer briefly.",
-  ].join("\n");
 }
 
 function resolveReturnedAuthProfileSource(
@@ -205,70 +194,6 @@ function resolveBtwAuthProfileStore(params: {
     store,
     ignoreAutoPreferredProfile: externalCliAuthScope.ignoreAutoPreferredProfile,
   };
-}
-
-function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): string {
-  const lines = [
-    "Answer this side question only.",
-    "Ignore any unfinished task in the conversation while answering it.",
-  ];
-  const trimmedPrompt = inFlightPrompt?.trim();
-  if (trimmedPrompt) {
-    lines.push(
-      "",
-      "Current in-flight main task request for background context only:",
-      "<in_flight_main_task>",
-      trimmedPrompt,
-      "</in_flight_main_task>",
-      "Do not continue or complete that task while answering the side question.",
-    );
-  }
-  lines.push("", "<btw_side_question>", question.trim(), "</btw_side_question>");
-  return lines.join("\n");
-}
-
-function collectBtwMessageText(content: Message["content"]): string {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((part) => {
-      if (part.type === "text") {
-        return part.text;
-      }
-      if (part.type === "image") {
-        return "[Image content omitted from CLI side-question context.]";
-      }
-      return [];
-    })
-    .join("\n")
-    .trim();
-}
-
-function buildBtwCliPrompt(params: {
-  messages: Message[];
-  question: string;
-  inFlightPrompt?: string;
-}): string {
-  const lines = [
-    "Use this sanitized conversation history as background context only.",
-    "Do not continue, resume, or complete any unfinished task from the conversation.",
-    "",
-    "<conversation_history>",
-  ];
-  for (const message of params.messages) {
-    const text = collectBtwMessageText(message.content);
-    if (!text) {
-      continue;
-    }
-    lines.push(`${message.role === "assistant" ? "Assistant" : "User"}:`, text, "");
-  }
-  lines.push("</conversation_history>", "");
-  lines.push(buildBtwQuestionPrompt(params.question, params.inFlightPrompt));
-  return lines.join("\n");
 }
 
 function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
@@ -439,7 +364,6 @@ async function materializeBtwRuntimeModel(
           modelRegistry: params.modelRegistry,
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: true,
-          preferBundledStaticCatalogTransport: true,
           preparedModelRuntime: params.preparedModelRuntime,
           workspaceDir,
           authProfileId,
@@ -517,7 +441,9 @@ async function resolveRuntimeModel(params: {
     workspaceDir,
     skipAgentDiscovery: true,
     allowBundledStaticCatalogFallback: true,
-    preferBundledStaticCatalogTransport: true,
+    preferBundledStaticCatalogTransport: Boolean(
+      params.harnessId && params.harnessId !== "openclaw",
+    ),
   });
   let model = resolution.model;
   if (!model) {
@@ -601,6 +527,7 @@ type RunBtwSideQuestionParams = {
   provider: string;
   model: string;
   question: string;
+  images?: ImageContent[];
   sessionEntry: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
@@ -645,6 +572,7 @@ async function runCliBtwSideQuestion(params: {
   cfg: OpenClawConfig;
   model: string;
   question: string;
+  imageCount: number;
   sessionId: string;
   sessionFile: string;
   sessionEntry: StoredSessionEntry;
@@ -689,6 +617,7 @@ async function runCliBtwSideQuestion(params: {
       prompt: buildBtwCliPrompt({
         messages: params.messages,
         question: params.question,
+        imageCount: params.imageCount,
         inFlightPrompt: params.inFlightPrompt,
       }),
       extraSystemPrompt: buildBtwSystemPrompt(),
@@ -1093,6 +1022,7 @@ export async function runBtwSideQuestion(
         });
         const sideParams = {
           ...hostAttempt,
+          images: params.images,
           hostCapabilities: host.capabilities,
           sandbox,
           provider: runtimeModel.provider,
@@ -1232,6 +1162,7 @@ export async function runBtwSideQuestion(
         cfg: params.cfg,
         model: params.model,
         question: params.question,
+        imageCount: params.images?.length ?? 0,
         sessionId,
         sessionFile,
         sessionEntry: params.sessionEntry,
@@ -1384,6 +1315,7 @@ export async function runBtwSideQuestion(
       await blockEmitChain;
     };
 
+    const { images } = await sanitizeImageBlocks(params.images ?? [], "btw:question", imageLimits);
     const stream = await streamWithPayloadPatch(
       streamFn,
       runtimeModel,
@@ -1398,6 +1330,7 @@ export async function runBtwSideQuestion(
                 type: "text",
                 text: buildBtwQuestionPrompt(params.question, inFlightPrompt),
               },
+              ...images,
             ],
             timestamp: Date.now(),
           },

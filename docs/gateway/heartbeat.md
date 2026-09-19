@@ -22,7 +22,7 @@ Under the hood, heartbeat cadence is owned by the Automations scheduler: the gat
 
 Scheduled heartbeats require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the gateway logs a startup warning and does not run scheduled heartbeats. Manual and event-driven heartbeat wakes remain available. There is no separate heartbeat fallback timer.
 
-Setting `heartbeat.every: "0m"` also disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as the completion follow-up requested by a background exec task. It does not create or re-enable a recurring schedule. Use tool policy and sandboxing, rather than heartbeat cadence, to control whether those agent turns may execute commands.
+Setting `heartbeat.every: "0m"` disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as a background exec completion. It does not create or re-enable a recurring schedule. To keep background exec without automatic completion turns or their model calls, set `tools.exec.notifyOnExit: false`; check `agents.entries.<id>.tools.exec.notifyOnExit` for per-agent overrides. Collect results with `process poll`. See [Background exec notifications](/gateway/background-process#disable-automatic-completion-turns). Tool policy and sandboxing control whether agent turns may execute commands.
 
 Targeted event wakes retain the same per-agent rate limits when recurring cadence is disabled. Those limits are a 30-second minimum between event turns, and a flood guard after five starts within 60 seconds. Deferred work resumes when its guard expires. Config reloads preserve this accounting without enrolling the agent in recurring or broadcast heartbeats.
 
@@ -40,7 +40,7 @@ Troubleshooting: [Automations](/automation/cron-jobs#troubleshooting)
     Store a tiny checklist in the heartbeat monitor's scratch with `openclaw cron scratch <jobId> --set "..."`.
   </Step>
   <Step title="Decide where heartbeat messages should go">
-    Heartbeat alerts go to the operator's direct message by default. Set `commands.ownerAllowFrom` or a concrete channel `allowFrom`. Wildcard-only allowlists do not identify an owner.
+    Heartbeat alerts go to the operator's direct message by default. Set `commands.ownerAllowFrom` to an array such as `["telegram:123456789"]`, or use a concrete channel `allowFrom`. Wildcard-only allowlists do not identify an owner.
   </Step>
   <Step title="Optional tuning">
     - Use lightweight bootstrap context if heartbeat runs only need the monitor scratch.
@@ -72,17 +72,37 @@ Example config:
 }
 ```
 
+For a configured Telegram bot, set the owner with a JSON array, even when there is
+only one entry. Replace `123456789` with your Telegram user ID and include any
+existing owners you want to keep:
+
+```bash
+openclaw config set commands.ownerAllowFrom '["telegram:123456789"]'
+```
+
+To select a recipient explicitly, set the channel and recipient separately:
+
+```bash
+openclaw config set agents.defaults.heartbeat.to '"123456789"'
+openclaw config set agents.defaults.heartbeat.target telegram
+```
+
+Keep the inner double quotes around the numeric chat ID so `to` is stored as a
+string. `heartbeat.target` accepts `owner`, `last`, `none`, or a channel ID such as
+`telegram`; `telegram:123456789` belongs in `commands.ownerAllowFrom`, not `target`.
+
 ## Defaults
 
 - Interval: `30m`. Applying Anthropic provider defaults bumps this to `1h` when the resolved auth mode is OAuth/token (including Claude CLI reuse), but only while `heartbeat.every` is unset. Set `agents.defaults.heartbeat.every` or per-agent `agents.entries.*.heartbeat.every`. Use `0m` to disable recurring cadence.
 - Delivery target: `owner`. OpenClaw uses the first concrete `commands.ownerAllowFrom` entry, then channel `allowFrom`, and never sends this route to a group. Without a resolvable owner DM, ambient polls skip with `reason=no-route`. Set `target: "last"` to follow the most recent conversation, including groups, or `target: "none"` for internal-only runs.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`): `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
-- Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
+- Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work. Turns that resume work after a background command completes or process background-task review and blocked-task events use the ordinary agent timeout (48 hours by default); heartbeat cadence and timeout settings do not shorten these continuations. The event must be included in the turn; an isolated monitor does not inherit the budget of work pending in its base session.
 - The heartbeat prompt is sent **verbatim** as the scheduled user message. Heartbeat runs use the same system prompt as ordinary agent turns. There is no heartbeat-specific system-prompt section.
 - When recurring heartbeats are disabled with `0m`, the automation job stays but is disabled. Its monitor scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
+- A targeted background-command completion waits for its own session to become free, including final-delivery recovery, but does not wait for unrelated sessions or automations. A completion coalesced with scheduled heartbeat work retains the scheduled work's busy guards.
 
 ## What the heartbeat prompt is for
 
@@ -274,6 +294,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - explicit channel: any configured channel or plugin id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
 - `none`: run the heartbeat for internal state only. **Do not deliver** it externally.
 
+For an explicit Telegram recipient, use `target: "telegram"` and `to: "123456789"`.
+The `target` field does not accept a combined channel-and-recipient value such as
+`"telegram:123456789"`.
+
 </ParamField>
 <ParamField path="directPolicy" type='"allow" | "block"' default="allow">
   Controls direct/DM delivery behavior. `allow`: allow direct/DM heartbeat delivery. `block`: suppress direct/DM delivery (`reason=dm-blocked`).
@@ -293,6 +317,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 </ParamField>
 <ParamField path="timeoutSeconds" type="number" default="global timeout or min(every, 600)">
   Maximum seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
+  Exec-completion continuations use the ordinary agent timeout instead, including an explicit `agents.defaults.timeoutSeconds` value of `0` for no timeout.
 
 </ParamField>
 <ParamField path="activeHours" type="object">
@@ -494,6 +519,8 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 | `--json`                     | Output JSON.                                                                                     |
 
 If no `--session-key` is given and multiple agents have `heartbeat` configured, `--mode now` runs each of those agent heartbeats immediately.
+
+Broadcast completion reports an agent failure even if another agent succeeded or was quietly skipped. Busy retries and guarded deferrals keep their existing retry behavior.
 
 Related heartbeat controls in the same CLI group:
 

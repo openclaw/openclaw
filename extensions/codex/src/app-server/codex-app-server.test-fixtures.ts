@@ -1,3 +1,4 @@
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
@@ -6,14 +7,36 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 type ServerRequestHandler = (request: RpcRequest, signal: AbortSignal) => unknown;
 type NotificationHandler = (notification: CodexServerNotification) => Promise<void> | void;
 
+export function createCronAuthorityCapabilityFixture(
+  runId: string,
+): NonNullable<EmbeddedRunAttemptParams["cronCreatorAuthorityCapability"]> {
+  // Mirror the gateway-minted capability instead of casting a partial fixture;
+  // transcript tools consume callerOrigin and future contract drift must type-fail.
+  const abortController = new AbortController();
+  return {
+    active: true,
+    abort: () => abortController.abort(),
+    callerOrigin: { kind: "local" },
+    grantTokens: new Set<string>(),
+    runId,
+    signal: abortController.signal,
+  };
+}
+
 export function codexTestTurnIds(threadId = "thread-1", turnId = "turn-1") {
   return { threadId, turnId };
 }
 
 export function mockClientRuntimeMethods() {
   const getServerVersion = () => CODEX_APP_SERVER_VERSION;
+  const closeAndWait: CodexAppServerClient["closeAndWait"] = async () => ({
+    exited: true,
+    cleanup: "closed",
+  });
   return {
+    closeAndWait,
     getInstanceId: () => "test-client-1",
+    getTransportPid: (): number | undefined => undefined,
     getRuntimeIdentity: () => ({ serverVersion: getServerVersion() }),
     getServerVersion,
   };
@@ -73,8 +96,8 @@ export function createFakeCodexAppServerClient(
   requestImpl: (method: string, params?: unknown, options?: unknown) => unknown = async () =>
     undefined,
 ) {
-  const notificationHandlers: NotificationHandler[] = [];
-  const requestHandlers: ServerRequestHandler[] = [];
+  const notificationHandlers = new Set<NotificationHandler>();
+  const requestHandlers = new Set<ServerRequestHandler>();
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   let closeError: Error | undefined;
   const request = vi.fn(requestImpl);
@@ -82,22 +105,12 @@ export function createFakeCodexAppServerClient(
     ...mockClientRuntimeMethods(),
     request,
     addNotificationHandler(handler: NotificationHandler) {
-      notificationHandlers.push(handler);
-      return () => {
-        const index = notificationHandlers.indexOf(handler);
-        if (index >= 0) {
-          notificationHandlers.splice(index, 1);
-        }
-      };
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
     },
     addRequestHandler(handler: ServerRequestHandler) {
-      requestHandlers.push(handler);
-      return () => {
-        const index = requestHandlers.indexOf(handler);
-        if (index >= 0) {
-          requestHandlers.splice(index, 1);
-        }
-      };
+      requestHandlers.add(handler);
+      return () => requestHandlers.delete(handler);
     },
     addCloseHandler(handler: (client: CodexAppServerClient) => void) {
       closeHandlers.add(handler);
@@ -116,7 +129,11 @@ export function createFakeCodexAppServerClient(
         [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
       );
     },
-    async handleServerRequest(serverRequest: RpcRequest, signal = new AbortController().signal) {
+    async handleServerRequest(
+      this: void,
+      serverRequest: RpcRequest,
+      signal = new AbortController().signal,
+    ) {
       for (const handler of requestHandlers) {
         const result = await handler(serverRequest, signal);
         if (result !== undefined) {

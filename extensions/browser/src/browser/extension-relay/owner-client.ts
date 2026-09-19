@@ -1,6 +1,6 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { ConnectOverCDPTransport } from "playwright-core";
-import type { WebSocket } from "ws";
 import { z } from "zod";
 import { parseStrictJsonObject } from "./auth-v2.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";

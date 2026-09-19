@@ -17,43 +17,17 @@ import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-
 
 const nodeRequire = createRequire(import.meta.url);
 
-function loadModuleWithJiti(modulePath: string): unknown {
-  const loadWithJiti = getCachedPluginModuleLoader({
+function loadModule(modulePath: string): unknown {
+  const extension = path.extname(modulePath).toLowerCase();
+  if (!isJavaScriptModulePath(modulePath) && !PLUGIN_SOURCE_MODULE_EXTENSIONS.includes(extension)) {
+    throw new Error(`channel plugin module must be built JavaScript: ${modulePath}`);
+  }
+  return getCachedPluginModuleLoader({
     modulePath,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
-    tryNative: false,
     cacheScopeKey: "channel-plugin-module-loader",
-  });
-  return loadWithJiti(modulePath);
-}
-
-function loadModule(modulePath: string): unknown {
-  const extension = path.extname(modulePath).toLowerCase();
-  const isSource = PLUGIN_SOURCE_MODULE_EXTENSIONS.includes(extension);
-  if (
-    !isJavaScriptModulePath(modulePath) &&
-    !(isSource && typeof nodeRequire.extensions?.[extension] === "function")
-  ) {
-    if (isSource) {
-      // Local source plugins need the TS loader unless the current runtime has
-      // installed a native source require hook for that extension.
-      return loadModuleWithJiti(modulePath);
-    }
-    throw new Error(`channel plugin module must be built JavaScript: ${modulePath}`);
-  }
-  try {
-    return nodeRequire(modulePath);
-  } catch (error) {
-    if (isSource) {
-      // Native source hooks can still fail on ESM/TS edge cases; fall back to
-      // the cached loader before surfacing the error.
-      return loadModuleWithJiti(modulePath);
-    }
-    throw new Error(`failed to load channel plugin module with native require: ${modulePath}`, {
-      cause: error,
-    });
-  }
+  })(modulePath);
 }
 
 function resolveSourceModuleCandidates(rootDir: string, specifier: string): string[] {

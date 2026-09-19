@@ -1,6 +1,8 @@
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 type RemoteModelCatalogStoreRow = {
   id: number;
@@ -29,6 +31,28 @@ export function readRemoteModelCatalog(
     options,
   );
   return snapshot ? { id: 1, ...snapshot } : undefined;
+}
+
+/** Read the startup catalog through the existing shared-state inspection owner. */
+export async function readRemoteModelCatalogAsync(
+  context: OpenClawStateWorkerContext,
+): Promise<RemoteModelCatalogStoreRow | undefined> {
+  const artifactPreservingReadOnly = isArtifactPreservingStateRead();
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  context.admission.assertCurrent();
+  return runOpenClawStateWorkerOperation(
+    context,
+    async (scope) => {
+      const row = await scope.execute({
+        type: "modelCatalog.remote.read",
+        input: { artifactPreservingReadOnly },
+      });
+      context.admission.assertCurrent();
+      return row;
+    },
+    { existingOnly: true },
+  );
 }
 
 export function writeRemoteModelCatalog(

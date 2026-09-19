@@ -16,6 +16,7 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
@@ -45,6 +46,7 @@ function resolveLegacyCronQuarantinePath(storePath: string): string {
 }
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
   noteMock.mockClear();
   if (tempRoot) {

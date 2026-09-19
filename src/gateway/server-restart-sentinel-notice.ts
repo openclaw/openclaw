@@ -229,7 +229,7 @@ async function enqueueRestartSentinelNoticeClaimed(
   const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
     onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
   });
-  preparationOwner.markPrepared();
+  await preparationOwner.markPrepared();
   const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
     getStablePreparation: preparationOwner.current,
   });

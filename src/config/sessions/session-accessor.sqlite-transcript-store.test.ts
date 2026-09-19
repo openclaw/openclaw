@@ -83,6 +83,50 @@ describe("SQLite transcript append", () => {
     expect(message["__openclaw"]).toMatchObject({
       media: [expect.objectContaining({ path: "/media/a.png", contentType: "image/png" })],
     });
+
+    const generation = readTranscriptGenerationInTransaction(database, "append-session");
+    const next = {
+      type: "message",
+      id: "event-2",
+      parentId: "event-1",
+      timestamp: 1001,
+      message: { role: "assistant", content: "next" },
+    };
+    const policy = trackSqliteStatementExecutions(database.db, ["policy"], (sql) =>
+      sql.includes('"session_key_contract"') ? "policy" : null,
+    );
+    let nextJson: string | false;
+    try {
+      nextJson = runOpenClawAgentWriteTransaction(
+        (writer) =>
+          appendTranscriptEventInTransaction(
+            writer,
+            {
+              agentId: "main",
+              env,
+              sessionId: "append-session",
+              sessionKey: "agent:main:append-session",
+            },
+            next,
+          ),
+        { agentId: "main", env },
+      );
+    } finally {
+      policy.restore();
+    }
+    expect(nextJson).toBe(JSON.stringify(next));
+    expect(
+      database.db
+        .prepare("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+        .all("append-session"),
+    ).toEqual([
+      { seq: 0, event_json: committedJson },
+      { seq: 1, event_json: nextJson },
+    ]);
+    expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
+    expect(policy.counts).toEqual({ policy: 1 });
+    expect(policy.rowCounts).toEqual({ policy: 1 });
+    expect(policy.textBytes).toEqual({ policy: 4 });
   });
 });
 

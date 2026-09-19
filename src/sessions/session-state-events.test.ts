@@ -1,18 +1,28 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+} from "../state/openclaw-state-schema-compatibility.js";
+import { recordSessionCreated } from "./session-created.js";
 import {
   acknowledgeSessionStateNotices,
   classifySessionStateActor,
@@ -22,7 +32,6 @@ import {
   listAmbientGroupWatchTargets,
   listSessionStateEventsSince,
   recordSessionCompacted,
-  recordSessionCreated,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
@@ -110,20 +119,88 @@ async function createWatcherSession(
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
   disposeHeartbeatWakeHandler?.();
   disposeHeartbeatWakeHandler = undefined;
+  vi.useRealTimers();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
-  vi.unstubAllEnvs();
-  vi.useRealTimers();
-});
-
-afterAll(() => {
+  resetHeartbeatEventsForTest();
   cleanupTempDirs(tempDirs);
+  vi.unstubAllEnvs();
 });
 
 describe("session state events", () => {
+  it("does not advance a replacement watch from older producer facts", () => {
+    const database = createDatabaseOptions();
+    resetHeartbeatEventsForTest();
+    registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: child }, database);
+    const readBinding = () =>
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          "SELECT * FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?",
+        )
+        .get(watcher, child);
+    const original = readBinding();
+    const event = recordSessionStateEvent(
+      eventInput({
+        watcherStorePaths: { [watcher]: "/synthetic/retired-store.sqlite" },
+      }),
+      database,
+    );
+    expect(event?.sequence).toBeGreaterThan(0);
+    expect(readBinding()).toEqual(original);
+    expect(peekSystemEventEntries(watcher)).toEqual([]);
+    expect(getLastHeartbeatEvent()).toMatchObject({ status: "skipped", reason: "store-replaced" });
+  });
+  it("preserves older readers and version markers when watcher provenance is first written", () => {
+    const database = createDatabaseOptions();
+    const before = openOpenClawStateDatabase(database);
+    before.db.exec("ALTER TABLE session_watch_cursors DROP COLUMN watcher_store_path");
+    const userVersion = before.db.prepare("PRAGMA user_version").get();
+    closeOpenClawStateDatabaseForTest();
+    const reopened = openOpenClawStateDatabase(database);
+    const schemaBeforeRead = reopened.db.prepare("PRAGMA schema_version").get();
+    expect(getSessionStateVersion(child, "main", database)).toBe(0);
+    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaBeforeRead);
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name FROM pragma_table_info('session_watch_cursors') WHERE name = 'watcher_store_path'",
+        )
+        .get(),
+    ).toBeUndefined();
+
+    seedChild(database);
+    assertSqliteSchemaContains(
+      reopened.db,
+      reopened.path,
+      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }).replace(
+        /^ {2}(?:watcher_store_path|requester_store_path|controller_store_path) TEXT,\n/gm,
+        "",
+      ),
+      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    );
+    reopened.db
+      .prepare(
+        "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, ?)",
+      )
+      .run(watcher, "legacy-target", Date.now());
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT last_seen_sequence, watcher_store_path FROM session_watch_cursors WHERE target_session_key = 'legacy-target'",
+        )
+        .get(),
+    ).toEqual({ last_seen_sequence: 0, watcher_store_path: null });
+    const installedSchema = reopened.db.prepare("PRAGMA schema_version").get();
+    recordSessionStateEvent(eventInput(), database);
+    expect(reopened.db.prepare("PRAGMA schema_version").get()).toEqual(installedSchema);
+    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(userVersion);
+  });
+
   it("bumps a durable head that survives pruning all retained rows", () => {
     const database = createDatabaseOptions();
     const now = Date.now();
@@ -345,6 +422,84 @@ describe("session state events", () => {
     expect(getSessionStateVersion(child, "main", database)).toBe(next.sequence);
   });
 
+  it("prunes many composite session heads without recreating or regressing them", () => {
+    const database = createDatabaseOptions();
+    const { db } = openOpenClawStateDatabase(database);
+    const now = SESSION_STATE_RETENTION_MS + 100;
+    const insertEvent = db.prepare(`
+      INSERT INTO session_state_events
+        (session_key, agent_id, kind, actor_type, occurred_at, summary)
+      VALUES (?, ?, 'compacted', 'system', 1, 'old')
+    `);
+    const insertHead = db.prepare(`
+      INSERT INTO session_state_heads
+        (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
+      VALUES (?, ?, 1000000, ?, 7)
+    `);
+    const expected: Array<{
+      session_key: string;
+      agent_id: string;
+      last_sequence: number;
+      pruned_max_sequence: number;
+      updated_at: number;
+    }> = [];
+    for (let index = 0; index < 257; index += 1) {
+      const sessionKey = `shared-${Math.floor(index / 2)}`;
+      const agentId = index % 2 === 0 ? "main" : "ops";
+      insertEvent.run(sessionKey, agentId);
+      const sequence = Number(insertEvent.run(sessionKey, agentId).lastInsertRowid);
+      if (index % 17 === 0) {
+        continue;
+      }
+      const previous = index % 4 === 0 ? 900000 : index % 4 === 1 ? sequence : 0;
+      insertHead.run(sessionKey, agentId, previous);
+      expected.push({
+        session_key: sessionKey,
+        agent_id: agentId,
+        last_sequence: 1000000,
+        pruned_max_sequence: Math.max(previous, sequence),
+        updated_at: previous < sequence ? now : 7,
+      });
+    }
+
+    db.exec(`
+      INSERT INTO session_state_events
+        (session_key, agent_id, kind, actor_type, occurred_at, summary)
+      VALUES (CAST(X'81' AS TEXT), 'main', 'compacted', 'system', 1, 'first'),
+             (CAST(X'80' AS TEXT), 'main', 'compacted', 'system', 1, 'second');
+    `);
+    insertHead.run("\ufffd", "main", 0);
+    expected.push({
+      session_key: "\ufffd",
+      agent_id: "main",
+      last_sequence: 1000000,
+      pruned_max_sequence: 516,
+      updated_at: now,
+    });
+
+    const updates = trackSqliteStatementExecutions(db, ["watermarks"], (sql) =>
+      /\bupdate\s+"?session_state_heads"?\b/i.test(sql) ? "watermarks" : null,
+    );
+    try {
+      sweepSessionStateWatchNotices({ ...database, now });
+    } finally {
+      updates.restore();
+    }
+
+    const heads = db.prepare("SELECT * FROM session_state_heads").all();
+    expect(heads).toHaveLength(expected.length);
+    expect(heads).toEqual(expect.arrayContaining(expected));
+    expect(db.prepare("SELECT count(*) AS count FROM session_state_events").get()).toEqual({
+      count: 0,
+    });
+    closeOpenClawStateDatabaseForTest();
+    expect(
+      openOpenClawStateDatabase(database).db.prepare("SELECT * FROM session_state_heads").all(),
+    ).toEqual(heads);
+    expect(updates.counts.watermarks).toBeGreaterThan(0);
+    expect(updates.counts.watermarks).toBeLessThanOrEqual(4);
+  });
+
   it("lists typed ascending deltas with truncation and history-gap signaling", () => {
     const database = createDatabaseOptions();
     const now = Date.now();
@@ -408,7 +563,7 @@ describe("session state events", () => {
       database,
     )!;
     expect(event.sequence).toBeGreaterThan(0);
-    expect(peekSystemEventEntries("global")).toEqual([]);
+    expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
     const cursorRow = openOpenClawStateDatabase(database)
       .db.prepare("SELECT COUNT(*) AS n FROM session_watch_cursors")
       .get() as { n: number };
@@ -548,6 +703,30 @@ describe("session state events", () => {
       notified_sequence: afterRegistration.sequence,
       material_sequence: afterRegistration.sequence,
     });
+  });
+
+  it.each(["ambient", "explicit"])("rebinds a replaced %s watch on the next group turn", (kind) => {
+    const database = createDatabaseOptions();
+    if (kind === "explicit") {
+      registerSessionStateWatch({ watcherSessionKey: watcher, targetSessionKey: group }, database);
+    } else {
+      registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
+    }
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("UPDATE session_watch_cursors SET watcher_store_path = ?").run(
+      "/retired/store.sqlite",
+    );
+    expect(registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database)).toBe(
+      true,
+    );
+    expect(
+      db.prepare("SELECT watcher_store_path, provenance FROM session_watch_cursors").get(),
+    ).toEqual({
+      watcher_store_path: expect.not.stringContaining("/retired/"),
+      provenance: "ambient-group",
+    });
+    recordSessionStateEvent(eventInput({ sessionKey: group, watcherSessionKeys: [] }), database);
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
   it("registers one ambient main watcher for a distinct group session", () => {
@@ -766,9 +945,9 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
   });
 
-  it("projects spawn, terminal, goal, and compaction producer helpers", () => {
+  it("projects spawn, terminal, goal, and compaction producer helpers", async () => {
     const database = createDatabaseOptions();
-    recordSessionCreated({
+    recordSessionCreated(cfg, {
       sessionKey: child,
       agentId: "main",
       entry: {
@@ -803,7 +982,7 @@ describe("session state events", () => {
       requesterSessionKey: watcher,
       outcomeStatus: "cancelled",
     });
-    recordSessionGoalChanged({
+    await recordSessionGoalChanged({
       sessionKey: child,
       entry: {
         sessionId: "session-child",

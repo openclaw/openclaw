@@ -13,15 +13,23 @@ import { formatCliCommand } from "../../../cli/command-format.js";
 import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  materializeUtilityModelSeparation,
+  resolveUtilityModelSeparationError,
+} from "../../../config/utility-model-separation-migration.js";
 import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
+import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import {
-  resolveDeprecatedProviderInstallCatalogEntry,
-  resolveProviderInstallCatalogEntry,
-} from "../../../plugins/provider-install-catalog.js";
+  buildProviderPluginMethodChoice,
+  parseProviderPluginMethodChoice,
+  PROVIDER_PLUGIN_CHOICE_PREFIX,
+} from "../../../plugins/provider-plugin-choice.js";
 import type {
   ProviderAuthOptionBag,
+  ProviderAuthMethod,
+  ProviderPlugin,
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/types.js";
@@ -39,8 +47,6 @@ import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureModelSelectionRuntimePlugins,
 } from "../../runtime-plugin-install.js";
-
-const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
 async function loadPluginProviderRuntime() {
   return import("./auth-choice.plugin-providers.runtime.js");
@@ -74,9 +80,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     return null;
   };
   let nextConfig = params.nextConfig;
-  const prefixedProviderId = params.authChoice.startsWith(PROVIDER_PLUGIN_CHOICE_PREFIX)
-    ? params.authChoice.slice(PROVIDER_PLUGIN_CHOICE_PREFIX.length).split(":", 1)[0]?.trim()
-    : undefined;
+  const prefixedProviderId = parseProviderPluginMethodChoice(params.authChoice)?.providerId;
   // Prefixed choices bypass generic validation, so reject empty IDs before provider discovery.
   if (prefixedProviderId === "") {
     return reject(
@@ -97,6 +101,12 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     includeUntrustedWorkspacePlugins: false,
   });
   if (trustedManifestMatch) {
+    if (trustedManifestMatch.modelTarget === "utility") {
+      const error = resolveUtilityModelSeparationError(params.baseConfig);
+      if (error) {
+        return reject(error);
+      }
+    }
     const enabled = await enablePluginWithCapabilityConsent(
       nextConfig,
       trustedManifestMatch.pluginId,
@@ -123,6 +133,15 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         workspaceDir,
       })
     : undefined;
+  const resolveManifestMethodChoice = (provider: ProviderPlugin, method: ProviderAuthMethod) =>
+    provider.pluginId
+      ? resolveManifestProviderAuthChoice(buildProviderPluginMethodChoice(provider.id, method.id), {
+          config: nextConfig,
+          workspaceDir,
+          pluginId: provider.pluginId,
+          includeUntrustedWorkspacePlugins: false,
+        })
+      : undefined;
   let providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
       config: nextConfig,
@@ -134,6 +153,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     }),
     choice: params.authChoice,
     manifestChoice: trustedManifestMatch,
+    resolveManifestMethodChoice,
   });
   if (!providerChoice) {
     if (prefixedProviderId) {
@@ -164,26 +184,34 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         ].join("\n"),
       );
     }
-    const installCatalogParams = {
+    const normalizedChoiceId = params.authChoice.trim();
+    if (!normalizedChoiceId) {
+      return undefined;
+    }
+    const installCatalog = resolveProviderInstallCatalogEntries({
       config: nextConfig,
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
-    };
-    const deprecatedInstallCatalogEntry = resolveDeprecatedProviderInstallCatalogEntry(
-      params.authChoice,
-      installCatalogParams,
+    });
+    const deprecatedInstallCatalogEntry = installCatalog.find((entry) =>
+      entry.deprecatedChoiceIds?.includes(normalizedChoiceId),
     );
     if (deprecatedInstallCatalogEntry) {
       return reject(
         `${JSON.stringify(params.authChoice)} is no longer supported. Use --auth-choice ${JSON.stringify(deprecatedInstallCatalogEntry.choiceId)} instead.`,
       );
     }
-    const installCatalogEntry = resolveProviderInstallCatalogEntry(
-      params.authChoice,
-      installCatalogParams,
+    const installCatalogEntry = installCatalog.find(
+      (entry) => entry.choiceId === normalizedChoiceId,
     );
     if (!installCatalogEntry) {
       return undefined;
+    }
+    if (installCatalogEntry.modelTarget === "utility") {
+      const error = resolveUtilityModelSeparationError(params.baseConfig);
+      if (error) {
+        return reject(error);
+      }
     }
     const { ensureOnboardingPluginInstalled } = await import("../../onboarding-plugin-install.js");
     const installResult = await ensureOnboardingPluginInstalled({
@@ -220,6 +248,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         includeUntrustedWorkspacePlugins: false,
       }),
       choice: params.authChoice,
+      resolveManifestMethodChoice,
       manifestChoice: installCatalogEntry,
     });
     if (!providerChoice) {
@@ -229,6 +258,12 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     }
   }
 
+  if (providerChoice.wizard?.modelTarget === "utility") {
+    const error = resolveUtilityModelSeparationError(params.baseConfig);
+    if (error) {
+      return reject(error);
+    }
+  }
   const enableResult = await enablePluginWithCapabilityConsent(
     nextConfig,
     providerChoice.provider.pluginId ?? providerChoice.provider.id,
@@ -241,6 +276,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   }
 
   const method = providerChoice.method;
+  const modelTarget = providerChoice.wizard?.modelTarget;
   if (!method.runNonInteractive) {
     // Interactive-only plugin setup methods may prompt, so non-interactive
     // setup must reject them before entering plugin code.
@@ -256,10 +292,14 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   const providerConfig = agentScopedModels
     ? prepareAgentModelDefaults(enableResult.config, params.target)
     : enableResult.config;
-  const projectProviderResult = (updated: OpenClawConfig) =>
-    agentScopedModels
+  const projectProviderResult = (updated: OpenClawConfig) => {
+    const projected = agentScopedModels
       ? projectAgentModelDefaults(enableResult.config, params.target, updated)
       : updated;
+    return modelTarget === "utility"
+      ? materializeUtilityModelSeparation(projected, params.baseConfig).config
+      : projected;
+  };
   const runNonInteractive = method.runNonInteractive;
   const context = {
     authChoice: params.authChoice,
@@ -354,7 +394,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         profiles.push(...prepared.profiles);
       }
       if (profiles.length > 0) {
-        const selected = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+        const selected =
+          modelTarget === "utility"
+            ? result.agents?.defaults?.utilityModel?.trim()
+            : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
         const modelRef = resolveSetupModel({
           label: providerChoice.provider.label,
           providerId: providerChoice.provider.id,
@@ -400,7 +443,24 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   if (!result) {
     return result;
   }
-  const selectedModel = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+  const selectedModel =
+    modelTarget === "utility"
+      ? result.agents?.defaults?.utilityModel?.trim()
+      : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+  if (modelTarget === "utility") {
+    if (!selectedModel) {
+      return reject("This provider did not return a utility model for setup.");
+    }
+    const { model: _selectedPrimary, ...defaults } = result.agents?.defaults ?? {};
+    const primary = providerConfig.agents?.defaults?.model;
+    result = {
+      ...result,
+      agents: {
+        ...result.agents,
+        defaults: { ...defaults, ...(primary !== undefined ? { model: primary } : {}) },
+      },
+    };
+  }
   if (!selectedModel) {
     return projectProviderResult(result);
   }

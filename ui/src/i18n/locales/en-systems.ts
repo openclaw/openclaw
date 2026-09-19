@@ -1,0 +1,73 @@
+import type { TranslationMap } from "../lib/types.ts";
+import { en } from "./en.ts";
+
+const enSystems = {
+  systems: {
+    title: "Systems",
+    inventory: "Machines",
+    search: "Find a machine…",
+    select: "Select a machine",
+    selectHint: "Choose a host, worker, or paired node to see its status and desktop.",
+    refresh: "Refresh machines",
+    loading: "Loading machines…",
+    empty: "No machines are available to this account.",
+    noMatches: "No machines match your search.",
+    offlineGateway: "Gateway disconnected. Reconnect to refresh machines or open a desktop.",
+    offlineTitle: "This machine is offline",
+    offlineHint:
+      "Its last reported information is shown. Reconnect the machine to open its desktop.",
+    noDesktopTitle: "No desktop available",
+    noDesktopHint:
+      "This machine has not reported a desktop. Its other capabilities remain available.",
+    accessTitle: "Desktop access unavailable",
+    accessHint: "Desktop viewing requires an advertised desktop service and administrator access.",
+    missingTitle: "This machine is no longer listed",
+    missingHint:
+      "Refresh the inventory or choose another machine. Your selection has not been changed.",
+    details: "Machine details",
+    closeDetails: "Close details",
+    stats: "Show statistics",
+    hideStats: "Hide statistics",
+    online: "Online",
+    offline: "Offline",
+    unknown: "Unknown",
+    unavailable: "Unavailable",
+    desktop: "Desktop",
+    host: "Gateway host",
+    worker: "Worker",
+    node: "Paired node",
+    workers: "Workers",
+    nodes: "Paired nodes",
+    status: "Status",
+    platform: "Platform",
+    identifier: "Identifier",
+    capabilities: "Capabilities",
+    telemetry: "Reported statistics",
+    load: "Load (1 min)",
+    cpuCount: "{count} cores",
+    memory: "Memory used",
+    disk: "Disk available",
+    sampled: "Sampled {time}",
+    lastKnown: "Last reported {time}",
+    noTelemetry: "This machine has not reported resource statistics.",
+    attachedSessions: "Attached sessions",
+    attachedHint: "Attachment does not mean a session is currently executing on this machine.",
+    relatedSessions: "Related sessions",
+    relatedHint:
+      "Bindings from the loaded session list. A binding is not proof that a turn executed here.",
+    noRelatedSessions: "No related sessions in the loaded list.",
+    relations: {
+      placement: "Placed here",
+      "retained-placement": "Retained placement",
+      runner: "Runner",
+      "exec-binding": "Configured exec target",
+      gateway: "Local session context",
+    },
+    statuses: { starting: "Starting", stopping: "Stopping", error: "Error" },
+    errors: "Some machine information could not be refreshed.",
+  },
+} satisfies TranslationMap;
+
+export const registerSystemsEnglish = Object.assign(() => Object.assign(en, enSystems), {
+  catalog: enSystems,
+});

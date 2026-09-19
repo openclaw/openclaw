@@ -23,6 +23,20 @@
       "help": "Trust this paired node's numeric GitHub account claims for local profile display attribution. Off by default."
     }
   },
+  "configGroups": [
+    {
+      "id": "session-sharing",
+      "title": "Session sharing",
+      "order": 10,
+      "properties": ["share"]
+    },
+    {
+      "id": "node-attribution",
+      "title": "Node attribution",
+      "order": 20,
+      "properties": ["nodes"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

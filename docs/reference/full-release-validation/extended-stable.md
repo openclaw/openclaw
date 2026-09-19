@@ -176,3 +176,9 @@ that selects Telegram, conflicts with the waiver and is rejected. The declaratio
 target version bind the immutable execution plan, manifest, and reuse identity;
 the publisher carries the waiver into release verification notes. The beta-only
 package deferral above remains unchanged.
+
+Source Telegram QA uses the release checks' shared context check: an exact candidate
+SHA must remain an ancestor of its canonical branch, or equal its release tag.
+Both build and execution admission independently repeat that check and retain
+candidate-version, signature/merge-attribution, and live maintainer checks.
+Advancing a release branch does not select a new candidate or invalidate the old one.

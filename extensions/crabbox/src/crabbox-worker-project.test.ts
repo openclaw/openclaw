@@ -1,8 +1,10 @@
 import { setImmediate } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   createNodeBootstrapFixture,
   createWorkerArchiveFixture,
@@ -37,6 +39,39 @@ function notSubmittedReceipt(leaseId: string) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it.each([false, true])(
+    "reports the checkpoint rejection while retaining capture recovery (cleanup fails=%s)",
+    async (cleanupFails) => {
+      const diagnostic =
+        'coordinator POST /v1/checkpoints: http 429: {"error":"checkpoint_limit_exceeded","message":"checkpoint admission limit exceeded: scope=owner observed=10 limit=10"}';
+      const { options } = projectOptions([]);
+      const { provider, calls } = createWarmProvider(({ argv }) => {
+        if (argv[2] === "create") {
+          return commandResult({ code: 5, stderr: diagnostic });
+        }
+        if (cleanupFails && argv[1] === "stop") {
+          return commandResult({ code: 2, stderr: "source has unresolved checkpoint chk_quota" });
+        }
+        return undefined;
+      });
+
+      const failure = await provider
+        .provision(PROFILE, "quota-rejection", options)
+        .catch((error: unknown) => error);
+      const message = formatErrorMessage(failure);
+      expect(message).toContain(diagnostic);
+      expect(message).toContain("capture is unresolved");
+      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
+      expect(capture).toMatchObject({ phase: "uncertain" });
+      expect(message).toContain(`--recover ${capture!.selector}`);
+      if (cleanupFails) {
+        expect(message).toContain("source has unresolved checkpoint chk_quota");
+      }
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    },
+  );
+
   it.each([false, true])(
     "clears only its own rejected capture and still stops the source (replaced=%s)",
     async (replaced) => {
@@ -77,14 +112,16 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
       expect(calls.find(({ argv }) => argv[1] === "stop")?.argv).toContain(leaseId);
       if (replaced) {
-        expect(listCrabboxWarmImages()[0]?.capture).toMatchObject({
+        expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toMatchObject({
           selector: "replacement-capture",
           leaseId: "cbx_replacement",
           phase: "creating",
         });
-        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeUndefined();
+        expect(
+          (await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId],
+        ).toBeUndefined();
       } else {
-        expect(listCrabboxWarmImages()).toEqual([]);
+        expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       }
     },
   );
@@ -174,7 +211,7 @@ describe("Crabbox project snapshot provisioning", () => {
             if (
               interrupt &&
               crash === "prepared" &&
-              listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase === "prepared"
+              openWarmImageStore().entries()[0]?.value.allocations[leaseId]?.phase === "prepared"
             ) {
               controller.abort();
             }
@@ -202,10 +239,10 @@ describe("Crabbox project snapshot provisioning", () => {
         await expect(
           first.provider.provision(PROFILE, operation, optionsFor(true)),
         ).rejects.toThrow();
-        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]?.phase).toBe(
+        expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId]?.phase).toBe(
           crash === "pending" ? "pending" : "prepared",
         );
-        expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+        expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
       }
       await first.provider.dispose();
       const before = captures;
@@ -281,14 +318,14 @@ describe("Crabbox project snapshot provisioning", () => {
         await provision;
         vi.useRealTimers();
       }
-      expect(listCrabboxWarmImages()[0]).toMatchObject({
+      expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
         checkpointId: CHECKPOINT_ID,
         state: "available",
         allocations: { [operationLeaseId("retained-capture")]: { phase: "enrolled" } },
       });
       expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
       expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
-      expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
     },
   );
 
@@ -387,13 +424,24 @@ describe("Crabbox project snapshot provisioning", () => {
     },
   );
 
-  it.each(["aws", "daytona", "machine0"])(
-    "captures the prepared %s project before enrollment and reuses it",
-    async (backend) => {
-      const profile = { ...PROFILE, provider: backend };
+  it.each([
+    { backend: "aws", desktop: false },
+    { backend: "aws", desktop: true },
+    { backend: "daytona", desktop: false },
+    { backend: "machine0", desktop: false },
+  ])(
+    "captures the prepared $backend project before enrollment and reuses it (desktop=$desktop)",
+    async ({ backend, desktop }) => {
+      const profile = { ...PROFILE, provider: backend, desktop };
       const events: string[] = [];
       let current = projectOptions(events);
       const { provider, calls } = createWarmProvider((call) => {
+        if (
+          call.argv[1] === "run" &&
+          String(call.options.input).includes("openclaw-worker-browser")
+        ) {
+          events.push("desktop");
+        }
         current.observe(call);
         if (
           backend === "daytona" &&
@@ -412,6 +460,7 @@ describe("Crabbox project snapshot provisioning", () => {
       await provider.provision(profile, "project-first", current.options);
 
       expect(events).toEqual([
+        ...(desktop ? ["desktop"] : []),
         "project-prepared",
         "runtime-granted",
         "runtime-install",
@@ -419,7 +468,7 @@ describe("Crabbox project snapshot provisioning", () => {
         "enrollment-begun",
         "enrollment-install",
       ]);
-      expect(listCrabboxWarmImages()[0]).toMatchObject({
+      expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
         projectKey: PROJECT_KEY,
         checkpointId: CHECKPOINT_ID,
         allocations: {
@@ -435,7 +484,12 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(calls.some(({ argv }) => argv[1] === "warmup" || argv[2] === "create")).toBe(false);
       // Waited capture already established readiness; reuse does not repeat the inspection.
       expect(calls.filter(({ argv }) => argv[2] === "inspect")).toHaveLength(0);
-      expect(events).toEqual(["project-prepared", "enrollment-begun", "enrollment-install"]);
+      expect(events).toEqual([
+        ...(desktop ? ["desktop"] : []),
+        "project-prepared",
+        "enrollment-begun",
+        "enrollment-install",
+      ]);
       expect(current.options.prepareNodeRuntime).not.toHaveBeenCalled();
       // A cache hit does not restart the machine; only allocation needs provider readiness.
       expect(
@@ -472,10 +526,14 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(
         failure === "readiness" ? 0 : 1,
       );
-      expect(listCrabboxWarmImages().every((image) => !image.capture)).toBe(true);
+      expect((await listCrabboxWarmImages(crabboxState)).every((image) => !image.capture)).toBe(
+        true,
+      );
       if (failure === "readiness") {
         expect(
-          listCrabboxWarmImages()[0]?.allocations[operationLeaseId(`runtime-${failure}`)],
+          (await listCrabboxWarmImages(crabboxState))[0]?.allocations[
+            operationLeaseId(`runtime-${failure}`)
+          ],
         ).toMatchObject({ phase: "prepared", choice: { kind: "cold" } });
       }
     },
@@ -518,7 +576,7 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(events).not.toContain("runtime-install");
       expect(calls.some(({ argv }) => argv[1] === "stop" || argv[2] === "create")).toBe(false);
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(listCrabboxWarmImages()[0]).toMatchObject({
+      expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
         allocations: {
           [operationLeaseId(`stale-grant-${outcome}`)]: {
             phase: "prepared",
@@ -526,7 +584,7 @@ describe("Crabbox project snapshot provisioning", () => {
           },
         },
       });
-      expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
     },
   );
 
@@ -577,7 +635,7 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(events).toContain("capture");
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(events).not.toContain("enrollment-install");
-      expect(listCrabboxWarmImages()[0]?.capture?.phase).toBe("uncertain");
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture?.phase).toBe("uncertain");
       expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure !== "aborted");
     },
   );
@@ -602,7 +660,7 @@ describe("Crabbox project snapshot provisioning", () => {
       await expect(
         provider.provision(PROFILE, "cancelled-project-capture", options),
       ).rejects.toMatchObject({ name: "AbortError" });
-      const capture = listCrabboxWarmImages()[0]?.capture;
+      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
       expect(capture).toMatchObject({ leaseId, phase: "uncertain" });
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
@@ -612,14 +670,16 @@ describe("Crabbox project snapshot provisioning", () => {
       const cleanup = provider.destroy({ leaseId, profile: PROFILE });
       if (stopFails) {
         await expect(cleanup).rejects.toThrow("source cleanup still pending");
-        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeDefined();
+        expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId]).toBeDefined();
       } else {
         await expect(cleanup).resolves.toBeUndefined();
-        expect(listCrabboxWarmImages()[0]?.allocations[leaseId]).toBeUndefined();
+        expect(
+          (await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId],
+        ).toBeUndefined();
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(capture!.selector));
       }
       expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
-      expect(listCrabboxWarmImages()[0]?.capture).toMatchObject({
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toMatchObject({
         selector: capture!.selector,
         leaseId,
         phase: "uncertain",
@@ -635,6 +695,7 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     await expect(
       provider.provision({ ...PROFILE, warmImage: false }, "closed-enrollment", {
+        assertCurrent: () => {},
         beginNodeEnrollment,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
@@ -658,7 +719,7 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(options.prepareNodeRuntime).not.toHaveBeenCalled();
       expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
-      expect(listCrabboxWarmImages()).toEqual([]);
+      expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
     },
   );
 });

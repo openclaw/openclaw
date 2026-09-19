@@ -14,6 +14,9 @@
  * is preserved unconditionally.
  */
 
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+
 const PROMOTION_SECTION_HEADING_RE = /^## Promoted From Short-Term Memory \(([^)]+)\)\s*$/;
 
 const PROMOTION_SUBSECTION_HEADING_RE = /^### (?:Global|Project: .+?)\s*$/;
@@ -33,6 +36,35 @@ const SETEXT_HEADING_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/;
 export const DEFAULT_MEMORY_FILE_MAX_CHARS = 10_000;
 
 /**
+ * Keep promotion output within every consuming agent's per-file bootstrap
+ * budget. An unconfigured bootstrap limit stays above the promotion writer's
+ * own ceiling, so only explicit lower limits need to reduce the budget here.
+ */
+export function resolveMemoryPromotionFileMaxChars(params: {
+  cfg?: OpenClawConfig;
+  agentIds: readonly string[];
+}): number {
+  const defaultBootstrapLimit = params.cfg?.agents?.defaults?.bootstrapMaxChars;
+  const agentIds: Array<string | undefined> =
+    params.agentIds.length > 0 ? [...new Set(params.agentIds)] : [undefined];
+  let limit = DEFAULT_MEMORY_FILE_MAX_CHARS;
+
+  for (const agentId of agentIds) {
+    const configuredLimit = agentId
+      ? (resolveAgentConfig(params.cfg ?? {}, agentId)?.bootstrapMaxChars ?? defaultBootstrapLimit)
+      : defaultBootstrapLimit;
+    if (
+      typeof configuredLimit === "number" &&
+      Number.isFinite(configuredLimit) &&
+      configuredLimit > 0
+    ) {
+      limit = Math.min(limit, Math.floor(configuredLimit));
+    }
+  }
+  return limit;
+}
+
+/**
  * Reserve for writer-side overhead that the helper does not see directly:
  * the `# Long-Term Memory\n\n` header re-emitted when compaction empties
  * out (20 chars) and `withTrailingNewline`'s trailing `\n` (1 char). See
@@ -44,7 +76,7 @@ const WRITE_OVERHEAD_RESERVE = 21;
 
 type MemoryBlock =
   | { kind: "preserved"; text: string }
-  | { kind: "promotion"; date: string; text: string };
+  | { kind: "promotion"; date: string; text: string; entryCount: number };
 
 function isGeneratedPromotionBlock(lines: string[]): boolean {
   let sawEntry = false;
@@ -125,7 +157,12 @@ function parseMemoryBlocks(content: string): MemoryBlock[] {
     }
     const text = currentLines.join("\n");
     if (currentKind === "promotion" && currentDate && isGeneratedPromotionBlock(currentLines)) {
-      blocks.push({ kind: "promotion", date: currentDate, text });
+      blocks.push({
+        kind: "promotion",
+        date: currentDate,
+        text,
+        entryCount: currentLines.filter((line) => PROMOTION_ENTRY_MARKER_RE.test(line)).length,
+      });
     } else {
       blocks.push({ kind: "preserved", text });
     }
@@ -167,10 +204,12 @@ function joinBlocks(blocks: MemoryBlock[]): string {
   return blocks.map((block) => block.text).join("\n");
 }
 
-type CompactMemoryParams = {
+export type CompactMemoryParams = {
   existingMemory: string;
   newSection: string;
   budgetChars: number;
+  /** Maximum fraction of existing generated entries that this write may remove. */
+  maxPriorEntryLossFraction?: number;
 };
 
 type CompactMemoryResult = {
@@ -190,10 +229,9 @@ type CompactMemoryResult = {
  * - Promotion sections are dropped in ascending date order (oldest first).
  * - If `existingMemory + newSection` already fits the budget, the existing
  *   memory is returned unchanged.
- * - If the budget cannot be satisfied even by dropping every promotion
- *   section, the function drops them all and returns; the caller writes
- *   the new section anyway. This is the "log and continue" failure mode —
- *   refusing the new write would silently swallow the freshest material.
+ * - Compaction stops before exceeding `maxPriorEntryLossFraction` when set.
+ * - If the budget cannot be satisfied within that loss bound, the caller owns
+ *   the final fit check and may defer the new section without rewriting memory.
  */
 export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemoryResult {
   const { existingMemory, newSection, budgetChars } = params;
@@ -212,9 +250,19 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
   const blocks = parseMemoryBlocks(existingMemory);
   const promotionEntries = blocks
     .map((block, index) =>
-      block.kind === "promotion" ? { index, date: block.date, length: block.text.length } : null,
+      block.kind === "promotion"
+        ? {
+            index,
+            date: block.date,
+            length: block.text.length,
+            entryCount: block.entryCount,
+          }
+        : null,
     )
-    .filter((entry): entry is { index: number; date: string; length: number } => entry !== null)
+    .filter(
+      (entry): entry is { index: number; date: string; length: number; entryCount: number } =>
+        entry !== null,
+    )
     .toSorted((a, b) => a.date.localeCompare(b.date));
 
   if (promotionEntries.length === 0) {
@@ -223,6 +271,9 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
 
   const droppedIndices = new Set<number>();
   const droppedDates: string[] = [];
+  const totalEntryCount = promotionEntries.reduce((total, entry) => total + entry.entryCount, 0);
+  const maxLossFraction = Math.max(0, Math.min(1, params.maxPriorEntryLossFraction ?? 1));
+  let droppedEntryCount = 0;
   let projectedExistingSize = existingMemory.length;
   // Block boundaries cost one newline each in joinBlocks; subtract a
   // newline along with the block text so the projection stays honest.
@@ -232,8 +283,15 @@ export function compactMemoryForBudget(params: CompactMemoryParams): CompactMemo
     if (projectedExistingSize + newSection.length <= effectiveBudget) {
       break;
     }
+    if (
+      totalEntryCount > 0 &&
+      (droppedEntryCount + entry.entryCount) / totalEntryCount > maxLossFraction
+    ) {
+      break;
+    }
     droppedIndices.add(entry.index);
     droppedDates.push(entry.date);
+    droppedEntryCount += entry.entryCount;
     projectedExistingSize = Math.max(0, projectedExistingSize - entry.length - blockSeparatorCost);
   }
 

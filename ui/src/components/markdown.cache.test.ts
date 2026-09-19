@@ -34,6 +34,24 @@ describe("toSanitizedMarkdownHtml", () => {
       }
     });
 
+    it("invalidates named-reference caches as authorized aliases arrive, collide, and disappear", () => {
+      const githubRepo = { owner: "openclaw", repo: "openclaw" };
+      const source = "ClawSweeper PR #1576";
+      const known = { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] };
+      for (const [githubRepositories, expected] of [
+        [[], null],
+        [[known], "https://github.com/openclaw/clawsweeper/pull/1576"],
+        [[known, { aliases: ["ClawSweeper"] }], null],
+        [[], null],
+      ] as const) {
+        expect(
+          htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo, githubRepositories }))
+            .querySelector("a")
+            ?.getAttribute("href") ?? null,
+        ).toBe(expected);
+      }
+    });
+
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
       const markdown = "```\ncode\n```";
       const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });
@@ -70,18 +88,22 @@ describe("toSanitizedMarkdownHtml", () => {
 
     it("uses plain text fallback for oversized content", () => {
       // MARKDOWN_PARSE_LIMIT is 40_000 chars
-      const input = Array.from(
+      const paragraphs = Array.from(
         { length: 220 },
         (_, i) =>
           `Paragraph ${i + 1}: ${Array.from({ length: 8 }, () => "Long plain-text reply.").join(
             " ",
           )}`,
       ).join("\n\n");
+      const input = `Résumé 😀: Alice's "ready & waiting"; 12 < 20, 7 > 3.\r\nNext\tcolumn\u2028last\u0000line\n${paragraphs}`;
       const html = toSanitizedMarkdownHtml(input);
       const fallback = htmlFragment(html).firstElementChild;
       expect(fallback?.tagName).toBe("DIV");
       expect(fallback?.className).toBe("markdown-plain-text-fallback");
-      expect(fallback?.textContent).toBe(input);
+      expect(fallback?.textContent).toBe(
+        `Résumé 😀: Alice's "ready & waiting"; 12 < 20, 7 > 3.\nNext\tcolumn\nlastline\n${paragraphs}`,
+      );
+      expect(html).not.toContain("\u0000");
     });
 
     it("preserves indentation in plain text fallback", () => {

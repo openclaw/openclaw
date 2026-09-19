@@ -68,6 +68,25 @@ Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
 debugging the full tool payload.
 
+## Background text completions
+
+With local stdio transport and the default `appServer.homeScope: "agent"`, Codex
+completions for memory narratives and session titles run in a fresh private Codex
+home and workspace. They retain the selected model and scoped
+authentication, with a read-only sandbox and no model-callable tools, apps, or MCP
+servers. Ordinary user and project hooks cannot enter that private process;
+administrator-managed hooks remain active.
+
+Private completions support directly executable launchers and Node script
+wrappers. Inline shell/eval commands and ambiguous launcher arguments fail with
+an isolation error; use a directly executable wrapper for those custom launches.
+
+User-home mode retains the native Codex account, even when an OpenClaw auth
+profile also exists. Stdio proxies and remote transports retain their configured
+server. These connections keep their existing restricted completion behavior
+and reject managed hooks when their isolation cannot be verified. Managed
+requirements that force a conflicting tool capability still reject the completion.
+
 ## Image loader ownership
 
 For image-capable models with Codex native tools enabled, Codex owns
@@ -77,16 +96,31 @@ native tool surface is disabled, OpenClaw supplies `view_image` with its
 `path`/`paths` schema and delegated vision route. Callers must use the schema
 advertised for the active run.
 
+When OpenClaw restores conversation history into a Codex thread, saved images
+stay beside their original messages inside the quoted history. The current
+request and its attachments follow that history, so a later text or voice turn
+does not present old screenshots as newly attached images. If context limits
+remove an image's original message, its image input is omitted too; the saved
+transcript and attachment remain unchanged.
+
 ## Turn liveness and timeouts
 
 Codex owns provider-stream liveness and native turn completion. OpenClaw waits
 for the exact `turn/completed` outcome rather than interrupting a quiet turn or
-treating assistant output as completion. The existing
+treating assistant output as completion. Malformed completion payloads do not end
+the run: OpenClaw waits for a valid native outcome instead of inventing missing
+items, tool arguments, or completion states. The existing
 `agents.defaults.timeoutSeconds` limit is an elapsed execution budget per
 attempt: progress does not reset it, and `0` means unlimited execution.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
+
+OpenClaw preserves assistant text supplied with the initial native item and
+reasoning supplied with a completed item, even when Codex sends no text deltas.
+Completed items reconcile the transcript with Codex's final content. Messages
+marked for asynchronous delivery remain separate from the final reply when
+Codex repeats them in the turn-completion summary.
 
 ## Cyber safety notices
 

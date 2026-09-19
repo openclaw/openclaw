@@ -37,6 +37,7 @@ export interface HealthFinding {
   readonly severity: HealthFindingSeverity;
   readonly message: string;
   readonly source?: string;
+  readonly errorCode?: string;
   readonly path?: string;
   readonly line?: number;
   readonly column?: number;

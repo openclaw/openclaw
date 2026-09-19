@@ -1,6 +1,9 @@
 import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code-blocks.ts";
 import { markdownTableCopyText } from "../../../components/markdown-tables.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+
+registerChatMessageMetadataEnglish();
 
 export function usesNativeContextMenu(path: EventTarget[]): boolean {
   return path.some(

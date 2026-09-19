@@ -99,6 +99,7 @@ export function buildMcpHttpFetch(params: {
   clientKey?: string;
   resourceUrl?: string;
   timeoutMs?: number;
+  beforeRequest?: () => void;
 }): FetchLike {
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
@@ -130,6 +131,7 @@ export function buildMcpHttpFetch(params: {
       allowCrossOriginUnsafeRedirectReplay: true,
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
+      beforeRequest: params.beforeRequest,
       ...(request.signal ? { signal: request.signal } : {}),
       ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       ...(policy ? { policy } : {}),

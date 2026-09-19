@@ -30,6 +30,7 @@ import type {
   OutboundDurableDeliverySupport,
   PlatformSendRoute,
 } from "./deliver-contracts.js";
+import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import { PlatformMessageNotDispatchedError, type OutboundDeliveryResult } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
@@ -78,8 +79,8 @@ async function loadBootstrappedChannelPlugin(params: {
     // surface. A second lookup could attach another plugin's send lifecycle.
     return { plugin, pluginRegistry: scopedRegistry };
   }
-  const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-  const pluginRegistry = bootstrapOutboundChannelPlugin({
+  const { bootstrapOutboundChannelPluginAsync } = await loadChannelBootstrapRuntime();
+  const pluginRegistry = await bootstrapOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -209,12 +210,17 @@ function createPluginHandler(
     route: PlatformSendRoute,
     send: () => Promise<T>,
   ): Promise<T> => {
-    await params.onPlatformSendStart?.(route);
-    await params.onDirectAdapterHandoff?.();
+    try {
+      await params.onPlatformSendStart?.(route);
+      await params.onDirectAdapterHandoff?.();
+    } catch (error) {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      throw error;
+    }
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
-    params.assertDirectAdapterHandoff?.();
+    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
     return await send();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
@@ -240,7 +246,12 @@ function createPluginHandler(
     let result: ChannelMessageSendResult;
     let afterCommit: OutboundDeliveryCommitHook | undefined;
     try {
-      attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      try {
+        attemptToken = await messageLifecycle.beforeSendAttempt?.(ctx);
+      } catch (error) {
+        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+        throw error;
+      }
       result = await dispatchToAdapter(ctx, () => send(ctx));
       if (result.outcome !== "not_sent") {
         const successCtx = {
@@ -391,13 +402,14 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin, gatewayClientScopes }) =>
+      ? async ({ target, messageId, pin, gatewayClientScopes, assertDirectAdapterHandoff }) =>
           outbound.pinDeliveredMessage!({
             cfg: params.cfg,
             target,
             messageId,
             pin,
             gatewayClientScopes,
+            assertDirectAdapterHandoff,
           })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload

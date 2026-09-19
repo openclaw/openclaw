@@ -13,6 +13,7 @@ import type {
 } from "./host-hooks.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { registerMemoryCapability } from "./memory-state.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -46,6 +47,37 @@ describe("managed plugin instances", () => {
       await draining;
     } finally {
       deferred.resolve("finished");
+      await instance.dispose();
+    }
+  });
+
+  it("optionally drains retained consumers before resources stop while preserving default drain", async () => {
+    const instance = new PluginInstance("consumer-drain");
+    const consumer = instance.retainConsumer();
+    const cleanup = createDeferredCore();
+    let drained = false;
+    try {
+      await expect(instance.drain()).resolves.toEqual({ errors: [] });
+      const draining = instance.drain({ includeConsumers: true }).then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      expect(instance.lifecycle.signal.aborted).toBe(false);
+      expect(consumer.run(() => "existing work continues")).toBe("existing work continues");
+      expect(() => instance.run(() => undefined)).toThrow("reloaded or disabled");
+      const closing = consumer.close(() => cleanup.promise);
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      cleanup.resolve();
+      await closing;
+      await draining;
+      expect(instance.lifecycle.signal.aborted).toBe(false);
+      instance.resume();
+      expect(instance.run(() => "resumed")).toBe("resumed");
+    } finally {
+      cleanup.resolve();
+      consumer.release();
       await instance.dispose();
     }
   });
@@ -670,9 +702,15 @@ describe("managed plugin instances", () => {
     pending.resolve();
     await rejectedCall;
     expect(atDrainTimeout).toEqual({ aborted: true, cleanupEntered: 1, cleaned: 0 });
-    await expect(disposing).resolves.toMatchObject({
-      errors: [new Error("Plugin stuck still has active calls after 5000ms")],
-    });
+    const { errors } = await disposing;
+    expect(errors).toHaveLength(1);
+    const [drainTimeout] = errors;
+    expect(drainTimeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+    if (!(drainTimeout instanceof PluginInstanceDrainTimeoutError)) {
+      throw new Error("Expected the disposal's original-call drain diagnostic");
+    }
+    expect(drainTimeout.message).toBe("Plugin stuck still has active calls after 5000ms");
+    await expect(drainTimeout.settled).resolves.toBeUndefined();
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(cleaned).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -681,6 +719,64 @@ describe("managed plugin instances", () => {
     expect(resumedStream).not.toHaveBeenCalled();
     expect(instance.dispose()).toBe(disposing);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps disposal's drain settlement pending until its original call actually %ss",
+    async (completion) => {
+      vi.useFakeTimers();
+      const instance = new PluginInstance("late-call");
+      const pending = createDeferredCore<string>();
+      const callFailure = new Error("original call failed");
+      const cleanupFailure = new Error("resource cleanup failed");
+      const cleanup = vi.fn(() => {
+        throw cleanupFailure;
+      });
+      instance.lifecycle.onDispose(cleanup);
+      const call = instance.wrap(() => pending.promise)();
+      const callOutcome = call.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      const disposing = instance.dispose();
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        const result = await disposing;
+        const [drainTimeout] = result.errors;
+        expect(drainTimeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+        if (!(drainTimeout instanceof PluginInstanceDrainTimeoutError)) {
+          throw new Error("Expected the disposal's original-call drain diagnostic");
+        }
+        expect(drainTimeout.message).toBe("Plugin late-call still has active calls after 5000ms");
+        expect(result.errors).toEqual([drainTimeout, cleanupFailure]);
+        expect(cleanup).toHaveBeenCalledOnce();
+        let settled = false;
+        const settlement = drainTimeout.settled.then(() => {
+          settled = true;
+        });
+        await Promise.resolve();
+        // Disposal revoked and cleared ordinary admission; neither action means
+        // the original promise returned or released its actual call lease.
+        expect(instance.lifecycle.signal.aborted).toBe(true);
+        expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+        expect(settled).toBe(false);
+        if (completion === "resolve") {
+          pending.resolve("finished");
+        } else {
+          pending.reject(callFailure);
+        }
+        expect(await callOutcome).toEqual(
+          completion === "resolve" ? { value: "finished" } : { error: callFailure },
+        );
+        await settlement;
+        expect(settled).toBe(true);
+        expect(await instance.dispose()).toBe(result);
+        expect(result.errors).toEqual([drainTimeout, cleanupFailure]);
+      } finally {
+        pending.resolve("finished");
+        await Promise.allSettled([call, disposing]);
+      }
+    },
+  );
 
   it("keeps a host prelude guard exceptional while attempting explicit cleanup", async () => {
     const instance = new PluginInstance("guarded-cleanup");

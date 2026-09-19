@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n } from "../../../i18n/index.ts";
 import "../../../styles.css";
+import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/split-view.css";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";

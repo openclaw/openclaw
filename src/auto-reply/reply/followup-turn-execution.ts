@@ -358,15 +358,17 @@ export async function executeFollowupTurn(params: {
     try {
       turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
       turn.operation.setPhase("running");
+      const gatewayOwnsCompletion =
+        turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
+        turn.queued.queuedFollowupReplyDisposition.deliver.ownsCompletion?.(
+          turn.queued.originatingChannel,
+        ) === true;
+      if (gatewayOwnsCompletion) {
+        turn.queued.run.mediaNormalizationOwner = "gateway";
+      }
       const execute = () =>
         executeAgentTurn({
-          completionSource:
-            turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
-            turn.queued.queuedFollowupReplyDisposition.deliver.ownsCompletion?.(
-              turn.queued.originatingChannel,
-            ) === true
-              ? "reply-dispatch"
-              : undefined,
+          completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
           followupRun: turn.queued,

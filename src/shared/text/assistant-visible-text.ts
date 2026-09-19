@@ -116,38 +116,13 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
 }
 
 function findTagCloseIndex(text: string, start: number): number {
-  let quoteChar: "'" | '"' | null = null;
-  let isEscaped = false;
-
+  const isInsideQuote = createQuotedStringScanner(text, start);
   for (let idx = start; idx < text.length; idx += 1) {
     const char = text[idx];
-    if (quoteChar !== null) {
-      if (isEscaped) {
-        isEscaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        isEscaped = true;
-        continue;
-      }
-      if (char === quoteChar) {
-        quoteChar = null;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quoteChar = char;
-      continue;
-    }
-    if (char === "<") {
-      return -1;
-    }
-    if (char === ">") {
-      return idx;
+    if ((char === "<" || char === ">") && !isInsideQuote(idx)) {
+      return char === ">" ? idx : -1;
     }
   }
-
   return -1;
 }
 

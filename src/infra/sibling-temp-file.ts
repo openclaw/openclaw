@@ -6,11 +6,10 @@ import {
   writeSiblingTempFile as writeSiblingTempFileBase,
   type WriteSiblingTempFileOptions,
 } from "@openclaw/fs-safe/advanced";
-import { writeOwnedTempFile } from "./owned-temp-file.js";
 
 export async function writeSiblingTempFile<T>(options: WriteSiblingTempFileOptions<T>) {
   return await writeSiblingTempFileBase({
     ...options,
-    writeTemp: (tempPath) => writeOwnedTempFile(tempPath, options.writeTemp),
+    producerIsolation: "private-directory",
   });
 }

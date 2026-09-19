@@ -79,6 +79,7 @@ describe("model catalog normalization", () => {
                   sendSessionIdHeader: false,
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
+                  supportsResponsesContinuation: true,
                   supportsJsonSchemaResponseFormat: true,
                   requiresReasoningContentOnAssistantMessages: true,
                   supportsStore: "yes",
@@ -185,6 +186,7 @@ describe("model catalog normalization", () => {
                 sendSessionIdHeader: false,
                 supportsEagerToolInputStreaming: false,
                 supportsLongCacheRetention: true,
+                supportsResponsesContinuation: true,
                 supportsJsonSchemaResponseFormat: true,
                 requiresReasoningContentOnAssistantMessages: true,
                 thinkingFormat: "together",
@@ -407,6 +409,21 @@ describe("model catalog normalization", () => {
         },
       },
     ]);
+  });
+
+  it("retains an explicitly empty supported reasoning effort list", () => {
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          example: { models: [{ id: "reasoner", compat: { supportedReasoningEfforts: [] } }] },
+        },
+      },
+      { ownedProviders: new Set(["example"]) },
+    );
+
+    expect(catalog?.providers?.example?.models[0]?.compat).toEqual({
+      supportedReasoningEfforts: [],
+    });
   });
 
   it.each([

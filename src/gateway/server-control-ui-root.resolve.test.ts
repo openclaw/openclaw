@@ -1,5 +1,6 @@
 /** Tests the Gateway-owned Control UI root and background asset lifecycle. */
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -17,9 +18,7 @@ const controlUiAssetsMocks = vi.hoisted(() => ({
   resolveControlUiRootSync: vi.fn(),
 }));
 const retentionMocks = vi.hoisted(() => ({
-  prepare: vi.fn<
-    (options?: { isCancelled?: () => boolean; signal?: AbortSignal }) => Promise<void>
-  >(async () => {}),
+  prepare: vi.fn<(options?: { signal?: AbortSignal }) => Promise<void>>(async () => {}),
   resolveAsset: vi.fn(() => null),
 }));
 
@@ -94,7 +93,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
     await lifecycle.start();
 
     expect(retentionMocks.prepare).toHaveBeenCalledWith({
-      isCancelled: expect.any(Function),
       signal: expect.any(AbortSignal),
     });
   });
@@ -281,24 +279,26 @@ describe("createGatewayControlUiRootLifecycle", () => {
   });
 
   test("keeps invalid configured roots terminal without starting a default build", () => {
+    const configuredRoot = path.resolve("/custom/missing");
     const { lifecycle, warn } = createLifecycle({ override: "/custom/missing" });
 
-    expect(lifecycle.state).toEqual({ kind: "invalid", path: "/custom/missing" });
-    expect(warn).toHaveBeenCalledWith("gateway: controlUi.root not found at /custom/missing");
+    expect(lifecycle.state).toEqual({ kind: "invalid", path: configuredRoot });
+    expect(warn).toHaveBeenCalledWith(`gateway: controlUi.root not found at ${configuredRoot}`);
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
   });
 
   test("keeps disappearing configured roots from aborting Gateway startup", () => {
-    controlUiAssetsMocks.resolveControlUiRootOverrideSync.mockReturnValue("/custom/ui");
+    const configuredRoot = path.resolve("/custom/ui");
+    controlUiAssetsMocks.resolveControlUiRootOverrideSync.mockReturnValue(configuredRoot);
     vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
       throw new Error("ENOENT: root vanished");
     });
 
-    const { lifecycle, warn } = createLifecycle({ override: "/custom/ui" });
+    const { lifecycle, warn } = createLifecycle({ override: configuredRoot });
 
-    expect(lifecycle.state).toEqual({ kind: "invalid", path: "/custom/ui" });
+    expect(lifecycle.state).toEqual({ kind: "invalid", path: configuredRoot });
     expect(warn).toHaveBeenCalledWith(
-      "gateway: Control UI assets are unavailable at /custom/ui: ENOENT: root vanished",
+      `gateway: Control UI assets are unavailable at ${configuredRoot}: ENOENT: root vanished`,
     );
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
   });

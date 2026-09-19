@@ -25,6 +25,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { closeAuthProfileReadPool } from "./auth-profiles/sqlite.js";
 import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -431,6 +432,7 @@ export function createCliRunnerPrepareFixture(prepareCliRun: PrepareCliRun) {
       }
       databasePaths.clear();
       for (const dir of tempDirs) {
+        closeAuthProfileReadPool({ kind: "root", rootPath: dir });
         closeOpenClawStateDatabaseByPath(
           resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
         );

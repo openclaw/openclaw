@@ -27,6 +27,16 @@ export const stateDirGatewayFixtureEntrypoint = {
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
+  modelAcquisitionFixture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "gateway-cli/run-loop.model-acquisition.test-support",
+    distWorkerPath: "cli/gateway-cli/run-loop.model-acquisition.test-support.js",
+  },
+  fileLogTransport: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../logging/logger-file-transport",
+    distWorkerPath: "logging/logger-file-transport.js",
+  },
   ingressDrain: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../channels/message/ingress-drain",

@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 /**
  * @typedef {"docs" | "source" | "package" | "ui" | "extension" | "app" | "rootTest" | "testFixture" | "rootTooling" | "rootGlobal" | "legacyRootAsset" | "unknown"} ChangedPathSurface
  */
@@ -64,4 +66,28 @@ export function getChangedPathFacts(inputPath) {
     isTestOnly: TEST_ONLY_PATH_RE.test(path),
     isNativeOnly: NATIVE_ONLY_PATH_RE.test(path),
   };
+}
+
+/** @param {string} arg */
+export function isTestFileTarget(arg) {
+  return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
+}
+
+/** @param {string} arg */
+export function isTestSupportFileTarget(arg) {
+  if (/(?:^|\/)(?:test-helpers|test-support)(?:\/|$)/u.test(arg)) {
+    return true;
+  }
+  const basename = posix.basename(arg).replace(/\.[cm]?[jt]sx?$/u, "");
+  return /(?:^|[._-])(?:suite|test-(?:helpers|support))(?:[._-]|$)/u.test(basename);
+}
+
+// Artifact and Docker gates retain narrower target-ownership rules than the isTestOnly fact.
+/** @param {string} changedPath */
+export function isTestOnlyPath(changedPath) {
+  return (
+    isTestFileTarget(changedPath) ||
+    isTestSupportFileTarget(changedPath) ||
+    changedPath.startsWith("test/")
+  );
 }

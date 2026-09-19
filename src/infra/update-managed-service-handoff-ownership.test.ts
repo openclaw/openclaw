@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -21,6 +22,8 @@ import {
 } from "./kysely-sync.js";
 import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDirMock: vi.fn(),
@@ -265,7 +268,7 @@ async function runOwnershipHelper(params: {
   if (params.sentinel !== undefined) {
     writeRestartSentinelRow(env, params.sentinel);
   }
-  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+  const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
   const parentClosed = new Promise<void>((resolve) => {
@@ -362,11 +365,11 @@ childProcess.spawn = function(command, args, options) {
         parentPid,
         parentStartIdentity: String(startIdentity),
         commandArgv: [
-          process.execPath,
+          testNodeExecPath,
           "-e",
           `require("node:fs").writeFileSync(${JSON.stringify(updaterPath)},"ran");setTimeout(() => process.exit(${params.commandExitCode ?? 1}), ${params.commandDelayMs ?? 0})`,
         ],
-        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
+        triageCommandArgv: [testNodeExecPath, "-e", "process.exit(0)", "--"],
         logPath,
         sensitivePaths: [],
       },
@@ -375,7 +378,7 @@ childProcess.spawn = function(command, args, options) {
     )}\n`,
   );
 
-  const helper = spawn(process.execPath, [helperScriptPath, helperParamsPath], {
+  const helper = spawn(testNodeExecPath, [helperScriptPath, helperParamsPath], {
     cwd: tmpDir,
     env: {
       ...spawnOptions.env,

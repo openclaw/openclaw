@@ -243,15 +243,19 @@ export function watchClientDisconnect(
       abortController.abort(new ClientDisconnectError());
     }
   };
-  const stopWatchingResponseErrors = () => {
-    stopWatchingDisconnect();
+  const handleResponseClose = () => {
     res.off("error", handleClose);
-    res.off("close", stopWatchingResponseErrors);
+    if (!res.writableFinished) {
+      handleClose();
+      return;
+    }
+    stopWatchingDisconnect();
   };
   // Completed responses release socket watchers; keep response errors handled
-  // until close so a failed flush cannot become process-fatal.
+  // until close so a failed flush cannot become process-fatal. Some compatible
+  // runtimes publish only the response close when a client disconnects.
   res.on("error", handleClose);
-  res.once("close", stopWatchingResponseErrors);
+  res.once("close", handleResponseClose);
   res.once("finish", stopWatchingDisconnect);
   if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
     handleClose();

@@ -6,10 +6,12 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { EmbeddedRunTrigger, RunEmbeddedAgentParams } from "./params.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptToolRunFacts = Pick<
   RunEmbeddedAgentParams,
   | "clientCaps"
+  | "gatewayUiCommandTarget"
   | "pinnedWidgetAuthoring"
   | "toolBindings"
   | "chatType"
@@ -45,6 +47,7 @@ type AttemptToolRunFacts = Pick<
  */
 export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
+    model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
     trigger?: EmbeddedRunTrigger;
     jobId?: string;
@@ -68,6 +71,7 @@ export function buildEmbeddedAttemptToolRunContext(
   });
   return {
     clientCaps: params.clientCaps,
+    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
     chatType: params.chatType,
@@ -97,6 +101,10 @@ export function buildEmbeddedAttemptToolRunContext(
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
+    // modelId may still be a configured alias; children need the prepared identity.
+    requesterModel: params.model
+      ? { provider: params.model.provider, model: params.model.id }
+      : undefined,
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,

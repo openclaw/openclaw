@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAgentRole } from "../agents/agent-roles.js";
+import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
+import {
+  createSystemAgentTool,
+  type SystemAgentToolDirective,
+} from "../agents/tools/system-agent-tool.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,7 +16,11 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
-import { executeSystemAgentOperation } from "./operations.js";
+import {
+  describeSystemAgentPersistentOperation,
+  executeSystemAgentOperation,
+} from "./operations.js";
+import type { SystemAgentProposalRef } from "./operator-approval.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -56,6 +65,70 @@ async function readConfig(): Promise<OpenClawConfig> {
 }
 
 describe("custodian role creation through persisted configuration", () => {
+  it.each([undefined, "writer"] as const)(
+    "preserves an explicit display name with role %s through the approved creation tool",
+    async (role) => {
+      await withState(async (root, configPath) => {
+        const workspace = path.join(root, "qa-writer");
+        const args = {
+          action: "create_agent",
+          agentId: "qa-writer",
+          name: "QA Writer",
+          workspace,
+          ...(role ? { role } : {}),
+        };
+        const proposalRef: SystemAgentProposalRef = {};
+        const directiveRef: { current?: SystemAgentToolDirective } = {};
+        const original = await fs.readFile(configPath, "utf8");
+        const tool = createSystemAgentTool({ surface: "gateway", proposalRef, directiveRef });
+        await tool.execute("propose", args);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        const approvedTool = createSystemAgentTool({
+          surface: "gateway",
+          approvalArmed: true,
+          proposalRef,
+          directiveRef,
+        });
+        await approvedTool.execute("approve", { ...args, approved: true });
+        const directive = directiveRef.current;
+        expect(directive?.kind).toBe("approved-operation");
+        if (directive?.kind !== "approved-operation") {
+          throw new Error("missing approved creation operation");
+        }
+        expect(describeSystemAgentPersistentOperation(directive.operation)).toContain(
+          'name: "QA Writer"',
+        );
+        const { runtime, lines } = createSystemAgentTestRuntime();
+        const result = await executeSystemAgentOperation(directive.operation, runtime, {
+          approved: true,
+        });
+        expect(result).toMatchObject({ applied: true, agentId: "qa-writer" });
+        const config = await readConfig();
+        expect(config.agents?.entries?.["qa-writer"]).toMatchObject({
+          name: "QA Writer",
+          identity: { name: "QA Writer" },
+          workspace,
+        });
+        expect(tool.parameters).toMatchObject({ properties: { name: { type: "string" } } });
+        expect(lines.join("\n")).toContain("Created agent QA Writer (qa-writer)");
+        if (role) {
+          const template = await loadAgentRole(role);
+          expect(config.agents?.entries?.["qa-writer"]?.identity).toEqual({
+            ...template.identity,
+            name: "QA Writer",
+          });
+          expect(loadAgentIdentityFromWorkspace(workspace)).toMatchObject({
+            ...template.identity,
+            name: "QA Writer",
+          });
+          expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
+            template.files["AGENTS.md"],
+          );
+        }
+      });
+    },
+  );
+
   it("seeds the selected role only after approval and tells the operator where to find it", async () => {
     await withState(async (root, configPath) => {
       const workspace = path.join(root, "editor");

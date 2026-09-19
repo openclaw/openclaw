@@ -106,7 +106,7 @@ it.each([
         store: openAcpxProcessLeaseStateStore((options) =>
           createPluginStateKeyedStoreForTests("acpx", {
             ...options,
-            env: { ...process.env, OPENCLAW_STATE_DIR: state.root },
+            env: state.env,
           }),
         ),
       });

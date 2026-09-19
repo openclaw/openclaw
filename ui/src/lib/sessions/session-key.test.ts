@@ -6,6 +6,7 @@ import {
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
+  isPinnableUiSessionRow,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   parseSessionKeyParts,
@@ -344,5 +345,29 @@ describe("canonical host-scoped event and row matching", () => {
     };
     expect(uiSessionRowMatchesSelectedChat(custom, "main", custom.sessionKey)).toBe(true);
     expect(uiSessionRowMatchesSelectedChat(custom, "global", custom.sessionKey)).toBe(false);
+  });
+});
+
+describe("session pin eligibility", () => {
+  it.each([
+    [{ key: "agent:main:dashboard:ordinary" }, true],
+    [{ key: "agent:main:dashboard:ordinary", parentSessionKey: "agent:main:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:other:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:main:main" }, false],
+    [
+      { key: "agent:main:dashboard:nested", parentSessionKey: "agent:main:dashboard:parent" },
+      false,
+    ],
+    [
+      {
+        key: "agent:main:dashboard:spawned",
+        parentSessionKey: "agent:main:main",
+        spawnedBy: "agent:main:main",
+      },
+      false,
+    ],
+    [{ key: "agent:main:subagent:spawned", parentSessionKey: "agent:main:main" }, false],
+  ])("projects pin eligibility for %j", (row, expected) => {
+    expect(isPinnableUiSessionRow(row)).toBe(expected);
   });
 });

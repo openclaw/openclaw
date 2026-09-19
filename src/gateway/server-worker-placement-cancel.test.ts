@@ -129,6 +129,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     try {
       await replaceSessionEntry(target, entry);
       subscriptions = startGatewayEventSubscriptions({
+        signal: new AbortController().signal,
         log,
         broadcast: context.broadcast,
         broadcastToConnIds: vi.fn(),
@@ -142,6 +143,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates: new Map(),
         terminalSessions: { closeTaskSessions: vi.fn() },
+        refreshConnectedUserProfiles: vi.fn(),
       });
       active = await admit(runId);
       expect(active.ok).toBe(true);

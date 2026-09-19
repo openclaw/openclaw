@@ -134,6 +134,10 @@ export const SessionRowSchema = Type.Object(
     ),
     activitySummary: Type.Optional(SessionActivitySummarySchema),
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+    /** Gateway sampling time, retained when a read reuses a cached projection. */
+    snapshotAt: Type.Optional(Type.Number()),
+    /** Personal list preference for the authenticated viewer; not session visibility. */
+    hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
@@ -153,6 +157,7 @@ export const SessionRowSchema = Type.Object(
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
+    parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
@@ -182,6 +187,10 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
+    /** Persisted project registry association, distinct from a cloud repository workspace. */
+    projectId: Type.Optional(Type.String()),
+    /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
+    workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
     permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),

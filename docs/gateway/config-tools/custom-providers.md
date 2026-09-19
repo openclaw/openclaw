@@ -114,7 +114,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
     | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
-    | `supportsStrictMode` | Accepts strict tool schemas. |
+    | `supportsStrictMode` | Accepts the `strict` tool field. On compatible Completions and Responses routes, `true` permits explicit `strict: false` so optional tool arguments remain optional. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |
     | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
     | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |

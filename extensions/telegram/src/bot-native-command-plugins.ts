@@ -1,4 +1,3 @@
-// Telegram plugin module implements native plugin command behavior.
 import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -281,7 +280,7 @@ export async function executeTelegramPluginCommand(
           buttons: telegramResultData?.buttons,
         },
       );
-      recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
+      await recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
         accountId: dispatch.route.accountId,
         agentId: dispatch.opts.ownerAgentId,
       });

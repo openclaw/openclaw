@@ -12,6 +12,7 @@ import {
 } from "../infra/windows-install-roots.js";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import "./test-helpers/schtasks-base-mocks.js";
+import { readWindowsStartupFallbackRuntimeForUpdate } from "./schtasks-runtime.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 
@@ -118,13 +119,13 @@ const {
   installScheduledTask,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
-  readWindowsStartupFallbackRuntimeForUpdate,
   restartScheduledTask,
   resolveTaskScriptPath,
   stopScheduledTask,
   uninstallScheduledTask,
 } = await import("./schtasks.js");
-const { launchFallbackTaskScript, removeStartupEntries } = await import("./schtasks-runtime.js");
+const { launchFallbackTaskScript, removeStartupEntries, resolveFallbackRuntime } =
+  await import("./schtasks-runtime.js");
 const { createMockGatewayService } = await import("./service.test-helpers.js");
 const { readServiceStatusSummary } = await import("../commands/status.service-summary.js");
 const { getStatusOverviewRowValue } = await import("../commands/status.test-support.ts");
@@ -918,6 +919,37 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("recognizes the supervised Startup-folder Gateway child by persisted command", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      await writeGatewayScript(env);
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command === getWindowsPowerShellExePath() &&
+          Array.isArray(args) &&
+          args.includes(NODE_PROCESS_QUERY)
+        ) {
+          return makeSpawnSyncResult({
+            stdout: JSON.stringify([
+              {
+                ProcessId: 4242,
+                CommandLine:
+                  '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789 --task-supervisor-child=305419896',
+              },
+            ]),
+          });
+        }
+        return makeSpawnSyncResult();
+      });
+
+      await expect(resolveFallbackRuntime(env, undefined, "control")).resolves.toMatchObject({
+        status: "running",
+        pid: 4242,
+      });
+      expect(inspectPortUsageMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses migration when listener and process inspection are both unavailable", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
@@ -1215,7 +1247,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(processQueries).toBe(5);
+      expect(processQueries).toBe(4);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });

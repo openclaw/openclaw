@@ -210,12 +210,30 @@ describe("managed Responses transport terminal errors", () => {
       expect(result.errorCode).toBe("incomplete_tool_call");
       expect(result.responseId).toBe("resp_truncated");
       expect(result.responseModel).toBe("served-model");
+      expect(result.diagnostics).toContainEqual({
+        type: "openai_responses_terminal",
+        timestamp: expect.any(Number),
+        details: {
+          eventType: "response.incomplete",
+          incompleteReason: "max_output_tokens",
+          endTurn: "absent",
+        },
+      });
     },
   );
 
-  it.each([false, true])(
-    "preserves the provider incomplete_reason with an active tool: %s",
-    async (activeTool) => {
+  it.each(
+    [
+      "max_output_tokens",
+      "max_messages",
+      "content_filter",
+      "steered",
+      "provider-private-reason",
+      undefined,
+    ].flatMap((reason) => [false, true].map((activeTool) => ({ reason, activeTool }))),
+  )(
+    "preserves bounded incomplete diagnostics for $reason (active tool: $activeTool)",
+    async ({ reason, activeTool }) => {
       sseState.outcomes.push({
         data: (async function* () {
           if (activeTool) {
@@ -237,7 +255,7 @@ describe("managed Responses transport terminal errors", () => {
             response: {
               id: "resp_filtered",
               status: "incomplete",
-              incomplete_details: { reason: "content_filter" },
+              incomplete_details: { reason },
             },
           };
         })(),
@@ -254,8 +272,26 @@ describe("managed Responses transport terminal errors", () => {
         options,
       );
       const result = await stream.result();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
+      expect(result.stopReason).toBe(
+        activeTool || reason === "content_filter" ? "error" : "length",
+      );
+      expect(result.errorCode).toBe(
+        activeTool && reason !== "content_filter" ? "incomplete_tool_call" : undefined,
+      );
+      if (reason === "content_filter") {
+        expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
+      }
+      expect(result.diagnostics).toContainEqual({
+        type: "openai_responses_terminal",
+        timestamp: expect.any(Number),
+        details: {
+          eventType: "response.incomplete",
+          incompleteReason:
+            reason === undefined || reason === "provider-private-reason" ? "unknown" : reason,
+          endTurn: "absent",
+        },
+      });
+      expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
     },
   );
 });

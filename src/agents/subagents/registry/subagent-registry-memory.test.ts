@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
@@ -24,6 +25,28 @@ afterEach(() => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("publishes accepted ownership and retirement without exposing provisional map writes", () => {
+    const changed = vi.fn();
+    const stop = sessionChanges.subscribe(changed);
+    const entry = createRun("accepted", "agent:main:subagent:accepted");
+    try {
+      subagentRuns.set(entry.runId, entry);
+      expect(changed).not.toHaveBeenCalled();
+      subagentRuns.commitOwnership(entry);
+      expect(changed.mock.calls).toEqual([[{ sessionKey: entry.childSessionKey }]]);
+      changed.mockClear();
+      subagentRuns.delete(entry.runId);
+      expect(changed).not.toHaveBeenCalled();
+      subagentRuns.confirmRetirement(entry);
+      expect(changed.mock.calls).toEqual([[{ sessionKey: entry.childSessionKey }]]);
+      changed.mockClear();
+      subagentRuns.clear();
+      expect(changed.mock.calls).toEqual([[{ all: true, scope: "subagent-runs" }]]);
+    } finally {
+      stop();
+    }
+  });
+
   it("tracks child-session generations across replacement, deletion, and clear", () => {
     const first = createRun("run-first", "agent:main:subagent:shared");
     const second = createRun("run-second", "agent:main:subagent:shared");

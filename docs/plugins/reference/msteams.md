@@ -15,7 +15,7 @@ OpenClaw Microsoft Teams channel plugin for bot conversations.
 ## Distribution
 
 - Package: `@openclaw/msteams`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/msteams`
 
 ## Surface
 

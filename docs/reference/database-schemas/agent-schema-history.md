@@ -28,8 +28,74 @@ title: "Agent schema history"
 | 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
 | 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
 | 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | Unreleased                                      |
+| 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Incremental canonical-session validation
+
+The [accepted storage design](https://github.com/openclaw/openclaw/issues/149323)
+owns this projection's invalidation, certification, migration and rollback contract.
+
+Agent schema **21** adds `session_canonical_validation_pending`, a derived set
+of session keys requiring canonical validation. Required triggers mark node
+identity, JSON, validity and lineage changes, changes to retained-window
+associations, and main-key policy changes. Node deletion and renaming clean up
+the old key without depending on foreign-key enforcement. The table stores no
+permission grants or copied session payloads.
+
+The existing canonical validator certifies final rows before their markers are
+removed in the same transaction. Rollback restores the data and pending work
+together. A connection opened before migration still fires the new triggers;
+its older validity flag cannot clear the pending marker. Read-only inspection
+does not create or repair the projection, and missing or drifted required
+definitions do not count as a clean database.
+
+The physical database owner requires a full canonical proof on first admission;
+an imported empty pending table is not sufficient. The existing mutation worker
+seeds all keys and validates bounded batches before publishing that proof.
+Ordinary connection close and eviction preserve it, while physical replacement,
+registry invalidation and native deserialization revoke it. Read-only callers
+without an admitted proof retain full validation and never create a writer.
+Each native reader keeps the existing admission contract for its current
+main-key policy and physical owner. Already-admitted metadata readers retain
+their established raw-row parser behavior; a fresh reader, policy change or
+owner replacement must cross admission again. Pending keys make that admission
+incremental without caching session identity or permission results.
+
+Gateway startup reuses valid canonical receipts for the same physical generation;
+they do not replace integrity checks. Stores needing fresh proof are certified up
+to two at a time, using the same disk-work bound as database preflight. Two
+execution workers serve separate
+per-database tasks. Each task retains its worker across validation batches, then
+closes the exact database and lease under the parent's coordinated close request
+before downstream maintenance or another task can proceed. Uncertain native
+termination retains writer admission and cleanup custody. A refusal stops new
+admissions and drains active work before startup fails; the startup owner joins
+its execution workers before returning. Ordinary archive work keeps its global
+FIFO; certification retains per-database write ordering and fresh physical-owner
+checks.
+
+Transcript-index reconciliation shares one worker across agent databases, including
+repairs scheduled by dashboard title reads. Each task retains its own message
+channel, source snapshot, and deletion lease. Successful reuse follows read-handle
+close, parent write settlement, and exact lease release. After a native worker
+failure, recovery joins termination and accepted parent writes before releasing
+the failed task's lease. Final Gateway shutdown closes admission, drains accepted
+repairs and lease recovery, then joins worker exit before shared-state retirement.
+
+The 20-to-21 migration installs the table and triggers and marks every existing
+node pending without parsing, repairing or certifying session contents. Both
+schema version markers advance in the same maintenance transaction. Earlier
+supported schemas retain their existing prerequisite migrations. Preserve
+malformed rows for Doctor and keep writers stopped if migration is interrupted.
+
+Older builds refuse schema 21 and do not recognize its triggers. Take and verify
+a WAL-aware backup before migration. Rollback restores that backup with its
+matching build; removing the derived objects or lowering the version markers
+does not provide a supported lossless downgrade. The 2026.9.2 updater cannot
+fence an agent-schema bump; use its
+[manual update path](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
 
 ### Cold transcript storage
 

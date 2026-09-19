@@ -270,6 +270,9 @@ type RuntimeConfigTestHarness = {
       typeof vi.fn<ApplicationContext["runtimeConfig"]["removeFormValue"]>
     >;
     save: ReturnType<typeof vi.fn<ApplicationContext["runtimeConfig"]["save"]>>;
+    flushFormChanges: ReturnType<
+      typeof vi.fn<ApplicationContext["runtimeConfig"]["flushFormChanges"]>
+    >;
     patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
     runExternalMutation: ApplicationContext["runtimeConfig"]["runExternalMutation"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
@@ -301,6 +304,7 @@ export function createRuntimeConfigHarness(
     patchForm,
     removeFormValue,
     save,
+    flushFormChanges: vi.fn(async () => true),
     patchFromSnapshot: vi.fn(async (build) => {
       const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
       const built = build(config);

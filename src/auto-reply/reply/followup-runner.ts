@@ -4,6 +4,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -11,6 +12,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
@@ -98,6 +100,7 @@ export function createFollowupRunner(
     let admittedRunId: string | undefined;
     let admittedTurn: AdmittedFollowupTurn | undefined;
     let terminalPayloads: ReplyPayload[] = [];
+    let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let queuedFollowupAdmitted = false;
@@ -219,12 +222,20 @@ export function createFollowupRunner(
         ...defaults.opts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const decision = resolveFollowupDeliveryDecision({
+      const decision = await resolveFollowupDeliveryDecision({
         turn,
         execution: execution.execution,
         accounting,
         opts: deliveryOpts,
       });
+      if (decision.kind === "deliver") {
+        for (const payload of decision.payloads) {
+          progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;
+          if (progressContinuation) {
+            break;
+          }
+        }
+      }
       if (
         completion.kind === "completed" &&
         decision.kind === "suppress" &&
@@ -281,8 +292,12 @@ export function createFollowupRunner(
           operation?.fail("run_failed", error);
         }
       }
-      if (queuedFollowupAdmitted) {
-        await settleQueuedFollowupPresentation(defaults);
+      try {
+        if (queuedFollowupAdmitted) {
+          await settleQueuedFollowupPresentation(defaults);
+        }
+      } finally {
+        progressContinuation?.close();
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

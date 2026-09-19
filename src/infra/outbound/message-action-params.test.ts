@@ -794,10 +794,35 @@ describe("message action media helpers", () => {
 
   it.each(
     ["dry-run", "preserve-buffer"].flatMap((mode) => [
-      { mode, buffer: "SGVsbG8=", name: "raw base64" },
-      { mode, buffer: "data:application/octet-stream;base64,SGVsbG8=", name: "data URL" },
+      { mode, buffer: "SGVsbG8=", name: "raw base64", expectedError: undefined },
+      {
+        mode,
+        buffer: "data:application/octet-stream;base64,SGVsbG8=",
+        name: "data URL",
+        expectedError: undefined,
+      },
+      { mode, buffer: "SGVsbG8", name: "unpadded base64", expectedError: undefined },
+      { mode, buffer: " SGV s bG8= \n", name: "whitespace base64", expectedError: undefined },
+      {
+        mode,
+        buffer: "SGVsbG8h",
+        name: "one byte over the limit",
+        expectedError: "Media too large: 6 bytes (limit: 5 bytes)",
+      },
+      {
+        mode,
+        buffer: "!!!!!!!!",
+        name: "oversized malformed base64",
+        expectedError: "Media too large: 6 bytes (limit: 5 bytes)",
+      },
+      {
+        mode,
+        buffer: " \t\r\n",
+        name: "whitespace-only base64",
+        expectedError: "message.send buffer has invalid base64 data",
+      },
     ]),
-  )("keeps explicit MIME for $mode $name without staging", async ({ mode, buffer }) => {
+  )("validates $mode $name without staging", async ({ mode, buffer, expectedError }) => {
     await withTempOpenClawStateDir(async (stateDir) => {
       const args: Record<string, unknown> = {
         buffer,
@@ -805,8 +830,8 @@ describe("message action media helpers", () => {
         mimeType: "text/plain",
       };
 
-      await hydrateAttachmentParamsForAction({
-        cfg,
+      const hydration = hydrateAttachmentParamsForAction({
+        cfg: { agents: { defaults: { mediaMaxMb: 5 / (1024 * 1024) } } },
         channel: "imessage",
         args,
         action: "send",
@@ -815,12 +840,18 @@ describe("message action media helpers", () => {
         mediaPolicy: { mode: "host" },
       });
 
-      expect(args.media).toBe("buffer://message-send/attachment");
-      expect(args.mediaUrl).toBe("buffer://message-send/attachment");
-      expect(args.mediaUrls).toEqual(["buffer://message-send/attachment"]);
-      expect(args.buffer).toBe(mode === "preserve-buffer" ? buffer : undefined);
-      expect(args.contentType).toBe("text/plain");
-      expect(args.filename).toBe("preview.txt");
+      if (expectedError) {
+        await expect(hydration).rejects.toThrow(expectedError);
+        expect(args).toEqual({ buffer, filename: "preview.txt", mimeType: "text/plain" });
+      } else {
+        await hydration;
+        expect(args.media).toBe("buffer://message-send/attachment");
+        expect(args.mediaUrl).toBe("buffer://message-send/attachment");
+        expect(args.mediaUrls).toEqual(["buffer://message-send/attachment"]);
+        expect(args.buffer).toBe(mode === "preserve-buffer" ? buffer : undefined);
+        expect(args.contentType).toBe("text/plain");
+        expect(args.filename).toBe("preview.txt");
+      }
       await expect(fs.readdir(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
     });
   });

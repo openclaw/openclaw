@@ -16,6 +16,7 @@ import {
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
 import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -48,7 +49,6 @@ type LeaseCleanup = {
   token: string;
   rowDeleted: boolean;
   refcountReleased: boolean;
-  gitUnlockPending: boolean;
 };
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
@@ -81,17 +81,18 @@ async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> 
     if (!needsLock) {
       return;
     }
-    const record = getRegistryWorktree(env, id);
-    if (!record) {
-      return;
-    }
+    let record: ManagedWorktreeRecord | undefined;
     try {
+      record = getRegistryWorktree(env, id);
+      if (!record) {
+        return;
+      }
       await lockWorktreeForProcess(record);
       held.gitLocked = true;
     } catch (error) {
       heldGitLocks.delete(id);
       throw new Error(
-        `managed worktree is unusable because its Git removal guard could not be acquired: ${record.path}; repair the checkout or create a new worktree before retrying: ${errorMessage(error)}`,
+        `managed worktree is unusable because its Git removal guard could not be acquired: ${record?.path ?? id}; repair the checkout or create a new worktree before retrying: ${errorMessage(error)}`,
         { cause: error },
       );
     }
@@ -100,44 +101,35 @@ async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> 
 
 async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
   return await withGitLockTransition(cleanup.id, async () => {
-    let held = heldGitLocks.get(cleanup.id);
+    const held = heldGitLocks.get(cleanup.id);
     if (!cleanup.refcountReleased) {
       cleanup.refcountReleased = true;
       if (held) {
         held.refcount -= 1;
       }
     }
-    held = heldGitLocks.get(cleanup.id);
     if (!held) {
-      cleanup.gitUnlockPending = false;
       return true;
     }
     if (held.refcount > 0) {
       // A newer holder adopted a guard whose prior unlock failed. Its own final
       // release now owns the unlock; stale cleanup must not drop that generation.
-      cleanup.gitUnlockPending = false;
       return true;
     }
     if (!held.gitLocked) {
       heldGitLocks.delete(cleanup.id);
-      cleanup.gitUnlockPending = false;
-      return true;
-    }
-    const record = getRegistryWorktree(cleanup.env, cleanup.id);
-    if (!record) {
-      heldGitLocks.delete(cleanup.id);
-      cleanup.gitUnlockPending = false;
       return true;
     }
     try {
-      await unlockWorktreeImpl(record);
+      const record = getRegistryWorktree(cleanup.env, cleanup.id);
+      if (record) {
+        await unlockWorktreeImpl(record);
+      }
     } catch (error) {
-      cleanup.gitUnlockPending = true;
       log.warn(`failed to unlock worktree ${cleanup.id}: ${errorMessage(error)}`);
       return false;
     }
     heldGitLocks.delete(cleanup.id);
-    cleanup.gitUnlockPending = false;
     return true;
   });
 }
@@ -272,7 +264,6 @@ export async function acquireWorktreeRunLease(
     token,
     rowDeleted: false,
     refcountReleased: false,
-    gitUnlockPending: false,
   };
   // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
   // newer same-process holder after a prior generation's unlock failed.

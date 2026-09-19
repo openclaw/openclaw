@@ -4,29 +4,28 @@ import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
 
-/** Return dotted config paths whose values differ between two config snapshots. */
-export function diffConfigPaths(
+function collectConfigDiffPaths(
   prev: unknown,
   next: unknown,
-  prefix = "",
-  refinementPrefixes: readonly string[] = [],
-): string[] {
+  prefix: string,
+  refinementPrefixes: readonly string[],
+  paths: string[],
+): void {
   if (prev === next) {
-    return [];
+    return;
   }
-  const hasNestedRefinement = refinementPrefixes.some((entry) =>
-    prefix ? entry.startsWith(`${prefix}.`) : true,
-  );
+  const prevIsPlainObject = isPlainObject(prev);
+  const nextIsPlainObject = isPlainObject(next);
   // A missing parent normally collapses to one path. Registered boundaries must
   // survive that collapse so a narrow owner rule can still outrank its fallback.
   if (
-    (isPlainObject(prev) && isPlainObject(next)) ||
-    (hasNestedRefinement && (isPlainObject(prev) || isPlainObject(next)))
+    (prevIsPlainObject && nextIsPlainObject) ||
+    ((prevIsPlainObject || nextIsPlainObject) &&
+      refinementPrefixes.some((entry) => (prefix ? entry.startsWith(`${prefix}.`) : true)))
   ) {
-    const prevRecord = isPlainObject(prev) ? prev : {};
-    const nextRecord = isPlainObject(next) ? next : {};
+    const prevRecord = prevIsPlainObject ? prev : {};
+    const nextRecord = nextIsPlainObject ? next : {};
     const keys = new Set([...Object.keys(prevRecord), ...Object.keys(nextRecord)]);
-    const paths: string[] = [];
     for (const key of keys) {
       const prevValue = prevRecord[key];
       const nextValue = nextRecord[key];
@@ -34,21 +33,30 @@ export function diffConfigPaths(
         continue;
       }
       const childPrefix = prefix ? `${prefix}.${key}` : key;
-      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix, refinementPrefixes);
-      if (childPaths.length > 0) {
-        paths.push(...childPaths);
-      }
+      collectConfigDiffPaths(prevValue, nextValue, childPrefix, refinementPrefixes, paths);
     }
-    return paths;
+    return;
   }
   if (Array.isArray(prev) && Array.isArray(next)) {
     // Arrays can contain object entries (for example agent bindings);
     // compare structurally so identical values are not reported as changed.
     if (isDeepStrictEqual(prev, next)) {
-      return [];
+      return;
     }
   }
-  return [prefix || "<root>"];
+  paths.push(prefix || "<root>");
+}
+
+/** Return dotted config paths whose values differ between two config snapshots. */
+export function diffConfigPaths(
+  prev: unknown,
+  next: unknown,
+  prefix = "",
+  refinementPrefixes: readonly string[] = [],
+): string[] {
+  const paths: string[] = [];
+  collectConfigDiffPaths(prev, next, prefix, refinementPrefixes, paths);
+  return paths;
 }
 
 function projectGatewayReloadBoundaries(config: OpenClawConfig) {

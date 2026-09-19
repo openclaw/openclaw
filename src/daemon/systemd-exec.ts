@@ -66,6 +66,13 @@ export function systemdInspectionError(
     return new ServiceInspectionError("service-manager-access-denied");
   }
   if (
+    scope === "system" &&
+    result.termination === "exit" &&
+    readSystemctlDetail(result).includes("System has not been booted with systemd")
+  ) {
+    return new ServiceInspectionError("service-manager-unavailable");
+  }
+  if (
     scope === "user" &&
     result.termination === "exit" &&
     isSystemdUserBusUnavailableDetail(readSystemctlDetail(result))
@@ -243,8 +250,9 @@ export async function disableSystemdUserUnitForRemoval(
 export async function reloadSystemdUserManager(
   env: GatewayServiceEnv,
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs);
+  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs, assertCurrent);
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,

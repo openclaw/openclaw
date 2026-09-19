@@ -133,6 +133,10 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
         await gateway.waitForRequest("connect");
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByText("Synthetic audit session", { exact: true })
+          .waitFor({ state: "visible" });
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {

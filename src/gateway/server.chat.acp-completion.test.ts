@@ -361,7 +361,7 @@ describe("Gateway ACP completion ownership", () => {
           (frame) =>
             frame.event === "sessions.changed" &&
             frame.payload?.sessionKey === sessionKey &&
-            frame.payload?.reason === "chat.run.settled",
+            frame.payload?.reason === "agent.input.settled",
         );
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
         expect(accepted.ok).toBe(true);

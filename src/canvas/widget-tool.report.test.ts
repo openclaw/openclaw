@@ -219,4 +219,38 @@ describe("native report authoring", () => {
     ).rejects.toThrow("Reports require pin=true");
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it("accepts HTML widget payload when report is an empty object", async () => {
+    const { mock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir: tempDirs.make("openclaw-empty-report-html-"),
+      agentSessionKey: "agent:main:dashboard:empty-report",
+      callGateway,
+    });
+    const result = await tool.execute("empty-report-with-html", {
+      title: "SaaS Operations",
+      pin: true,
+      report: {},
+      widget_code: "<main>dashboard</main>",
+      kind: "html",
+      capabilities: {},
+      presentation: {
+        target: "assistant_message",
+        frame: "card",
+      },
+    });
+    expect(result.details).toMatchObject({
+      kind: "canvas",
+      view: { boardWidgetName: "saas-operations" },
+    });
+    expect(mock).toHaveBeenCalledWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: expect.objectContaining({
+          kind: "html",
+          html: "<main>dashboard</main>",
+        }),
+      }),
+    );
+  });
 });

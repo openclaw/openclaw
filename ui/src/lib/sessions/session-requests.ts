@@ -1,4 +1,10 @@
-import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionsDeleteResult,
+  SessionsSetInvolvementParams,
+  SessionsListParams,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type {
@@ -24,6 +30,14 @@ import type {
   SessionRequestClient,
   SessionResetOptions,
 } from "./session-capability.ts";
+
+/** Personal list choices share one RPC contract across all session menus. */
+export async function requestSessionInvolvement(
+  client: SessionRequestClient,
+  params: SessionsSetInvolvementParams,
+): Promise<void> {
+  await client.request("sessions.setInvolvement", params);
+}
 
 /** Gateway rosters omit recency so Chat and Settings agree, and carry the shared
  *  sidebar page size: a roster smaller than the store empties whole categories
@@ -60,12 +74,6 @@ export function sessionProgressTargetQuery(agentId?: string | null): SessionList
  *  field, kept separate from the roster page so tuning one never moves the other. */
 export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;
 
-const SESSION_LIST_PARAMS = {
-  includeGlobal: true,
-  includeUnknown: true,
-  configuredAgentsOnly: true,
-} as const;
-
 function buildSessionRequestParams(
   key: string,
   agentId?: string | null,
@@ -90,27 +98,39 @@ function buildTranscriptMutationParams(
   };
 }
 
-export function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
-  const params: Record<string, unknown> = { ...SESSION_LIST_PARAMS };
+export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {
+  const params: SessionsListParams = {
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+  };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
   } else if (options.limit > 0) {
     params.limit = Math.floor(options.limit);
   }
-  if (options.includeGlobal !== undefined) {
-    params.includeGlobal = options.includeGlobal;
+  for (const key of [
+    "includeGlobal",
+    "includeUnknown",
+    "configuredAgentsOnly",
+    "excludeSubagents",
+    "excludeCron",
+    "excludeSystem",
+    "hasBoard",
+  ] as const) {
+    if (options[key] !== undefined) {
+      params[key] = options[key];
+    }
   }
-  if (options.includeUnknown !== undefined) {
-    params.includeUnknown = options.includeUnknown;
-  }
-  if (options.configuredAgentsOnly !== undefined) {
-    params.configuredAgentsOnly = options.configuredAgentsOnly;
-  }
-  if (options.includeDerivedTitles === true) {
-    params.includeDerivedTitles = true;
-  }
-  if (options.includeLastMessage === true) {
-    params.includeLastMessage = true;
+  for (const key of [
+    "includeDerivedTitles",
+    "includeLastMessage",
+    "ownerFirst",
+    "involvingMe",
+  ] as const) {
+    if (options[key] === true) {
+      params[key] = true;
+    }
   }
   if (options.archivedFilter === "archived") {
     params.archived = true;
@@ -126,33 +146,14 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   if (activeMinutes > 0) {
     params.activeMinutes = activeMinutes;
   }
-  const agentId = options.agentId?.trim();
-  const spawnedBy = options.spawnedBy?.trim();
-  const search = options.search?.trim();
-  const ownerId = options.ownerId?.trim();
-  if (options.ownerFirst === true) {
-    params.ownerFirst = true;
-  }
-  if (options.involvingMe === true) {
-    params.involvingMe = true;
+  for (const key of ["agentId", "spawnedBy", "search", "ownerId"] as const) {
+    const value = options[key]?.trim();
+    if (value) {
+      params[key] = value;
+    }
   }
   if (options.boardFace) {
     params.boardFace = options.boardFace;
-  }
-  if (options.hasBoard !== undefined) {
-    params.hasBoard = options.hasBoard;
-  }
-  if (agentId) {
-    params.agentId = agentId;
-  }
-  if (spawnedBy) {
-    params.spawnedBy = spawnedBy;
-  }
-  if (search) {
-    params.search = search;
-  }
-  if (ownerId) {
-    params.ownerId = ownerId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -208,6 +209,19 @@ export function requestSessionPatch(
   return patch.archived === true
     ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
     : client.request<SessionsPatchResult>("sessions.patch", params);
+}
+
+export function requestSessionPatchMany(
+  client: SessionRequestClient,
+  params: SessionsPatchManyParams,
+): Promise<SessionsPatchManyResult> {
+  return params.patch.archived === true
+    ? client.request<SessionsPatchManyResult>(
+        "sessions.patchMany",
+        params,
+        SESSION_ARCHIVE_REQUEST_OPTIONS,
+      )
+    : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
 }
 
 export function requestSessionDelete(

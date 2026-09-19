@@ -3,13 +3,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./github-connections.ts";
 
-const system = {
+const system: ToolsGitHubStatusResult["effective"] = {
   source: "system-configured",
   credentialKind: "managed-oauth",
   credentialState: "available",
@@ -20,7 +21,7 @@ const system = {
   refreshState: "available",
   oauthScopes: [],
   repositoryGrants: "unknown",
-} as const;
+};
 const disconnected = {
   state: "disconnected",
   generation: null,
@@ -37,6 +38,27 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
     hello: gatewayHelloForMethods([], scopes),
     selfUser: profileId ? { id: profileId } : null,
   } as ApplicationGatewaySnapshot;
+  const agents = {
+    state: {
+      agentsList: {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender" as const,
+        agents: [
+          { id: "main", name: "Clawd" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    },
+    subscribe: () => () => undefined,
+  };
+  const settingsAgentSelection = createAgentSelectionCapability(
+    { connection: { gatewayUrl: "ws://gateway.test" }, snapshot, subscribe: () => () => {} },
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
   const context = {
     basePath: "/ui",
     navigate: vi.fn(),
@@ -47,7 +69,8 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
         return () => listeners.delete(listener);
       },
     },
-    agents: { state: { agentsList: { defaultId: "main" } }, subscribe: () => () => undefined },
+    agents,
+    settingsAgentSelection,
     runtimeConfig: {
       state: {},
       subscribe: () => () => undefined,
@@ -72,6 +95,52 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
 }
 afterEach(() => {
   document.body.replaceChildren();
+});
+
+it("follows Settings selection for effective agent GitHub without changing personal or system scope", async () => {
+  const pending = createDeferredCore<ToolsGitHubStatusResult>();
+  const status = (agentId: string): ToolsGitHubStatusResult => ({
+    agentId,
+    selectedScope: "system",
+    selected: { scope: "system", configured: true, identity: system },
+    effective: { ...system, source: "agent-override", account: { login: `${agentId}-account` } },
+  });
+  const request = vi.fn(async (method: string, params: { agentId?: string }) =>
+    method === "users.github.status"
+      ? { personal: disconnected, system }
+      : params.agentId === "main"
+        ? pending.promise
+        : status("research"),
+  );
+  const { element, context } = mount(["operator.admin"], "profile-a", request);
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("tools.github.status", {
+      agentId: "main",
+      selectedScope: "system",
+    }),
+  );
+  context.settingsAgentSelection.set("research");
+  await waitForFast(() => expect(element.textContent).toContain("GitHub for Research"));
+  const agent = () => element.querySelector('[data-github-connection="agent"]');
+  await waitForFast(() => expect(agent()?.textContent).toContain("@research-account"));
+  pending.resolve(status("main"));
+  await pending.promise;
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
+  expect(agent()?.textContent).not.toContain("@main-account");
+  expect(element.querySelector('[data-github-connection="system"]')?.textContent).toContain(
+    "@system-account",
+  );
+  expect(request.mock.calls.filter(([method]) => method === "users.github.status")).toHaveLength(1);
+  expect(request).toHaveBeenCalledWith("tools.github.status", {
+    agentId: "research",
+    selectedScope: "system",
+  });
+  agent()?.querySelector("button")?.click();
+  expect(context.navigate).toHaveBeenCalledWith("agents", {
+    pathname: "/ui/settings/agents/research/tools",
+  });
 });
 
 it("renders reader self-service independently of profile mutation and shared configuration", async () => {

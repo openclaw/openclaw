@@ -454,39 +454,45 @@ export function buildPluginInspectReport({
   return plugin ? buildPluginInspectRecord(plugin, context) : null;
 }
 
+type PluginInspectRows = Pick<
+  PluginRegistry,
+  "typedHooks" | "hooks" | "tools" | "diagnostics" | "gatewayMethodDescriptors" | "sessionCatalogs"
+>;
+
 function buildPluginInspectRecord(
   plugin: PluginRegistry["plugins"][number],
   { report, entries }: ReturnType<typeof resolvePluginInspectContext>,
+  rows?: PluginInspectRows,
 ): PluginInspectReport {
-  const typedHooks = report.typedHooks
-    .filter((entry) => entry.pluginId === plugin.id)
+  const typedHooks = (
+    rows?.typedHooks ?? report.typedHooks.filter((entry) => entry.pluginId === plugin.id)
+  )
     .map((entry) => ({
       name: entry.hookName,
       priority: entry.priority,
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name));
-  const customHooks = report.hooks
-    .filter((entry) => entry.pluginId === plugin.id)
+  const customHooks = (rows?.hooks ?? report.hooks.filter((entry) => entry.pluginId === plugin.id))
     .map((entry) => ({
       name: entry.entry.hook.name,
       events: [...entry.events].toSorted(),
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name));
-  const tools = report.tools
-    .filter((entry) => entry.pluginId === plugin.id)
-    .map((entry) => ({
-      names: [...entry.names],
-      optional: entry.optional,
-    }));
-  const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
+  const tools = (rows?.tools ?? report.tools.filter((entry) => entry.pluginId === plugin.id)).map(
+    (entry) => ({ names: [...entry.names], optional: entry.optional }),
+  );
+  const diagnostics = rows
+    ? [...rows.diagnostics]
+    : report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = entries[normalizePluginPolicyId(plugin.id)];
-  const shapeSummary = buildPluginShapeSummary({ plugin, report });
+  const shapeSummary = buildPluginShapeSummary({ plugin, report: rows ?? report });
   const shape = shapeSummary.shape;
-  const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
-    .filter(
+  const gatewayMethods = (
+    rows?.gatewayMethodDescriptors ??
+    (report.gatewayMethodDescriptors ?? []).filter(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     )
-    .map((descriptor) => descriptor.name);
+  ).map((descriptor) => descriptor.name);
 
   // MCP metadata is process-stable and comes from the discovered plugin manifest.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -578,9 +584,48 @@ function buildPluginInspectRecord(
   };
 }
 
+function groupByPluginId<T>(rows: readonly T[], getPluginId: (row: T) => string | undefined) {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const pluginId = getPluginId(row);
+    if (pluginId === undefined) {
+      continue;
+    }
+    const group = grouped.get(pluginId);
+    if (group) {
+      group.push(row);
+    } else {
+      grouped.set(pluginId, [row]);
+    }
+  }
+  return grouped;
+}
+
 export function buildAllPluginInspectReports(params: PluginInspectParams): PluginInspectReport[] {
   const context = resolvePluginInspectContext(params);
-  return context.report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
+  const { report } = context;
+  if (report.plugins.length < 2) {
+    return report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
+  }
+  const typedHooks = groupByPluginId(report.typedHooks, (entry) => entry.pluginId);
+  const hooks = groupByPluginId(report.hooks, (entry) => entry.pluginId);
+  const tools = groupByPluginId(report.tools, (entry) => entry.pluginId);
+  const diagnostics = groupByPluginId(report.diagnostics, (entry) => entry.pluginId);
+  const sessionCatalogs = groupByPluginId(report.sessionCatalogs, (entry) => entry.pluginId);
+  const gatewayMethodDescriptors = groupByPluginId(
+    report.gatewayMethodDescriptors ?? [],
+    (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
+  );
+  return report.plugins.map((plugin) =>
+    buildPluginInspectRecord(plugin, context, {
+      typedHooks: typedHooks.get(plugin.id) ?? [],
+      hooks: hooks.get(plugin.id) ?? [],
+      tools: tools.get(plugin.id) ?? [],
+      diagnostics: diagnostics.get(plugin.id) ?? [],
+      sessionCatalogs: sessionCatalogs.get(plugin.id) ?? [],
+      gatewayMethodDescriptors: gatewayMethodDescriptors.get(plugin.id) ?? [],
+    }),
+  );
 }
 
 export function buildPluginCompatibilityWarnings(params: PluginInspectParams): string[] {

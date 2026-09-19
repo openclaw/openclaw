@@ -34,7 +34,7 @@ export async function probeCodexNativeAuth(params: {
     // Isolated homes and external servers cannot borrow the operator's local login.
     if (
       options.start.transport !== "stdio" ||
-      pluginConfig.appServer?.homeScope === "agent" ||
+      options.start.homeScope !== "user" ||
       isCodexAppServerProxyLaunch(options.start.args)
     ) {
       return undefined;

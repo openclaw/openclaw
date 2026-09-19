@@ -80,17 +80,19 @@ function isAtLeast(version: Semver | null, minimum: Semver): boolean {
 }
 
 /** Reads current process runtime metadata for startup support checks. */
-export function detectRuntime(): RuntimeDetails {
+export async function detectRuntime(): Promise<RuntimeDetails> {
   const bunVersion = process.versions?.bun;
   const kind: RuntimeKind = bunVersion ? "bun" : process.versions?.node ? "node" : "unknown";
   const version = bunVersion ?? process.versions?.node ?? null;
-  const sqlite = detectCurrentRuntimeSqlite();
+  const execPath = process.execPath ?? null;
+  const pathEnv = process.env.PATH ?? "(not set)";
+  const sqlite = await detectCurrentRuntimeSqlite();
 
   return {
     kind,
     version,
-    execPath: process.execPath ?? null,
-    pathEnv: process.env.PATH ?? "(not set)",
+    execPath,
+    pathEnv,
     hasNodeSqlite: sqlite.available,
     sqliteVersion: sqlite.version,
     sqliteSelectionError: sqlite.selectionError,
@@ -98,12 +100,12 @@ export function detectRuntime(): RuntimeDetails {
   };
 }
 
-function detectCurrentRuntimeSqlite(): {
+async function detectCurrentRuntimeSqlite(): Promise<{
   available: boolean;
   version: string | null;
   selectionError?: string;
   probe?: SqliteCapabilities;
-} {
+}> {
   try {
     ensureSqliteLibrarySelected();
   } catch (error) {
@@ -114,7 +116,7 @@ function detectCurrentRuntimeSqlite(): {
     };
   }
   try {
-    const probe = detectCurrentSqliteCapabilities();
+    const probe = await detectCurrentSqliteCapabilities();
     return { available: probe.available, version: probe.version, probe };
   } catch {
     return { available: false, version: null };
@@ -143,8 +145,8 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
 }
 
 /** Returns whether the current process runtime satisfies OpenClaw's engine contract. */
-export function isCurrentRuntimeSupported(): boolean {
-  return runtimeSatisfies(detectRuntime());
+export async function isCurrentRuntimeSupported(): Promise<boolean> {
+  return runtimeSatisfies(await detectRuntime());
 }
 
 /** Checks a Node version label against OpenClaw's supported Node version range. */
@@ -212,11 +214,12 @@ export function nodeVersionSatisfiesEngine(
 /** Exits through the provided runtime when the current Node runtime is unsupported. */
 export async function assertSupportedRuntime(
   providedRuntime?: RuntimeEnv,
-  details: RuntimeDetails = detectRuntime(),
+  providedDetails?: RuntimeDetails,
   argv?: readonly string[],
   emitDiagnosticWarning = true,
   recoveryEnv?: NodeJS.ProcessEnv,
 ): Promise<void> {
+  const details = providedDetails ?? (await detectRuntime());
   if (runtimeSatisfies(details)) {
     const note =
       details.kind === "node" && details.sqliteProbe

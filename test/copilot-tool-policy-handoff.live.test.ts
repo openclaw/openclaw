@@ -205,13 +205,13 @@ describeLive("Copilot tool policy live handoff", () => {
     const toolAuthorityFingerprint = "copilot-policy-live-authority";
     const bindings = new Map<string, CopilotSessionBindingForTest>();
     const sessionStore = {
-      delete(key: string) {
+      async delete(key: string) {
         return bindings.delete(key);
       },
-      lookup(key: string) {
+      async lookup(key: string) {
         return bindings.get(key);
       },
-      register(key: string, value: CopilotSessionBindingForTest) {
+      async register(key: string, value: CopilotSessionBindingForTest) {
         bindings.set(key, value);
       },
     };

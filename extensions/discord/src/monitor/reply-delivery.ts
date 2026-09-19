@@ -1,4 +1,3 @@
-// Discord plugin module implements reply delivery behavior.
 import { formatReasoningMessage, resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {

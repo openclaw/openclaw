@@ -111,6 +111,49 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
     },
   );
 
+  it("accepts confirmed group exit after a denied graceful signal", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    let gone = false;
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error(gone ? "group gone" : "group denied"), {
+        code: gone ? "ESRCH" : "EPERM",
+      });
+    });
+    const child: { pid: number; exitCode: number | null; signalCode: null } = {
+      pid: 4242,
+      exitCode: null,
+      signalCode: null,
+    };
+    const owner = createCommandTerminationController({
+      child,
+      cancelController: new AbortController(),
+      processTree: { mode: "graceful" },
+      killGraceMs: 300,
+      isChildExited: () => child.exitCode !== null,
+      isCommandSettled: () => false,
+    });
+    try {
+      expect(owner.terminate()).toBe(true);
+      let settled = false;
+      const completion = owner.settle().then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(24);
+      expect(settled).toBe(false);
+      child.exitCode = 1;
+      gone = true;
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(completion).resolves.toBe("cooperative");
+      expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
+      expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["graceful", "force"] as const)(
     "joins observed group exit after a %s force-send receipt",
     async (mode) => {

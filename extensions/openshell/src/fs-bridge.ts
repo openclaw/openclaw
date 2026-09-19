@@ -26,7 +26,6 @@ type ResolvedMountPath = SandboxResolvedPath & {
 };
 
 type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
-type FsSafeStat = Awaited<ReturnType<FsSafeRoot["stat"]>>;
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
@@ -283,7 +282,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     return target.hostPath;
   }
 
-  private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
+  private containerMounts(readOnlyMounts = this.readOnlyMounts()) {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
     const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
@@ -292,9 +291,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
       "/",
     );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
-    const input = params.filePath.trim();
-    const readOnlyMounts = this.readOnlyMounts();
-
     const containerMounts: OpenShellWorkspaceRoot<{
       hostRoot: string;
       writable: boolean;
@@ -328,6 +324,28 @@ class OpenShellFsBridge implements SandboxFsBridge {
         value: { hostRoot: path.resolve(mount.hostPath), writable: false },
       })),
     );
+    return containerMounts;
+  }
+
+  get pathMappings(): NonNullable<SandboxFsBridge["pathMappings"]> {
+    return this.containerMounts()
+      .toSorted((a, b) => Number(a.owner === "agent") - Number(b.owner === "agent"))
+      .map((mount) => ({ hostRoot: mount.value.hostRoot, containerRoot: mount.remote }));
+  }
+
+  private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
+    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
+    const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
+    const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
+    const agentContainerRoot = (this.backend.remoteAgentWorkspaceDir || "/agent").replace(
+      /\\/g,
+      "/",
+    );
+    const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
+    const input = params.filePath.trim();
+    const readOnlyMounts = this.readOnlyMounts();
+
+    const containerMounts = this.containerMounts(readOnlyMounts);
     const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {
       const containerMount = resolveOpenShellWorkspaceRoot(containerMounts, containerPath);
       if (!containerMount) {
@@ -451,45 +469,22 @@ async function removeLocalRootPath(params: {
     if (params.force === false) {
       await fsPromises.lstat(params.hostPath);
     }
-    if (params.recursive) {
-      const stats = await fsPromises.lstat(params.hostPath).catch((err: unknown) => {
-        if (isNotFoundError(err)) {
-          return null;
-        }
-        throw err;
+    // Clearing a mounted root removes its contents while retaining the mount directory.
+    const targets = params.recursive && !relativePath ? await root.list("") : [relativePath];
+    for (const target of targets) {
+      await root.remove(target, {
+        force: params.force !== false,
+        ...(params.recursive
+          ? { recursive: true, order: "sorted" as const, maxEntries: Infinity, maxDepth: Infinity }
+          : {}),
       });
-      if (stats?.isSymbolicLink()) {
-        await root.remove(relativePath);
-        return;
-      }
-      await removeRootTree(root, relativePath);
-      return;
     }
-    await root.remove(relativePath);
   } catch (err) {
     if (params.force !== false && isNotFoundError(err)) {
       return;
     }
     throw err;
   }
-}
-
-async function removeRootTree(
-  root: FsSafeRoot,
-  relativePath: string,
-  knownStats?: FsSafeStat,
-): Promise<void> {
-  const stats = knownStats ?? (await root.stat(relativePath));
-  if (stats.isDirectory && !stats.isSymbolicLink) {
-    const entries = await root.list(relativePath, { withFileTypes: true });
-    for (const entry of entries) {
-      await removeRootTree(root, path.join(relativePath, entry.name), entry);
-    }
-    if (!relativePath) {
-      return;
-    }
-  }
-  await root.remove(relativePath);
 }
 
 async function moveLocalRootPath(params: {

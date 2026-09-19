@@ -7,7 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as chatDisplayProjection from "./chat-display-projection.js";
+import * as chatDisplayProjection from "./chat-display-projection.core.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -50,6 +50,7 @@ it("applies the head byte budget before loading an older malformed row", async (
     ).toBe(1);
 
     const tail = await readIncrementalChatHistoryTail({
+      readers: sessionTranscriptReaders,
       entry: undefined,
       readScope,
       beforeSeq: 99,
@@ -103,6 +104,7 @@ it("keeps a sparse tail below its first snapshot when messages append between pa
       });
     try {
       const tail = await readIncrementalChatHistoryTail({
+        readers: sessionTranscriptReaders,
         entry: undefined,
         readScope,
         effectiveMaxChars: 8_000,
@@ -156,6 +158,7 @@ it("fills sparse pages without repeatedly projecting scanned transcript rows", a
       });
     try {
       const tail = await readIncrementalChatHistoryTail({
+        readers: sessionTranscriptReaders,
         entry: undefined,
         readScope,
         effectiveMaxChars: 8_000,
@@ -208,6 +211,7 @@ it("does not serialize transcript batches when the extended sparse byte guard is
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       const tail = await readIncrementalChatHistoryTail({
+        readers: sessionTranscriptReaders,
         entry: undefined,
         readScope,
         effectiveMaxChars: 8000,

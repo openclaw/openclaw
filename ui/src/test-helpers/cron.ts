@@ -1,4 +1,4 @@
-import type { CronFormState } from "../lib/cron/index.ts";
+import type { CronFormState } from "../lib/cron/types.ts";
 
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",

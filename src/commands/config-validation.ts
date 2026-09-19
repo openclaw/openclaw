@@ -1,6 +1,8 @@
 // Config validation helpers shared by commands that need fail-fast config loading.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../cli/config-recovery-hints.js";
+import { isJsonOutputModeActive } from "../cli/json-output-mode.js";
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import {
   type ConfigFileSnapshot,
   type OpenClawConfig,
@@ -45,7 +47,7 @@ export async function requireValidConfigFileSnapshot(
 /** Preserve native read-time ownership through commands that can write after awaits. */
 export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   const read = await readConfigFileSnapshotForWrite();
-  if (!validateConfigFileSnapshot(read.snapshot, runtime)) {
+  if (!(await validateConfigFileSnapshot(read.snapshot, runtime))) {
     return null;
   }
   return read;
@@ -72,12 +74,17 @@ export async function withCommandPluginMetadata<T>(
   });
 }
 
-function validateConfigFileSnapshot(
+async function validateConfigFileSnapshot(
   snapshot: ConfigFileSnapshot,
   runtime: RuntimeEnv,
   includeCompatibilityAdvisory = false,
-): ConfigFileSnapshot | null {
+): Promise<ConfigFileSnapshot | null> {
   if (snapshot.exists && !snapshot.valid) {
+    if (isJsonOutputModeActive(process.argv)) {
+      const { writeInvalidConfigCliJson } = await import("../cli/config-validation-output.js");
+      writeInvalidConfigCliJson(runtime, snapshot);
+      exitCliAfterOutput(runtime, 1);
+    }
     const issues =
       snapshot.issues.length > 0
         ? renderConfigValidationIssueLines(snapshot).join("\n")

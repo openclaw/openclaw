@@ -1,4 +1,3 @@
-// Line plugin module implements webhook behavior.
 import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

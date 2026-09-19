@@ -188,7 +188,6 @@ export function createTelegramInboundMedia({
       senderId,
       effectiveDmAllow: authorization.effectiveDmAllow,
       effectiveGroupAllow: authorization.effectiveGroupAllow,
-      ownerAccess: { ownerList: [], senderIsOwner: false },
       eventKind: "message",
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,

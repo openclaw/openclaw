@@ -151,8 +151,11 @@ function createFilteredSessionController(
     },
     agentSelection,
   } as unknown as ApplicationContext;
+  let hostConnected = true;
   const host = {
-    isConnected: true,
+    get isConnected() {
+      return hostConnected;
+    },
     connected: true,
     activeRouteId: "sessions",
     getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
@@ -173,6 +176,12 @@ function createFilteredSessionController(
   const controller = new SessionDataController(host);
 
   return {
+    context,
+    host,
+    disconnectHost: () => {
+      hostConnected = false;
+      controller.hostDisconnected();
+    },
     controller,
     list,
     resultForKeys,
@@ -226,6 +235,27 @@ function createFilteredSessionController(
 }
 
 describe("filtered sidebar session event refresh", () => {
+  it("keeps shared group hydration when its first sidebar presenter disconnects", async () => {
+    const { controller, context, host, disconnectHost } = createFilteredSessionController("active");
+    const bootstrap = context.connectionBootstrap;
+    const client = context.gateway.snapshot.client;
+    bootstrap.setForegroundRoute("agent:main:pending");
+    const load = vi.spyOn(context.sessions, "groupsLoad");
+    const replacement = new SessionDataController({ ...host, isConnected: true });
+    try {
+      controller.hostConnected();
+      replacement.hostConnected();
+      expect(load).not.toHaveBeenCalled();
+      disconnectHost();
+      bootstrap.setForegroundPane({}, { sessionKey: "agent:main:pending", client, ready: true });
+      await bootstrap.run(context.sessions.groupsLoad, async () => {});
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      replacement.hostDisconnected();
+      vi.restoreAllMocks();
+    }
+  });
+
   it.each(["archived", "all"] as const)(
     "automatically rebinds the restored %s filter across controller reconnect",
     async (statusFilter) => {
@@ -256,6 +286,7 @@ describe("filtered sidebar session event refresh", () => {
       vi.useFakeTimers();
       const {
         controller,
+        context,
         list,
         selectMembership,
         selectAgent,
@@ -306,6 +337,21 @@ describe("filtered sidebar session event refresh", () => {
           expect.objectContaining({ agentId: "research", involvingMe: true }),
         );
         expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
+
+        // A mutation of the previous agent can settle after this selection.
+        const outcome = await context.sessions.reconcileMutation("main");
+        expect(outcome.status).toBe("refreshed");
+        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
+        const readsAfterMutation = list.mock.calls.length;
+        await controller.refreshSidebarSessions("main");
+        controller.hostUpdated();
+        expect(list).toHaveBeenCalledTimes(readsAfterMutation);
+        expect(controller.sessionsAgentId).toBe("research");
+        await controller.loadMoreSidebarSessions();
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agentId: "research", involvingMe: true, offset: pageSize }),
+        );
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
 
         await selectMembership({ ownerId: "profile-ada", involvingMe: false });
         expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ ownerId: "profile-ada" }));
@@ -665,7 +711,9 @@ describe("filtered sidebar session event refresh", () => {
     expect(list).toHaveBeenCalledOnce();
 
     resolveFirstRefresh(refreshedPage);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(list).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(list).toHaveBeenCalledTimes(2);
     expect(controller.sessionsResult?.sessions[0]?.updatedAt).toBe(2);

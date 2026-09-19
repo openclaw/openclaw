@@ -8,8 +8,8 @@ import {
   getProcessPluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const instances: PluginInstance[] = [];

@@ -276,6 +276,7 @@ async function runExternalScenario(root: string): Promise<void> {
       return loaded;
     },
   });
+  let phase = "cold-bundle-setup";
   try {
     const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
       await import("./mcp-auth-profile.js");
@@ -298,6 +299,7 @@ async function runExternalScenario(root: string): Promise<void> {
       env: undefined,
     });
     const foreignInit = { headers: { Authorization: "Bearer caller-owned-not-real" } };
+    phase = "foreign-before-demand";
     await consumeFetch(wrapped, foreign.url, foreignInit);
     assert.equal(calls[0]?.init, foreignInit);
     // Assert a completed phase, not the live recorders the next request populates.
@@ -308,6 +310,7 @@ async function runExternalScenario(root: string): Promise<void> {
     };
     assert.deepEqual(beforeDemand, { moduleAttempts: [], moduleLoads: [], providerEvents: [] });
 
+    phase = "same-origin-first-demand";
     authRuntimeEntered = true;
     const signal = new AbortController().signal;
     await consumeFetch(wrapped, new URL(endpoint.url), {
@@ -327,14 +330,17 @@ async function runExternalScenario(root: string): Promise<void> {
       );
     }
 
+    phase = "same-origin-after-rotation";
     fs.writeFileSync(fixture.credentialPath, "rotated");
     await consumeFetch(wrapped, endpoint.url);
     assert.equal(endpoint.requests.at(-1)?.headers.authorization, "Bearer external:rotated");
+    phase = "missing-profile-after-removal";
     fs.rmSync(fixture.credentialPath);
     const sent = endpoint.requests.length;
     await assert.rejects(() => wrapped(endpoint.url), /profile was not found/u);
     assert.equal(endpoint.requests.length, sent);
     const eventsAfterRemoval = providerEvents.length;
+    phase = "foreign-after-removal";
     await consumeFetch(wrapped, new URL(foreign.url), foreignInit);
     assert.equal(calls.at(-1)?.init, foreignInit);
     assert.equal(providerEvents.length, eventsAfterRemoval);
@@ -342,12 +348,26 @@ async function runExternalScenario(root: string): Promise<void> {
       assert.equal(request.headers.authorization, "Bearer caller-owned-not-real");
       assert.equal(request.headers["x-trace"], undefined);
     }
+    phase = "persisted-store-check";
     const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
     assert.equal(
       loadPersistedAuthProfileStore(fixture.agentDir)?.profiles[EXTERNAL_PROFILE],
       undefined,
     );
     console.log(JSON.stringify({ moduleAttempts, moduleLoads, providerEvents }));
+  } catch (error) {
+    console.error(
+      "MCP_AUTH_EXTERNAL_FAILURE",
+      JSON.stringify({
+        phase,
+        endpointRequests: endpoint.requests.length,
+        foreignRequests: foreign.requests.length,
+        moduleAttempts: moduleAttempts.length,
+        moduleLoads: moduleLoads.length,
+        providerEvents: providerEvents.length,
+      }),
+    );
+    throw error;
   } finally {
     hooks.deregister();
     await Promise.all([endpoint.close(), foreign.close()]);

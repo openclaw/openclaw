@@ -1,64 +1,54 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { build } from "esbuild";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { agentDatabaseModuleIdentityEntrypoints } from "./openclaw-agent-db-module-identity-runtime.test-support.js";
 
 it("shares agent ownership, reclamation queues, and commit observers across transformed SDK modules", async () => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-module-")));
   const repo = process.cwd();
-  const dist = path.join(root, "dist");
-  const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
-  const ownerExports = `
-    export {
-      openOpenClawAgentDatabase, closeOpenClawAgentDatabaseByPath,
-      closeOpenClawAgentDatabases, runOpenClawAgentWriteTransaction,
-      deferOpenClawAgentPostCommitPublication,
-      listOpenClawRegisteredAgentDatabases, readOpenClawAgentDatabaseRegistryToken,
-    } from ${source("src/state/openclaw-agent-db.ts")};
-    export { closeOpenClawStateDatabase } from ${source("src/state/openclaw-state-db.ts")};
-    export { runExclusiveSqliteTranscriptArchiveWorker } from ${source("src/config/sessions/session-accessor.sqlite-archive.ts")};
-    export { runExclusiveSqliteSessionReclamation } from ${source("src/config/sessions/session-accessor.sqlite-reclamation.ts")};
-  `;
+  let hostUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.host);
+  let sdkUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.sdk);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-module-")));
   try {
-    fs.mkdirSync(dist);
     fs.symlinkSync(path.join(repo, "node_modules"), path.join(root, "node_modules"), "junction");
     fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
     fs.writeFileSync(path.join(root, "config.json"), "{}\n");
     fs.writeFileSync(
-      path.join(root, "host.ts"),
-      `${ownerExports}
-       export { getCachedPluginModuleLoader } from ${source("src/plugins/plugin-module-loader-cache.ts")};`,
-    );
-    fs.writeFileSync(
-      path.join(root, "sqlite-runtime.ts"),
-      `${ownerExports}\nexport * from ${source("src/plugin-sdk/sqlite-runtime.ts")};`,
-    );
-    fs.writeFileSync(
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/sqlite-runtime";\n',
     );
-    // A shared chunk models the packaged host/SDK graph; the supported plugin
-    // transform then evaluates its own module graph within the same process.
-    await build({
-      absWorkingDir: repo,
-      entryPoints: {
-        host: path.join(root, "host.ts"),
-        "sqlite-runtime": path.join(root, "sqlite-runtime.ts"),
-      },
-      bundle: true,
-      splitting: true,
-      packages: "external",
-      platform: "node",
-      format: "esm",
-      outdir: dist,
-      tsconfig: path.join(repo, "tsconfig.json"),
-      logLevel: "silent",
-    });
-    for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
-      fs.copyFileSync(path.join(repo, "src/state", schema), path.join(dist, schema));
+    // Standalone/watch still needs the packaged graph, rebuilt from current source.
+    if (hostUrl.pathname.endsWith(".ts")) {
+      const { build } = await import("tsdown");
+      const dist = path.join(root, "dist");
+      await build({
+        config: false,
+        cwd: repo,
+        entry: { host: fileURLToPath(hostUrl), "sqlite-runtime": fileURLToPath(sdkUrl) },
+        dts: false,
+        envPrefix: [],
+        clean: false,
+        deps: {
+          alwaysBundle: (id) =>
+            (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
+            id !== "@openclaw/fs-safe" &&
+            !id.startsWith("@openclaw/fs-safe/"),
+        },
+        platform: "node",
+        format: "esm",
+        outDir: dist,
+        outExtensions: () => ({ js: ".js" }),
+        tsconfig: path.join(repo, "tsconfig.json"),
+        logLevel: "silent",
+      });
+      for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
+        fs.copyFileSync(path.join(repo, "src/state", schema), path.join(dist, schema));
+      }
+      hostUrl = pathToFileURL(path.join(dist, "host.js"));
+      sdkUrl = pathToFileURL(path.join(dist, "sqlite-runtime.js"));
     }
     const result = spawnNodeEvalSync(
       String.raw`
@@ -101,8 +91,8 @@ it("shares agent ownership, reclamation queues, and commit observers across tran
         let plugin;
         let borrowed;
         try {
-          host = await import(${JSON.stringify(pathToFileURL(path.join(dist, "host.js")).href)});
-          const nativeSdk = await import(${JSON.stringify(pathToFileURL(path.join(dist, "sqlite-runtime.js")).href)});
+          host = await import(${JSON.stringify(hostUrl.href)});
+          const nativeSdk = await import(${JSON.stringify(sdkUrl.href)});
           const canonical = host.openOpenClawAgentDatabase(options);
           const nativeBorrow = nativeSdk.borrowOpenClawAgentDatabase(options);
           assert.equal(nativeBorrow.db === canonical.db, true, "native SDK control shares host owner");
@@ -113,8 +103,10 @@ it("shares agent ownership, reclamation queues, and commit observers across tran
           plugin = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
             transformOpenClawDependencies: true,
-            aliasMap: { "openclaw/plugin-sdk/sqlite-runtime": path.join(root, "dist/sqlite-runtime.js") },
+            aliasMap: { "openclaw/plugin-sdk/sqlite-runtime": ${JSON.stringify(fileURLToPath(sdkUrl))} },
           })(modulePath);
+          assert.notEqual(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase,
+            "transformed SDK evaluates a separate graph");
           borrowed = plugin.borrowOpenClawAgentDatabase(options);
           assert.equal(physicalOpens, 1, "transformed borrowing must not physically reopen the agent database");
           assert.equal(integrityScans, 1, "transformed borrowing must not repeat integrity validation");

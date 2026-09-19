@@ -34,6 +34,7 @@ import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
   prepareSessionLifecycleDrain,
+  SessionLifecycleWorkspaceRecoveryError,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
 import {
@@ -210,6 +211,9 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           assertCurrent();
           if (error instanceof SessionDeletionError) {
             throw error;
+          }
+          if (error instanceof SessionLifecycleWorkspaceRecoveryError) {
+            throw new SessionDeletionError(error.error);
           }
           throw new SessionDeletionError(
             errorShape(

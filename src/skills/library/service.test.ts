@@ -7,12 +7,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setDisplayName } from "../../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  getProfileAvatar,
+  linkEmail,
+  setAvatar,
+  setDisplayName,
+  setUserProfileRole,
+} from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
@@ -468,26 +475,137 @@ describe("profile-owned skill publication and selection", () => {
     expect(listSkillLibrary(alice, {}, options).entries).toEqual([]);
   });
 
-  it("rejects same-library collisions while retaining both authors' same-name skills across profile merge", async () => {
-    const { options, alice, actor } = fixture();
-    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-    const a = await saveSkillLibrary(alice, draft(), options);
-    const b = await saveSkillLibrary(bob, draft(), options);
-    setDisplayName(alice.profileId!, "Alice 雪 · 🦞", options);
-    await expect(saveSkillLibrary(alice, draft(), options)).rejects.toMatchObject({
-      code: "NAME_CONFLICT",
-    });
-    linkEmail("bob@example.test", alice.profileId!, options);
-    const entries = listSkillLibrary(alice, { scope: "mine" }, options).entries;
-    expect(entries.map((entry) => entry.skillId).toSorted()).toEqual(
-      [a.entry.skillId, b.entry.skillId].toSorted(),
-    );
-    expect(new Set(entries.map((entry) => entry.name)).size).toBe(2);
-    expect(entries.every((entry) => entry.ownerLabel === "Alice 雪 · 🦞")).toBe(true);
-    expect(
-      (await readSkillLibrary(alice, b.entry.skillId, undefined, options)).entry.ownerProfileId,
-    ).toBe(alice.profileId);
-  });
+  it.each(["canonical", "merged"] as const)(
+    "retains same-name skills, permissions and avatar-free listings for a %s actor after profile merge",
+    async (actorKind) => {
+      const { options, alice, actor } = fixture();
+      const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+      const a = await saveSkillLibrary(alice, draft(), options);
+      const b = await saveSkillLibrary(bob, draft(), options);
+      const avatar = Buffer.alloc(128 * 1024, 97);
+      for (const profileId of [alice.profileId!, bob.profileId!]) {
+        expect(setAvatar(profileId, avatar, "image/png", options).ok).toBe(true);
+      }
+      setDisplayName(alice.profileId!, "Alice 雪 · 🦞", options);
+      await expect(saveSkillLibrary(alice, draft(), options)).rejects.toMatchObject({
+        code: "NAME_CONFLICT",
+      });
+      linkEmail("bob@example.test", alice.profileId!, options);
+      const authority = actorKind === "canonical" ? alice : bob;
+      const reads = trackSqliteStatementExecutions(
+        openOpenClawStateDatabase(options).db,
+        ["profiles"],
+        (sql) =>
+          sql.startsWith("select ") && sql.includes('from "user_profiles"') ? "profiles" : null,
+      );
+      const entries = (() => {
+        try {
+          return listSkillLibrary(authority, { scope: "mine" }, options).entries;
+        } finally {
+          reads.restore();
+        }
+      })();
+      expect(entries.map((entry) => entry.skillId).toSorted()).toEqual(
+        [a.entry.skillId, b.entry.skillId].toSorted(),
+      );
+      expect(new Set(entries.map((entry) => entry.name)).size).toBe(2);
+      expect(entries.every((entry) => entry.ownerLabel === "Alice 雪 · 🦞")).toBe(true);
+      expect(entries.every((entry) => entry.canEdit)).toBe(true);
+      expect(
+        (await readSkillLibrary(alice, b.entry.skillId, undefined, options)).entry.ownerProfileId,
+      ).toBe(alice.profileId);
+      expect(
+        Buffer.from(
+          expectDefined(getProfileAvatar(alice.profileId!, options), "stored avatar").bytes,
+        ),
+      ).toEqual(avatar);
+      setUserProfileRole(alice.profileId!, "viewer", options);
+      const viewerEntries = listSkillLibrary(
+        {
+          ...authority,
+          getConfig: () => ({
+            gateway: {
+              roles: {
+                definitions: {
+                  viewer: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+                },
+              },
+            },
+          }),
+        },
+        {},
+        options,
+      ).entries;
+      expect(viewerEntries.map((entry) => entry.skillId)).toEqual(
+        entries.map((entry) => entry.skillId),
+      );
+      expect(viewerEntries.every((entry) => !entry.canEdit)).toBe(true);
+      expect(reads.rowCounts.profiles).toBeGreaterThan(0);
+      expect(reads.blobBytes.profiles, `profile BLOB bytes for ${actorKind} actor`).toBe(0);
+    },
+  );
+
+  it.each(["current", "legacy"] as const)(
+    "reads a skill through a cold %s profile handle",
+    async (schema) => {
+      const { options, alice } = fixture();
+      const saved = await saveSkillLibrary(alice, draft(), options);
+      if (schema === "legacy") {
+        openOpenClawStateDatabase(options).db.exec("ALTER TABLE user_profiles DROP COLUMN role");
+      }
+      closeOpenClawStateDatabaseForTest();
+      const database = openOpenClawStateDatabase(options);
+      const read = await readSkillLibrary(alice, saved.entry.skillId, undefined, {
+        ...options,
+        database,
+      });
+      expect(read.content).toBe(content);
+      expect(read.entry).toEqual(saved.entry);
+      expect(tableHasColumn(database.db, "user_profiles", "role")).toBe(schema === "current");
+    },
+  );
+
+  it.each(["created_at", "updated_at", "avatar"] as const)(
+    "preserves native %s errors on either actor merge row",
+    async (column) => {
+      const { options, alice, actor } = fixture();
+      const source = actor(ensureProfileForEmail("source@example.test", options).id);
+      await saveSkillLibrary(alice, draft(), options);
+      linkEmail("source@example.test", alice.profileId!, options);
+      const { db } = openOpenClawStateDatabase(options);
+      if (column === "avatar") {
+        // A non-STRICT fixture can hold a damaged avatar value that native row conversion rejects.
+        db.exec(`
+        CREATE TABLE untyped_profiles AS SELECT * FROM user_profiles;
+        DROP TABLE user_profiles;
+        ALTER TABLE untyped_profiles RENAME TO user_profiles;
+      `);
+      }
+      for (const profileId of [source.profileId!, alice.profileId!]) {
+        db.prepare(`UPDATE user_profiles SET ${column} = ? WHERE id = ?`).run(
+          9223372036854775807n,
+          profileId,
+        );
+        let nativeError: unknown;
+        try {
+          db.prepare("SELECT * FROM user_profiles WHERE id = ?").get(profileId);
+        } catch (error) {
+          nativeError = error;
+        }
+        if (!(nativeError instanceof Error)) {
+          throw new Error("Expected native SQLite INTEGER conversion failure");
+        }
+        expect(() => listSkillLibrary(source, {}, options)).toThrow(
+          expect.objectContaining({
+            name: nativeError.name,
+            message: nativeError.message,
+            ...("code" in nativeError ? { code: nativeError.code } : {}),
+          }),
+        );
+        db.prepare(`UPDATE user_profiles SET ${column} = 1 WHERE id = ?`).run(profileId);
+      }
+    },
+  );
 
   it("delivers complete immutable supporting files into a worker-owned directory", async () => {
     const { options, alice, stateDir } = fixture();

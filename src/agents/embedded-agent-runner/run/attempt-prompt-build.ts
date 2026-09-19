@@ -85,6 +85,7 @@ type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]
 type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
+  isCurrent: () => boolean;
 };
 
 type EmbeddedAttemptPromptAssembly = {
@@ -295,14 +296,19 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
   if (attempt.sessionKey && !preserveExactPrompt) {
     const leaseId = `${attempt.runId}:agent-steering`;
-    const leased = leasePendingAgentSteeringItems({
+    const leased = await leasePendingAgentSteeringItems({
       requesterSessionKey: attempt.sessionKey,
       leaseId,
     });
     if (leased) {
-      leasedSteering = { leaseId, runIds: leased.runIds };
+      leasedSteering = { leaseId, runIds: leased.runIds, isCurrent: leased.isCurrent };
       // Transfer cleanup ownership before any prompt mutation can throw.
       input.setLeasedSteering(leasedSteering);
+      if (!leased.isCurrent()) {
+        throw new Error(
+          "The queued child results lost authority before requester prompt injection.",
+        );
+      }
       effectivePrompt = prependAgentSteeringPrompt({
         steeringPrompt: leased.prompt,
         prompt: effectivePrompt,

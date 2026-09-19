@@ -3,6 +3,7 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -346,6 +347,7 @@ export function startManagedGatewayConfigReloader(
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
       lastCommittedRuntimeConfig = committedRuntimeConfig;
+      publishSystemEventStoreConfig(committedRuntimeConfig);
       params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(committedRuntimeConfig);
@@ -354,7 +356,6 @@ export function startManagedGatewayConfigReloader(
     ...(params.prepareConfigCandidate
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
-    initialInternalWriteHash: params.initialInternalWriteHash,
     runTransaction: (run) =>
       runWithGatewayIndependentRootWorkAdmission(run, "reload:config", lifecycle.signal).catch(
         (error: unknown) => {

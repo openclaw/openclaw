@@ -53,7 +53,7 @@ describe("OpenClaw shell document title", () => {
         snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
       },
       sessions: {
-        state: { result: options.sessions ? { sessions: options.sessions } : null },
+        presentation: { result: options.sessions ? { sessions: options.sessions } : null },
       },
     } as unknown as ApplicationContext;
   }

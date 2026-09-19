@@ -7,7 +7,6 @@
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
 import { readCdpMainFrameDocumentIdentity } from "./cdp-page-session.js";
-import { bindPlaywrightCdpSend } from "./pw-cdp-send.js";
 
 type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
 
@@ -28,13 +27,11 @@ async function withPlaywrightPageCdpSession<T>(
 
 /** Run a function with a CDP send helper scoped to one Playwright page. */
 export async function withPageScopedCdpClient<T>(opts: {
-  cdpUrl: string;
   page: Page;
-  targetId?: string;
-  fn: (send: ReturnType<typeof bindPlaywrightCdpSend>) => Promise<T>;
+  fn: (send: CDPSession["send"]) => Promise<T>;
 }): Promise<T> {
   return await withPlaywrightPageCdpSession(opts.page, async (session) => {
-    return await opts.fn(bindPlaywrightCdpSend(session));
+    return await opts.fn(session.send.bind(session));
   });
 }
 
@@ -44,7 +41,7 @@ export async function readMainFrameDocumentIdentityForPage(
 ): Promise<string | undefined> {
   return await withPlaywrightPageCdpSession(
     page,
-    async (session) => await readCdpMainFrameDocumentIdentity(bindPlaywrightCdpSend(session)),
+    async (session) => await readCdpMainFrameDocumentIdentity(session.send.bind(session)),
   );
 }
 
@@ -76,22 +73,16 @@ export async function markBackendDomRefsOnPage(opts: {
   }
 
   return await withPlaywrightPageCdpSession(opts.page, async (session) => {
-    const send = async (method: string, params?: Record<string, unknown>) =>
-      await (
-        session.send as unknown as (
-          method: string,
-          params?: Record<string, unknown>,
-        ) => Promise<unknown>
-      )(method, params);
+    const send = session.send.bind(session);
 
     // Backend-id pushes require a bound document in this fresh session.
     // getDocument also enables DOM; depth zero avoids fetching the subtree.
     await send("DOM.getDocument", { depth: 0 }).catch(() => {});
 
     const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
-    const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {
+    const pushed = await send("DOM.pushNodesByBackendIdsToFrontend", {
       backendNodeIds,
-    }).catch(() => ({}))) as { nodeIds?: number[] };
+    }).catch(() => ({ nodeIds: [] }));
     const nodeIds = Array.isArray(pushed.nodeIds) ? pushed.nodeIds : [];
     const nodeIdByBackendId = new Map<number, number>();
     for (let index = 0; index < backendNodeIds.length; index += 1) {

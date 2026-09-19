@@ -9,15 +9,17 @@ import {
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "../../../app/stale-chunk-reload.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { FileCopyController } from "./chat-file-copy-controller.ts";
+import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { FileHtmlPreviewController } from "./chat-html-preview.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type {
@@ -31,11 +33,29 @@ import {
   handleSidebarKeydown,
   renderSidebarPanel,
 } from "./chat-sidebar-content.ts";
-import { computeFileMatches, readFileDraft, setFileDraft } from "./chat-sidebar-file-view.ts";
+import { computeFileMatches } from "./chat-sidebar-file-view.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
+
+const FILE_WRAP_PREFERENCE_KEY = "openclaw.control.fileView.wrap.v1";
+
+function loadFileWrapPreference(): boolean {
+  try {
+    return getSafeLocalStorage()?.getItem(FILE_WRAP_PREFERENCE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveFileWrapPreference(wrap: boolean): void {
+  try {
+    getSafeLocalStorage()?.setItem(FILE_WRAP_PREFERENCE_KEY, String(wrap));
+  } catch {
+    // Preference persistence is best effort.
+  }
+}
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
@@ -46,7 +66,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
-  @property({ attribute: false }) githubRepo: MarkdownRenderOptions["githubRepo"] = null;
+  @property({ attribute: false }) githubContext: MarkdownGitHubContext = {};
   @property({ type: Boolean }) embedded = false;
   @property({ attribute: false }) onOpenWorkspaceFile?:
     | ((target: { path: string; line?: number | null }) => void)
@@ -59,6 +79,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @state() private visibleContent: ChatDetailPanelContent | null = null;
   @state() private error: Error | null = null;
   @state() private fileSearchOpen = false;
+  @state() private fileWrap = loadFileWrapPreference();
   @state() private fileSearchQuery = "";
   @state() private fileSearchMatchIndex = 0;
   @state() private fileEditorMenuOpen = false;
@@ -253,6 +274,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           content: this.fileDraftContent ?? current.content,
           name: current.name,
           editable: this.fileEditing,
+          wrap: this.fileWrap,
           onSave: this.saveFile,
         });
         if (
@@ -326,6 +348,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       editor.setContent(content.content);
     }
     editor.setEditable(this.fileEditing && !this.fileReloading);
+    editor.setLineWrapping(this.fileWrap);
     const matches = this.fileSearchMatches();
     editor.setDecorations({
       targetLine: this.fileNavigation?.line ?? content.line,
@@ -358,6 +381,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       this.fileEditor?.scrollToLine(line, true);
     }
   }
+
+  private readonly toggleFileWrap = () => {
+    this.fileWrap = !this.fileWrap;
+    saveFileWrapPreference(this.fileWrap);
+  };
 
   private readonly toggleFileSearch = () => {
     this.htmlPreview.showSource();
@@ -471,12 +499,13 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileDraftContent = !this.fileEditor && this.fileDirty ? draftContent : null;
     setFileDraft(content, this.fileDirty ? { content: draftContent, expectedHash: hash } : null);
     this.fileSaveNotice = null;
-    this.visibleContent = {
-      ...content,
-      content: nextContent,
-      rawText: nextContent,
-      ...(content.edit ? { edit: { ...content.edit, hash } } : {}),
-    };
+    // The retained file tab owns the saved buffer used by later reads and opens.
+    content.content = nextContent;
+    content.rawText = nextContent;
+    if (content.edit) {
+      content.edit.hash = hash;
+    }
+    this.visibleContent = content;
   }
 
   private async saveFileContent(
@@ -660,6 +689,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       : 0;
     return renderSidebarPanel({
       content: this.visibleContent,
+      showingRawText: this.showingRawText,
       error: file ? null : this.error,
       onRetry: this.retryFileEditor,
       fileView: {
@@ -683,6 +713,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         saveNotice: this.fileSaveNotice,
         saving: this.fileSaving,
         searchOpen: this.fileSearchOpen,
+        wrap: this.fileWrap,
         onCopy: this.fileCopy.copy,
         onDiscard: this.discardFileEdits,
         onEdit: () => void this.editFile(),
@@ -699,11 +730,12 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           this.fileEditorMenuOpen = open;
         },
         onToggleSearch: this.toggleFileSearch,
+        onToggleWrap: this.toggleFileWrap,
       },
       canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
       embedSandboxMode: this.embedSandboxMode,
       allowExternalEmbedUrls: this.allowExternalEmbedUrls,
-      githubRepo: this.githubRepo,
+      ...this.githubContext,
       embedded: this.embedded,
       onClose: this.close,
       onOpenImage: this.onOpenImage ?? undefined,

@@ -58,23 +58,27 @@ scripts/pr review-init <pr>
 scripts/pr review-checkout-main <pr>
 scripts/pr review-checkout-pr <pr>
 scripts/pr review-artifacts-init <pr>
-# Complete the generated review artifacts for this exact head.
+# Complete .local/review.json for this exact head.
 scripts/pr review-validate-artifacts <pr>
 # Invoke only after exact-head required CI is green.
 OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
 scripts/pr merge-run <pr>
 ```
 
-Keep the generated first line of `review.md`, `review.json` PR identity, and head
-stamp intact. Use template enum values; a land-ready recommendation is `READY
+Keep the `review.json` PR identity and head stamp intact. JSON owns the verdict;
+validation prints its human-readable summary. No separate Markdown checklist or
+nit sweep is required. Templates describe unfinished work with valid enum values; a land-ready recommendation is `READY
 FOR /prepare-pr`. After every push, rerun `review-init`; checkout alone does not
 refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
 
 The agent Testbox flag verifies hosted evidence instead of running full gates
-locally. The wrapper may accept a patch-identical recently green pre-rebase run;
-it owns that decision. For explicitly owner-approved reviewed fork code without
-hosted Testbox, use the documented `OPENCLAW_PR_GATES_REMOTE=testbox` path.
+locally. The wrapper may accept a patch-identical recently green pre-rebase run
+when the main context incorporated into the candidate is unchanged or disjoint.
+Incorporated overlapping or critical input changes require current-head CI.
+The merge workflow still owns later main-drift policy. For explicitly
+owner-approved reviewed fork code without hosted Testbox, use the documented
+`OPENCLAW_PR_GATES_REMOTE=testbox` path.
 
 Watch one exact head with `node scripts/watch-pr-ci.mjs <pr> <head-sha>`; use narrow
 JSON check/run reads and fetch failed logs once. Address substantive human/bot

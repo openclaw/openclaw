@@ -15,7 +15,7 @@ import {
   trackActiveCronTaskRunSettlement,
 } from "./active-run-cancellation.js";
 import {
-  cleanupTimedOutCronAgentRun,
+  settleTimedOutCronRun,
   createCronAgentWatchdog,
   CRON_AGENT_SETUP_WATCHDOG_MS,
 } from "./agent-watchdog.js";
@@ -152,6 +152,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
   const progress: CronRunProgress = {};
+  let commandSettlement: Promise<CronCoreRunOutcome> | undefined;
   const assertRunCurrent = opts?.runReceipt
     ? () => assertServiceCronRunReceiptCurrent(state, opts.runReceipt!, opts.activeJobMarker)
     : undefined;
@@ -172,7 +173,17 @@ async function executeJobCoreWithTimeoutUnfinalized(
       return settled;
     }
     if (interruption !== "cancelled") {
-      await cleanupTimedOutCronAgentRun(state, job, interruption.timeoutMs, execution);
+      await settleTimedOutCronRun(state, job, interruption.timeoutMs, execution, commandSettlement);
+      if (commandSettlement) {
+        const settledAfterCleanup = resolveInterruptedRunProgress({
+          progress,
+          job,
+          error: deliveryError,
+        });
+        if (settledAfterCleanup) {
+          return settledAfterCleanup;
+        }
+      }
     }
     const isolatedAgentSetupTimeout =
       interruption !== "cancelled" &&
@@ -281,7 +292,14 @@ async function executeJobCoreWithTimeoutUnfinalized(
       // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
       onHeartbeatExecutionStarted:
         watchdog && resolveHeartbeatTimeoutMs
-          ? (heartbeat) => watchdog.replaceTimeout(resolveHeartbeatTimeoutMs(heartbeat))
+          ? (heartbeat) => {
+              const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(heartbeat);
+              // The queue owns admission and retries; only attempts spend the deadline.
+              return {
+                onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
+                onQueued: () => watchdog.replaceTimeout(undefined),
+              };
+            }
           : undefined,
       assertRunCurrent,
       executionIdentity: executionIdentity && {
@@ -294,6 +312,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     };
     watchdog?.start();
     const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
+    commandSettlement = job.payload.kind === "command" ? corePromise : undefined;
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(
@@ -323,7 +342,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       if (runAbortController.signal.aborted) {
         state.deps.log.warn(
           { jobId: job.id, err: String(err) },
-          `cron: job core rejected after ${watchdog ? "timeout" : "cancellation"} abort`,
+          `cron: job core rejected after abort: ${abortErrorMessage(runAbortController.signal)}`,
         );
       }
     });

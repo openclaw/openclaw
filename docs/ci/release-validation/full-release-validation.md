@@ -22,6 +22,29 @@ See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, the `npm-beta-v1`
 and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 
+The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
+without `release_gate`. Complete campaigns (`rerun_group=all`) retain QA Smoke's
+full scenario profile, Control UI performance, and the Docker seed
+`published-upgrade-survivor` lane independently of changed paths. The survivor
+uses `legacy-operator-state` with `auto-auth`, so the published driver must update
+the running managed Gateway. This exact combination remains covered after
+ordinary PR/main runs adopt owner-path gates. Hosted manual CI splits QA Smoke
+into six parts; normal hybrid first attempts use four parts with the same coverage.
+
+Package Acceptance separately retains expanded published-upgrade scenarios:
+current unpublished candidates include native operator state, and stable/full
+profiles force the `reported-issues` soak. Its ordinary survivor restart mode
+and separate `update-restart-auth` base scenario do not replace the exact Docker
+seed combination. `Full Release Artifacts` and `Full Release Candidate` prepare
+the immutable package/image inputs; candidate-phase release checks consume them
+without moving or weakening that coverage.
+
+Existing frozen-target contracts still apply: Docker seed requires its declared
+capability, QA Smoke requires a supported harness, and historical performance
+checks retain their availability handling. Focused reruns select their requested
+groups, and validated evidence reuse can reuse completed proof. Regressions
+outside the automatic owner paths can first surface in this manual/release tier.
+
 The live/E2E selected-ref validator fetches the complete commit and ref history
 with a sparse checkout. Ancestry and release-ref checks remain unchanged, while
 historical file contents stay out of this metadata-only job. Build and test jobs

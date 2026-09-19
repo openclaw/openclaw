@@ -100,8 +100,7 @@ function serializeToolParams(value: unknown): string {
   return Object.prototype.toString.call(value);
 }
 
-function formatToolParamPreview(label: string, value: unknown): string {
-  const serialized = serializeToolParams(value);
+function formatToolParamPreview(label: string, serialized: string): string {
   const redacted = redactToolDetail(serialized);
   const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
   return `${label}=${preview}`;
@@ -195,11 +194,11 @@ function describeToolFailureInputs(params: {
 }): string {
   const rawParams = sanitizeToolFailureParamsForLog(params.toolName, params.rawParams);
   const effectiveParams = sanitizeToolFailureParamsForLog(params.toolName, params.effectiveParams);
-  const parts = [formatToolParamPreview("raw_params", rawParams)];
   const rawSerialized = serializeToolParams(rawParams);
+  const parts = [formatToolParamPreview("raw_params", rawSerialized)];
   const effectiveSerialized = serializeToolParams(effectiveParams);
   if (effectiveSerialized !== rawSerialized) {
-    parts.push(formatToolParamPreview("effective_params", effectiveParams));
+    parts.push(formatToolParamPreview("effective_params", effectiveSerialized));
   }
   return parts.join(" ");
 }

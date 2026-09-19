@@ -6,7 +6,7 @@
 import path from "node:path";
 import { extractApplyPatchTargets } from "./apply-patch-targets.js";
 import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
-import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 /**
@@ -61,7 +61,7 @@ export async function resolveApplyPatchInputPath(
   if (!raw.startsWith("@") || preserved !== raw) {
     return preserved;
   }
-  const referenced = raw.slice(1);
+  const referenced = normalizeFileReferencePrefix(raw);
   return referenced === "~" || referenced.startsWith("~/") || referenced.startsWith("~\\")
     ? resolvePathFromInput(raw, cwd)
     : referenced;

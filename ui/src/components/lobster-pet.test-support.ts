@@ -1,6 +1,9 @@
 import { t } from "../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { resolveLobsterPetMode } from "./lobster-pet-contract.ts";
 import "./lobster-pet.runtime.ts";
+
+registerNewSessionSetupEnglish();
 
 type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
 

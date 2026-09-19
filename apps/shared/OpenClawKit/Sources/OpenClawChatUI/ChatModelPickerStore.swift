@@ -59,6 +59,7 @@ public final class ChatModelPickerStore {
         recents: [String],
         defaultProvider: String? = nil) -> ChatModelPickerSections
     {
+        let choices = choices.filter { $0.manualSelectionAllowed != false }
         var choicesByID: [String: OpenClawChatModelChoice] = [:]
         for choice in choices where choicesByID[choice.selectionID] == nil {
             choicesByID[choice.selectionID] = choice

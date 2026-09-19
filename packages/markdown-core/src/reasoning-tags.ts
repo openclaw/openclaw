@@ -151,7 +151,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     }
   };
 
-  const emitSafePrefix = (limit: number, output: ReasoningTagTextDelta[]) => {
+  const emitSafePrefix = (limit: number, output: ReasoningTagTextDelta[], appended?: string) => {
     if (strictMode) {
       holdStart ??= emitted;
       return;
@@ -189,10 +189,16 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     if (holdStart !== undefined || emitted >= limit) {
       return;
     }
+    // Reuse the incoming chunk so emitted slices do not retain each growing
+    // flattened source prefix through the caller's accumulated output.
+    const appendedStart = source.length - (appended?.length ?? 0);
+    const useAppended = appended !== undefined && emitted >= appendedStart;
+    const scanSource = useAppended ? appended : source;
+    const scanOffset = useAppended ? appendedStart : 0;
     while (emitted < limit && holdStart === undefined) {
       let special = -1;
       for (let index = emitted; index < limit; index += 1) {
-        const char = source.charAt(index);
+        const char = scanSource.charAt(index - scanOffset);
         if (char === "<" || char === "`") {
           special = index;
           break;
@@ -204,7 +210,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         holdStart = emitted;
         return;
       }
-      const text = source.slice(emitted, end);
+      const text = scanSource.slice(emitted - scanOffset, end - scanOffset);
       if (text) {
         merge(output, [{ kind: "text", text }]);
         if (text.trim()) {
@@ -439,7 +445,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     if (final) {
       processBlock(source.length, true, output);
     } else {
-      emitSafePrefix(source.length, output);
+      emitSafePrefix(source.length, output, appended);
       if (!strictMode && holdStart !== undefined && holdStart < source.length) {
         const ownershipStart = heldBacktickStart ?? holdStart;
         const heldLineStart =

@@ -21,6 +21,7 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isValidGeminiEmbeddingValues,
   sanitizeGeminiEmbedding,
   type GeminiEmbeddingClient,
   type GeminiTextEmbeddingRequest,
@@ -52,9 +53,9 @@ type GeminiBatchOutputLine = {
   key?: string;
   custom_id?: string;
   request_id?: string;
-  embedding?: { values?: number[] };
+  embedding?: { values?: unknown };
   response?: {
-    embedding?: { values?: number[] };
+    embedding?: { values?: unknown };
     error?: { message?: string };
   };
   error?: { message?: string };
@@ -309,15 +310,14 @@ function applyGeminiBatchOutputLine(params: {
     params.errors.push(`${customId}: ${error}`);
     return;
   }
-  const embedding = sanitizeGeminiEmbedding(
-    params.line.embedding?.values ?? params.line.response?.embedding?.values ?? [],
-    params.expectedDimensions,
-  );
-  if (embedding.length === 0) {
-    params.errors.push(`${customId}: empty embedding`);
+  const values = params.line.embedding?.values ?? params.line.response?.embedding?.values;
+  if (!isValidGeminiEmbeddingValues(values)) {
+    const reason =
+      values == null || (Array.isArray(values) && values.length === 0) ? "empty" : "invalid";
+    params.errors.push(`${customId}: ${reason} embedding`);
     return;
   }
-  params.byCustomId.set(customId, embedding);
+  params.byCustomId.set(customId, sanitizeGeminiEmbedding(values, params.expectedDimensions));
 }
 
 async function fetchGeminiBatchOutput(params: {

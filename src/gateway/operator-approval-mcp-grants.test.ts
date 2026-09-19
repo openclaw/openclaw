@@ -32,6 +32,7 @@ const cfg: OpenClawConfig = {
 function gateway() {
   const aux = createGatewayAuxHandlers({
     log: {},
+    getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: async () => {
       throw new Error("unexpected secrets reload");
     },

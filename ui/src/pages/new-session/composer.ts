@@ -1,16 +1,13 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import "../../components/tooltip.ts";
-import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
-import { updateHumanMentions, type HumanMentionInput } from "../../lib/chat/human-mentions.ts";
-import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -18,23 +15,11 @@ import {
   renderAttachmentReadStatus,
   renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
-import {
-  adjustTextareaHeight,
-  disconnectTextareaOverflowObserver,
-  observeTextareaOverflow,
-  paneDomId,
-  scheduleTextareaHeightAdjustment,
-} from "../chat/components/chat-composer-dom.ts";
-import {
-  HumanMentionMenu,
-  renderSelectedHumanMentions,
-  type HumanMentionDirectory,
-  type HumanMentionMenuHost,
-} from "../chat/components/chat-composer-mention-menu.ts";
+import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
+import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
 import {
-  createSkillMenuState,
   handleSkillMenuKeydown,
   renderSkillMenu,
   resetSkillMenuState,
@@ -42,65 +27,23 @@ import {
   type SkillMenuHost,
 } from "../chat/components/chat-composer-skill-menu.ts";
 import {
-  createSlashMenuState,
   handleSlashMenuKeydown,
   renderSlashMenu,
   resetSlashMenuState,
   type SlashMenuHost,
   updateSlashMenu,
 } from "../chat/components/chat-composer-slash-menu.ts";
-import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
-import { ensureChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
-import { insertComposerDictation } from "../chat/composer-dictation.ts";
 import {
   renderNewSessionDraftVisibility,
   renderNewSessionPlusMenu,
   renderNewSessionSelectionStatus,
 } from "./composer-capability-controls.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
+import type { NewSessionComposerOptions } from "./composer-types.ts";
 
-export type NewSessionComposerOptions = {
-  renderCritters: (floorEnabled: boolean) => TemplateResult | typeof nothing;
-  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
-  attachments: ChatAttachment[];
-  canSubmit: boolean;
-  getAttachments: () => ChatAttachment[];
-  message: string;
-  mentions?: readonly HumanMention[];
-  getMentions?: () => readonly HumanMention[];
-  mentionDirectory?: HumanMentionDirectory;
-  modelControl?: TemplateResult | typeof nothing;
-  permissionControl?: TemplateResult | typeof nothing;
-  pendingAttachmentReads: number;
-  readSignal: AbortSignal;
-  requiresModifier: boolean;
-  requestUpdate: () => void;
-  refreshCommands?: () => void | Promise<void>;
-  submitDisabledReason?: string;
-  blockedSubmitNotice?: string;
-  dictationActive?: boolean;
-  dictationPreview?: string;
-  dictationStatus?: TemplateResult | typeof nothing;
-  nativeTerminal?: boolean;
-  onUnsupportedAttachment?: () => void;
-  submitting: boolean;
-  textareaController: NewSessionComposerTextareaController;
-  voiceControl?: TemplateResult | typeof nothing;
-  messageLocked?: boolean;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
-  capabilityMenu?: CapabilityMenuProps;
-  toolOverrides?: SessionToolOverrides | null;
-  onAttachmentsChange: (attachments: ChatAttachment[]) => void;
-  onPendingReadsChange: (delta: 1 | -1) => void;
-  onInput: (message: string, mentions?: readonly HumanMention[]) => void;
-  onOpenImage?: (item: ImageLightboxItem) => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
-  onSubmit: () => void;
-  onBackgroundSubmit?: () => void;
-};
+registerNewSessionSetupEnglish();
 
 function submitNewSession(options: NewSessionComposerOptions) {
+  options.textareaController.emojiMenu.close();
   options.textareaController.mentionMenu.close();
   resetSkillMenuState(options.textareaController.skillMenuState);
   resetSlashMenuState(options.textareaController.slashMenuState);
@@ -135,223 +78,6 @@ function renderStartControl(options: NewSessionComposerOptions) {
   </openclaw-tooltip>`;
 }
 
-export class NewSessionComposerTextareaController {
-  // An opening gets one cast; typing and async picker updates never reroll it.
-  readonly critterVisit = Math.random();
-  private textarea: HTMLTextAreaElement | null = null;
-  private placeholderFrame: number | null = null;
-  private placeholderStartedAt: number | null = null;
-  private placeholderText = "";
-  private placeholderTarget = "";
-  private placeholderEntered = false;
-  private capturedSelection: { start: number; end: number; value: string } | null = null;
-  private skillCommandClient: GatewayBrowserClient | null = null;
-  private skillCommandAgentId = "";
-  private skillCommandDraftOwnerKey = "";
-  readonly skillMenuState = createSkillMenuState();
-  readonly slashMenuState = createSlashMenuState();
-  readonly mentionMenu = new HumanMentionMenu();
-  mentionInput?: HumanMentionInput;
-  capabilityMenuOpen = false;
-  capabilityMenuView: ChatComposerPlusMenuView = "root";
-
-  readonly ref = (element?: Element) => {
-    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-    if (this.textarea && this.textarea !== nextTextarea) {
-      disconnectTextareaOverflowObserver(this.textarea);
-    }
-    if (this.textarea && !nextTextarea) {
-      this.resetPlaceholder();
-    }
-    this.textarea = nextTextarea;
-    if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea);
-      scheduleTextareaHeightAdjustment(nextTextarea);
-    }
-  };
-
-  syncDraft(message: string) {
-    // The stable ref measures attachment only. Programmatic restores and
-    // resets still need a post-render measurement after Lit commits .value.
-    if (this.textarea?.isConnected && this.textarea.value !== message) {
-      scheduleTextareaHeightAdjustment(this.textarea);
-    }
-  }
-
-  getPlaceholder(target: string, message: string, requestUpdate: () => void) {
-    if (message.length > 0 || this.placeholderEntered) {
-      this.placeholderEntered = true;
-      if (this.placeholderFrame !== null) {
-        globalThis.cancelAnimationFrame?.(this.placeholderFrame);
-        this.placeholderFrame = null;
-      }
-      return target;
-    }
-    if (this.placeholderTarget !== target) {
-      this.resetPlaceholder();
-      this.placeholderTarget = target;
-    }
-    const requestFrame = globalThis.requestAnimationFrame?.bind(globalThis);
-    if (
-      !requestFrame ||
-      (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false)
-    ) {
-      this.placeholderText = target;
-      this.placeholderEntered = true;
-      return target;
-    }
-    if (this.placeholderFrame === null) {
-      const step = (timestamp: number) => {
-        this.placeholderStartedAt ??= timestamp;
-        const elapsed = Math.max(0, timestamp - this.placeholderStartedAt - 180);
-        const length = Math.min(target.length, Math.floor(elapsed / 26));
-        if (length !== this.placeholderText.length) {
-          this.placeholderText = target.slice(0, length);
-          requestUpdate();
-        }
-        if (length < target.length) {
-          this.placeholderFrame = requestFrame(step);
-          return;
-        }
-        this.placeholderFrame = null;
-        this.placeholderEntered = true;
-      };
-      this.placeholderFrame = requestFrame(step);
-    }
-    return this.placeholderText;
-  }
-
-  private resetPlaceholder() {
-    if (this.placeholderFrame !== null) {
-      globalThis.cancelAnimationFrame?.(this.placeholderFrame);
-      this.placeholderFrame = null;
-    }
-    this.placeholderStartedAt = null;
-    this.placeholderText = "";
-    this.placeholderTarget = "";
-    this.placeholderEntered = false;
-  }
-
-  /**
-   * Remembers the live draft and caret before another control takes focus.
-   * Partial previews rewrite the textarea, so commit must keep using this base
-   * snapshot or each successive transcript would be inserted into the last preview.
-   */
-  captureSelection() {
-    const target = this.textarea;
-    this.capturedSelection = target
-      ? { start: target.selectionStart, end: target.selectionEnd, value: target.value }
-      : null;
-  }
-
-  previewTranscript(transcript: string): string | undefined {
-    const target = this.textarea;
-    if (!target) {
-      return undefined;
-    }
-    const selection = this.capturedSelection ?? {
-      start: target.selectionStart,
-      end: target.selectionEnd,
-      value: target.value,
-    };
-    return insertComposerDictation(selection.value, transcript, selection.start, selection.end)
-      .value;
-  }
-
-  /**
-   * Writes a transcript into the draft at the remembered caret and returns the
-   * new draft, or null when there is nothing to insert.
-   *
-   * The captured element value includes keystrokes not yet committed upward.
-   * Writing the final insertion directly grows the box before the next render
-   * commits that same value into the page-owned draft.
-   */
-  insertTranscript(transcript: string, late?: true): string | null {
-    const target = this.textarea;
-    if (!target) {
-      return null;
-    }
-    const captured = this.capturedSelection;
-    // Delayed finals must not replace edits made after Stop unlocked this draft.
-    const selection =
-      captured && (!late || captured.value === target.value)
-        ? captured
-        : {
-            start: late ? target.selectionStart : target.value.length,
-            end: late ? target.selectionEnd : target.value.length,
-            value: target.value,
-          };
-    this.capturedSelection = null;
-    const insertion = insertComposerDictation(
-      selection.value,
-      transcript,
-      selection.start,
-      selection.end,
-    );
-    if (insertion.value === selection.value) {
-      return null;
-    }
-    target.value = insertion.value;
-    adjustTextareaHeight(target);
-    queueMicrotask(() => {
-      if (!target.isConnected) {
-        return;
-      }
-      target.focus({ preventScroll: true });
-      target.selectionStart = insertion.caret;
-      target.selectionEnd = insertion.caret;
-    });
-    return insertion.value;
-  }
-
-  readonly getTextarea = () => this.textarea;
-
-  syncSkillCommandOwner(
-    client: GatewayBrowserClient | null,
-    agentId: string,
-    draftOwnerKey: string,
-  ) {
-    const normalizedAgentId = agentId.trim();
-    if (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === normalizedAgentId &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    ) {
-      return;
-    }
-    // The controller survives route, agent, and Gateway changes. Invalidate its
-    // menu generation so a prior owner cannot publish into the next draft.
-    this.skillCommandClient = client;
-    this.skillCommandAgentId = normalizedAgentId;
-    this.skillCommandDraftOwnerKey = draftOwnerKey;
-    resetSkillMenuState(this.skillMenuState);
-  }
-
-  ownsSkillCommands(client: GatewayBrowserClient, agentId: string, draftOwnerKey: string): boolean {
-    return (
-      this.skillCommandClient === client &&
-      this.skillCommandAgentId === agentId.trim() &&
-      this.skillCommandDraftOwnerKey === draftOwnerKey
-    );
-  }
-
-  disconnect() {
-    this.mentionMenu.dispose();
-    this.resetPlaceholder();
-    this.skillCommandClient = null;
-    this.skillCommandAgentId = "";
-    this.skillCommandDraftOwnerKey = "";
-    resetSkillMenuState(this.skillMenuState);
-    resetSlashMenuState(this.slashMenuState);
-    this.capabilityMenuOpen = false;
-    this.capabilityMenuView = "root";
-    if (this.textarea) {
-      disconnectTextareaOverflowObserver(this.textarea);
-      this.textarea = null;
-    }
-  }
-}
-
 function handleComposerKeydown(
   event: KeyboardEvent,
   options: NewSessionComposerOptions,
@@ -359,10 +85,15 @@ function handleComposerKeydown(
   slashMenuHost: SlashMenuHost,
   mentionMenuHost: HumanMentionMenuHost,
 ) {
-  if (options.dictationActive) {
+  if (options.dictationActive || options.submitting || options.messageLocked) {
     return;
   }
-  if (event.isComposing || event.keyCode === 229) {
+  if (options.textareaController.composing || event.isComposing || event.keyCode === 229) {
+    return;
+  }
+  if (
+    options.textareaController.emojiMenu.handleKeydown(event, "new-session", options.requestUpdate)
+  ) {
     return;
   }
   if (
@@ -402,6 +133,10 @@ function handleComposerKeydown(
     ? hasSubmitModifier && event.shiftKey
     : hasSubmitModifier && !event.shiftKey;
   if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
+    if (event.repeat) {
+      event.preventDefault();
+      return;
+    }
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
       resetSkillMenuState(options.textareaController.skillMenuState);
@@ -412,6 +147,10 @@ function handleComposerKeydown(
     return;
   }
   if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
+    return;
+  }
+  if (event.repeat) {
+    event.preventDefault();
     return;
   }
   // A reasoned gate still consumes the press: the submission flow records the
@@ -428,6 +167,9 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const skillMenuState = options.textareaController.skillMenuState;
   const slashMenuState = options.textareaController.slashMenuState;
   const mentionMenu = options.textareaController.mentionMenu;
+  const emojiMenu = options.textareaController.emojiMenu;
+  const composerLocked =
+    options.submitting || options.messageLocked === true || options.dictationActive === true;
   mentionMenu.syncDirectory(
     options.submitting || options.messageLocked || options.dictationActive
       ? undefined
@@ -458,8 +200,21 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getMentions: () => options.getMentions?.() ?? options.mentions ?? [],
     commitDraft: options.onInput,
   };
+  const updateEmojiMenu = (target: HTMLTextAreaElement) => {
+    emojiMenu.update(
+      target,
+      options.requestUpdate,
+      !composerLocked &&
+        !options.nativeTerminal &&
+        !options.textareaController.composing &&
+        !skillMenuState.skillMenuOpen &&
+        !slashMenuState.slashMenuOpen &&
+        !mentionMenu.open,
+    );
+  };
   const updateMenus = (target: HTMLTextAreaElement, event?: InputEvent) => {
-    if (options.nativeTerminal) {
+    if (options.nativeTerminal || options.textareaController.composing || event?.isComposing) {
+      emojiMenu.close();
       return;
     }
     updateSlashMenu(target.value, slashMenuState, slashMenuHost, options.requestUpdate);
@@ -484,19 +239,30 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         event?.inputType === "insertText" && event.data?.includes("@") === true,
       );
     }
+    updateEmojiMenu(target);
   };
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
     if (target instanceof HTMLTextAreaElement) {
-      updateMenus(target);
+      if (event.type === "keyup") {
+        updateEmojiMenu(target);
+      } else {
+        updateMenus(target);
+      }
     }
   };
-  const composerLocked =
-    options.submitting || options.messageLocked === true || options.dictationActive === true;
+  if (composerLocked || options.nativeTerminal || options.textareaController.composing) {
+    emojiMenu.close();
+  }
   const attachmentProps = {
+    attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
-    disabled: composerLocked,
+    get disabled() {
+      return (
+        options.submitting || options.messageLocked === true || options.dictationActive === true
+      );
+    },
     getAttachments: options.getAttachments,
     draft: options.message,
     getDraft: () => options.message,
@@ -504,6 +270,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onDraftChange: options.onInput,
     onPendingReadsChange: options.onPendingReadsChange,
     onOpenImage: options.onOpenImage,
+    onOpenSidebar: options.onOpenSidebar,
     readSignal: options.readSignal,
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
@@ -535,10 +302,8 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     skillMenuState,
     slashMenuState,
     mentionMenu,
+    emojiMenu,
   );
-  if (mentionMenu.open) {
-    ensureChatComposerPickerDismissal();
-  }
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
   const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
   const backgroundShortcut = options.requiresModifier
@@ -568,6 +333,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         }"
         @openclaw-composer-dismiss-invocations=${() => {
           mentionMenu.close();
+          emojiMenu.dismiss(options.textareaController.getTextarea());
           options.requestUpdate();
         }}
       >
@@ -580,12 +346,16 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
             !options.textareaController.capabilityMenuOpen,
         )}
         ${mentionMenu.render(mentionMenuHost, options.requestUpdate)}
+        ${emojiMenu.render("new-session", options.textareaController.getTextarea(), options.requestUpdate)}
         ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
+        ${renderSelectedHumanMentions(
+          options.message,
+          options.mentions,
+          () => options.onInput(options.message, []),
+          mentionMenu.selectedAvatarUrls,
+        )}
         ${renderAttachmentPreview(attachmentProps)}
         ${renderAttachmentReadStatus(options.pendingAttachmentReads)}
-        ${renderSelectedHumanMentions(options.message, options.mentions, () =>
-          options.onInput(options.message, []),
-        )}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
@@ -651,8 +421,37 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                   end: target.selectionEnd,
                   inputType: event.inputType,
                 };
+                emojiMenu.complete(
+                  event,
+                  options.requestUpdate,
+                  !composerLocked &&
+                    !options.nativeTerminal &&
+                    !options.textareaController.composing,
+                );
               }}
               @select=${handleSelect}
+              @focus=${handleSelect}
+              @pointerup=${handleSelect}
+              @keyup=${(event: KeyboardEvent) => {
+                emojiMenu.handleKeyup(event);
+                if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
+                  handleSelect(event);
+                }
+              }}
+              @blur=${() => {
+                const emojiWasOpen = emojiMenu.open;
+                options.textareaController.composing = false;
+                emojiMenu.close();
+                if (emojiWasOpen) {
+                  options.requestUpdate();
+                }
+              }}
+              @compositionend=${(event: CompositionEvent) => {
+                options.textareaController.composing = false;
+                if (event.target instanceof HTMLTextAreaElement) {
+                  updateMenus(event.target);
+                }
+              }}
               @keydown=${(event: KeyboardEvent) =>
                 handleComposerKeydown(
                   event,
@@ -662,6 +461,8 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                   mentionMenuHost,
                 )}
               @compositionstart=${() => {
+                options.textareaController.composing = true;
+                emojiMenu.close();
                 mentionMenu.close();
                 options.requestUpdate();
               }}
@@ -714,7 +515,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       ${
         options.blockedSubmitNotice
           ? html`<div
-              class="new-session-page__blocked-submit agent-chat__composer-underlaps"
+              class="new-session-page__blocked-submit agent-chat__composer-status"
               data-tone="info"
               role="status"
             >

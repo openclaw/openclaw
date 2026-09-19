@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { sqliteMessageEventWithSeq } from "../session-transcript-message.js";
+import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
@@ -306,6 +306,26 @@ async function loadSessionFiles(params: {
   const { storePath, entry, canonicalKey, agentId } = loaded;
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
+  }
+  if (entry.worktree?.id && loaded.root) {
+    const { withSettledLocalWorkspacePath } =
+      await import("../worker-environments/local-workspace-projection.js");
+    await withSettledLocalWorkspacePath(
+      {
+        cwd: loaded.root,
+        assertCurrent: () => {
+          const current = loadGatewaySessionEntryReadOnly(canonicalKey, { agentId }).entry;
+          if (
+            current?.sessionId !== entry.sessionId ||
+            current.lifecycleRevision !== entry.lifecycleRevision ||
+            current.worktree?.id !== entry.worktree?.id
+          ) {
+            throw new Error("Session workspace changed during file read");
+          }
+        },
+      },
+      async () => {},
+    );
   }
   const repository = resolveRepositoryWorkspaceAccess(loaded, params.context);
   const scope = {

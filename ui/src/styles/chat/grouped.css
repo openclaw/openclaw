@@ -2,33 +2,6 @@
    GROUPED CHAT LAYOUT (Slack-style)
    ============================================= */
 
-/* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared turn gap directly. Footer-bearing groups split
-   message content and footer into separate rows so each row keeps the avatar
-   gutter while only the message row controls avatar alignment. */
-.chat-group {
-  --chat-avatar-column: 36px;
-  --chat-avatar-gap: 10px;
-  --chat-avatar-gutter: calc(var(--chat-avatar-column) + var(--chat-avatar-gap));
-  --chat-footer-row-offset: 26px;
-  --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
-  --chat-run-block-gap: 12px;
-  --chat-touch-row-margin: 14px;
-  --chat-turn-gap: 50px;
-  display: flex;
-  gap: var(--chat-avatar-gap);
-  align-items: flex-start;
-  padding-bottom: var(--chat-turn-gap);
-  margin-inline: 4px 16px;
-}
-
-/* User messages on right */
-.chat-group.user {
-  --chat-user-content-align: end;
-  flex-direction: row-reverse;
-  justify-content: flex-start;
-}
-
 .chat-group.user.chat-group--peer {
   --chat-user-content-align: start;
   /* The left-aligned identity owns the leading edge while hidden details
@@ -37,10 +10,9 @@
   flex-direction: row;
 }
 
-/* Freshly submitted composer text flows up into the transcript. Applied only
-   to the locally pending bubble (see shouldAnimateUserTurnEntry); the bubble
-   keeps a stable key through the history handoff so this never replays. */
-@keyframes chat-user-turn-enter {
+/* The committed transcript opts new prompts and replies in once. Animate the
+   bubble only, not the virtual row positioning or measured layout dimensions. */
+@keyframes chat-message-enter {
   from {
     opacity: 0;
     transform: translateY(8px);
@@ -51,8 +23,10 @@
   }
 }
 
-.chat-bubble--user-turn-enter {
-  animation: chat-user-turn-enter var(--duration-normal) var(--ease-out) backwards;
+@media (prefers-reduced-motion: no-preference) {
+  .chat-bubble--enter {
+    animation: chat-message-enter 180ms var(--ease-out) backwards;
+  }
 }
 
 .chat-group.chat-group--with-footer {
@@ -60,10 +34,10 @@
   --chat-group-content-column: 2;
   display: grid;
   grid-template-columns: var(--chat-avatar-column) minmax(0, var(--chat-message-column-max));
-  grid-template-rows: auto auto;
+  grid-template-rows: auto minmax(calc(var(--chat-turn-gap) - 2px), auto);
   gap: 2px var(--chat-avatar-gap);
   justify-content: start;
-  padding-bottom: calc(var(--chat-turn-gap) - var(--chat-footer-row-offset));
+  padding-bottom: 0;
 }
 
 .chat-group.user.chat-group--with-footer {
@@ -85,6 +59,18 @@
   grid-row: 1;
 }
 
+/* Preview chips are shorter than avatars; keep the avatar from enlarging the message row. */
+.chat-group.user.chat-group--with-footer:has(
+    > .chat-group-messages > .chat-bubble--preview-chips-only
+  ) {
+  position: relative;
+
+  > :is(.chat-avatar, .chat-avatar-slot) {
+    position: absolute;
+    align-self: start;
+  }
+}
+
 .chat-group.chat-group--with-footer > .chat-group-messages {
   grid-column: var(--chat-group-content-column);
   grid-row: 1;
@@ -95,19 +81,6 @@
   grid-column: var(--chat-group-content-column);
   grid-row: 2;
   max-width: none;
-}
-
-.chat-group-messages {
-  --chat-message-type-boundary-gap: var(--space-1);
-  position: relative; /* anchors message-local popovers */
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1 1 auto;
-  align-items: flex-start;
-  width: 100%;
-  max-width: var(--chat-message-column-max);
-  min-width: 0;
 }
 
 .chat-group-messages
@@ -133,19 +106,16 @@
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
-/* Content follows the same side as the participant's bubble. */
-.chat-group.user .chat-group-messages {
-  align-items: var(--chat-user-content-align);
-}
-
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
   padding-inline-start: var(--chat-avatar-gutter);
 }
 
+/* Tool groups have no footer; attach their activity to the following reply. */
 .chat-group.tool.chat-group--with-footer {
   display: block;
+  padding-bottom: var(--chat-run-block-gap);
 }
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
@@ -241,7 +211,9 @@
 /* Own-message footers are right-aligned, so hover-revealed time/actions must
    slot in to the LEFT of the always-visible name; otherwise the name jumps
    sideways on hover. */
-.chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
+.chat-group.user:not(.chat-group--peer)
+  .chat-group-footer--persistent-identity
+  :is(.chat-sender-name, .chat-message-source) {
   order: 1;
 }
 
@@ -284,6 +256,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-message-source {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-send-status {
@@ -358,7 +337,8 @@
 /* ── Group footer action buttons ── */
 .chat-group-footer-actions button,
 .chat-group-footer .chat-send-status__action,
-.chat-message-actions-row button {
+.chat-message-actions-row button,
+.chat-comment-preview__actions button {
   background: none;
   border: none;
   padding: 4px;
@@ -377,7 +357,7 @@
 
 .chat-group-footer-actions button,
 .chat-group-footer .chat-send-status__action {
-  opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
+  opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
 }
 
@@ -395,28 +375,38 @@
 }
 
 @media (hover: hover) {
-  .chat-group--latest-assistant {
-    --chat-footer-action-opacity: 0.6;
+  .chat-group:focus-within .chat-group-footer-actions button,
+  .chat-group:focus-within .chat-message-actions-row button {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
+}
+
+@media (hover: none) {
+  .chat-group--latest-assistant > .chat-group-footer {
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
   }
 }
 
 .chat-group:hover .chat-group-footer-actions button:disabled,
-.chat-reply-context-menu button:disabled {
+.chat-reply-context-menu button:disabled,
+.chat-comment-preview__actions button:disabled {
   opacity: 0.3;
   pointer-events: none;
 }
 
 .chat-group-footer-actions button:hover,
-.chat-message-actions-row button:hover {
+.chat-message-actions-row button:hover,
+.chat-comment-preview__actions button:hover {
   opacity: 1 !important;
   background: transparent;
   color: var(--accent);
 }
 
 .chat-group-footer-actions button svg,
-.chat-message-actions-row button svg {
+.chat-message-actions-row button svg,
+.chat-comment-preview__actions button svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -621,23 +611,6 @@
   color: inherit;
 }
 
-/* Avatar Styles. Identity avatars are circles everywhere (sidebar, pickers,
-   profile, native apps); square tiles expose opaque avatar corners. */
-.chat-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-full);
-  background: var(--panel-strong);
-  display: grid;
-  place-items: center;
-  font-weight: 600;
-  font-size: 13px;
-  flex-shrink: 0;
-  align-self: flex-end;
-  margin-bottom: 4px;
-  border: 1px solid var(--border);
-}
-
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
@@ -677,8 +650,7 @@ img.chat-avatar.user {
   color: var(--muted);
 }
 
-.chat-avatar.other,
-.chat-avatar--forwarded {
+.chat-avatar.other {
   background: var(--secondary);
   color: var(--muted);
 }
@@ -692,22 +664,6 @@ img.chat-avatar.user {
 img.chat-avatar {
   object-fit: cover;
   object-position: center;
-}
-
-/* Minimal Bubble Design - dynamic width based on content */
-.chat-bubble {
-  position: relative;
-  display: block;
-  border: 1px solid transparent;
-  background: var(--card);
-  border-radius: var(--radius-md);
-  padding: 16px;
-  box-shadow: none;
-  transition: border-color var(--duration-fast) ease-out;
-  width: auto;
-  max-width: 100%;
-  min-width: 0;
-  overflow-wrap: break-word;
 }
 
 :is(.chat-thread, .chat-session-rail__thread) .chat-bubble {
@@ -750,23 +706,6 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Assistant replies render as a flat text stream; user and forwarded messages
-   keep bubble cards. Border collapses to 0 so the streaming border pulse and hover
-   outline become no-ops without extra rules. */
-.chat-group.assistant {
-  --chat-message-column-max: var(
-    --chat-message-max-width,
-    min(980px, calc(100% - var(--chat-avatar-gutter)))
-  );
-}
-
-.chat-group.assistant .chat-bubble {
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
 .chat-group.assistant.chat-group--forwarded .chat-bubble {
   width: fit-content;
   padding: 13px 16px;
@@ -786,19 +725,6 @@ img.chat-avatar {
    exactly where it punched. Direct threads have no avatar indent to match. */
 .chat-group--working .chat-group-messages {
   padding-inline-start: var(--chat-avatar-gutter);
-}
-
-/* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
-   the repeated identity icons pure decoration. Group threads (any labeled
-   foreign sender) keep avatars as the always-visible identity marker. */
-.chat-thread--direct :is(.chat-avatar, .chat-avatar-slot) {
-  display: none;
-}
-
-.chat-thread--direct .chat-group {
-  --chat-avatar-column: 0px;
-  --chat-avatar-gap: 0px;
-  margin-inline: 0;
 }
 
 .chat-duplicate-count {
@@ -846,24 +772,11 @@ img.chat-avatar {
   /* Shared message renderers stay touch-readable by default. Transcript rows
      opt into one-at-a-time disclosure through their owning thread. */
   .chat-group {
-    --chat-footer-row-offset: 44px;
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
     --chat-message-action-opacity: var(--chat-footer-disclosure-opacity, 0);
     --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events, none);
-    padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
-    margin-bottom: var(--chat-touch-row-margin);
-  }
-
-  .chat-group.chat-group--with-footer:has(
-      .chat-group-footer:not(.chat-group-footer--persistent-identity) .chat-group-footer-actions
-    ),
-  .chat-group.chat-group--with-footer:is(.chat-group--meta-revealed, :focus-within):has(
-      .chat-group-footer--persistent-identity .chat-group-footer-actions
-    ) {
-    padding-bottom: 0;
-    margin-bottom: 0;
   }
 
   .chat-group-footer {
@@ -994,6 +907,12 @@ img.chat-avatar {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* Forwarded cards share the user's quiet edge in both themes and on hover. */
+:root .chat-group.assistant.chat-group--forwarded .chat-bubble {
+  border-color: transparent;
+  box-shadow: none;
+}
+
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
   --chat-bubble-background: var(--accent-subtle);
@@ -1061,6 +980,76 @@ img.chat-avatar {
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
   color: hsl(var(--chat-sender-hue) 60% 36%);
+}
+
+/* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
+.agent-chat__typing-indicator {
+  display: grid;
+  min-width: 0;
+}
+
+.chat-group.user.chat-group--typing .chat-bubble {
+  background: color-mix(in srgb, var(--chat-bubble-background) 65%, var(--bg));
+}
+
+.agent-chat__typing-state {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.agent-chat__typing-preview-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.agent-chat__typing-preview-text::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-inline-start: 2px;
+  background: currentColor;
+  vertical-align: -0.12em;
+  animation: chat-typing-pulse 1s step-end infinite;
+}
+
+.agent-chat__typing-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: calc(var(--chat-text-size) * 1.5);
+  color: var(--muted);
+}
+
+.agent-chat__typing-bubble > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: chat-typing-pulse 1.2s ease-in-out infinite;
+}
+
+.agent-chat__typing-bubble > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.agent-chat__typing-bubble > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes chat-typing-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__typing-preview-text::after,
+  .agent-chat__typing-bubble > span {
+    animation: none;
+  }
 }
 
 .chat-message-avatar-anchor {
@@ -1306,25 +1295,29 @@ img.chat-avatar {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-group {
-    --chat-avatar-column: 0px;
-    --chat-avatar-gap: 0px;
-    --chat-message-column-max: 82%;
-    margin-inline: 0;
+  .chat-thread
+    .chat-group.assistant:not(.chat-group--forwarded)
+    .chat-bubble:not(.chat-bubble--tool-shell):has(.chat-message-images) {
+    width: 100%;
   }
 
-  .chat-group :is(.chat-avatar, .chat-avatar-slot) {
-    display: none;
+  .chat-thread
+    .chat-group.assistant.chat-group--forwarded
+    .chat-bubble:not(.chat-bubble--tool-shell),
+  .chat-thread
+    .chat-group.assistant:not(.chat-group--forwarded)
+    .chat-bubble:not(.chat-bubble--tool-shell)
+    :is(
+      .chat-assistant-attachments,
+      .chat-message-images,
+      openclaw-chat-async-question,
+      openclaw-chat-clawhub-card
+    ):not(.chat-assistant-attachments *) {
+    max-width: 90%;
   }
 
   /* Peer names carry identity when narrow rows have no avatar column. */
   .chat-group.user.chat-group--peer {
     --chat-persistent-footer-opacity: 1;
-  }
-}
-
-@media (max-width: 400px) {
-  .chat-group {
-    --chat-message-column-max: 88%;
   }
 }

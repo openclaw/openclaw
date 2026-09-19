@@ -11,6 +11,7 @@ import {
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -48,18 +49,28 @@ export async function verifyPreviousGatewayForUpdate(params: {
   timeoutMs?: number;
   observedStartupMs?: number;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
+  requirePluginHealth?: boolean;
+  expectedVersion?: string;
 }): Promise<boolean> {
   const { config, env } = params;
-  const readiness = captureUpdateGatewayReadinessOwner({ opts: params.opts });
+  const readiness = captureUpdateGatewayReadinessOwner({
+    opts: params.opts,
+    signal: params.signal,
+  });
   const assertCurrent = () => {
     readiness.assertCurrent();
     params.assertCurrent?.();
   };
   const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
-  const [expectedVersion, expectedBuildId] = await Promise.all([
+  const [installedVersion, expectedBuildId] = await Promise.all([
     readPackageVersion(params.root),
     readBuiltGatewayBuildId(params.root),
   ]);
+  if (params.expectedVersion && installedVersion !== params.expectedVersion) {
+    return false;
+  }
+  const expectedVersion = params.expectedVersion ?? installedVersion;
   const { health, readyz } = await observeUpdateGatewayReadiness({
     serviceEnv: env,
     gatewayPort: port,
@@ -69,6 +80,8 @@ export async function verifyPreviousGatewayForUpdate(params: {
     observedStartupMs: params.observedStartupMs,
     requireRunningService: true,
     settle: { probes: 1 },
+    signal: params.signal,
+    requirePluginHealth: params.requirePluginHealth,
     assertCurrent,
   });
   const servesPreviousPackage = await gatewayServiceCommandUsesRoot({ root: params.root, env });
@@ -120,12 +133,10 @@ export function recordUpdateGatewayHealth(
       port,
       runningVersion: health.gatewayVersion ?? undefined,
       runningBuildId: health.gatewayBuildId ?? undefined,
-      ...(health.expectedVersion
-        ? {
-            versionMatch:
-              health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch,
-          }
-        : {}),
+      versionMatch:
+        health.expectedVersion && health.gatewayVersion != null
+          ? health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch
+          : undefined,
       pluginErrors: [
         ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
         ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
@@ -181,6 +192,7 @@ type UpdateGatewayReadinessParams = {
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
+  requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
   settle?: { probes: number };
   signal?: AbortSignal;
@@ -193,6 +205,26 @@ type UpdateGatewayReadinessParams = {
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
 };
+
+function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
+  if (health.waitOutcome === "still-starting") {
+    return true;
+  }
+  return (
+    health.waitOutcome === "timeout" &&
+    health.runtime.status === "running" &&
+    (typeof health.runtime.pid === "number" || Boolean(health.gatewayBootId)) &&
+    // Only the restart owner can establish startup; an HTTP failure is not progress.
+    ["waiting for Gateway listener", "startup migration", "settling healthy Gateway"].includes(
+      health.startupPhase ?? "",
+    ) &&
+    !health.versionMismatch &&
+    !health.buildIdMismatch &&
+    !health.activatedPluginErrors?.length &&
+    !health.channelProbeErrors?.length &&
+    health.staleGatewayPids.length === 0
+  );
+}
 
 /** Observe one ready generation before activation or after restart, without recording a verdict. */
 async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
@@ -217,7 +249,7 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: false,
+    requirePluginHealth: params.requirePluginHealth ?? false,
     env: params.serviceEnv,
     ...(params.signal ? { signal: params.signal } : {}),
   };
@@ -241,7 +273,7 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
   };
   let health = params.health ?? (await waitForHealthy());
   let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
-  if (params.recoverHealth) {
+  if (params.recoverHealth && !gatewayReadinessPending(health)) {
     ({ health, launchAgentRecovery } = await params.recoverHealth(health, waitForHealthy));
     assertCurrent();
   }
@@ -269,11 +301,7 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
   });
   assertCurrent();
   const readyz = http.readyz === 200;
-  if (
-    health.healthy &&
-    readyz &&
-    (!params.requireRunningService || health.runtime.status === "running")
-  ) {
+  if (health.healthy && (!params.requireRunningService || health.runtime.status === "running")) {
     // HTTP readiness cannot transfer an earlier settle to a replacement boot.
     const settled = health;
     const inspect = () =>
@@ -288,16 +316,24 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
     // or PID-less reboot during that observation cannot inherit the old boot.
     health = inspected.healthy ? await inspect() : inspected;
     assertCurrent();
+    health.startupPhase = settled.startupPhase;
     const sameGeneration =
       isSameGatewayRestartGeneration(settled, inspected) &&
       isSameGatewayRestartGeneration(inspected, health);
     if (!sameGeneration) {
       health.healthy = false;
+      health.waitOutcome = "generation-changed";
       health.probeError = "Gateway process changed during final readiness verification.";
     }
   }
-  if (remainingMs() === 0) {
-    health = { ...health, healthy: false, waitOutcome: "timeout" };
+  if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
+    health = {
+      ...health,
+      healthy: false,
+      waitOutcome: "timeout",
+      elapsedMs: performance.now() - startedAtMs,
+      ...(!readyz ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
+    };
   }
   return { health, readyz, http, launchAgentRecovery };
 }
@@ -323,7 +359,11 @@ export async function verifyUpdatedGateway(
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
-  const recordVerificationStep = (failureFacts?: UpdateFailureFact[], detail?: string) => {
+  const recordVerificationStep = (
+    failureFacts?: UpdateFailureFact[],
+    detail?: string,
+    warning?: string,
+  ) => {
     const endedAtMs = Date.now();
     const step: UpdateStepResult = {
       name: params.result.recovery?.packageRollbackVerified
@@ -334,28 +374,29 @@ export async function verifyUpdatedGateway(
       durationMs: endedAtMs - startedAtMs,
       exitCode: failureFacts ? 1 : 0,
       ...(failureFacts ? { failureFacts } : {}),
+      ...(warning
+        ? {
+            termination: "timeout" as const,
+            advisory: { kind: "recoverable-maintenance" as const, message: warning },
+          }
+        : {}),
     };
     // Repair reuses the result: the last observation replaces its earlier failure.
     const index = params.result.steps.findIndex((entry) => entry.name === step.name);
     if (index === -1) {
-      if (failureFacts) {
-        params.result.steps.push(step);
-      }
+      params.result.steps.push(step);
     } else {
       params.result.steps[index] = step;
     }
     if (proofOptions.run) {
-      recordUpdateRunStep(
-        proofOptions.run.runId,
-        {
-          step: step.name,
-          status: failureFacts ? "failed" : "completed",
-          endedAtMs,
-          detail,
-          failureFacts,
-        },
-        { env: proofOptions.run.env },
-      );
+      for (const row of updateRunStepsFromResultStep(step)) {
+        // A recheck must clear failure facts from the previous observation.
+        recordUpdateRunStep(
+          proofOptions.run.runId,
+          { failureFacts: undefined, ...row, endedAtMs, detail: row.detail ?? detail },
+          { env: proofOptions.run.env },
+        );
+      }
     }
   };
   if (health.healthy && serviceRunning && readyz) {
@@ -393,6 +434,23 @@ export async function verifyUpdatedGateway(
     };
   }
   recordUpdateGatewayHealth(proofOptions.run, health, params.gatewayPort, readyz);
+  if (gatewayReadinessPending(health)) {
+    const detail = [
+      "Gateway readiness is pending; leaving the observed running process starting without another recovery restart or rollback.",
+      ...renderRestartDiagnostics(health),
+      ...(http ? [`Last HTTP readiness response: ${http.readyz ?? "unavailable"}.`] : []),
+      `Keep recovery backups and check progress with \`${formatCliCommand("openclaw gateway status --deep")}\`.`,
+    ].join("\n");
+    recordVerificationStep(undefined, detail, detail);
+    defaultRuntime.error(detail);
+    return {
+      ok: false,
+      score: 0,
+      summary: "Gateway is still starting; readiness remains unverified.",
+      stopReason:
+        health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
+    };
+  }
   const httpFailed = http !== undefined && !readyz;
   const diagnosticLines: [string, ...string[]] = [
     "Gateway did not become healthy after restart.",

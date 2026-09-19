@@ -6,7 +6,7 @@ import {
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,11 +28,13 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { WorkerInferenceSessionDrainBusyError } from "../worker-environments/inference-control-internal.js";
 import {
+  prepareSessionWorkerPlacementArchiveCheck,
   prepareSessionWorkerPlacementMutationCheck,
   SessionWorkerPlacementStopError,
 } from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
+  SessionLifecycleWorkspaceRecoveryError,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
 import {
@@ -122,7 +124,7 @@ export async function prepareSessionPatchArchive(params: {
   commitGuard: () => ErrorShape | undefined;
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
-  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalogSnapshot: () => Promise<ModelCatalogSnapshot>;
   personalModelSelection?: UserModelAccountSelection;
   pluginOwnerId?: string;
   target: SessionPatchArchiveTarget;
@@ -225,7 +227,7 @@ export async function prepareSessionPatchArchive(params: {
     agentId: target.requestedAgentId,
     patch: target.fullPatch,
     archivedBy: target.archiveActor,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
     personalModelSelection: params.personalModelSelection,
   });
   if (!preview.ok) {
@@ -273,6 +275,9 @@ export async function prepareSessionPatchArchive(params: {
       ...(fresh.entry ? { entry: fresh.entry } : {}),
     });
   } catch (error) {
+    if (error instanceof SessionLifecycleWorkspaceRecoveryError) {
+      return err(error.error);
+    }
     if (error instanceof WorkerInferenceSessionDrainBusyError) {
       return err(
         errorShape(
@@ -332,7 +337,7 @@ export function validateSessionPatchArchiveProjection(params: {
 }
 
 /** Restore before opening admission; remove only after archive metadata is durable. */
-export async function prepareSessionPatchWorktreeTransition(params: {
+export async function prepareSessionPatchArchiveTransition(params: {
   archived: boolean;
   entry: SessionEntry;
   context: GatewayRequestContext;
@@ -341,18 +346,21 @@ export async function prepareSessionPatchWorktreeTransition(params: {
   preparation?: SessionPatchArchivePreparation;
 }): Promise<{
   assertCommitAllowed: () => void;
-  afterCommit?: (entry: SessionEntry) => Promise<ErrorShape | undefined>;
+  afterCommit?: (entry: SessionEntry) => Promise<void>;
 }> {
-  const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+  const placementTarget = {
     context: params.context,
     sessionId: params.entry.sessionId,
-  });
+  };
+  const placement = prepareSessionWorkerPlacementArchiveCheck(placementTarget);
+  let assertWorktreeMutationAllowed: (() => void) | undefined;
   const commitGuard = () => {
     const authorizationError = params.authorize();
     if (authorizationError) {
       throw new SessionMutationAuthorizationChangedError(authorizationError);
     }
-    assertPlacementCurrent();
+    placement.assertCurrent();
+    assertWorktreeMutationAllowed?.();
     if (params.preparation?.drain.hasAuthoritativeWork()) {
       throw new SessionWorktreeLifecycleError(
         "Session worktree is still active; retry the archive after work settles.",
@@ -366,28 +374,29 @@ export async function prepareSessionPatchWorktreeTransition(params: {
       entry,
       scope: params.scope,
       commitGuard,
+      assertRestoreAllowed: () => {
+        assertWorktreeMutationAllowed = prepareSessionWorkerPlacementMutationCheck(placementTarget);
+      },
     });
   // Carry the exact restored binding through the later metadata commit.
   const assertCommitAllowed = params.archived ? commitGuard : await synchronize(params.entry);
   return {
     assertCommitAllowed,
-    afterCommit: params.archived
-      ? async (entry) => {
-          try {
-            // The durable archive row hands failed cleanup to GC. Keep the lifecycle
-            // fence and compare the exact committed projection, never a fresh successor.
-            await synchronize(entry);
-            return undefined;
-          } catch (error) {
-            const cleanupError = unexpectedPatchError(params.scope.sessionKey, error);
-            return errorShape(
-              ErrorCodes.UNAVAILABLE,
-              `Session archived, but worktree cleanup did not finish. ${cleanupError.message} Retry archive after resolving the cleanup condition; garbage collection will also retry.`,
-              // Deferred self-archive must stop retrying an already committed archive.
-              { retryable: false },
-            );
+    afterCommit:
+      params.archived && params.entry.worktree && !placement.cleanupPending
+        ? async (entry) => {
+            try {
+              // The durable archive row hands failed cleanup to GC. Keep the lifecycle
+              // fence and compare the exact committed projection, never a fresh successor.
+              assertWorktreeMutationAllowed =
+                prepareSessionWorkerPlacementMutationCheck(placementTarget);
+              await synchronize(entry);
+            } catch (error) {
+              sessionLog.warn(
+                `sessions.patch: archived worktree cleanup deferred for ${params.scope.sessionKey}: ${formatErrorMessage(error)}`,
+              );
+            }
           }
-        }
-      : undefined,
+        : undefined,
   };
 }

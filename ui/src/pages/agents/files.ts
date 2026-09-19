@@ -21,6 +21,34 @@ type AgentFilesState = {
   agentFileWriteRevisions: Map<string, number>;
 };
 
+export type RetainedAgentFileDrafts = {
+  drafts: Record<string, string>;
+  hashes: Record<string, string>;
+  active: string | null;
+  conflict: string | null;
+};
+
+export function retainAgentFileDrafts(
+  state: AgentFilesState & { agentFileActive: string | null },
+): RetainedAgentFileDrafts | null {
+  const entries = Object.entries(state.agentFileDrafts).filter(
+    ([name, draft]) => draft !== state.agentFileContents[name] || state.agentFileConflict === name,
+  );
+  if (entries.length === 0) {
+    return null;
+  }
+  return {
+    drafts: Object.fromEntries(entries),
+    hashes: Object.fromEntries(
+      entries.flatMap(([name]) =>
+        state.agentFileHashes[name] === undefined ? [] : [[name, state.agentFileHashes[name]]],
+      ),
+    ),
+    active: state.agentFileActive,
+    conflict: state.agentFileConflict,
+  };
+}
+
 function withFileHash(
   hashes: Record<string, string>,
   name: string,
@@ -91,7 +119,7 @@ async function requestAgentFile(
     );
     if (res?.file && isCurrent()) {
       const content = operation.kind === "write" ? operation.content : (res.file.content ?? "");
-      const previousBase = state.agentFileContents[name] ?? "";
+      const previousBase = state.agentFileContents[name];
       const currentDraft = state.agentFileDrafts[name];
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
       // Refresh may advance the workspace base while a dirty draft keeps its ancestry.
@@ -100,7 +128,8 @@ async function requestAgentFile(
       const rebasesDraft =
         resolution === "draft" ||
         !Object.hasOwn(state.agentFileDrafts, name) ||
-        currentDraft === (saving ? content : previousBase);
+        currentDraft === content ||
+        (!saving && currentDraft === previousBase);
       if (rebasesDraft) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }

@@ -59,6 +59,7 @@ import {
   shouldUseLmstudioApiKeyPlaceholder,
 } from "./provider-auth.js";
 import {
+  LmstudioConfigResolutionError,
   resolveLmstudioConfiguredApiKey,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRequestContext,
@@ -295,14 +296,6 @@ function resolvePersistedLmstudioApiKey(params: {
   })
     ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
     : undefined;
-}
-
-function isLmstudioDiscoveryConfigResolutionError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes("models.providers.lmstudio.apiKey") ||
-    message.includes("models.providers.lmstudio.headers.")
-  );
 }
 
 /** Preserves existing allowlist metadata and appends discovered LM Studio model refs. */
@@ -994,7 +987,7 @@ export async function discoverLmstudioProvider(
       allowUnresolved: hasAuthorizationHeader || Boolean(discoveryApiKey),
     });
   } catch (error) {
-    if (isLmstudioDiscoveryConfigResolutionError(error)) {
+    if (error instanceof LmstudioConfigResolutionError) {
       return null;
     }
     throw error;

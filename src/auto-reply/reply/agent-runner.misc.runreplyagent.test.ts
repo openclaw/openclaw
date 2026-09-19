@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { parseCliOutput } from "../../agents/cli-output.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -41,6 +41,7 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
@@ -53,6 +54,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -74,7 +76,7 @@ import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js"
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 let rootDir: string;
 
 function createCliBackendTestConfig() {
@@ -455,7 +457,7 @@ function setupAgentRunnerMocks(): void {
 
 beforeEach(setupAgentRunnerMocks);
 
-afterEach(() => {
+afterEach(async () => {
   cliBackendsTesting.resetDepsForTest();
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
@@ -464,6 +466,10 @@ afterEach(() => {
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
+  tempDirs.cleanup();
 });
 
 describe("runReplyAgent pending operator input", () => {
@@ -922,7 +928,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         releaseForeground?.();
         await waitForSessionMaintenance(sessionKey);
         setLoggerOverride(null);
-        await fs.rm(tmp, { recursive: true, force: true });
       }
     },
   );
@@ -1066,57 +1071,51 @@ describe("runReplyAgent auto-compaction token update", () => {
 
   it("loads post-compaction context before starting a queued followup drain", async () => {
     const workspaceDir = tempDirs.make("openclaw-post-compaction-queued-followup-");
-    try {
-      await fs.writeFile(
-        path.join(workspaceDir, "AGENTS.md"),
-        "## Session Startup\nRead the queued workspace startup file.\n\n## Red Lines\nNever skip startup context after compaction.\n",
-        "utf-8",
-      );
-      const sessionKey = "main";
-      const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 50_000 };
-      runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-        const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
-        if (typeof onAgentEvent === "function") {
-          await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
-          await onAgentEvent({ stream: "compaction", data: { phase: "end", completed: true } });
-        }
-        return { payloads: [{ text: "ok" }], meta: { agentMeta: {} } };
-      });
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "## Session Startup\nRead the queued workspace startup file.\n\n## Red Lines\nNever skip startup context after compaction.\n",
+      "utf-8",
+    );
+    const sessionKey = "main";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 50_000 };
+    runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
+      if (typeof onAgentEvent === "function") {
+        await onAgentEvent({ stream: "compaction", data: { phase: "start" } });
+        await onAgentEvent({ stream: "compaction", data: { phase: "end", completed: true } });
+      }
+      return { payloads: [{ text: "ok" }], meta: { agentMeta: {} } };
+    });
 
-      vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
-        const events = peekSystemEvents(key);
-        expect(events).toHaveLength(1);
-        expect(events[0]).toContain("Read the queued workspace startup file.");
-        expect(events[0]).toContain("Never skip startup context after compaction.");
-      });
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
+      const events = peekSystemEvents(resolveSystemEventQueueKey(key, "main"));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toContain("Read the queued workspace startup file.");
+      expect(events[0]).toContain("Never skip startup context after compaction.");
+    });
 
-      const baseRun = createBaseRun({
-        run: {
-          agentId: "main",
-          agentDir: path.join(rootDir, "agent"),
-          workspaceDir,
-          reasoningLevel: "on",
-          config: {
-            agents: {
-              defaults: {
-                compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
-              },
+    await createBaseRun({
+      run: {
+        agentId: "main",
+        agentDir: path.join(rootDir, "agent"),
+        workspaceDir,
+        reasoningLevel: "on",
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
             },
           },
         },
-        reply: {
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
-        },
-      });
+      },
+      reply: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+    }).run();
 
-      await baseRun.run();
-
-      expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a provided reply operation active until final delivery completes", async () => {
@@ -1274,11 +1273,10 @@ describe("runReplyAgent auto-compaction token update", () => {
           totalTokens: 40,
           totalTokensFresh: true,
         });
-        expect(peekSystemEvents(sessionKey)).toEqual([]);
+        expect(peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"))).toEqual([]);
       } finally {
         releaseFallback();
         replyOperation.complete();
-        await fs.rm(root, { recursive: true, force: true });
       }
     },
   );
@@ -1440,7 +1438,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           },
         },
       });
-      const events = peekSystemEvents(sessionKey);
+      const events = peekSystemEvents(resolveSystemEventQueueKey(sessionKey, "main"));
       expect(events).toHaveLength(compactionCount);
       if (compactionCount > 0) {
         expect(events[0]).toContain("Post-compaction context refresh");
@@ -2716,59 +2714,53 @@ describe("runReplyAgent fallback reasoning tags", () => {
       totalTokensVersion: 1,
       compactionCount: 0,
     };
-    try {
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-      registerMemoryFlushPlanResolverForTest(() => ({
-        softThresholdTokens: 1_000,
-        forceFlushTranscriptBytes: 1_000_000_000,
-        reserveTokensFloor: 20_000,
-        prompt: "Pre-compaction memory flush.",
-        systemPrompt: "Flush memory into the configured memory file.",
-        relativePath: "memory/active.md",
-      }));
-      runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
-      runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
-      runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
-        result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
-        provider: "google-gemini-cli",
-        model: "gemini-3",
-        attempts: [],
-      }));
-      compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { tokensAfter: 1_000_000 },
-      });
+    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.",
+      systemPrompt: "Flush memory into the configured memory file.",
+      relativePath: "memory/active.md",
+    }));
+    runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
+    runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+    runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
+      result: await runFallbackModelAttempt(params, "google-gemini-cli", "gemini-3", "unknown"),
+      provider: "google-gemini-cli",
+      model: "gemini-3",
+      attempts: [],
+    }));
+    compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 1_000_000 },
+    });
 
-      const result = await createBaseRun({
-        run: {
-          agentId: "main",
-          agentDir: path.join(root, "agent"),
-          sessionKey,
-          workspaceDir: root,
-          config: createCliBackendTestConfig(),
-        },
-        reply: {
-          queueKey: sessionKey,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
-          storePath,
-        },
-      }).run();
+    const result = await createBaseRun({
+      run: {
+        agentId: "main",
+        agentDir: path.join(root, "agent"),
+        sessionKey,
+        workspaceDir: root,
+        config: createCliBackendTestConfig(),
+      },
+      reply: {
+        queueKey: sessionKey,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+      },
+    }).run();
 
-      const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
-        (params as EmbeddedAgentParams | undefined)?.prompt?.includes(
-          "Pre-compaction memory flush.",
-        ),
-      )?.[0] as EmbeddedAgentParams | undefined;
-      expect(flushCall?.enforceFinalTag).toBe(true);
-      expect(runCliAgentMock).toHaveBeenCalledOnce();
-      const payloads = Array.isArray(result) ? result : [result];
-      expect(payloads.filter((payload) => payload?.text === "ok")).toHaveLength(1);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    const flushCall = runEmbeddedAgentMock.mock.calls.find(([params]) =>
+      (params as EmbeddedAgentParams | undefined)?.prompt?.includes("Pre-compaction memory flush."),
+    )?.[0] as EmbeddedAgentParams | undefined;
+    expect(flushCall?.enforceFinalTag).toBe(true);
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const payloads = Array.isArray(result) ? result : [result];
+    expect(payloads.filter((payload) => payload?.text === "ok")).toHaveLength(1);
   });
 });
 

@@ -42,6 +42,10 @@ vi.mock("../../plugins/loader.js", () => ({
   loadPluginRegistryHandle: (...args: unknown[]) => resolveRuntimePluginRegistryMock(...args),
 }));
 
+vi.mock("../../plugins/plugin-metadata-state-worker.js", () => ({
+  readPluginMetadataStateRow: vi.fn(async () => undefined),
+}));
+
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
   getActivePluginRegistryVersion: (...args: unknown[]) =>
@@ -175,7 +179,7 @@ describe("outbound channel resolution", () => {
     });
 
     expect(
-      channelResolution.resolveOutboundChannelMessageAdapter({
+      await channelResolution.resolveOutboundChannelMessageAdapter({
         channel: "alpha",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
@@ -193,7 +197,7 @@ describe("outbound channel resolution", () => {
     getChannelPluginMock.mockReturnValue(undefined);
 
     expect(
-      withPluginRuntimeRegistryScope(registry, () =>
+      await withPluginRuntimeRegistryScope(registry, () =>
         channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
       ),
     ).toBe(message);
@@ -212,10 +216,10 @@ describe("outbound channel resolution", () => {
       };
       const registry = createTestRegistry([{ pluginId: "scoped", plugin: scoped, source: "test" }]);
 
-      withPluginRuntimeRegistryScope(registry, () => {
+      await withPluginRuntimeRegistryScope(registry, async () => {
         expect(channelResolution.resolveOutboundChannelPlugin({ channel: "alpha" })).toBe(scoped);
         expect(
-          channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
+          await channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
         ).toBeUndefined();
       });
       expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
@@ -227,10 +231,10 @@ describe("outbound channel resolution", () => {
     getChannelPluginMock.mockReturnValue({ id: "alpha", message: { send: { text: vi.fn() } } });
     const registry = createTestRegistry([{ pluginId: "scoped", plugin: scoped, source: "test" }]);
 
-    withPluginRuntimeRegistryScope(registry, () => {
+    await withPluginRuntimeRegistryScope(registry, async () => {
       expect(channelResolution.resolveOutboundChannelPlugin({ channel: "alpha" })).toBe(scoped);
       expect(
-        channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
+        await channelResolution.resolveOutboundChannelMessageAdapter({ channel: "alpha" }),
       ).toBeUndefined();
     });
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
@@ -337,7 +341,7 @@ describe("outbound channel resolution", () => {
       }),
     ).toBe(plugin);
     expect(
-      channelResolution.resolveOutboundChannelMessageAdapter({
+      await channelResolution.resolveOutboundChannelMessageAdapter({
         channel: "external",
         cfg: { channels: {} } as never,
       }),
@@ -518,7 +522,7 @@ describe("outbound channel resolution", () => {
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
 
     expect(
-      channelResolution.resolveOutboundChannelMessageAdapter({
+      await channelResolution.resolveOutboundChannelMessageAdapter({
         channel: "alpha",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
@@ -539,7 +543,7 @@ describe("outbound channel resolution", () => {
     );
 
     expect(
-      channelResolution.resolveOutboundChannelMessageAdapter({
+      await channelResolution.resolveOutboundChannelMessageAdapter({
         channel: "external-channel",
         cfg: { channels: {} } as never,
         allowBootstrap: true,

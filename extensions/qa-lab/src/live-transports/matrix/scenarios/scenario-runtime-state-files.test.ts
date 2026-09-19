@@ -1,6 +1,6 @@
 // Qa Matrix tests cover persisted runtime state probes.
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -157,11 +157,24 @@ describe("Matrix QA persisted state probes", () => {
   );
 
   it.each(["json", "sqlite"] as const)(
-    "recognizes matching pre-doctor metadata for a %s cursor",
+    "finds a boundary-depth %s cursor after deeper subtrees and skips linked state",
     async (source) => {
       const stateDir = await createStateDir();
+      const levels = Array.from({ length: source === "json" ? 7 : 8 }, (_, index) => `d${index}`);
+      const target = path.join(stateDir, "zz-target", ...levels);
+      const linked = await createStateDir();
+      for (const root of [path.join(stateDir, "aa-too-deep", ...levels, "extra"), linked]) {
+        await seedSyncStore({
+          root,
+          metadata: identity,
+          source,
+          legacyMetadata: true,
+          cursor: "excluded-cursor",
+        });
+      }
+      await symlink(linked, path.join(stateDir, "aa-linked"), "junction");
       await seedSyncStore({
-        root: path.join(stateDir, "matrix", "accounts", "target"),
+        root: target,
         metadata: identity,
         source,
         legacyMetadata: true,
@@ -169,7 +182,14 @@ describe("Matrix QA persisted state probes", () => {
       });
       await expect(
         waitForMatrixSyncStoreWithCursor({ context, stateDir, timeoutMs: 1_000 }),
-      ).resolves.toMatchObject({ cursor: "legacy-cursor", source });
+      ).resolves.toMatchObject({
+        cursor: "legacy-cursor",
+        source,
+        pathname: path.join(
+          target,
+          ...(source === "json" ? ["bot-storage.json"] : ["state", "openclaw.sqlite"]),
+        ),
+      });
     },
   );
 

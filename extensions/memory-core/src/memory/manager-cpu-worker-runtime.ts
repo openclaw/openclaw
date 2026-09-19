@@ -11,6 +11,13 @@ import type {
   MemorySearchWorkerOutput,
   MemoryVectorWorkerQuery,
 } from "./manager-search.worker.js";
+const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
+
+export type MemoryIndexTask = { kind: "prepare"; input: MemoryIndexPreparationInput };
+export type MemoryIndexTaskResult = {
+  kind: "prepared";
+  value: ReturnType<typeof prepareMemoryIndexChunks>;
+};
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
@@ -18,16 +25,26 @@ const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorker
   sharedCompute: true,
 });
 // Background chunk preparation must not occupy the foreground retrieval worker.
-const indexing = new WorkerTaskPool<
-  MemoryIndexPreparationInput,
-  ReturnType<typeof prepareMemoryIndexChunks>
->({
+const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
   maxWorkers: 1,
   sharedCompute: true,
+  maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
+
+export async function runMemoryPresenceInspection(databasePath: string): Promise<boolean> {
+  ensureSqliteLibrarySelected();
+  const result = await retrieval.run(
+    { kind: "presence", databasePath },
+    { inputBytes: databasePath.length * 2 },
+  );
+  if (result.kind !== "presence") {
+    throw new Error("Invalid memory presence worker result");
+  }
+  return result.present;
+}
 
 export async function runMemoryKeywordSearch(
   target: MemoryReadTarget,
@@ -72,7 +89,7 @@ export async function runMemoryVectorFallback(
   return result.rows;
 }
 
-export function prepareMemoryIndexInWorker(input: MemoryIndexPreparationInput) {
+export async function prepareMemoryIndexInWorker(input: MemoryIndexPreparationInput) {
   let inputBytes = input.content.length * 2 + (input.entry.lineMap?.length ?? 0) * 8;
   for (const provenance of input.entry.lineProvenance ?? []) {
     inputBytes +=
@@ -82,5 +99,9 @@ export function prepareMemoryIndexInWorker(input: MemoryIndexPreparationInput) {
           provenance.sessionKind.length +
           (provenance.supersedesKey?.length ?? 0));
   }
-  return indexing.run(input, { inputBytes });
+  const result = await indexing.run({ kind: "prepare", input }, { inputBytes });
+  if (result.kind !== "prepared") {
+    throw new Error("Invalid memory indexing worker result");
+  }
+  return result.value;
 }

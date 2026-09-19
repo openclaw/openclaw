@@ -402,3 +402,76 @@ and `stop --current-repo --id <lease-id>` from the original owning workspace. It
 pre-allocation `exec --check` probe requires `execution` and `currentRepoStop` to
 both be true; initial support is for direct Daytona leases. Static SSH continues
 to use its existing settings through an adapter into the same workspace owner.
+
+## Docked link readers
+
+A link reader lets an enabled plugin claim supported HTTPS links and render a
+passive document beside chat. Core owns the dock, browser-style tabs, history,
+keyboard behavior, and safe Markdown rendering. The plugin owns URL policy,
+service requests, caching, and the document data. This is not a plugin JavaScript
+loader or a framed external website.
+
+Register read-scoped Gateway methods and a contribution descriptor:
+
+```typescript
+import type { ControlUiLinkReaderDocument } from "openclaw/plugin-sdk/control-ui-link-reader";
+
+api.registerGatewayMethod(
+  "notes.read",
+  async ({ params, respond }) => {
+    // Validate params.url against your service and bound the response before returning it.
+    const document: ControlUiLinkReaderDocument = await readNotesDocument(params);
+    respond(true, document, undefined);
+  },
+  { scope: "operator.read" },
+);
+
+api.session.controls.registerControlUiDescriptor({
+  surface: "link-reader",
+  id: "notes",
+  label: "Notes",
+  icon: "book",
+  requiredScopes: ["operator.read"],
+  linkReader: {
+    hosts: ["notes.example"],
+    pathPattern: "^/documents/[a-z0-9-]+$",
+    detailMethod: "notes.read",
+  },
+});
+```
+
+The descriptor is advertised in `hello.controlUiLinkReaders` and live plugin capability snapshots only when its
+plugin is loaded, the caller has the required scopes, and every referenced
+method belongs to that same plugin with `operator.read` scope. Hidden and control-plane write methods do not advertise a reader. Registration can happen
+before or after method registration; projection checks the completed registry.
+Plugin enablement and reload update contributions through the existing `plugins.changed` capability-refresh flow.
+The UI clears removed contributions and ignores stale request results.
+
+The `linkReader` fields are:
+
+| Field           | Contract                                                                                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                            |
+| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable. |
+| `detailMethod`  | Same-plugin read method receiving `{ url, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                                   |
+| `previewMethod` | Optional same-plugin read method receiving `{ url }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews.        |
+
+Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS
+URLs are never intercepted. A descriptor is a routing hint, not authorization
+or input validation: each plugin method still validates its URL, source access,
+and request parameters. Ordinary modified clicks, downloads, unsupported links,
+and explicit external actions keep their native destination.
+
+The exported passive models include a source `url`, `title`, optional subtitle,
+author, dates, badge, and label/value metadata. A document adds Markdown `body`,
+optional comments and changed-file patches, totals, and explicit partial or
+truncated flags. Comment IDs and source links, review context labels, and badge
+text come from the plugin rather than service-specific conditions in core.
+`filesExpanded` optionally selects the initial file-diff view. Badge tones are
+`neutral`, `positive`, `negative`, `attention`, and `accent`.
+
+Return only bounded data appropriate for the caller. Rendered content cannot
+activate embedded app widgets, script, file actions, or code execution. Inline
+remote images use anonymous CORS and no referrer; unsupported images retain an
+external link. Use an explicit error response for unavailable content so the UI
+can offer retry and the original URL.

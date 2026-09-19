@@ -1,4 +1,4 @@
-// Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
+// Session transcript facade appends mirror messages and reads tails.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -49,6 +49,7 @@ import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
+import { recordAssistantManagedMediaUrls } from "./transcript-assistant-delivery.js";
 import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
@@ -156,8 +157,6 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
 }
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
-
-export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 
 function parseAssistantTranscriptText(
   line: string,
@@ -456,7 +455,10 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
     message: {
-      role: "assistant" as const,
+      ...recordAssistantManagedMediaUrls(
+        { role: "assistant" as const, openclawDelivery: { mediaUrls: [] } },
+        params.mediaUrls,
+      ),
       content,
       ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
@@ -582,22 +584,20 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         reason: "blocked by before_message_write",
       };
     }
-    const identifiedDeliveryMirror =
-      Boolean(explicitIdempotencyKey) && isIdentifiedDeliveryMirror(params.message);
     const target: SessionTranscriptAppendTarget = {
       ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
       sessionId: currentEntry.sessionId,
       sessionKey: resolved.normalizedKey,
       storePath,
     };
-    if (isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror) {
+    if (isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey) {
       // Reconciliation needs the writer queue. Wait before entering it, then
       // read the current projected tail again inside the guarded append.
       await waitForSessionTranscriptProjection(target);
     }
     let latestEquivalentAssistantId: string | undefined;
-    // Identified delivery mirrors, including suppressed finals, dedupe only by
-    // key so same-text markers from different source ids remain separate rows.
+    // Keyed mirrors use strict replay identity; text-only suppression must not
+    // hide conflicting media or collapse distinct source messages.
     const turn = await persistSessionTranscriptTurn(
       {
         sessionId: currentEntry.sessionId,
@@ -644,7 +644,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
               : {}),
             shouldAppend: async (appendTarget) => {
               latestEquivalentAssistantId =
-                isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror
+                isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
                   ? await findLatestEquivalentAssistantMessageId(
                       appendTarget,
                       preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
@@ -761,18 +761,6 @@ async function readLatestVisibleTranscriptMessage(scope: {
     // Mirror deduplication remains best-effort when transcript reads are unavailable.
     return undefined;
   }
-}
-
-function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  const marker = (message as { openclawDeliveryMirror?: InternalSessionTranscriptDeliveryMirror })
-    .openclawDeliveryMirror;
-  return (
-    isRedundantDeliveryMirror(message) &&
-    (marker?.kind === "channel-final" ||
-      marker?.kind === "channel-final-suppressed" ||
-      marker?.kind === "message-tool-source-reply" ||
-      marker?.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND)
-  );
 }
 
 function extractAssistantMessageText(message: AgentMessage): string | null {

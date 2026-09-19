@@ -82,7 +82,7 @@ async function installOwnerGateway(page: Page, archived = false, extraNames: str
   await routeAvatarFixtures(page, [{ id: "profile-ada", background: "#7c3aed", label: "A" }]);
   const result = sessionsListResponse(archived);
   const gateway = await installMockGateway(page, {
-    featureMethods: ["chat.startup", "sessions.assignOwner", "users.list"],
+    featureMethods: ["chat.startup", "sessions.assignOwner", "sessions.create", "users.list"],
     historyMessages: [{ role: "assistant", content: "Owner assignment outcome proof." }],
     methodResponses: {
       "sessions.list": archived
@@ -172,6 +172,97 @@ async function chooseMe(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it.each(["sidebar", "header"] as const)(
+    "moves from a tall assignee submenu to sibling rows and back from the %s",
+    async (surface) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installOwnerGateway(
+          page,
+          false,
+          Array.from({ length: 40 }, (_, index) => `Teammate ${index + 1}`),
+        );
+        if (surface === "sidebar") {
+          const row = page.locator(`[data-session-key="${sessionKey}"]`);
+          await row.hover();
+          await row
+            .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
+            .click();
+        } else {
+          await page
+            .getByRole("button", { name: "Actions for Owner outcome", exact: true })
+            .click();
+        }
+        const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
+        const sibling = page.getByRole("menuitem", { name: "Fork conversation", exact: true });
+        const anchor = await assignTo.boundingBox();
+        const target = await sibling.boundingBox();
+        const inactiveBackground = await sibling.evaluate(
+          (element) => getComputedStyle(element).backgroundColor,
+        );
+        expect(anchor).not.toBeNull();
+        expect(target).not.toBeNull();
+        await page.mouse.move(anchor!.x + 24, anchor!.y + anchor!.height / 2);
+        await expectBrowser(assignTo).toHaveAttribute("aria-expanded", "true");
+        const me = assignTo.getByRole("menuitemradio", { name: "Me", exact: true });
+        await expectBrowser(me).toBeVisible();
+        await captureProof(page, `mouse-${surface}-submenu-open`);
+
+        // Native pointer steps matter: locator.hover retries around intercepting overlays.
+        await page.mouse.move(target!.x + target!.width - 24, target!.y + target!.height / 2, {
+          steps: 12,
+        });
+        try {
+          await expectBrowser(assignTo).toHaveAttribute("aria-expanded", "false");
+          await expect
+            .poll(() => sibling.evaluate((element) => element.matches(":hover")))
+            .toBe(true);
+          await expectBrowser(me).toBeHidden();
+          await expect
+            .poll(() => sibling.evaluate((element) => getComputedStyle(element).backgroundColor))
+            .not.toBe(inactiveBackground);
+        } finally {
+          await captureProof(page, `mouse-${surface}-sibling-row`);
+        }
+
+        const copy = page.getByRole("menuitem", { name: "Copy", exact: true });
+        await copy.hover();
+        await expectBrowser(copy).toHaveAttribute("aria-expanded", "true");
+        await assignTo.hover();
+        await expectBrowser(copy).toHaveAttribute("aria-expanded", "false");
+        await expectBrowser(me).toBeVisible();
+
+        // Follow a paced diagonal from the submenu-facing edge into a non-first
+        // choice. The existing dropdown owner must keep the destination usable.
+        const choice = assignTo.getByRole("menuitemradio", { name: "Carol", exact: true });
+        // Resolve animation/layout actionability before freezing pointer coordinates;
+        // the trial does not click or move the pointer into the submenu.
+        await choice.click({ trial: true });
+        const destination = await choice.boundingBox();
+        const origin = await assignTo.boundingBox();
+        expect(destination).not.toBeNull();
+        expect(origin).not.toBeNull();
+        const left = destination!.x < origin!.x;
+        const fromX = left ? origin!.x + 4 : origin!.x + origin!.width - 4;
+        const fromY = origin!.y + origin!.height / 2;
+        const toX = destination!.x + destination!.width / 2;
+        const toY = destination!.y + destination!.height / 2;
+        await page.mouse.move(fromX, fromY);
+        for (let step = 1; step <= 12; step += 1) {
+          await page.mouse.move(
+            fromX + ((toX - fromX) * step) / 12,
+            fromY + ((toY - fromY) * step) / 12,
+          );
+          // This delay models pointer travel, not a wait for application readiness.
+          await page.waitForTimeout(25);
+        }
+        await expectBrowser(assignTo).toHaveAttribute("aria-expanded", "true");
+        await expect.poll(() => choice.evaluate((element) => element.matches(":hover"))).toBe(true);
+        await page.mouse.click(toX, toY);
+        await expectAssignmentRequest(gateway, "profile-carol");
+      });
+    },
+  );
+
   it("marks exactly one target when the session is assigned to self", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installOwnerGateway(page);

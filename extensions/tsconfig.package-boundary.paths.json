@@ -928,14 +928,14 @@
       "openclaw/plugin-sdk/provider-model-metadata": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-model-metadata.d.ts"
       ],
-      "openclaw/plugin-sdk/websocket-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/websocket-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/memory-core-host-engine-knn": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-knn.d.ts"
       ],
       "openclaw/plugin-sdk/memory-core-host-engine-indexing": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-indexing.d.ts"
+      ],
+      "openclaw/plugin-sdk/sqlite-worker-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-worker-runtime.d.ts"
       ]
     }
   }

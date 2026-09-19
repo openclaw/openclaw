@@ -11,27 +11,6 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-// The test runner relocates worker declarations; the production factory needs source metadata.
-vi.mock(
-  "../../src/infra/update-managed-service-handoff-runtime-assets.js",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("../../src/infra/update-managed-service-handoff-runtime-assets.js")
-      >();
-    return {
-      ...actual,
-      managedHandoffRuntimeEntrypoint: {
-        ...actual.managedHandoffRuntimeEntrypoint,
-        currentModuleUrl: new URL(
-          "../../src/infra/update-managed-service-handoff-runtime-assets.ts",
-          import.meta.url,
-        ).href,
-      },
-    };
-  },
-);
-
 vi.mock("../../src/infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerUrl: vi.fn(),
 }));

@@ -1,3 +1,4 @@
+import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
@@ -25,7 +26,7 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    return isRetryableAssistantError(message);
+    return isResponsesOutputLimitToolCallError(message) || isRetryableAssistantError(message);
   }
 
   /**
@@ -62,10 +63,11 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       errorMessage: message.errorMessage || "Unknown error",
     });
 
-    // Remove error message from agent state (keep in session for history)
+    // Async tool results can settle after the error. Keep them and the durable transcript.
     const messages = this.agent.state.messages;
-    if (messages.at(-1)?.role === "assistant") {
-      this.agent.state.messages = messages.slice(0, -1);
+    const failedIndex = messages.findLastIndex((candidate) => candidate === message);
+    if (failedIndex >= 0) {
+      this.agent.state.messages = messages.toSpliced(failedIndex, 1);
     }
 
     // Wait with exponential backoff (abortable)

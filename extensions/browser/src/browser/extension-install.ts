@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   chromeStoreInstallRequests,
@@ -373,9 +374,7 @@ async function installRegistration(params: {
       throw new Error(`Refusing to overwrite foreign native host launcher: ${launcherPath}`);
     }
     if (existingLauncher !== launcher.content) {
-      const replacement = `${launcherPath}.tmp-${process.pid}`;
-      await fs.writeFile(replacement, launcher.content, { mode: 0o700, flag: "wx" });
-      await fs.rename(replacement, launcherPath);
+      await replaceFileAtomic({ filePath: launcherPath, content: launcher.content, mode: 0o700 });
     }
   } else {
     await fs.writeFile(launcherPath, launcher.content, { mode: 0o700, flag: "wx" });
@@ -390,15 +389,11 @@ async function installRegistration(params: {
     type: "stdio",
     allowed_origins: expectedOriginsForExtensionIds(extensionIds),
   };
-  const temporary = `${manifestPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
-  await fs.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, {
+  await replaceFileAtomic({
+    filePath: manifestPath,
+    content: `${JSON.stringify(manifest, null, 2)}\n`,
     mode: 0o600,
-    flag: "wx",
   });
-  await fs.rename(temporary, manifestPath);
-  if (process.platform !== "win32") {
-    await fs.chmod(manifestPath, 0o600);
-  }
   return await inspectRegistration(root, deps, extensionIds);
 }
 

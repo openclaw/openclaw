@@ -49,28 +49,28 @@ export class FileCopyController implements ReactiveController {
     }
     const attempt = (this.attempts.get(action) ?? 0) + 1;
     this.attempts.set(action, attempt);
-    void copyToClipboard(action === "path" ? content.path : content.content).then((copied) => {
-      if (
-        this.attempts.get(action) !== attempt ||
-        this.content() !== content ||
-        !this.host.isConnected
-      ) {
-        return;
-      }
-      this.feedback = { ...this.feedback, [action]: copied ? "copied" : "failed" };
-      this.host.requestUpdate();
-      globalThis.clearTimeout(this.timers.get(action));
-      this.timers.set(
-        action,
-        globalThis.setTimeout(
-          () => {
-            this.timers.delete(action);
-            this.feedback = { ...this.feedback, [action]: undefined };
-            this.host.requestUpdate();
-          },
-          copied ? 1500 : 2000,
-        ),
-      );
-    });
+    const isCurrent = () =>
+      this.attempts.get(action) === attempt && this.content() === content && this.host.isConnected;
+    void copyToClipboard(action === "path" ? content.path : content.content, isCurrent).then(
+      (copied) => {
+        if (!isCurrent()) {
+          return;
+        }
+        this.feedback = { ...this.feedback, [action]: copied ? "copied" : "failed" };
+        this.host.requestUpdate();
+        globalThis.clearTimeout(this.timers.get(action));
+        this.timers.set(
+          action,
+          globalThis.setTimeout(
+            () => {
+              this.timers.delete(action);
+              this.feedback = { ...this.feedback, [action]: undefined };
+              this.host.requestUpdate();
+            },
+            copied ? 1500 : 2000,
+          ),
+        );
+      },
+    );
   };
 }

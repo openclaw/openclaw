@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
+import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
@@ -589,6 +590,38 @@ describe("tools.effective handler", () => {
     });
   });
 
+  it("applies inherited MCP denies from the session entry already read by the request", async () => {
+    const sessionKey = "agent:main:subagent:prepared-policy";
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: { session: { store: "/tmp/tools-effective-prepared-policy/sessions.sqlite" } },
+      agentId: "main",
+      storePath: "/tmp/tools-effective-prepared-policy/sessions.sqlite",
+      store: {},
+      canonicalKey: sessionKey,
+      storeKeys: [sessionKey],
+      legacyKey: undefined,
+      entry: {
+        sessionId: "prepared-policy-session",
+        updatedAt: 1,
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolDeny: ["reproProbe__probe_tool"],
+      },
+    });
+    mockWarmMcpTool();
+    runtimeMocks.applyFinalEffectiveToolPolicy.mockImplementationOnce(
+      applyFinalEffectiveToolPolicy,
+    );
+
+    const { respond, invoke } = createInvokeParams({ sessionKey });
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expectPayloadGroupIds(respond, ["core"]);
+    expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledOnce();
+  });
+
   it("uses async model context while projecting a warm MCP catalog", async () => {
     mockWarmMcpTool();
     runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockImplementation(() => {
@@ -778,10 +811,9 @@ describe("tools.effective handler", () => {
     await invoke();
 
     expectPayloadGroupIds(respond, ["core", "mcp"]);
-    expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/sandbox-copy",
-      cfg: {},
-    });
+    expect(runtimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/sandbox-copy", cfg: {} }),
+    );
     expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.acquireEffectiveToolInventoryRuntimeModelContext).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -823,6 +855,35 @@ describe("tools.effective handler", () => {
 
     expectPayloadGroupIds(respond, ["core"]);
     expectPayloadNotice(respond, "unsupported-tool-schema:reproProbe__probe_tool");
+  });
+
+  it("keeps usable MCP tools and ordered quarantine notices without changing the cached base", async () => {
+    const base = {
+      ...makeCoreInventory(),
+      notices: [{ id: "base-notice", severity: "info", message: "Keep the base notice" }],
+    };
+    const originalBase = structuredClone(base);
+    Object.freeze(base.groups);
+    Object.freeze(base.notices);
+    Object.freeze(base);
+    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(base);
+    mockMcpConfigSummary();
+    mockWarmMcpRuntime(makeMcpCatalog());
+    const invalid = makeMcpTool({ type: "array", items: { type: "string" } });
+    invalid.name = "reproProbe__invalid";
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([makeMcpTool(), invalid]);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expectPayloadGroupIds(respond, ["core", "mcp"]);
+    const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload;
+    expect(payload.groups?.[1]?.tools?.map((tool) => tool.id)).toEqual(["reproProbe__probe_tool"]);
+    expect(payload.notices?.map((notice) => notice.id)).toEqual([
+      "base-notice",
+      "unsupported-tool-schema:reproProbe__invalid",
+    ]);
+    expect(base).toEqual(originalBase);
   });
 
   it("does not project stale MCP catalogs after config changes", async () => {

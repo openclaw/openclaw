@@ -31,7 +31,10 @@ import { applyHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
+import {
+  getSuspensionVisibleCronTaskRunCount,
+  waitForActiveCronTaskRuns,
+} from "../cron/service/active-run-cancellation.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import * as sessionReaper from "../cron/session-reaper.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
@@ -47,6 +50,7 @@ import {
 } from "../state/agent-deletion-journal.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -578,7 +582,7 @@ describe("Claw serving monitor cleanup", () => {
       const plan = await current.plan();
       const database = openOpenClawStateDatabase();
       if (failure === "cron-persistence") {
-        database.db.exec(`CREATE TEMP TRIGGER refuse_monitor_delete
+        database.db.exec(`CREATE TRIGGER refuse_monitor_delete
           BEFORE DELETE ON cron_jobs WHEN OLD.agent_id = 'worker'
           BEGIN SELECT RAISE(ABORT, 'synthetic monitor persistence failure'); END`);
       }
@@ -632,6 +636,7 @@ describe("Claw serving monitor cleanup", () => {
       const firstJournal = readAgentDeletionJournal("worker");
       expect(firstJournal).toBeDefined();
       await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       expect(readAgentDeletionJournal("worker")?.operationId).toBe(firstJournal?.operationId);
       current.setReloadSettled(true);
@@ -786,10 +791,9 @@ describe("Claw serving monitor cleanup", () => {
     const signal = await started.promise;
     try {
       const plan = await current.plan();
-      const removal = current.apply(plan);
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      const result = await current.apply(plan);
+      expect(signal.aborted).toBe(true);
       await run;
-      const result = await removal;
       expect(result).toMatchObject({
         status: "partial",
         agentRemoved: false,
@@ -798,15 +802,16 @@ describe("Claw serving monitor cleanup", () => {
       expect(readAgentDeletionJournal("worker")).toBeDefined();
       expect(Object.hasOwn(current.getConfig().agents?.entries ?? {}, "worker")).toBe(true);
       await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       expect(readAgentDeletionJournal("worker")).toBeDefined();
       release.resolve();
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
       const retry = await current.plan();
       expect(await current.apply(retry)).toMatchObject({ status: "complete" });
     } finally {
       release.resolve();
       await run;
+      expect(await waitForActiveCronTaskRuns(1_000)).toEqual({ drained: true, active: 0 });
     }
   });
 });

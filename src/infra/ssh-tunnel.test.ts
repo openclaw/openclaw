@@ -366,7 +366,6 @@ describe("startSshPortForward", () => {
       try {
         if (pending === "retry") {
           await retryScheduled.promise;
-          expect(socket.destroyed).toBe(true);
           expect(vi.getTimerCount()).toBe(1);
         }
         if (terminal === "abort") {

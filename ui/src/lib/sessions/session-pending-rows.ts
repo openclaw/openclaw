@@ -28,15 +28,35 @@ type SessionReadFields = {
   lastReadAt: number | undefined;
   markedUnreadAt: number | undefined;
 };
+export type SessionArchiveFields = Pick<
+  GatewaySessionRow,
+  "archivedAt" | "archivedBy" | "archiveReason"
+> & { archived: boolean } & Partial<SessionPinFields>;
 export type SessionPatchRowFact = {
   key: string;
   agentId: string;
   sessionId: string;
   updatedAt: number | null;
+  readCutoff?: number;
   fields:
+    | { category: GatewaySessionRow["category"] }
     | SessionPinFields
+    | { pinned: true }
     | SessionReadFields
     | (SessionPinFields & SessionReadFields)
+    | SessionArchiveFields
+    | Pick<
+        GatewaySessionRow,
+        | "model"
+        | "modelProvider"
+        | "modelOverrideSource"
+        | "agentRuntime"
+        | "runtimeSelectionLocked"
+        | "contextWindow"
+        | "contextWindows"
+        | "thinkingLevel"
+        | "thinkingLevels"
+      >
     | { boardPresentation: GatewaySessionRow["boardPresentation"] };
 };
 export type PendingRowTarget = Readonly<{
@@ -146,6 +166,13 @@ export function createOptimisticRowPatches<T>(
       }
       // A synchronous subscriber may have started a newer intent during decoration.
       if (pending.get(target.identity) === current) {
+        pending.delete(target.identity);
+      }
+    },
+    /** An uncertain write releases its overlay without claiming a rollback. */
+    abandon(target: PendingRowTarget, token: symbol): void {
+      const current = pending.get(target.identity);
+      if (current?.token === token && current.sessionId === target.sessionId) {
         pending.delete(target.identity);
       }
     },

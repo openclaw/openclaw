@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
@@ -18,7 +18,6 @@ const DEFAULT_RESPONSE_MAX_BYTES = 1024 * 1024;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CONVEX_WRITE_CONTENTION =
   /Documents read from or written to the "credential_sets" table changed while this mutation was being run/u;
-const execFile = promisify(execFileCallback);
 
 export class QaCredentialBrokerError extends Error {
   constructor(code, message, retryAfterMs) {
@@ -62,17 +61,61 @@ function parseBrokerConfig({ siteUrl, secret, allowInsecureHttp }) {
   return { siteUrl: parsed.toString().replace(/\/+$/u, ""), secret };
 }
 
-async function defaultRunConvexCli(args, { cwd }) {
-  const { stdout } = await execFile("convex", args, {
-    cwd,
-    env: process.env,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-  });
-  return stdout.trim();
+const CONVEX_LAUNCHERS = [
+  { command: "convex", prefix: [], label: "convex" },
+  { command: "bunx", prefix: ["--no-install", "convex"], label: "bunx convex" },
+  {
+    command: "npx",
+    prefix: ["--offline", "--no", "--ignore-scripts", "convex"],
+    label: "npx convex",
+  },
+];
+
+async function defaultRunConvexCli(args, { cwd, env, signal, launcher }) {
+  if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
+    throw Object.assign(new Error("The broker project directory is unavailable."), {
+      code: "PROJECT_ACCESS",
+    });
+  }
+  const { runCommand } = await import("./run-mock-sut-user-e2e.mjs");
+  const { withTelegramRun } = await import("./telegram-run-scope.mjs");
+  let result;
+  try {
+    result = await withTelegramRun(
+      () =>
+        runCommand(launcher.command, [...launcher.prefix, ...args], {
+          cwd,
+          env: { ...env, CI: "1", NO_COLOR: "1" },
+          timeoutMs: 15_000,
+        }),
+      { signal },
+    );
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw Object.assign(new Error("Convex launcher failed."), {
+      code: error.code === "ENOENT" ? "UNAVAILABLE" : "LOOKUP_FAILED",
+    });
+  }
+  if (result.timedOut || result.status !== 0) {
+    const diagnostic = `${result.stderr}\n${result.stdout}`;
+    const code = result.timedOut
+      ? "TIMED_OUT"
+      : /not (?:logged|authenticated)|log ?in|authenticate|unauthenticated|401/iu.test(diagnostic)
+        ? "AUTH_REQUIRED"
+        : /project|deployment|forbidden|permission|403/iu.test(diagnostic)
+          ? "PROJECT_ACCESS"
+          : /not found|not installed|missing packages|could not determine executable|ENOTCACHED|ENOENT/iu.test(
+                diagnostic,
+              )
+            ? "UNAVAILABLE"
+            : "LOOKUP_FAILED";
+    // CLI errors can include credential values and private project metadata.
+    throw Object.assign(new Error("Convex credential lookup failed."), { code });
+  }
+  return result.stdout.trim();
 }
 
-async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDir }) {
+async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDir, signal }) {
   const siteUrl = env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   const secret = env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
   if (siteUrl || secret) {
@@ -89,21 +132,49 @@ async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDi
   }
 
   const projectDir = convexProjectDir ?? path.join(cwd, "qa", "convex-credential-broker");
-  try {
-    const cliSecret = (
-      await runConvexCliImpl(
-        ["env", "--deployment", CONVEX_BROKER_DEPLOYMENT, "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
-        { cwd: projectDir },
-      )
-    ).trim();
-    if (!cliSecret) throw new Error("Convex production broker credential is missing.");
-    return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
-  } catch (error) {
-    throw new Error(
-      "Could not load the QA broker through the Convex CLI. Ask the user to install and authenticate the convex command, then request access to the OpenClaw broker project.",
-      { cause: error },
-    );
+  const failures = [];
+  let authenticated = false;
+  for (const launcher of CONVEX_LAUNCHERS) {
+    signal?.throwIfAborted();
+    try {
+      const options = { cwd: projectDir, env, signal, launcher };
+      const cliSecret = (
+        await runConvexCliImpl(
+          ["env", "--deployment", CONVEX_BROKER_DEPLOYMENT, "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
+          options,
+        )
+      ).trim();
+      signal?.throwIfAborted();
+      authenticated = true;
+      // convex env get can exit zero for a missing variable, with no stdout.
+      if (!cliSecret)
+        throw Object.assign(new Error("Broker credential is missing."), { code: "BROKER_CONFIG" });
+      return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
+    } catch (error) {
+      signal?.throwIfAborted();
+      const code = [
+        "UNAVAILABLE",
+        "TIMED_OUT",
+        "AUTH_REQUIRED",
+        "PROJECT_ACCESS",
+        "BROKER_CONFIG",
+      ].includes(error.code)
+        ? error.code
+        : "LOOKUP_FAILED";
+      failures.push({ launcher: launcher.label, code });
+    }
   }
+  const details = failures.map(({ launcher, code }) => `${launcher}: ${code}`).join("; ");
+  const remedy = authenticated
+    ? "An existing launcher authenticated; check the production broker CI variable, not login."
+    : failures.some(({ code }) => code === "PROJECT_ACCESS")
+      ? "Check existing Convex access to the broker project before requesting credentials."
+      : failures.every(({ code }) => code === "UNAVAILABLE" || code === "AUTH_REQUIRED")
+        ? "No existing launcher can authenticate. Ask the user to provide authenticated Convex access or the broker environment pair."
+        : "Resolve the reported launcher or connectivity error before concluding credentials are missing.";
+  throw new Error(
+    `Could not load the QA broker through existing Convex launchers (${details}). ${remedy} No installation or login was attempted.`,
+  );
 }
 
 async function readBrokerResponse(response, maxBytes) {
@@ -221,25 +292,29 @@ export async function acquireQaLease({
   payloadMaxBytes = DEFAULT_PAYLOAD_MAX_BYTES,
   payloadMaxChunks = DEFAULT_PAYLOAD_MAX_CHUNKS,
   env = process.env,
+  signal,
   cwd = process.cwd(),
   runConvexCliImpl = defaultRunConvexCli,
   convexProjectDir,
   fetchImpl = fetch,
-  sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleepImpl = (ms) => delay(ms, undefined, { signal }),
   randomImpl = Math.random,
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
+  signal?.throwIfAborted();
   const broker = await resolveBrokerConfig({
     env,
     cwd,
     runConvexCliImpl,
     convexProjectDir,
+    signal,
   });
   const requestOptions = { broker, fetchImpl, httpTimeoutMs };
   const startedAt = Date.now();
   let acquired;
   let confirmedAt;
   for (;;) {
+    signal?.throwIfAborted();
     try {
       confirmedAt = { wall: Date.now(), monotonic: performance.now() };
       acquired = await callBroker(
@@ -270,6 +345,63 @@ export async function acquireQaLease({
   if (!identity.credentialId || !identity.leaseToken) {
     throw new Error("Broker acquire response is missing lease identity.");
   }
+  return await manageQaLease({
+    identity,
+    acquired,
+    confirmedAt,
+    requestOptions,
+    leaseTtlMs,
+    heartbeatIntervalMs,
+    payloadMaxBytes,
+    payloadMaxChunks,
+    signal,
+  });
+}
+
+// Recovery revalidates the same broker owner. It never allocates a replacement.
+export async function resumeQaLease({
+  recovery,
+  env = process.env,
+  signal,
+  cwd = process.cwd(),
+  fetchImpl = fetch,
+  runConvexCliImpl = defaultRunConvexCli,
+  convexProjectDir,
+  httpTimeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
+}) {
+  signal?.throwIfAborted();
+  const broker = await resolveBrokerConfig({
+    env,
+    cwd,
+    runConvexCliImpl,
+    convexProjectDir,
+    signal,
+  });
+  return await manageQaLease({
+    identity: recovery.identity,
+    acquired: { payload: undefined },
+    requestOptions: { broker, fetchImpl, httpTimeoutMs },
+    leaseTtlMs: recovery.leaseTtlMs,
+    heartbeatIntervalMs: recovery.heartbeatIntervalMs,
+    payloadMaxBytes: DEFAULT_PAYLOAD_MAX_BYTES,
+    payloadMaxChunks: DEFAULT_PAYLOAD_MAX_CHUNKS,
+    signal,
+    recovering: true,
+  });
+}
+
+async function manageQaLease({
+  identity,
+  acquired,
+  requestOptions,
+  leaseTtlMs,
+  heartbeatIntervalMs,
+  payloadMaxBytes,
+  payloadMaxChunks,
+  signal,
+  recovering = false,
+  confirmedAt = { wall: Date.now(), monotonic: performance.now() },
+}) {
   let heartbeatError;
   let heartbeatInFlight;
   let resolveUnhealthy;
@@ -322,6 +454,7 @@ export async function acquireQaLease({
   let payload;
   try {
     await initialHeartbeat;
+    signal?.throwIfAborted();
     assertHealthy();
     payload = await resolveCredentialPayload(
       acquired,
@@ -334,7 +467,12 @@ export async function acquireQaLease({
       { assertHealthy, whenUnhealthy },
     );
     assertHealthy();
+    signal?.throwIfAborted();
   } catch (error) {
+    if (recovering) {
+      await stopHeartbeat();
+      throw error;
+    }
     try {
       await stopHeartbeat();
       await callBroker("release", identity, requestOptions);
@@ -346,22 +484,26 @@ export async function acquireQaLease({
     }
     throw error;
   }
-  let released = false;
+  let releasing;
   return {
     payload,
-    credentialId: acquired.credentialId,
+    credentialId: identity.credentialId,
+    recovery: { identity, leaseTtlMs, heartbeatIntervalMs },
     whenUnhealthy,
     assertHealthy,
     abandon: async () => {
       invalidate(new Error("Credential lease abandoned; waiting for existing broker expiry."));
       await stopHeartbeat();
     },
-    release: async () => {
-      if (released) return;
-      invalidate(new Error("Credential lease released."));
-      await stopHeartbeat();
-      await callBroker("release", identity, requestOptions);
-      released = true;
+    release: () => {
+      invalidate(
+        Object.assign(new Error("Credential lease released."), { code: "LEASE_RELEASED" }),
+      );
+      releasing ??= (async () => {
+        await stopHeartbeat();
+        await callBroker("release", identity, requestOptions);
+      })();
+      return releasing;
     },
   };
 }

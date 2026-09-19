@@ -59,8 +59,10 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
   meta?: SessionAcpMeta;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<boolean> {
   if (
+    !params.isCurrentActor() ||
     isAcpOwnerRepairRequired(params.error) ||
     params.attempt > 0 ||
     params.promptStarted ||
@@ -84,12 +86,18 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     return false;
   }
   if (params.runtime.prepareFreshSession) {
+    if (!params.isCurrentActor()) {
+      return false;
+    }
     try {
       await params.runtime.prepareFreshSession({
         persistedHandle: persistedAcpRuntimeHandle(params, params.meta),
         sessionKey: params.sessionKey,
         agentId: params.agentId,
       });
+      if (!params.isCurrentActor()) {
+        return false;
+      }
     } catch (error) {
       if (isAcpOwnerRepairRequired(error)) {
         throw error;
@@ -105,8 +113,9 @@ export async function prepareFreshManagerRuntimeHandleRetry(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     writeSessionMeta: params.writeSessionMeta,
+    isCurrentActor: params.isCurrentActor,
   });
-  if (!cleared) {
+  if (!cleared || !params.isCurrentActor()) {
     return false;
   }
   params.runtimeHandles.clear(params);
@@ -121,13 +130,18 @@ async function clearPersistedRuntimeResumeState(params: {
   sessionKey: string;
   agentId: string;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<boolean> {
   const now = Date.now();
   const updated = await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
+      if (!params.isCurrentActor()) {
+        return undefined;
+      }
       if (!entry) {
         return null;
       }
@@ -174,13 +188,18 @@ export async function discardPersistedManagerRuntimeState(params: {
   sessionKey: string;
   agentId: string;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor: () => boolean;
 }): Promise<void> {
   const now = Date.now();
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    isCurrentActor: params.isCurrentActor,
     mutate: (current, entry) => {
+      if (!params.isCurrentActor()) {
+        return undefined;
+      }
       if (!entry) {
         return null;
       }

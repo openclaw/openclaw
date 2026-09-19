@@ -4,9 +4,13 @@ import {
   readNonBlankString as normalizeTtsSupplementSpokenText,
 } from "@openclaw/normalization-core/string-coerce";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
+import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
+import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
+import type { BlockReplySource } from "./reply/block-reply-source.types.js";
 
 export type {
   ReplyMediaAttachment,
@@ -185,6 +189,8 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
+  /** Captured admitted completion authority, retained by the durable queue. */
+  harnessCompletion?: HarnessCompletionRecovery;
   expectedLifecycleRevision?: string;
   expectedSessionId: string;
   expectedWriterRunId?: string;
@@ -196,8 +202,12 @@ export type ReplyPayloadMetadata = {
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
+  /** Answer to a preceding user input in the same run. */
+  precedingInputAnswer?: true;
   /** Visible source represented by this block, excluding synthetic chunk wrappers. */
   blockSourceText?: string;
+  /** Live source receipts retained until final text recovery settles. */
+  blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;
   /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
@@ -214,6 +224,8 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** A read-only status command exchange belongs in history, not model context. */
+  contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;
   /** Host-projected monitoring final; notification policy already normalized its text. */
@@ -226,6 +238,8 @@ export type ReplyPayloadMetadata = {
   finalDeliveryCapture?: object;
   /** One host-visible status gates a child-completion wake for this exact turn. */
   continuationStatus?: true;
+  /** One-shot transfer of an identified ongoing progress surface to its core task owner. */
+  progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
     deliveryId: string;
@@ -283,7 +297,11 @@ export type ReplyPayloadMetadata = {
   heartbeatScratchProposal?: string;
 };
 
-const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
+// Source Gateways and native plugin SDK chunks must share the same payload identity.
+const replyPayloadMetadata = resolveGlobalSingleton(
+  Symbol.for("openclaw.replyPayloadMetadata"),
+  () => new WeakMap<object, ReplyPayloadMetadata>(),
+);
 
 /** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(

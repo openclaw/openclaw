@@ -9,10 +9,12 @@ import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
 } from "../../state/agent-deletion-journal.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
@@ -28,10 +30,8 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.js";
 import { replaceSessionEntry } from "./session-accessor.js";
-import {
-  isCanonicalSqliteSessionMainKeyCurrent,
-  setCanonicalSqliteSessionMainKey,
-} from "./session-canonical-key.js";
+import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-read.js";
+import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
@@ -39,7 +39,8 @@ import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -51,6 +52,10 @@ it.each(["cold", "preexisting"] as const)(
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const options = { agentId: "main", env };
     const initial = openOpenClawAgentDatabase(options);
+    await replaceSessionEntry(
+      { ...options, sessionKey: "agent:main:retained" },
+      { sessionId: "retained-session", updatedAt: 1 },
+    );
     setCanonicalSqliteSessionMainKey(initial, "previous");
     if (lifetime === "cold") {
       closeOpenClawAgentDatabasesForTest();
@@ -66,6 +71,8 @@ it.each(["cold", "preexisting"] as const)(
     expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(lifetime === "preexisting");
     if (lifetime === "preexisting") {
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
+    } else {
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toThrow();
     }
   },
 );
@@ -83,7 +90,7 @@ it("does not create a missing configured agent database during startup maintenan
     agentId: "idle",
     env,
   }).path;
-  const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
+  const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => ({ found: 0, repaired: 0 }));
 
   await runSessionStartupMigration({
     cfg,
@@ -217,7 +224,10 @@ it("re-registers durable lineage children before configured-only runtime reads",
       ),
     ).toBe(false);
 
-    const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
+    const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => ({
+      found: 0,
+      repaired: 0,
+    }));
     await runSessionStartupMigration({
       cfg,
       env,
@@ -340,7 +350,7 @@ it.each(["registry", "main-key"] as const)(
           migrateManagedWorktreeCanonicalWorkspaces: async () => {
             maintenanceSawProgress = yielded;
             maintenanceSawSelectedKey = isCanonicalSqliteSessionMainKeyCurrent(options, undefined);
-            return 0;
+            return { found: 0, repaired: 0 };
           },
         },
       });

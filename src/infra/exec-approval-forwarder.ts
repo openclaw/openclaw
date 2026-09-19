@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getLoadedChannelPlugin,
   resolveChannelApprovalAdapter,
@@ -17,6 +18,10 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  hasActiveNativeApprovalRoute,
+  type ApprovalNativeRouteCoordinator,
+} from "./approval-native-route-coordinator.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import {
@@ -88,6 +93,8 @@ type ExecApprovalForwarderDeps = {
   deliver?: DeliverApprovalPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: ResolveSessionTargetFn;
+  /** The owning Gateway's coordinator, where its channel accounts register native handlers. */
+  getNativeApprovalRouteCoordinator?: () => ApprovalNativeRouteCoordinator | undefined;
 };
 
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
@@ -149,6 +156,7 @@ function shouldSkipForwardingFallback(params: {
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
+  nativeRouteCoordinator: ApprovalNativeRouteCoordinator | undefined;
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
   if (!channel) {
@@ -156,15 +164,27 @@ function shouldSkipForwardingFallback(params: {
   }
   // Channel adapters can suppress generic fallback delivery when they already
   // own native approval UX for the same target.
-  const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel));
-  return (
+  const plugin = getLoadedChannelPlugin(channel);
+  const adapter = resolveChannelApprovalAdapter(plugin);
+  const suppress =
     adapter?.delivery?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
       approvalKind: params.approvalKind,
       target: params.target,
       request: buildSyntheticApprovalRequest(params.routeRequest),
-    }) ?? false
-  );
+    }) ?? false;
+  if (!suppress || !plugin) {
+    return false;
+  }
+  // Suppression hands the chat to the native handler, so it holds only while the handler
+  // for the destination account runs; a target without one is delivered by the default.
+  return hasActiveNativeApprovalRoute(params.nativeRouteCoordinator, {
+    channel,
+    accountId:
+      normalizeOptionalString(params.target.accountId) ??
+      resolveChannelDefaultAccountId({ plugin, cfg: params.cfg }),
+    approvalKind: params.approvalKind,
+  });
 }
 
 function normalizeTurnSourceChannel(value?: string | null): string | undefined {
@@ -327,6 +347,7 @@ function createApprovalHandlers<
   deliver: DeliverApprovalPayloads;
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;
+  getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
 }) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
@@ -348,6 +369,7 @@ function createApprovalHandlers<
       approvalKind: params.strategy.kind,
       resolveSessionTarget: params.resolveSessionTarget,
     });
+    const nativeRouteCoordinator = params.getNativeApprovalRouteCoordinator();
     return targets.filter(
       (target) =>
         !shouldSkipForwardingFallback({
@@ -355,6 +377,7 @@ function createApprovalHandlers<
           target,
           cfg: paramsForRoute.cfg,
           routeRequest: paramsForRoute.routeRequest,
+          nativeRouteCoordinator,
         }),
     );
   };
@@ -517,6 +540,8 @@ export function createExecApprovalForwarder(
     });
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
+  const getNativeApprovalRouteCoordinator =
+    deps.getNativeApprovalRouteCoordinator ?? (() => undefined);
 
   const execHandlers = createApprovalHandlers({
     strategy: execApprovalStrategy,
@@ -524,6 +549,7 @@ export function createExecApprovalForwarder(
     deliver,
     nowMs,
     resolveSessionTarget,
+    getNativeApprovalRouteCoordinator,
   });
   const pluginHandlers = createApprovalHandlers({
     strategy: pluginApprovalStrategy,
@@ -531,6 +557,7 @@ export function createExecApprovalForwarder(
     deliver,
     nowMs,
     resolveSessionTarget,
+    getNativeApprovalRouteCoordinator,
   });
 
   return {

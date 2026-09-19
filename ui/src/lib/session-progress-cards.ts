@@ -35,8 +35,17 @@ type ProgressCardEntry = {
 
 type SessionProgressCardLoadError = "access-denied" | "unavailable";
 
+type ProgressCardWatchOptions = {
+  /** Gates automatic reads only; inactive watches still retain and invalidate their cache. */
+  admitAutomaticRead?: () => boolean;
+};
+
 export type SessionProgressCardStore = {
-  watch: (owner: object, targets: readonly ProgressCardGetParams[]) => void;
+  watch: (
+    owner: object,
+    targets: readonly ProgressCardGetParams[],
+    options?: ProgressCardWatchOptions,
+  ) => void;
   unwatch: (owner: object) => void;
   load: (target: ProgressCardGetParams) => Promise<ProgressCard | null>;
   dismiss: (target: ProgressCardGetParams, card: ProgressCard) => Promise<boolean>;
@@ -133,7 +142,10 @@ function progressCardRequestTarget(target: ProgressCardGetParams): ProgressCardG
 }
 
 function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
-  const watchedByOwner = new Map<object, readonly ProgressCardGetParams[]>();
+  const watchedByOwner = new Map<
+    object,
+    ProgressCardWatchOptions & { targets: readonly ProgressCardGetParams[] }
+  >();
   const entries = new Map<string, ProgressCardEntry>();
   const listeners = new Set<() => void>();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
@@ -150,14 +162,16 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       wireKey: scopedSessionArtifactKey(canonical.sessionKey, canonical.agentId),
     };
   };
-  const watchedTargets = () =>
+  const watchedTargets = (admittedOnly = false) =>
     new Map(
-      Array.from(watchedByOwner.values()).flatMap((targets) =>
-        targets.map((target) => {
-          const resolved = resolveTarget(target);
-          return [resolved.key, resolved.target] as const;
-        }),
-      ),
+      Array.from(watchedByOwner.values())
+        .filter((registration) => !admittedOnly || registration.admitAutomaticRead?.() !== false)
+        .flatMap(({ targets }) =>
+          targets.map((target) => {
+            const resolved = resolveTarget(target);
+            return [resolved.key, resolved.target] as const;
+          }),
+        ),
     );
   const notify = () => {
     for (const listener of listeners) {
@@ -249,6 +263,10 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
           delete entry.load;
           if (entries.get(resolved.key) === entry) {
             remember(resolved.key, entry);
+            // Invalidations survive a hidden watch that resumes before this read settles.
+            if (entry.generation !== generation && watchedTargets(true).has(resolved.key)) {
+              void load(entry.target).catch(() => undefined);
+            }
           }
         }
       });
@@ -257,7 +275,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     return request;
   };
   const refreshWatched = () => {
-    for (const target of watchedTargets().values()) {
+    for (const target of watchedTargets(true).values()) {
       void load(target).catch(() => undefined);
     }
   };
@@ -295,7 +313,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     ) {
       return;
     }
-    const watched = watchedTargets();
+    const watched = watchedTargets(true);
     // Loading rewrites LRU order, so capture the matching entries before starting requests.
     const matching = [...entries].filter(([, entry]) => entry.wireKey === sessionKey);
     for (const [key, entry] of matching) {
@@ -304,17 +322,8 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       entry.generation += 1;
       entry.dirty = true;
       delete entry.error;
-      if (watched.has(key)) {
-        const refresh = () => {
-          if (watchedTargets().has(key)) {
-            void load(entry.target).catch(() => undefined);
-          }
-        };
-        if (entry.load) {
-          void entry.load.finally(refresh).catch(() => undefined);
-        } else {
-          refresh();
-        }
+      if (!entry.load && watched.has(key)) {
+        void load(entry.target).catch(() => undefined);
       }
     }
   };
@@ -338,7 +347,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     // Without event/client subscriptions these snapshots cannot remain fresh.
     entries.clear();
   };
-  const watch = (owner: object, targets: readonly ProgressCardGetParams[]) => {
+  const watch: SessionProgressCardStore["watch"] = (owner, targets, options) => {
     // Retain aliases so a replacement Gateway can resolve its new routing facts.
     const retained = targets
       .filter((target) => target.sessionKey.trim())
@@ -348,10 +357,12 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       detachIfIdle();
       return;
     }
-    watchedByOwner.set(owner, retained);
+    watchedByOwner.set(owner, { targets: retained, ...options });
     attach();
     for (const target of retained) {
-      void load(target).catch(() => undefined);
+      if (options?.admitAutomaticRead?.() !== false) {
+        void load(target).catch(() => undefined);
+      }
     }
   };
   return {

@@ -17,6 +17,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import * as agentJob from "../agent-turn/agent-job.js";
+import * as githubPublication from "../github-publication-availability.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -103,11 +104,11 @@ function streamReply(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("visible yielded session reset", () => {
-  it(
-    "preserves real chat yield metadata and cancels its held descendant without resuming inference",
+describe("visible yielded session continuation", () => {
+  it.each(["reset", "complete"] as const)(
+    "preserves real chat yield metadata and the held descendant's %s outcome",
     { timeout: 90_000 },
-    async () => {
+    async (outcome) => {
       const home = tempDirs.make("openclaw-visible-yield-reset-");
       const stateDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "workspace");
@@ -141,6 +142,13 @@ describe("visible yielded session reset", () => {
       const nestedClosed = createDeferred();
       const requesterWaitAttached = createDeferred();
       const requesterYielded = createDeferred();
+      const resumedCatalog = createDeferred<string[]>();
+      const publicationCatalogs: string[][] = [];
+      let childResponse: ServerResponse | undefined;
+      const publicationSpy = vi.spyOn(githubPublication, "prepareGitHubPublicationAvailability");
+      if (outcome === "complete") {
+        publicationSpy.mockResolvedValue(true);
+      }
       const requesterWaitFinished = createDeferred<WaitResult>();
       const resetAcknowledged = createDeferred<{ state?: string }>();
       const attachedChatRuns = new Set<string>();
@@ -369,24 +377,36 @@ describe("visible yielded session reset", () => {
                 };
               }),
             });
-            const marked = body.input
+            const userTexts = body.input
               .filter((item) => item.role === "user")
-              .map((item) => {
-                const text =
-                  typeof item.content === "string"
-                    ? item.content
-                    : item.content?.map((part) => part.text).join("\n");
-                return [rootMarker, requesterMarker, childMarker].filter((marker) =>
-                  text?.includes(marker),
-                );
-              })
-              .findLast((markers) => markers.length > 0);
-            expect(marked, "one fixture marker in latest marked user message").toHaveLength(1);
+              .map((item) =>
+                typeof item.content === "string"
+                  ? item.content
+                  : (item.content?.map((part) => part.text).join("\n") ?? ""),
+              );
+            // Completion messages quote child tasks; route by the admitted assignment.
+            const assignment = userTexts.findLast((text) => text.includes("[Subagent Task]"));
+            const task = assignment?.split("[Subagent Task]").at(-1);
+            const marked = task
+              ? [requesterMarker, childMarker].filter((marker) => task.includes(marker))
+              : [rootMarker].filter((marker) => userTexts.some((text) => text.includes(marker)));
+            expect(marked, "one fixture marker in the admitted task").toHaveLength(1);
             const marker = marked![0];
             if (stopping) {
               throw new Error("provider called during fixture shutdown");
             }
             if (marker === requesterMarker && yieldDispatched) {
+              if (outcome === "complete") {
+                resumedCatalog.resolve(body.tools.map((entry) => entry.name));
+                streamReply(response, {
+                  type: "message",
+                  id: randomUUID(),
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "output_text", text: "Review complete.", annotations: [] }],
+                });
+                return;
+              }
               unexpectedInference++;
               record("unexpected-requester-inference");
               response.writeHead(400, { "content-type": "application/json" }).end(
@@ -397,6 +417,9 @@ describe("visible yielded session reset", () => {
               return;
             }
             if (marker === rootMarker) {
+              if (outcome === "complete") {
+                publicationCatalogs.push(body.tools.map((entry) => entry.name));
+              }
               if (rootStep++ === 0) {
                 tool(
                   response,
@@ -428,6 +451,9 @@ describe("visible yielded session reset", () => {
               return;
             }
             if (marker === requesterMarker) {
+              if (outcome === "complete") {
+                publicationCatalogs.push(body.tools.map((entry) => entry.name));
+              }
               if (requesterStep++ === 0) {
                 tool(
                   response,
@@ -470,6 +496,7 @@ describe("visible yielded session reset", () => {
             }
             expect(marker).toBe(childMarker);
             expect(++childRequests, "held nested request must not replay").toBe(1);
+            childResponse = response;
             response.once("close", () => {
               record("nested-stream-close", {
                 writableEnded: response.writableEnded,
@@ -477,10 +504,12 @@ describe("visible yielded session reset", () => {
               });
               nestedClosed.resolve();
             });
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            response.write(
-              `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
-            );
+            if (outcome === "reset") {
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              response.write(
+                `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
+              );
+            }
             record("nested-stream-open");
             nestedOpen.resolve();
           })().catch((error: unknown) => {
@@ -525,7 +554,11 @@ describe("visible yielded session reset", () => {
             tools: {
               profile: "full",
               codeMode: false,
-              allow: ["sessions_spawn", "sessions_yield"],
+              allow: [
+                "sessions_spawn",
+                "sessions_yield",
+                ...(outcome === "complete" ? ["github_identity_status", "github_publish"] : []),
+              ],
             },
             models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
             gateway: { auth: { mode: "token", token: environment.OPENCLAW_GATEWAY_TOKEN } },
@@ -572,6 +605,49 @@ describe("visible yielded session reset", () => {
         expect
           .soft(waitResult, "chat waiter must retain actual yield metadata")
           .toMatchObject({ status: "ok", yielded: true });
+        if (outcome === "complete") {
+          streamReply(expectDefined(childResponse, "held reviewer response"), {
+            type: "message",
+            id: randomUUID(),
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Reviewer finished.", annotations: [] }],
+          });
+          publicationCatalogs.push(
+            await bound(resumedCatalog.promise, "requester did not resume").catch(
+              (cause: unknown) => {
+                throw new Error(
+                  JSON.stringify({
+                    fixtureErrors,
+                    runs: snapshot(),
+                    trace: failureTrace.slice(-12),
+                  }),
+                  { cause },
+                );
+              },
+            ),
+          );
+          expect(publicationCatalogs.length).toBeGreaterThanOrEqual(3);
+          for (const catalog of publicationCatalogs) {
+            expect(catalog).toEqual(
+              expect.arrayContaining(["github_identity_status", "github_publish"]),
+            );
+          }
+          const client = gateway.client;
+          await vi.waitFor(
+            async () => {
+              const history = await client.request("chat.history", {
+                sessionKey: expectDefined(requester, "requester session").childSessionKey,
+                agentId: "main",
+                limit: 20,
+              });
+              expect(JSON.stringify(history)).toContain("Review complete.");
+            },
+            { timeout: 30_000, interval: 50 },
+          );
+          expect(fixtureErrors).toEqual([]);
+          return;
+        }
         await gateway.client.request(
           "chat.send",
           { sessionKey, message: "/new", deliver: false, idempotencyKey: resetId },
@@ -631,6 +707,7 @@ describe("visible yielded session reset", () => {
         unsubscribe();
         waiterSpy.mockRestore();
         admissionSpy.mockRestore();
+        publicationSpy.mockRestore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();
         clearSessionStoreCacheForTest();

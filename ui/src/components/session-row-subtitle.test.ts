@@ -56,8 +56,6 @@ describe("resolveSidebarSessionSubtitle", () => {
   it.each(["stuck", "waiting-on-user"] as const)(
     "keeps a %s observer headline when previews are hidden",
     (health) => {
-      // isCriticalObserverHealth owns these two states; the chat pane announces them
-      // too, so a display preference must not silence them in the sidebar.
       expect(
         resolveSidebarSessionSubtitle({
           session: {
@@ -128,7 +126,7 @@ describe("resolveSidebarSessionSubtitle", () => {
       activeRunIds: ["run-1"],
       status: "running",
       agentStatusNote: "Waiting for deployment",
-      attention: { kind: "question" },
+      attention: { kind: "question", requests: [] },
     };
     const observerDigest = {
       runId: "run-1",
@@ -280,11 +278,14 @@ describe("resolveSidebarSessionSubtitle", () => {
 
     expect(resolve({ agentStatusNote: "Waiting for deployment" })).toBe("Waiting for deployment");
     expect(
-      resolve({ attention: { kind: "question" }, agentStatusNote: "Waiting for deployment" }),
+      resolve({
+        attention: { kind: "question", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
     ).toBeUndefined();
     expect(
       resolve({
-        attention: { kind: "approval" },
+        attention: { kind: "approval", requests: [] },
         agentStatusNote: "Waiting for deployment",
       }),
     ).toBe("Waiting for approval");

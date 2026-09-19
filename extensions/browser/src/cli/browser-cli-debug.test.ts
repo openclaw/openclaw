@@ -1,18 +1,14 @@
 // Browser tests cover browser cli debug plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliSharedModule from "./browser-cli-shared.js";
 import {
   createBrowserProgram,
+  mockBrowserGateway,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
 import * as cliCoreApiModule from "./core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
-}));
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+const gatewayMock = mockBrowserGateway();
 const browserCliRuntime = getBrowserCliRuntime();
 vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
   browserCliRuntime.writeJson,
@@ -24,7 +20,7 @@ const { registerBrowserDebugCommands } = await import("./browser-cli-debug.js");
 
 describe("browser debug command timeouts", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
+    gatewayMock.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
@@ -43,9 +39,11 @@ describe("browser debug command timeouts", () => {
 
       await program.parseAsync(["browser", ...parentArgs, ...args], { from: "user" });
 
-      expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
+      expect(gatewayMock).toHaveBeenLastCalledWith(
+        "browser.request",
         expect.objectContaining({ timeout }),
-        expect.objectContaining({ path }),
+        expect.objectContaining({ path, timeoutMs: Number(timeout) }),
+        expect.objectContaining({ scopes: ["operator.admin"] }),
       );
     }
   });

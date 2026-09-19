@@ -17,8 +17,12 @@ import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
+import { recordModelFallbackStop } from "../agents/failover-error.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
-import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
+import {
+  projectEffectiveExecPolicy,
+  resolveSessionPermissionCoreToolPolicy,
+} from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -36,7 +40,6 @@ import { createWorkerComputerTool } from "./computer-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
   createWorkerTranscriptRuntime,
-  toAgentMessage,
   toWorkerInferenceContext,
 } from "./embedded-agent-transcript.runtime.js";
 import type { WorkerBrowserLaunchDescriptor, WorkerLaunchPlan } from "./launch-descriptor.js";
@@ -45,6 +48,7 @@ import {
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
   WORKER_SESSION_TOOL_NAMES,
   WORKER_TOOL_NAMES,
+  type WorkerToolAuthority,
   type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
@@ -101,6 +105,7 @@ type RunWorkerEmbeddedTurnParams = {
   inferenceOptions?: WorkerInferenceOptions;
   allowedToolNames: readonly WorkerToolName[];
   permissionMode?: import("../../packages/gateway-protocol/src/schema/sessions-row.js").SessionPermissionMode;
+  execAuthority: WorkerToolAuthority["exec"];
   browser?: WorkerBrowserLaunchDescriptor;
   browserRuntime?: WorkerBrowserRuntime;
   computer?: Omit<Parameters<typeof createWorkerComputerTool>[0], "runId" | "registerRunCleanup">;
@@ -179,7 +184,7 @@ async function runWorkerEmbeddedTurnWithResources(
 
   const baseSessionManager = SessionManager.inMemory(params.cwd);
   for (const message of params.initialMessages ?? []) {
-    baseSessionManager.appendMessage(toAgentMessage(message));
+    baseSessionManager.appendMessage(structuredClone(message));
   }
 
   const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript);
@@ -188,8 +193,18 @@ async function runWorkerEmbeddedTurnWithResources(
     onMessagePersisted: transcriptRuntime.onMessagePersisted,
   });
 
+  // Exec security/ask are host-relative, and workers have no Gateway transport for node RPC:
+  // snapshotNodeWorkerEnv strips the Gateway URL/token, so resolveNodeExecutionTarget ->
+  // callGatewayTool has no loopback. Fail closed; the descriptor still carries audit authority.
+  const execUnavailable =
+    params.execAuthority === undefined ||
+    params.execAuthority.host === "sandbox" ||
+    params.execAuthority.host === "node";
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
+  if (execUnavailable) {
+    allowedToolNameSet.delete("exec");
+    allowedToolNameSet.delete("process");
+  }
   const permissionToolPolicy = params.permissionMode
     ? resolveSessionPermissionCoreToolPolicy({ mode: params.permissionMode })
     : undefined;
@@ -199,15 +214,32 @@ async function runWorkerEmbeddedTurnWithResources(
   const activeToolNames = WORKER_TOOL_NAMES.filter(
     (name) => allowedToolNameSet.has(name) && !omittedToolNames?.has(name),
   );
+  const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const headlessApprovalText = params.permissionMode
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
+  // The Gateway resolves effective exec policy before dispatch; deriving it from the worker's
+  // isolated config would reconstruct restricted turns with wider authority.
+  const execAuthority = params.execAuthority ?? {
+    host: "gateway" as const,
+    security: "deny" as const,
+    ask: "off" as const,
+  };
+  const {
+    security: execSecurity,
+    ask: execAsk,
+    mode: execMode,
+  } = projectEffectiveExecPolicy({
+    base: execAuthority,
+    overrides: execAuthority,
+    permissionPolicy: params.permissionMode ? { mode: params.permissionMode } : undefined,
+  });
   const coreTools = createCoreCodingTools({
     skillsSnapshot,
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
-    includeShellTools: true,
+    shellTools: execUnavailable ? "patch-only" : "full",
     workspaceOnly: permissionToolPolicy?.workspaceOnly ?? false,
     readOnly: permissionToolPolicy?.readOnly ?? false,
     modelContextWindowTokens: model.contextWindow,
@@ -220,12 +252,15 @@ async function runWorkerEmbeddedTurnWithResources(
       }),
     applyPatchWorkspaceOnly: permissionToolPolicy?.applyPatchWorkspaceOnly ?? true,
     execDefaults: {
-      bypassHostApprovalFloors: permissionToolPolicy?.bypassHostApprovalFloors,
-      host: "gateway",
-      mode: permissionToolPolicy?.execMode ?? "full",
-      security: "full",
-      ask: "off",
-      // Safe clamp v1 keeps allowlist hits local but denies misses before review.
+      bypassHostApprovalFloors:
+        permissionToolPolicy?.bypassHostApprovalFloors && execSecurity === "full",
+      safeBins: execAuthority.safeBins ?? [],
+      host: execAuthority.host,
+      node: execAuthority.host === "node" ? execAuthority.node : undefined,
+      security: execSecurity,
+      ask: execAsk,
+      ...(execMode ? { mode: execMode } : {}),
+      // Host-specific approvals are not portable; misses require local execution.
       // Worker LLM review and interactive approval RPC remain a named follow-up.
       nonInteractiveApproval: Boolean(
         permissionToolPolicy && permissionToolPolicy.execMode !== "full",
@@ -259,11 +294,27 @@ async function runWorkerEmbeddedTurnWithResources(
     ? AbortSignal.any([params.signal, turnLifetime.signal])
     : turnLifetime.signal;
   let computerCleanup: ((reason: string) => Promise<void>) | undefined;
-  const disposeComputer = async () => {
+  function disposeTools(failure: Error): Promise<Error>;
+  function disposeTools(failure?: Error): Promise<Error | undefined>;
+  async function disposeTools(failure?: Error): Promise<Error | undefined> {
+    turnLifetime.abort();
     const cleanup = computerCleanup;
     computerCleanup = undefined;
-    await cleanup?.("Worker turn finished");
-  };
+    const failures = failure ? [failure] : [];
+    for (const dispose of [
+      () => cleanup?.("Worker turn finished"),
+      () => browserRuntime?.dispose(),
+    ]) {
+      try {
+        await dispose();
+      } catch (error) {
+        const cleanupFailure = toWorkerAgentError(error, "Worker tool cleanup failed.");
+        recordModelFallbackStop(cleanupFailure);
+        failures.push(cleanupFailure);
+      }
+    }
+    return failures.length > 1 ? new AggregateError(failures, "Worker turn failed") : failures[0];
+  }
   const { session } = await (async () => {
     try {
       const computerTool = params.computer
@@ -309,7 +360,10 @@ async function runWorkerEmbeddedTurnWithResources(
       );
       const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
       for (const toolName of WORKER_REQUIRED_LOCAL_TOOL_NAMES) {
-        if (omittedToolNames?.has(toolName)) {
+        if (
+          omittedToolNames?.has(toolName) ||
+          (execUnavailable && (toolName === "exec" || toolName === "process"))
+        ) {
           continue;
         }
         if (!discoveredToolNames.has(toolName)) {
@@ -347,13 +401,7 @@ async function runWorkerEmbeddedTurnWithResources(
         withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
       });
     } catch (error) {
-      turnLifetime.abort();
-      try {
-        await disposeComputer();
-      } finally {
-        await browserRuntime?.dispose();
-      }
-      throw error;
+      throw await disposeTools(toWorkerAgentError(error, "Worker agent setup failed."));
     }
   })();
   session.agent.sessionId = params.sessionId;
@@ -407,21 +455,14 @@ async function runWorkerEmbeddedTurnWithResources(
     runFailure = params.signal?.aborted
       ? toWorkerAgentError(params.signal.reason, "Worker agent turn aborted.")
       : toWorkerAgentError(error, "Worker agent turn failed.");
-    liveRuntime.enqueueRunFailure({
-      aborted: params.signal?.aborted === true,
-      error: runFailure,
-    });
   }
 
   let finalTranscriptFailure: Error | undefined;
   try {
     // Provider executions must close while the Gateway still admits this turn.
     // The terminal ACK fences every later desktop RPC, including cleanup.
-    turnLifetime.abort();
-    try {
-      await disposeComputer();
-    } catch (error) {
-      runFailure ??= toWorkerAgentError(error, "Worker computer cleanup failed.");
+    runFailure = await disposeTools(runFailure);
+    if (runFailure) {
       liveRuntime.enqueueRunFailure({
         aborted: params.signal?.aborted === true,
         error: runFailure,
@@ -442,7 +483,6 @@ async function runWorkerEmbeddedTurnWithResources(
     params.signal?.removeEventListener("abort", abortTurn);
     unsubscribe();
     session.dispose();
-    await browserRuntime?.dispose();
   }
   if (runFailure !== undefined) {
     throw runFailure;

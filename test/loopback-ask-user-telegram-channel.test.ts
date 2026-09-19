@@ -24,6 +24,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../src/agents/cli-runner.test-helpers.js";
+import { createCliRunCurrentAssertion } from "../src/agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -288,7 +289,10 @@ describe("loopback ask_user Telegram channel transport", () => {
                   context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
                   "prepared CLI grant",
                 );
-                context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+                context.preparedBackend.mcpClientGrantCapture?.activate(
+                  captureKey,
+                  createCliRunCurrentAssertion(context.params),
+                );
                 expect(
                   resolveMcpLoopbackClientGrant({
                     token,

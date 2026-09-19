@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { racePromiseWithAbortSignal, waitForAbortSignal } from "../../infra/abort-signal.js";
 import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
 import { WorkerProviderError } from "../../plugins/capability-provider.types.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
@@ -12,7 +12,10 @@ import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap
 function createRuntimeManager(
   transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>,
 ) {
-  support.testState.config.gateway = { publicOrigin: "https://gateway.example.test" };
+  support.testState.config.gateway = {
+    publicOrigin: "https://gateway.example.test",
+    auth: { mode: "token", token: "test-gateway-token" },
+  };
   return createWorkerNodeEnrollmentManager({
     store: support.testState.store,
     getConfig: () => support.testState.config,
@@ -282,92 +285,101 @@ describe("worker provisioning cancellation ownership", () => {
     },
   );
 
-  it("cleans a warm runtime lease while shutdown retains its cancelled bundle producer", async () => {
-    const preparing = createDeferredCore();
-    const prepared = createDeferredCore();
-    const controller = new AbortController();
-    const events: string[] = [];
-    support.testState.prepareInstallation = vi.fn(async () => {
-      events.push("bundle-started");
-      preparing.resolve();
-      await prepared.promise;
-      events.push("bundle-settled");
-      return support.BUNDLE_ARTIFACT;
-    });
-    const transfer = createWorkerBootstrapArtifactTransferService();
-    const grant = vi.spyOn(transfer, "prepare");
-    const manager = createRuntimeManager(transfer);
-    const destroy = vi.fn(async () => {
-      events.push("destroy");
-    });
-    const service = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        requiresNodeEnrollment: true,
-        provisionBeforeInstallation: true,
-        provision: async (_profile, _operation, options) => {
-          events.push("allocated");
-          await options!.prepareNodeRuntime!();
-          throw new Error("Cancelled runtime preparation unexpectedly completed");
-        },
-        destroy,
-      }),
-      {
-        prepareNodeBootstrap: manager.prepare,
-        prepareNodeRuntime: manager.prepareRuntime,
-        closeNodeRuntime: manager.closeRuntime,
-        prepareNodeEnrollment: manager.begin,
-        closeNodeEnrollment: manager.close,
-        stopNodeEnrollmentWaits: manager.stop,
-      },
-    );
-    let settled = false;
-    const creation = service
-      .create(
-        "development",
-        "warm-runtime-bundle-stop",
-        undefined,
-        "worker-turn",
-        undefined,
-        controller.signal,
-      )
-      .catch((error: unknown) => error)
-      .finally(() => {
-        settled = true;
+  it.each(["warm-runtime", "enrollment"] as const)(
+    "cleans the %s lease while shutdown retains its cancelled bundle producer",
+    async (phase) => {
+      const preparing = createDeferredCore();
+      const prepared = createDeferredCore();
+      const controller = new AbortController();
+      const events: string[] = [];
+      support.testState.prepareInstallation = vi.fn(async () => {
+        events.push("bundle-started");
+        preparing.resolve();
+        await prepared.promise;
+        events.push("bundle-settled");
+        return support.BUNDLE_ARTIFACT;
       });
-    let teardown: ReturnType<typeof service.destroy> | undefined;
-    let shutdown: Promise<void> | undefined;
-    let shutdownSettled = false;
-    try {
-      await Promise.race([
-        preparing.promise,
-        creation.then(() => {
-          throw new Error("Creation ended before warm runtime bundle preparation");
+      const transfer = createWorkerBootstrapArtifactTransferService();
+      const grant = vi.spyOn(transfer, "prepare");
+      const manager = createRuntimeManager(transfer);
+      const destroy = vi.fn(async () => {
+        events.push("destroy");
+      });
+      const service = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn"],
+          requiresNodeEnrollment: true,
+          provisionBeforeInstallation: true,
+          provision: async (_profile, _operation, options) => {
+            events.push("allocated");
+            if (phase === "warm-runtime") {
+              await options!.prepareNodeRuntime!();
+            } else {
+              await options!.beginNodeEnrollment!();
+              await waitForAbortSignal(options!.signal);
+              options!.signal!.throwIfAborted();
+            }
+            throw new Error("Cancelled runtime preparation unexpectedly completed");
+          },
+          destroy,
         }),
-      ]);
-      const record = support.testState.store.list()[0]!;
-      controller.abort(new DOMException("Stop warm runtime packaging", "AbortError"));
-      teardown = service.destroy(record.environmentId);
-      await support.waitForFast(() => expect(settled).toBe(true));
-      await expect(teardown).resolves.toMatchObject({ state: "destroyed" });
-      expect(events).toEqual(["allocated", "bundle-started", "destroy"]);
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(grant).not.toHaveBeenCalled();
-      shutdown = service.stop().then(() => {
-        shutdownSettled = true;
-      });
-      await setImmediate();
-      expect(shutdownSettled).toBe(false);
-    } finally {
-      prepared.resolve();
-      await Promise.allSettled([creation, teardown, shutdown]);
-      manager.stop();
-      grant.mockRestore();
-    }
-    expect(await creation).toMatchObject({ name: "AbortError" });
-    expect(shutdownSettled).toBe(true);
-    expect(events).toEqual(["allocated", "bundle-started", "destroy", "bundle-settled"]);
-  });
+        {
+          prepareNodeBootstrap: manager.prepare,
+          prepareNodeRuntime: manager.prepareRuntime,
+          closeNodeRuntime: manager.closeRuntime,
+          prepareNodeEnrollment: manager.begin,
+          closeNodeEnrollment: manager.close,
+          stopNodeEnrollmentWaits: manager.stop,
+        },
+      );
+      let settled = false;
+      const creation = service
+        .create(
+          "development",
+          `${phase}-bundle-stop`,
+          undefined,
+          "worker-turn",
+          undefined,
+          controller.signal,
+        )
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      let teardown: ReturnType<typeof service.destroy> | undefined;
+      let shutdown: Promise<void> | undefined;
+      let shutdownSettled = false;
+      try {
+        await Promise.race([
+          preparing.promise,
+          creation.then((result) => {
+            throw new Error("Creation ended before bundle preparation", { cause: result });
+          }),
+        ]);
+        const record = support.testState.store.list()[0]!;
+        controller.abort(new DOMException("Stop bundle packaging", "AbortError"));
+        teardown = service.destroy(record.environmentId);
+        await support.waitForFast(() => expect(settled).toBe(true));
+        await expect(teardown).resolves.toMatchObject({ state: "destroyed" });
+        expect(events).toEqual(["allocated", "bundle-started", "destroy"]);
+        expect(destroy).toHaveBeenCalledOnce();
+        expect(grant).toHaveBeenCalledTimes(phase === "enrollment" ? 1 : 0);
+        shutdown = service.stop().then(() => {
+          shutdownSettled = true;
+        });
+        await setImmediate();
+        expect(shutdownSettled).toBe(false);
+      } finally {
+        prepared.resolve();
+        await Promise.allSettled([creation, teardown, shutdown]);
+        manager.stop();
+        grant.mockRestore();
+      }
+      expect(await creation).toMatchObject({ name: "AbortError" });
+      expect(shutdownSettled).toBe(true);
+      expect(events).toEqual(["allocated", "bundle-started", "destroy", "bundle-settled"]);
+    },
+  );
 
   it("does not let older runtime packaging revoke a newer enrollment", async () => {
     const preparing = createDeferredCore();

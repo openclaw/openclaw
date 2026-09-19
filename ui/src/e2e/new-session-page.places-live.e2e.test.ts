@@ -295,6 +295,9 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       const runner = page.locator('[data-value="device:runner"]');
+      const details = runner
+        .locator("xpath=ancestor::openclaw-tooltip[1]")
+        .locator('[slot="content"]');
       await runner.waitFor();
       expect(await runner.isEnabled()).toBe(true);
 
@@ -319,12 +322,10 @@ suite.define(() => {
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await runner.hover();
       await expect
-        .poll(() => runner.locator("..").locator('[slot="content"]').textContent())
+        .poll(() => details.textContent())
         .toContain("No worker slots are available. Wait for a slot or pick another device.");
       expect(await runner.locator(".session-menu__description").count()).toBe(0);
-      expect(
-        await runner.locator("..").locator(".new-session-page__capacity-caption").count(),
-      ).toBe(0);
+      expect(await details.locator(".new-session-page__capacity-caption").count()).toBe(0);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

@@ -14,9 +14,12 @@ import {
 import {
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
-  moveDeliveryQueueEntryToFailed,
   upsertDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
+import {
+  prepareDeliveryQueueTerminalEntry,
+  terminalizePendingDeliveryQueueEntryInDatabase,
+} from "../delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.types.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
@@ -48,12 +51,25 @@ describe("outbound delivery namespace ownership", () => {
     terminalAt: number,
   ): void {
     vi.setSystemTime(terminalAt);
+    const entry = { id, enqueuedAt: terminalAt - 1, retryCount: 0, completionRetention };
     upsertDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      entry: { id, enqueuedAt: terminalAt - 1, retryCount: 0, completionRetention },
+      entry,
       stateDir,
     });
-    moveDeliveryQueueEntryToFailed(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+    const database = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      terminalizePendingDeliveryQueueEntryInDatabase(
+        database,
+        prepareDeliveryQueueTerminalEntry({
+          queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+          id,
+          entry,
+        }),
+      ),
+    ).toMatchObject({ status: "terminalized" });
   }
 
   function seedOwnerSet(prefix: string) {

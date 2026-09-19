@@ -135,15 +135,60 @@ async function request(
 // The real HTTP boundary plus real files protect session-root admission and exact-file grants;
 // existing media tests cover static agent roots only.
 describe("assistant image session policy", () => {
-  it("previews a protected project's image outside the agent workspace", async () => {
-    const source = path.join(project, "image.png");
-    await fs.writeFile(source, PNG);
-    expect((await request(source)).payload).toMatchObject({
-      available: true,
-      mimeType: "image/png",
-      mediaTicket: expect.any(String),
-    });
+  it.each(["absolute", "image.png", "./image.png", "openclaw/tmp/proof/image.png"])(
+    "previews a protected project's image using %s paths",
+    async (reference) => {
+      const source = reference === "absolute" ? path.join(project, "image.png") : reference;
+      const file = path.resolve(project, source);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, PNG);
+      const metadata = (await request(source)).payload;
+      expect(metadata).toMatchObject({
+        available: true,
+        mimeType: "image/png",
+        mediaTicket: expect.any(String),
+      });
+      const served = await request(source, { ticket: String(metadata!.mediaTicket), bytes: true });
+      expect(served.res.statusCode).toBe(200);
+      expect(served.bytes).toEqual(PNG);
+    },
+  );
+
+  it("binds relative media tickets to the execution directory within the session root", async () => {
+    const first = path.join(project, "first");
+    const second = path.join(project, "second");
+    for (const directory of [first, second]) {
+      await fs.mkdir(directory);
+      await fs.writeFile(path.join(directory, "image.png"), PNG);
+    }
+    entry.spawnedCwd = first;
+    const metadata = (await request("image.png")).payload;
+    expect(metadata).toMatchObject({ available: true });
+    const ticket = String(metadata!.mediaTicket);
+    entry.spawnedCwd = second;
+    expect((await request("image.png", { ticket, bytes: true })).res.statusCode).toBe(404);
+    expect((await request("image.png")).payload).toMatchObject({ available: true });
+    expect((await request("image.png", { unscoped: true })).res.statusCode).toBe(404);
   });
+
+  it.each(["metadata", "bytes"] as const)(
+    "rechecks the execution directory after asynchronous relative %s preparation",
+    async (operation) => {
+      const source = path.join(project, "image.png");
+      await fs.writeFile(source, PNG);
+      const openFile = fs.open;
+      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const file = await openFile(filePath, flags, mode);
+        if (filePath === source) {
+          entry.spawnedCwd = path.join(project, "another-directory");
+        }
+        return file;
+      });
+      const denied = await request("image.png", { bytes: operation === "bytes" });
+      expect(denied.res.statusCode).toBe(404);
+      expect(denied.bytes).not.toEqual(PNG);
+    },
+  );
 
   it("lets full sessions preview an outside image but not text disguised as an image", async () => {
     entry.permissionMode = "full";

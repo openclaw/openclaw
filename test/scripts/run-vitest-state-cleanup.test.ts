@@ -69,7 +69,12 @@ function expectFixtureResults(
           ? intentionalFailure
           : undefined;
     const expectedStatus = failure ? "failed" : "passed";
-    expect(file.status, file.name).toBe(expectedStatus);
+    const childFailureMessages = file.assertionResults
+      .flatMap(({ failureMessages }) => failureMessages ?? [])
+      .join("\n");
+    expect(file.status, `${file.name}\n${file.message}\n${childFailureMessages}`).toBe(
+      expectedStatus,
+    );
     expect(file.message, file.name).toBe("");
     expect(
       file.assertionResults.map(

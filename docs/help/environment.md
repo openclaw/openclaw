@@ -53,6 +53,8 @@ When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.home
 
 **Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > Termux `PREFIX` home fallback on Android > `os.homedir()`
 
+Blank values and the literal strings `undefined` and `null` (after trimming) are treated as unset. CLI home-path display uses `~` in that case; valid overrides use `$OPENCLAW_HOME`.
+
 **Example** (macOS LaunchDaemon):
 
 ```xml

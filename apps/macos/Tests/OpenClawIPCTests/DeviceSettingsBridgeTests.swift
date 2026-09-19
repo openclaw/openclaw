@@ -14,6 +14,7 @@ struct DeviceSettingsBridgeTests {
         ("voice.talkBackgroundEnabled", .talkBackgroundEnabled),
         ("voice.speakerphoneEnabled", .speakerphoneEnabled),
         ("app.showDockIcon", .showDockIcon),
+        ("app.nativeExperienceEnabled", .nativeExperienceEnabled),
         ("app.iconAnimationsEnabled", .iconAnimationsEnabled),
         ("app.launchAtLogin", .launchAtLogin),
         ("app.quickChatEnabled", .quickChatEnabled),
@@ -79,6 +80,14 @@ struct DeviceSettingsBridgeTests {
         ]
         for (key, value, expected) in cases {
             #expect(DeviceSettingsRequest(body: ["type": "set", "key": key, "value": value]) == expected)
+        }
+    }
+
+    @Test func `native experience snapshot preserves both modes and absent host support`() throws {
+        for enabled in [nil, false, true] as [Bool?] {
+            let app = DeviceSettingsSnapshot.App(nativeExperienceEnabled: enabled)
+            let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(app)) as? [String: Any])
+            #expect(json["nativeExperienceEnabled"] as? Bool == enabled)
         }
     }
 

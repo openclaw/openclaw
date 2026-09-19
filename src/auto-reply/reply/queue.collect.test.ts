@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
@@ -27,9 +26,11 @@ import {
 } from "./queue.js";
 import {
   createQueueTestRun as createRun,
+  createQueueSettings,
+  createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
+import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 
@@ -42,16 +43,6 @@ type InternalFollowupRun = FollowupRun & {
 };
 
 installQueueRuntimeErrorSilencer();
-
-function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
-  return {
-    mode: "collect",
-    debounceMs: 0,
-    cap: 50,
-    dropPolicy: "summarize",
-    ...overrides,
-  };
-}
 
 function enqueueTestRun(
   key: string,
@@ -79,18 +70,6 @@ function enqueueSlackRun(
     settings,
     runOverrides,
   );
-}
-
-function createDrainRecorder(expectedCalls = 1) {
-  const calls: Array<FollowupRun & { currentTurnImagesPrepared?: true }> = [];
-  const done = createDeferred();
-  const runFollowup = async (run: FollowupRun) => {
-    calls.push(run);
-    if (calls.length >= expectedCalls) {
-      done.resolve();
-    }
-  };
-  return { calls, done, runFollowup };
 }
 
 function createQueueCase(key: string, overrides: Partial<QueueSettings> = {}, expectedCalls = 1) {
@@ -210,6 +189,66 @@ describe("followup queue collect routing", () => {
     const cancelB = resolveFollowupDeliveryContextKey(cancelOnlyShared);
     expect(cancelA).toEqual(cancelB);
   });
+
+  it.each(["admission", "abandonment", "abort", "callback failure"] as const)(
+    "renews a deeper queued lifecycle until %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const key = `test-deferred-heartbeat-${transition}`;
+      const abort = new AbortController();
+      let lastHeartbeat = -Infinity;
+      let failHeartbeat = false;
+      const heartbeat = vi.fn(() => {
+        if (failHeartbeat) {
+          throw new Error("heartbeat unavailable");
+        }
+        lastHeartbeat = Date.now();
+      });
+      const pending = createRun({ prompt: "deeper queued turn" });
+      pending.turnAdoptionLifecycle = {
+        admission: "exclusive",
+        abortSignal: abort.signal,
+        onAdopted: async () => {},
+        onDeferredHeartbeat: heartbeat,
+        deferredHeartbeatIntervalMs: 1_000,
+      };
+      try {
+        const settings = createQueueSettings({ mode: "followup" });
+        enqueueFollowupRun(key, createRun({ prompt: "earlier turn" }), settings);
+        enqueueFollowupRun(key, pending, settings);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(Date.now() - lastHeartbeat).toBeLessThan(1_000);
+
+        if (transition === "admission") {
+          await admitFollowupRunLifecycle(pending);
+        } else if (transition === "abandonment") {
+          clearFollowupQueue(key);
+        } else if (transition === "abort") {
+          abort.abort();
+        } else {
+          failHeartbeat = true;
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        const callsAtTransition = heartbeat.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(heartbeat).toHaveBeenCalledTimes(callsAtTransition);
+
+        if (transition === "admission" || transition === "callback failure") {
+          const delivered: string[] = [];
+          scheduleFollowupDrain(key, async (run) => {
+            await admitFollowupRunLifecycle(run);
+            delivered.push(run.prompt);
+            completeFollowupRunLifecycle(run);
+          });
+          await vi.runAllTimersAsync();
+          expect(delivered).toEqual(["earlier turn", "deeper queued turn"]);
+        }
+      } finally {
+        clearFollowupQueue(key);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("retries lifecycle admission after a callback rejection", async () => {
     const onAdmitted = vi
@@ -2230,103 +2269,6 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).not.toContain("second");
     expect(calls[1]?.prompt).toContain("second");
     expect(calls[1]?.prompt).not.toContain("first");
-  });
-
-  it("splits collect batches when queued authority facts change", async () => {
-    const key = `test-collect-queued-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
-    const pluginGrant = createRun({ prompt: "plugin grant", ...route });
-    pluginGrant.run.runtimePluginToolGrant = {
-      pluginId: "workboard",
-      toolNames: ["workboard_complete"],
-    };
-    const scheduled = createRun({ prompt: "scheduled authority", ...route });
-    scheduled.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
-    const handoff = createRun({ prompt: "trusted handoff", ...route });
-    handoff.run.trustedInternalHandoff = {
-      kind: "subagent-completion",
-      sourceSessionKey: "agent:child",
-      targetSessionKey: "agent:parent",
-      targetSessionId: "session-1",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    };
-
-    enqueueFollowupRun(key, pluginGrant, settings);
-    enqueueFollowupRun(key, scheduled, settings);
-    enqueueFollowupRun(key, handoff, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => call.prompt)).toEqual([
-      expect.stringContaining("plugin grant"),
-      expect.stringContaining("scheduled authority"),
-      expect.stringContaining("trusted handoff"),
-    ]);
-    expect(calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
-    expect(calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
-    expect(calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
-  });
-
-  it("drains different provider and model routes under their own run snapshots", async () => {
-    const key = `test-collect-route-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
-    const first = createRun({ prompt: "first route", ...route });
-    first.run.provider = "openai";
-    first.run.model = "gpt-primary";
-    const second = createRun({ prompt: "second route", ...route });
-    second.run.provider = "openai";
-    second.run.model = "gpt-fallback";
-    const third = createRun({ prompt: "third route", ...route });
-    third.run.provider = "anthropic";
-    third.run.model = "gpt-fallback";
-
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, third, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => [call.prompt, call.run.provider, call.run.model])).toEqual([
-      [expect.stringContaining("first route"), "openai", "gpt-primary"],
-      [expect.stringContaining("second route"), "openai", "gpt-fallback"],
-      [expect.stringContaining("third route"), "anthropic", "gpt-fallback"],
-    ]);
-  });
-
-  it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
-    const createAuthorityRun = () =>
-      createRun({
-        prompt: "authority",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      });
-    const baseline = createAuthorityRun();
-    const toolsAllow = createAuthorityRun();
-    toolsAllow.toolsAllow = ["exec"];
-    const disabled = createAuthorityRun();
-    disabled.disableTools = true;
-    const roles = createAuthorityRun();
-    roles.run.memberRoleIds = ["operator"];
-    const firstIntersection = createAuthorityRun();
-    firstIntersection.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-    const secondIntersection = createAuthorityRun();
-    secondIntersection.toolsAllow = attachToolAllowlistIntersection(
-      ["exec"],
-      [["exec"], ["message"]],
-    );
-
-    const baselineKey = resolveFollowupDeliveryContextKey(baseline);
-    expect(resolveFollowupDeliveryContextKey(toolsAllow)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(disabled)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(roles)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(firstIntersection)).not.toBe(
-      resolveFollowupDeliveryContextKey(secondIntersection),
-    );
   });
 
   it("keeps one collect batch when authorization context matches", async () => {

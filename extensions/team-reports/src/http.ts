@@ -14,8 +14,9 @@ import {
   type PeriodIndex,
 } from "./render/html.js";
 import type { TeamReportsHealth } from "./scheduler.js";
+import type { ReportPerson } from "./store-contract.js";
 import type { TeamReportsStore } from "./store.js";
-import type { Period, Person, PersonReport } from "./types.js";
+import type { Period, Person } from "./types.js";
 
 type TeamReportsHttpOptions = {
   basePath: string;
@@ -83,7 +84,7 @@ function absolutePageUrl(req: IncomingMessage, path: string): string | undefined
   }
 }
 
-function personFromReport(member: PersonReport): Person {
+function personFromReport(member: ReportPerson): Person {
   return {
     github: [member.login, ...member.aliases],
     display: member.display,
@@ -95,7 +96,7 @@ function personFromReport(member: PersonReport): Person {
   };
 }
 
-function visiblePeople(configured: Person[], recentReports: PersonReport[]): Person[] {
+function visiblePeople(configured: Person[], recentReports: ReportPerson[]): Person[] {
   const aliases = new Set(
     configured.flatMap((person) => person.github.map((login) => login.toLowerCase())),
   );
@@ -228,11 +229,8 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       );
     }
     if (first === "people" && route.segments.length <= 2) {
-      const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
-      const recent = latest
-        ? ((await store.getPeriod("day", latest.key))?.report.members ?? [])
-        : [];
-      const people = visiblePeople(options.people(), recent);
+      const latest = await store.latestPeople();
+      const people = visiblePeople(options.people(), latest?.members ?? []);
       if (!key) {
         const endKey = latest?.key ?? new Date().toISOString().slice(0, 10);
         const since = new Date(Date.parse(`${endKey}T00:00:00Z`) - 27 * DAY_MS)

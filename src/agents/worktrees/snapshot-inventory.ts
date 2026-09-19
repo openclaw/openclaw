@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
@@ -17,6 +17,7 @@ import {
   parseGitTreePaths,
   rawPathExists,
   splitNullBuffer,
+  type GitIndexPath,
   type GitTreePath,
 } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
@@ -34,6 +35,157 @@ type SnapshotInventory = {
 const assertCurrent = () =>
   requestGitWorkerEffect<"worktree.assert-current">({ type: "worktree.assert-current", input: {} });
 
+// @types/node omits opendir's buffer encoding and declares only string names.
+function openRawDirectory(directoryPath: string | Buffer) {
+  // SAFETY: Node accepts buffer encoding; the consumer validates names before use.
+  const openDirectory = fs.opendir as (
+    path: string | Buffer,
+    options: { encoding: BufferEncoding | "buffer" },
+  ) => Promise<AsyncIterable<Dirent<string | Buffer>>>;
+  return openDirectory(directoryPath, { encoding: "buffer" });
+}
+
+async function listCollapsedOtherPaths(checkoutPath: string, ignored: boolean): Promise<Buffer[]> {
+  // --directory collapses whole untracked/ignored trees to one entry each, so the
+  // Git output stays bounded by top-level entries instead of every dependency file.
+  return splitNullBuffer(
+    await requireGitBuffer(checkoutPath, [
+      "ls-files",
+      "-z",
+      "--others",
+      ...(ignored ? ["--ignored"] : []),
+      "--exclude-standard",
+      "--directory",
+    ]),
+  );
+}
+
+async function walkCollapsedPaths(
+  checkoutPath: string,
+  entries: readonly Buffer[],
+  options: { visitFile?: (entry: Buffer) => Promise<void>; skip?: ReadonlySet<string> },
+): Promise<boolean> {
+  const visitDirectory = async (relative: Buffer): Promise<boolean> => {
+    if (
+      await rawPathExists(
+        checkoutPathFromGitBytes(checkoutPath, Buffer.concat([relative, Buffer.from("/.git")])),
+      )
+    ) {
+      return true;
+    }
+    // Buffer names preserve bytes through Node's lstat fallback for unknown entry
+    // types. opendir batches entries and closes the handle even on early retention.
+    const directory = await openRawDirectory(checkoutPathFromGitBytes(checkoutPath, relative));
+    for await (const entry of directory) {
+      if (!Buffer.isBuffer(entry.name)) {
+        throw new Error("Expected raw directory-entry bytes");
+      }
+      const child = Buffer.concat([relative, Buffer.from("/"), entry.name]);
+      if (options.skip?.has(gitPathKey(child))) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (await visitDirectory(child)) {
+          return true;
+        }
+      } else {
+        // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
+        await options.visitFile?.(child);
+      }
+    }
+    return false;
+  };
+  for (const entry of entries) {
+    if (entry.at(-1) === 47) {
+      if (await visitDirectory(entry.subarray(0, -1))) {
+        return true;
+      }
+    } else {
+      await options.visitFile?.(entry);
+    }
+  }
+  return false;
+}
+
+/** Index entries whose flags make Git skip its worktree comparison for that path. */
+function unstattedIndexPaths(index: readonly GitIndexPath[]): Buffer[] {
+  return index
+    .filter((entry) => entry.assumeUnchanged || entry.skipWorktree)
+    .map((entry) => entry.path);
+}
+
+/**
+ * Inspect untracked and ignored paths without buffering every filename through Git.
+ * Resolves true when a nested repository marker is found; ignored paths nested in
+ * untracked trees stay out of the untracked visit so ignore semantics are preserved.
+ * `unstattedIndexPaths` carries the index entries Git will not compare against the
+ * filesystem, whose replacements only a direct stat can discover.
+ */
+async function inspectOtherPaths(
+  checkoutPath: string,
+  options: {
+    unstattedIndexPaths?: readonly Buffer[];
+    untracked?: (entry: Buffer) => Promise<void>;
+    ignored?: (entry: Buffer) => Promise<void>;
+  } = {},
+): Promise<boolean> {
+  const untracked = await listCollapsedOtherPaths(checkoutPath, false);
+  // Git omits a directory that replaced an indexed file from the collapsed listing
+  // because the index still holds that path. diff-files reports such entries as deleted
+  // or, for a conflict, unmerged; it deliberately skips assume-unchanged and
+  // skip-worktree entries, so those are stat-checked directly. Every candidate set stays
+  // small: worktree deletions and conflicts, plus only manually flagged paths.
+  const candidates = new Map<string, Buffer>();
+  for (const entry of [
+    ...splitNullBuffer(
+      await requireGitBuffer(checkoutPath, ["diff-files", "-z", "--name-only", "--diff-filter=DU"]),
+    ),
+    ...(options.unstattedIndexPaths ?? []),
+  ]) {
+    candidates.set(gitPathKey(entry), entry);
+  }
+  const replaced = [...candidates.values()];
+  for (let offset = 0; offset < replaced.length; offset += 64) {
+    const batch = replaced.slice(offset, offset + 64);
+    const stats = await Promise.allSettled(
+      batch.map((entry) => fs.lstat(checkoutPathFromGitBytes(checkoutPath, entry))),
+    );
+    for (const [index, result] of stats.entries()) {
+      if (result.status === "rejected") {
+        if (!isMissingPathError(result.reason)) {
+          throw result.reason;
+        }
+      } else if (result.value.isDirectory()) {
+        untracked.push(Buffer.concat([batch[index]!, Buffer.from("/")]));
+      }
+    }
+  }
+  const ignored = await listCollapsedOtherPaths(checkoutPath, true);
+  if (await containsGitMarker(checkoutPath, [...untracked, ...ignored])) {
+    return true;
+  }
+  const ignoredKeys = new Set(
+    ignored.map((entry) => gitPathKey(entry.at(-1) === 47 ? entry.subarray(0, -1) : entry)),
+  );
+  return (
+    (await walkCollapsedPaths(checkoutPath, untracked, {
+      visitFile: options.untracked,
+      skip: ignoredKeys,
+    })) || (await walkCollapsedPaths(checkoutPath, ignored, { visitFile: options.ignored }))
+  );
+}
+
+async function rawDirectoryExists(target: string | Buffer): Promise<boolean> {
+  try {
+    return (await fs.lstat(target)).isDirectory();
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotInventory> {
   const head = await requireGit(input.checkoutPath, ["rev-parse", "--verify", "HEAD^{commit}"]);
   const headPaths = parseGitTreePaths(
@@ -41,23 +193,6 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
   );
   const index = parseGitIndexPaths(
     await requireGitBuffer(input.checkoutPath, ["ls-files", "--stage", "-v", "-z"]),
-  );
-  const untracked = splitNullBuffer(
-    await requireGitBuffer(input.checkoutPath, [
-      "ls-files",
-      "-z",
-      "--others",
-      "--exclude-standard",
-    ]),
-  );
-  const ignored = splitNullBuffer(
-    await requireGitBuffer(input.checkoutPath, [
-      "ls-files",
-      "-z",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-    ]),
   );
   const provisioned = new Set(
     input.provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))),
@@ -80,8 +215,18 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
   const sparse = sparseConfig.code === 0 && sparseConfig.stdout.trim() === "true";
   const sourcePaths = new Set<string>();
   const sparseCandidates: Buffer[] = [];
+  const headKeys = new Set(headPaths.map((entry) => gitPathKey(entry.path)));
   for (const entry of index) {
     sourcePaths.add(gitPathKey(entry.path));
+    // A directory replacing an indexed path is no blob. HEAD paths still delete
+    // cleanly against the snapshot index, but a conflicted path carries no stage 0
+    // for Git to drop by name; its untracked children arrive through the listing.
+    if (
+      !headKeys.has(gitPathKey(entry.path)) &&
+      (await rawDirectoryExists(checkoutPathFromGitBytes(input.checkoutPath, entry.path)))
+    ) {
+      continue;
+    }
     if (
       !entry.skipWorktree ||
       (await rawPathExists(checkoutPathFromGitBytes(input.checkoutPath, entry.path))) ||
@@ -110,17 +255,20 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
       add(entry.path);
     }
   }
-  for (const entry of untracked) {
-    add(entry);
-  }
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(input.checkoutPath));
-  for (const entry of ignored) {
-    const relativePath = entry.toString("utf8");
-    if (stagedInputPathDirectory(relativePath) && (await isStagedInput(relativePath))) {
+  const otherNested = await inspectOtherPaths(input.checkoutPath, {
+    unstattedIndexPaths: unstattedIndexPaths(index),
+    untracked: async (entry) => {
       add(entry);
-    }
-  }
-  if (await containsGitMarker(input.checkoutPath, [...paths.values(), ...ignored])) {
+    },
+    ignored: async (entry) => {
+      const relativePath = entry.toString("utf8");
+      if (stagedInputPathDirectory(relativePath) && (await isStagedInput(relativePath))) {
+        add(entry);
+      }
+    },
+  });
+  if (otherNested || (await containsGitMarker(input.checkoutPath, paths.values()))) {
     throw new Error("nested git repositories cannot be snapshotted losslessly");
   }
   return { head, headPaths, paths };
@@ -401,21 +549,11 @@ export async function inspectNestedRepository(checkoutPath: string): Promise<boo
   if (index.some((entry) => entry.mode === "160000")) {
     return true;
   }
-  const untracked = splitNullBuffer(
-    await requireGitBuffer(checkoutPath, ["ls-files", "-z", "--others", "--exclude-standard"]),
+  return (
+    (await containsGitMarker(
+      checkoutPath,
+      index.map((entry) => entry.path),
+    )) ||
+    (await inspectOtherPaths(checkoutPath, { unstattedIndexPaths: unstattedIndexPaths(index) }))
   );
-  const ignored = splitNullBuffer(
-    await requireGitBuffer(checkoutPath, [
-      "ls-files",
-      "-z",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-    ]),
-  );
-  return await containsGitMarker(checkoutPath, [
-    ...index.map((entry) => entry.path),
-    ...untracked,
-    ...ignored,
-  ]);
 }

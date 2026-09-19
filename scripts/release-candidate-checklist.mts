@@ -38,6 +38,7 @@ import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   downloadFullReleaseNpmPreflight,
@@ -46,6 +47,7 @@ import {
 } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
+import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
   dedicatedSectionVersionForTag,
@@ -2360,14 +2362,54 @@ async function main() {
     fullReleaseRunAttempt: fullRun.runAttempt,
     npmTelegramRunId: npmTelegram.runId,
   };
+  const publicationSelection = publicationSelectionForChecklist(options);
+  const publishPreflight = await runReleasePublishPreflight(
+    {
+      repo: options.repo,
+      tag: options.tag,
+      fullReleaseValidationRunId: options.fullReleaseRunId,
+      fullReleaseValidationRunAttempt: fullRun.runAttempt,
+      preflightRunId: options.npmPreflightRunId,
+      npmDistTag: options.npmDistTag,
+      pluginPublishScope: publicationSelection.pluginPublishScope,
+      plugins: options.plugins,
+      stableSoakWaiver: "",
+      workflowRef:
+        options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef,
+      releaseProfile: "from-validation",
+      publicationRoute: publicationSelection.route === "prepared" ? "prepared" : "normal",
+      publishOpenclawNpm: true,
+      openclawNpmResumeRunId: "",
+      pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement,
+      windowsNodeTag: options.windowsNodeTag,
+      windowsNodeInstallerDigests: options.windowsNodeInstallerDigests,
+      npmTelegramRunId: npmTelegram.runId ?? "",
+    },
+    {
+      manifest: fullManifest,
+      manifestPath: join(fullDir, "full-release-validation-manifest.json"),
+      run: fullRun,
+      targetSha,
+      toolingSha,
+      allowPlannedTag: true,
+      npmManifest,
+      npmManifestPath: join(npmDir, "preflight-manifest.json"),
+      npmPreflightRun: npmRun,
+      fullValidationEvidence,
+    },
+  );
+  const publishPreflightTable = formatReleasePublishPreflight(publishPreflight, {
+    includeCommand: false,
+  });
   const publishCommand =
-    options.publicationRoute === "normal"
-      ? buildPublishCommand(publicationOptions, npmPreflightSource)
-      : undefined;
+    options.publicationRoute === "normal" ? publishPreflight.command : undefined;
   const prepareCommand =
     options.publicationRoute === "prepared"
       ? buildPublishCommand(publicationOptions, npmPreflightSource, "prepare")
       : undefined;
+  if (prepareCommand) {
+    publishPreflight.command = prepareCommand;
+  }
   const evidence = {
     version: 1,
     tag: options.tag,
@@ -2409,6 +2451,7 @@ async function main() {
     npmTelegram,
     pluginNpmPlan,
     pluginClawHubPlan,
+    publishPreflight,
     publishCommand,
     prepareCommand,
   };
@@ -2463,6 +2506,8 @@ async function main() {
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
       }`,
       "",
+      publishPreflightTable,
+      "",
       ...(prepareCommand
         ? [
             "Prepare once for the release button (after creating the frozen release tag):",
@@ -2480,10 +2525,13 @@ async function main() {
         : []),
     ].join("\n"),
   );
-  updateReleaseCandidateState(statePath, candidateState, "completed");
-
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  console.log(publishPreflightTable);
+  if (publishPreflight.failed) {
+    throw new Error("Publish preflight failed; resolve the reported gates before publication.");
+  }
+  updateReleaseCandidateState(statePath, candidateState, "completed");
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }

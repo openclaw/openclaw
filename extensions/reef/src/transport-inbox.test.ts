@@ -13,6 +13,80 @@ afterEach(() => {
 });
 
 describe("ReefInboxConnection recovery", () => {
+  it("keeps the highest cursor when direct drains finish persistence out of order", async () => {
+    const requestedAfter: number[] = [];
+    const lowerPersistence = createDeferred<void>();
+    const lowerStarted = createDeferred<void>();
+    const client = createClient(async (input) => {
+      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
+      return Response.json({ entries: [], cursor: requestedAfter.length === 1 ? 10 : 20 });
+    });
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => new ControlledSocket() as unknown as WebSocketLike,
+      {
+        persistCursor: async (cursor) => {
+          if (cursor === 10) {
+            lowerStarted.resolve();
+            await lowerPersistence.promise;
+          }
+        },
+      },
+    );
+    const lower = inbox.drain();
+    try {
+      await lowerStarted.promise;
+      await inbox.drain();
+    } finally {
+      lowerPersistence.resolve();
+      await lower;
+    }
+    await inbox.drain();
+    expect(requestedAfter).toEqual([0, 0, 20]);
+  });
+
+  it.each([false, true])(
+    "retains the previous cursor when asynchronous persistence fails (empty page: %s)",
+    async (empty) => {
+      const requestedAfter: number[] = [];
+      const persistence = createDeferred<void>();
+      const started = createDeferred<void>();
+      const failure = new Error("cursor persistence failed");
+      let fail = true;
+      const client = createClient(async (input) => {
+        const after = Number(parseRequestUrl(input).searchParams.get("after"));
+        requestedAfter.push(after);
+        return Response.json({
+          entries: !empty && after === 7 ? [receiptEntry(8)] : [],
+          cursor: 8,
+        });
+      });
+      const inbox = new ReefInboxConnection(
+        client,
+        async () => {},
+        () => new ControlledSocket() as unknown as WebSocketLike,
+        {
+          initialCursor: 7,
+          persistCursor: async () => {
+            started.resolve();
+            if (fail) {
+              await persistence.promise;
+            }
+          },
+        },
+      );
+      const first = expect(inbox.drain()).rejects.toBe(failure);
+      await started.promise;
+      expect(requestedAfter).toEqual([7]);
+      persistence.reject(failure);
+      await first;
+      fail = false;
+      await inbox.drain();
+      expect(requestedAfter).toEqual(empty ? [7, 7] : [7, 7, 8]);
+    },
+  );
+
   it("starts REST catch-up at the durable cursor and advances only processed entries", async () => {
     const requestedAfter: number[] = [];
     const persisted: number[] = [];
@@ -467,11 +541,13 @@ describe("ReefInboxConnection recovery", () => {
     await running;
   });
 
-  it("waits for an in-flight handler before completing channel abort", async () => {
+  it("waits for an in-flight handler and its cursor write before completing channel abort", async () => {
     const socket = new ControlledSocket();
     const persisted: number[] = [];
     const handlerGate = createDeferred<void>();
     const handlerStarted = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const persistenceStarted = createDeferred<void>();
     const client = createClient(async () =>
       Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
     );
@@ -483,7 +559,13 @@ describe("ReefInboxConnection recovery", () => {
         await handlerGate.promise;
       },
       () => socket as unknown as WebSocketLike,
-      { persistCursor: (cursor) => persisted.push(cursor) },
+      {
+        persistCursor: async (cursor) => {
+          persistenceStarted.resolve();
+          await persistence.promise;
+          persisted.push(cursor);
+        },
+      },
     );
 
     let finished = false;
@@ -496,8 +578,16 @@ describe("ReefInboxConnection recovery", () => {
       abort.abort();
       await Promise.resolve();
       expect(finished).toBe(false);
+      handlerGate.resolve();
+      await persistenceStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(finished).toBe(false);
+      expect(persisted).toEqual([]);
     } finally {
       handlerGate.resolve();
+      persistence.resolve();
       abort.abort();
       await running;
     }

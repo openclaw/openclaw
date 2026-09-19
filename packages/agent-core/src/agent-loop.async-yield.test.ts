@@ -3,6 +3,7 @@ import type { AssistantMessage, Context, Model, ToolCall } from "@openclaw/llm-c
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { createRequesterYieldCallback } from "../../../src/agents/openclaw-tools.requester-yield.js";
+import { isToolResultError } from "../../../src/agents/tool-result-error.js";
 import { createSessionsYieldTool } from "../../../src/agents/tools/sessions-yield-tool.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runAgentLoop } from "./agent-loop.js";
@@ -69,7 +70,7 @@ it.each([
       type: "toolCall",
       id: "yield-first",
       name: "sessions_yield",
-      arguments: {},
+      arguments: { waitFor: "message" },
       ...(asyncYield ? { async: true } : {}),
     };
     const lookup: AgentTool = {
@@ -126,7 +127,12 @@ it.each([
     const run = runAgentLoop(
       [{ role: "user", content: "Inspect then wait", timestamp: 0 }],
       { systemPrompt: "", messages: [], tools: [lookup, yieldTool] },
-      { model, convertToLlm: (messages) => messages as Context["messages"] },
+      {
+        model,
+        convertToLlm: (messages) => messages as Context["messages"],
+        // Mirror the production session hook that classifies structured tool errors.
+        afterToolCall: async ({ result }) => ({ isError: isToolResultError(result) }),
+      },
       (event) => {
         if (event.type !== "message_end") {
           return;
@@ -175,6 +181,14 @@ it.each([
         await firstYieldPersisted.promise;
         expect(claimYield).not.toHaveBeenCalled();
         expect(onYield).not.toHaveBeenCalled();
+        expect(persisted).toContainEqual(
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: "yield-first",
+            isError: false,
+            details: expect.objectContaining({ status: "deferred" }),
+          }),
+        );
         if (priorResult === "pending") {
           expect(
             persisted.some(

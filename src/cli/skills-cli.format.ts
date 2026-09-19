@@ -1,4 +1,5 @@
 // Formatting layer for `openclaw skills` commands; keeps discovery data separate from terminal UI.
+import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -6,6 +7,8 @@ import {
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   hasMissingSkillRequirements,
   resolveSkillStatusEntry,
@@ -15,6 +18,7 @@ import {
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 
 /** Options for rendering the skill list command. */
 export type SkillsListOptions = {
@@ -244,16 +248,27 @@ export function formatSkillInfo(
   if (requirementGroups.length > 0) {
     lines.push("");
     lines.push(theme.heading("Requirements:"));
+    const formatRequirementStatus = (value: string, satisfied: boolean) =>
+      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
     for (const [key, label] of requirementGroups) {
-      const missingRequirements = skill.missing[key];
-      const requirementStatus = skill.requirements[key].map((requirement) => {
-        const missing =
-          key === "anyBins"
-            ? missingRequirements.length > 0
-            : missingRequirements.includes(requirement);
-        return missing ? theme.error(`✗ ${requirement}`) : theme.success(`✓ ${requirement}`);
-      });
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus.join(", ")}`);
+      const required = skill.requirements[key];
+      const missing = skill.missing[key];
+      let requirementStatus: string;
+      if (key === "anyBins" || key === "os") {
+        // Missing arrays describe the whole alternative group, not individual availability.
+        const prefix = key === "anyBins" ? "any of: " : "";
+        requirementStatus = formatRequirementStatus(
+          `(${prefix}${required.join(", ")})`,
+          missing.length === 0,
+        );
+      } else {
+        requirementStatus = required
+          .map((requirement) =>
+            formatRequirementStatus(requirement, !missing.includes(requirement)),
+          )
+          .join(", ");
+      }
+      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
     }
   }
 
@@ -266,6 +281,9 @@ export function formatSkillInfo(
   }
 
   if (skill.primaryEnv && skill.missing.env.includes(skill.primaryEnv)) {
+    const apiKeyPath = quoteCliArg(
+      formatConcreteConfigPath(["skills", "entries", safeSkillKey, "apiKey"]),
+    );
     lines.push("");
     lines.push(theme.heading("API key setup:"));
     if (safeHomepage) {
@@ -274,9 +292,7 @@ export function formatSkillInfo(
     lines.push(
       `  Save via UI: ${theme.muted("Control UI → Skills → ")}${safeName}${theme.muted(" → Save key")}`,
     );
-    lines.push(
-      `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${safeSkillKey}.apiKey YOUR_KEY`)}`,
-    );
+    lines.push(`  Save via CLI: ${formatCliCommand(`openclaw config set ${apiKeyPath} YOUR_KEY`)}`);
     lines.push(
       `  Stored in: ${theme.muted("$OPENCLAW_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
     );
@@ -435,4 +451,51 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   }
 
   return appendClawHubHint(lines.join("\n"));
+}
+
+export function formatSkillCuratorStatus(status: SkillsCuratorCompatibleStatusResult): string {
+  const timestamp = (value: number | null) =>
+    value === null ? "never" : new Date(value).toISOString();
+  const lines = [
+    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
+    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
+    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
+  ];
+  if (!("inventory" in status)) {
+    lines.push(
+      "Legacy inventory: this Gateway reports limited coverage. Upgrade the Gateway for current Workshop inventory.",
+    );
+  }
+  if (status.lastError) {
+    lines.push(`Last error: ${status.lastError}`);
+  }
+  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
+  for (const review of Object.values(status.collectionReview ?? {})) {
+    lines.push(
+      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
+    );
+  }
+  for (const [workspace, review] of Object.entries(status.experienceReview ?? {})) {
+    lines.push(
+      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
+    );
+  }
+  const keyCounts = new Map<string, number>();
+  for (const skill of status.skills) {
+    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
+  }
+  for (const skill of status.skills) {
+    const pinned = skill.pinned ? " pinned" : "";
+    const lastUsed =
+      skill.lastUsedAtMs === null ? "not recorded" : new Date(skill.lastUsedAtMs).toISOString();
+    const label =
+      keyCounts.get(skill.skillKey) === 1
+        ? skill.skillKey
+        : `${skill.skillKey} (${skill.skillFile})`;
+    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
+  }
+  for (const overlap of status.overlaps) {
+    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
+  }
+  return `${lines.join("\n")}\n`;
 }

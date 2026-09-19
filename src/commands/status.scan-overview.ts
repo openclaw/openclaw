@@ -12,7 +12,7 @@ import { applyLoggingConfig } from "../logging/logger.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { StatusSessionStores } from "../status/session-stores.js";
-import type { StatusSummary } from "../status/types.js";
+import type { StatusSummary } from "../status/summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { AgentLocalStatusesResult } from "./status.agent-local.js";
 import {
@@ -106,14 +106,17 @@ export type StatusScanOverviewResult = {
     | "gatewaySelf"
     | "gatewayCallOverrides"
   >;
-  runtimeDegradation: Pick<
-    StatusSummary,
-    | "degradedSecretOwners"
-    | "degradedPlugins"
-    | "startupMigrationWarning"
-    | "secretEgressProxy"
-    | "sqliteWal"
-  > | null;
+  runtimeDegradation:
+    | (Pick<
+        StatusSummary,
+        | "degradedSecretOwners"
+        | "degradedPlugins"
+        | "startupMigrationWarning"
+        | "secretEgressProxy"
+        | "sqliteWal"
+      > &
+        Partial<Pick<StatusSummary, "heartbeat">>)
+    | null;
   channelsStatus: unknown;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
@@ -301,6 +304,8 @@ export async function collectStatusScanOverview(params: {
           startupMigrationWarning: status.startupMigrationWarning,
           secretEgressProxy: status.secretEgressProxy,
           sqliteWal: status.sqliteWal,
+          // The Gateway owns route readiness; CLI channel runtimes stay unloaded.
+          ...(status.heartbeat ? { heartbeat: status.heartbeat } : {}),
         }
       : null;
   }
@@ -398,7 +403,7 @@ export async function resolveStatusSummaryFromOverview(params: {
     StatusScanOverviewResult,
     "skipColdStartNetworkChecks" | "cfg" | "sourceConfig" | "runtimeDegradation" | "sessionStores"
   >;
-}) {
+}): Promise<StatusSummary> {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
   }

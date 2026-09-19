@@ -92,6 +92,17 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
+it.each([
+  "missing/MEMORY.md",
+  ...(process.platform === "win32" ? [] : ["missing/../MEMORY.md"]),
+  "missing/",
+])("rejects a memory target whose missing suffix is %s", async (suffix) => {
+  const memoryPath = await setupMemoryFile("existing memory");
+  const filePath = `${path.dirname(memoryPath)}${path.sep}${suffix.replaceAll("/", path.sep)}`;
+
+  await expect(resolveMemoryWritePath(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it.runIf(Boolean(process.versions.bun) && process.platform !== "win32")(
   "rejects a non-directory symlink before a parent traversal",
   async () => {

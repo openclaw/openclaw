@@ -31,15 +31,46 @@ function createDatabase(): DatabaseSync {
 function tracePreparedSql(database: DatabaseSync): {
   database: DatabaseSync;
   statements: string[];
+  readonly materializedIndexSqlBytes: number;
 } {
   const statements: string[] = [];
+  let materializedIndexSqlBytes = 0;
+  function observe(row: unknown) {
+    if (
+      row &&
+      typeof row === "object" &&
+      "sql" in row &&
+      typeof row.sql === "string" &&
+      /^CREATE (?:UNIQUE )?INDEX\b/iu.test(row.sql)
+    ) {
+      materializedIndexSqlBytes += Buffer.byteLength(row.sql, "utf8");
+    }
+  }
   return {
     database: new Proxy(database, {
       get(target, property) {
         if (property === "prepare") {
           return (sql: string) => {
             statements.push(sql);
-            return target.prepare(sql);
+            return new Proxy(target.prepare(sql), {
+              get(statement, method) {
+                if (method === "get" || method === "all") {
+                  return (...args: unknown[]) => {
+                    const result = Reflect.apply(statement[method], statement, args);
+                    if (method === "all") {
+                      for (const row of result) {
+                        observe(row);
+                      }
+                    } else {
+                      observe(result);
+                    }
+                    return result;
+                  };
+                }
+                const value = Reflect.get(statement, method, statement) as unknown;
+                return typeof value === "function" ? value.bind(statement) : value;
+              },
+            });
           };
         }
         const value = Reflect.get(target, property, target) as unknown;
@@ -47,6 +78,9 @@ function tracePreparedSql(database: DatabaseSync): {
       },
     }) as DatabaseSync,
     statements,
+    get materializedIndexSqlBytes() {
+      return materializedIndexSqlBytes;
+    },
   };
 }
 
@@ -70,10 +104,21 @@ describe("repairCanonicalSqliteIndexes", () => {
     const db = createDatabase();
     try {
       const before = db.prepare("PRAGMA schema_version").get();
+      const indexSqlBytes = db
+        .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND sql IS NOT NULL")
+        .all()
+        .reduce((sum, row) => {
+          if (typeof row.sql !== "string") {
+            throw new Error("Expected fixture index DDL");
+          }
+          return sum + Buffer.byteLength(row.sql, "utf8");
+        }, 0);
+      const traced = tracePreparedSql(db);
 
-      verifyAndRepairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA);
+      verifyAndRepairCanonicalSqliteIndexes(traced.database, "test database", CANONICAL_SCHEMA);
 
       expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
+      expect(traced.materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
     } finally {
       db.close();
     }

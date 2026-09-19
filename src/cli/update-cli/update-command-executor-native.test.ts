@@ -197,7 +197,8 @@ it
     const root=${JSON.stringify(root)}, fault=${JSON.stringify(fault)};
     const wait=async name=>{while(!fs.existsSync(root+"/"+name))await setTimeout(10);};
     try { await runGatewayServiceUpdateCommand("run","install",async()=>{
-      fs.writeFileSync(root+"/ready",String(process.pid));
+      fs.writeFileSync(root+"/ready.tmp",String(process.pid));
+      fs.renameSync(root+"/ready.tmp",root+"/ready");
       await wait("proceed");
       const results={};
       const attempt=async(name,fn)=>{try{await fn();results[name]="ok";}catch(e){results[name]=e.message;}};
@@ -208,7 +209,8 @@ it
       }}));
       await attempt("native",async()=>{const r=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);if(r.code!==0)throw new Error(r.stderr);});
       await attempt("definition",()=>publishLaunchAgentPlist({label:${JSON.stringify("ai.openclaw.proof." + randomUUID())},plistPath:root+"/gateway.plist",contents:"next-definition"}));
-      fs.writeFileSync(root+"/done",JSON.stringify(results));
+      fs.writeFileSync(root+"/done.tmp",JSON.stringify(results));
+      fs.renameSync(root+"/done.tmp",root+"/done");
       await wait("release");
     });}catch(e){process.stderr.write(e.message);process.exitCode=1;}
   `;
@@ -355,7 +357,7 @@ it
       } else {
         expect(Object.values(results)).toHaveLength(3);
         for (const result of Object.values(results)) {
-          expect(result).toMatch(/ownership.*current/);
+          expect(result).toBe("The update process no longer has permission to continue.");
         }
         expect(fs.readFileSync(config, "utf8")).toBe(JSON.stringify(before));
         expect(fs.existsSync(effect)).toBe(false);

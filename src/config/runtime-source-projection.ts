@@ -1,10 +1,26 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  captureRuntimeConfigWithSource,
+  getRuntimeConfigCapture,
+} from "./runtime-config-capture-state.js";
 import { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } from "./runtime-snapshot.js";
 import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
+/** Captures runtime and authored values together for one admitted preparation generation. */
+export function captureRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  if (getRuntimeConfigCapture(config)) {
+    return config;
+  }
+  return captureRuntimeConfigWithSource(config, projectConfigOntoRuntimeSourceSnapshot(config));
+}
+
 /** Projects a runtime-derived config back onto the active authored source snapshot. */
 export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  const captured = getRuntimeConfigCapture(config);
+  if (captured) {
+    return captured.source;
+  }
   const runtimeConfigSnapshot = getRuntimeConfigSnapshot();
   const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshot();
   if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {

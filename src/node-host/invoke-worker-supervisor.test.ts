@@ -58,6 +58,8 @@ function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
     state: "running",
     supervisor: { pid: 100, startTime: 1 },
     worker: { pid: 101, startTime: 2 },
+    workerCleanupMode: "owned-anchor",
+    workerLineageSettled: true,
     resultJson: null,
     errorText: null,
     completedAtMs: null,

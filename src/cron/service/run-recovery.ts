@@ -302,10 +302,12 @@ export function recoverNonTerminalCronRunReceipts(state: CronServiceState): {
   repaired: boolean;
   receipts: CronRunReceiptRecoveryCandidate[];
   notifications: DeferredCronNotifications;
+  interruptedRuns: InterruptedStartupRun[];
 } {
   let repaired = false;
   const receipts: CronRunReceiptRecoveryCandidate[] = [];
   const notifications: DeferredCronNotifications = [];
+  const interruptedRuns: InterruptedStartupRun[] = [];
   for (const job of state.store?.jobs ?? []) {
     const queuedAtMs = job.state.queuedAtMs;
     const runningAtMs = job.state.runningAtMs;
@@ -325,9 +327,12 @@ export function recoverNonTerminalCronRunReceipts(state: CronServiceState): {
     } else {
       repaired = true;
       notifications.push(...result.notifications);
+      if (result.interrupted) {
+        interruptedRuns.push(result.interrupted);
+      }
     }
   }
-  return { repaired, receipts, notifications };
+  return { repaired, receipts, notifications, interruptedRuns };
 }
 
 export function recoverCronRunProposal(

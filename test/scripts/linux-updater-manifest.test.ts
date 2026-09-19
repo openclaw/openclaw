@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -16,10 +16,13 @@ type Release = {
   isPrerelease: boolean;
   assets: string[];
   manifest?: string;
+  immutable?: string;
   checksums?: string;
   digests?: Record<string, string>;
   assetState?: string;
   assetSize?: number;
+  restId?: number;
+  assetIds?: Record<string, number>;
 };
 type ActionRun = {
   id: number;
@@ -39,6 +42,8 @@ type Remote = {
   calls: string[][];
   uploads: number;
   requests?: Array<{ ref: string; inputs: Record<string, string> }>;
+  requestRuns?: ActionRun[];
+  requestReadRejected?: boolean;
   uploadBehavior?: "accepted-error" | "rejected-error" | "deleted-error" | "success-noop";
   dispatchRejected?: boolean;
   dispatchResponse?: "missing-id" | "null-id";
@@ -46,11 +51,7 @@ type Remote = {
   parentAttempt?: number;
   currentRun?: ActionRun;
   currentRunOverrides?: Partial<ActionRun>;
-  sourceRequest?: ActionRun;
-  sourceRequestOverrides?: Partial<ActionRun>;
   eventInputOverrides?: { tag?: string; npm_dist_tag?: string };
-  writerLossAtTagRead?: "cancelled" | "attempt";
-  binaryUploads?: string[][];
 };
 
 function fixtureRelease(remote: Remote, tag: string): Release {
@@ -126,17 +127,30 @@ state.calls.push(args);
 const save = () => fs.writeFileSync(file, JSON.stringify(state));
 const result = (value) => { save(); process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value)); };
 const fail = (message) => { save(); process.stderr.write(message); process.exit(1); };
-const metadata = (tag, entry) => ({tagName: tag, isDraft: entry.isDraft, isPrerelease: entry.isPrerelease,
+const metadata = (tag, entry) => ({databaseId: 42, tagName: tag, isDraft: entry.isDraft, isPrerelease: entry.isPrerelease,
   assets: [...entry.assets, ...(entry.manifest === undefined ? [] : ['latest.json']),
+    ...(entry.immutable === undefined ? [] : ['OpenClaw-' + tag.slice(1) + '-linux.json']),
     ...(entry.checksums === undefined ? [] : ['SHA256SUMS.linux-app.txt'])]
-    .map(name => ({name, digest: entry.digests?.[name],
-      state: entry.assetState ?? 'uploaded', size: entry.assetSize ?? 1024}))});
+    .map(name => {
+      const bytes = name === 'latest.json' ? entry.manifest : name === 'SHA256SUMS.linux-app.txt' ? entry.checksums :
+        name.endsWith('-linux.json') ? entry.immutable : undefined;
+      return {name, digest: entry.digests?.[name] ?? (bytes === undefined ? undefined : 'sha256:' + require('node:crypto').createHash('sha256').update(bytes).digest('hex')),
+        state: entry.assetState ?? 'uploaded', size: entry.assetSize ?? (bytes === undefined ? 1024 : Buffer.byteLength(bytes))};
+    })});
 if (args[0] === 'api') {
   const endpoint = args.find(value => value.startsWith('repos/'));
   if (endpoint === 'repos/${repository}/releases/latest') {
     const entry = state.releases[state.latest];
     if (!entry) fail('release not found (HTTP 404)');
     result(metadata(state.latest, entry));
+  } else if (endpoint?.startsWith('repos/${repository}/releases/tags/')) {
+    const tag = endpoint.slice('repos/${repository}/releases/tags/'.length);
+    const entry = state.releases[tag];
+    if (!entry) fail('release not found (HTTP 404)');
+    const release = metadata(tag, entry);
+    result({id: entry.restId ?? 42, tag_name: tag, draft: entry.isDraft, prerelease: entry.isPrerelease,
+      assets: release.assets.map((asset, index) => ({...asset,
+        id: entry.assetIds?.[asset.name] ?? (asset.name === 'SHA256SUMS.linux-app.txt' ? 3 : index + 1)}))});
   } else if (endpoint === 'repos/${repository}/compare/${toolingSha}...main') {
     result({status: state.toolingStatus || 'identical'});
   } else if (endpoint === 'repos/${repository}/actions/runs/123') {
@@ -146,23 +160,25 @@ if (args[0] === 'api') {
       status: 'completed', conclusion: 'success'});
   } else if (endpoint === 'repos/${repository}/actions/runs/200') {
     result(state.currentRun);
-  } else if (endpoint === 'repos/${repository}/actions/runs/300') {
-    result(state.sourceRequest);
   } else if (endpoint === 'repos/${repository}/git/ref/heads/main' ||
       endpoint === 'repos/${repository}/commits/main') {
     result('${toolingSha}');
+  } else if (endpoint?.startsWith('repos/${repository}/actions/workflows/linux-app-release-request.yml/runs?')) {
+    if (state.requestReadRejected) fail('request history unavailable (HTTP 503)');
+    const page = Number(new URLSearchParams(endpoint.split('?')[1]).get('page'));
+    const runs = state.requestRuns || [];
+    result({total_count: runs.length, workflow_runs: runs.slice((page - 1) * 100, page * 100)});
   } else if (endpoint === 'repos/${repository}/actions/workflows/linux-app-release-request.yml/dispatches') {
     if (state.dispatchRejected) fail('workflow dispatch refused (HTTP 403)');
-    (state.requests ||= []).push(JSON.parse(fs.readFileSync(0, 'utf8')));
+    const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+    (state.requests ||= []).push(request);
+    (state.requestRuns ||= []).unshift({id: 456, head_sha: '${toolingSha}', head_branch: request.ref,
+      event: 'workflow_dispatch', status: 'queued', conclusion: null,
+      display_title: 'Linux App Release Request [' + request.inputs.tag + '] desktop=' + request.inputs['desktop-test-bundles']});
     result({...(state.dispatchResponse === 'missing-id' ? {} :
       {workflow_run_id: state.dispatchResponse === 'null-id' ? null : 456}),
       html_url: 'https://github.com/${repository}/actions/runs/456'});
   } else if (endpoint?.startsWith('repos/${repository}/commits/')) {
-    if (state.writerLossAtTagRead === 'cancelled') {
-      Object.assign(state.currentRun, {status: 'completed', conclusion: 'cancelled'});
-    } else if (state.writerLossAtTagRead === 'attempt') {
-      state.currentRun.run_attempt++;
-    }
     result('${sourceSha}');
   } else {
     fail('Unexpected API request: ' + args.join(' '));
@@ -176,22 +192,16 @@ if (args[0] === 'api') {
   if (!entry) fail('release not found (HTTP 404)');
   if (args[1] === 'view') {
     if (!args.includes('--json')) fail('Metadata reads must use JSON.');
+    if (args[args.indexOf('--json') + 1].includes('databaseId')) fail('Unknown JSON field: databaseId');
     result(metadata(tag, entry));
   } else if (args[1] === 'download') {
     const name = args[args.indexOf('--pattern') + 1];
-    if (!['latest.json', 'SHA256SUMS.linux-app.txt'].includes(name) ||
+    if (!['latest.json', 'SHA256SUMS.linux-app.txt', 'OpenClaw-' + tag.slice(1) + '-linux.json'].includes(name) ||
         args[args.indexOf('--output') + 1] !== '-') fail('Only manifest downloads are permitted.');
-    const bytes = name === 'latest.json' ? entry.manifest : entry.checksums;
+    const bytes = name === 'latest.json' ? entry.manifest : name === 'SHA256SUMS.linux-app.txt' ? entry.checksums : entry.immutable;
     if (bytes === undefined) fail('asset not found (HTTP 404)');
     result(bytes);
   } else if (args[1] === 'upload') {
-    const bundles = args.filter(arg => arg.startsWith('dist/release/'));
-    if (bundles.length) {
-      for (const bundle of bundles) fs.readFileSync(bundle);
-      (state.binaryUploads ||= []).push(bundles);
-      result('');
-      process.exit(0);
-    }
     if (!args[3].endsWith('/latest.json')) fail('Only manifest uploads are permitted.');
     state.uploads++;
     if (state.uploadBehavior === 'deleted-error') {
@@ -233,7 +243,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
     GITHUB_REF_NAME: "main",
     GITHUB_WORKFLOW_SHA: toolingSha,
   };
-  const prepareRun = (command: "carry" | "publish" | "status", tag: string, prepared: boolean) => {
+  const prepareRun = (prepared: boolean) => {
     update((state) => {
       state.currentRun = {
         id: 200,
@@ -243,92 +253,21 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
         head_branch: "main",
         status: "in_progress",
         conclusion: null,
-        event: command === "publish" ? "workflow_run" : "workflow_dispatch",
+        event: "workflow_dispatch",
         path: `${
-          command === "publish"
-            ? ".github/workflows/linux-app-release.yml"
-            : prepared
-              ? ".github/workflows/openclaw-release-promote.yml"
-              : ".github/workflows/openclaw-release-publish.yml"
+          prepared
+            ? ".github/workflows/openclaw-release-promote.yml"
+            : ".github/workflows/openclaw-release-publish.yml"
         }@refs/heads/main`,
         ...state.currentRunOverrides,
-      };
-      state.sourceRequest = {
-        id: 300,
-        run_attempt: 1,
-        repository: { full_name: repository },
-        head_sha: toolingSha,
-        head_branch: "main",
-        status: "completed",
-        conclusion: "success",
-        event: "workflow_dispatch",
-        path: ".github/workflows/linux-app-release-request.yml@refs/heads/main",
-        display_title: `Linux App Release Request [${tag}] desktop=false`,
-        ...state.sourceRequestOverrides,
       };
     });
   };
   return {
     read,
     update,
-    attachBundles(previous = false) {
-      prepareRun("publish", "v2026.9.4", false);
-      const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8"));
-      const step = expectDefined(
-        workflow.jobs.publish.steps.find(
-          (entry: { name?: string; run?: string }) =>
-            entry.name === "Attach bundles to the release",
-        ),
-        "registered Linux bundle upload step",
-      );
-      let body = expectDefined(step.run, "Linux bundle upload script");
-      if (previous) {
-        const withoutWriter = body.replace(
-          / \\\n[ \t]+--writer-run-id "\$GITHUB_RUN_ID" --writer-run-attempt "\$GITHUB_RUN_ATTEMPT" \\\n[ \t]+--writer-workflow-path \.github\/workflows\/linux-app-release\.yml \\\n[ \t]+--writer-workflow-event workflow_run/u,
-          "",
-        );
-        if (withoutWriter === body) {
-          throw new Error(
-            "The registered upload step has no writer tuple to remove for regression proof.",
-          );
-        }
-        body = withoutWriter;
-      }
-      mkdirSync(join(root, "scripts/lib"), { recursive: true });
-      for (const source of [
-        "scripts/linux-updater-manifest.mjs",
-        "scripts/release-tooling-identity.mjs",
-        "scripts/lib/record-shared.mjs",
-        "scripts/lib/release-version.mjs",
-      ]) {
-        copyFileSync(resolve(source), join(root, source));
-      }
-      mkdirSync(join(root, "dist/release"), { recursive: true });
-      writeFileSync(
-        join(root, "dist/release/OpenClaw-2026.9.4-amd64.AppImage"),
-        "synthetic AppImage bytes",
-      );
-      const output = join(root, `attach-${++runNumber}`);
-      mkdirSync(output);
-      return spawnSync("bash", ["-c", body], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 20_000,
-        env: {
-          ...env,
-          GITHUB_RUN_ID: "200",
-          GITHUB_RUN_ATTEMPT: "1",
-          GITHUB_REPOSITORY: repository,
-          RUNNER_TEMP: output,
-          GITHUB_STEP_SUMMARY: join(output, "summary.md"),
-          RELEASE_TAG: "v2026.9.4",
-          TAG_SHA: sourceSha,
-          DESKTOP_TEST_BUNDLES: "false",
-        },
-      });
-    },
     identity(writerArguments: string[]) {
-      prepareRun("carry", "v2026.9.5", true);
+      prepareRun(true);
       return spawnSync(
         process.execPath,
         [
@@ -357,18 +296,14 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
         { encoding: "utf8", timeout: 20_000, env },
       );
     },
-    run(command: "carry" | "publish" | "status", tag = "v2026.9.5", prepared = false) {
+    run(command: "carry" | "status", tag = "v2026.9.5", prepared = false) {
       const output = join(root, `operation-${++runNumber}`);
       const requestPath = join(root, "publication-request.json");
       const eventPath = join(root, `event-${runNumber}.json`);
-      prepareRun(command, tag, prepared);
+      prepareRun(prepared);
       writeFileSync(
         eventPath,
-        JSON.stringify(
-          command === "publish"
-            ? { workflow_run: { id: 300, run_attempt: 1 } }
-            : { inputs: { tag, npm_dist_tag: "latest", ...read().eventInputOverrides } },
-        ),
+        JSON.stringify({ inputs: { tag, npm_dist_tag: "latest", ...read().eventInputOverrides } }),
       );
       if (prepared) {
         writeFileSync(
@@ -445,38 +380,6 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
   };
 }
 
-it.each(["core-first", "linux-first"])(
-  "serves the newest signed Linux release when publication completes %s",
-  (order) => {
-    const remote = fixture();
-    const finishLinux = () => {
-      remote.update((state) => {
-        state.releases["v2026.9.4"] = release("2026.9.4");
-      });
-      const result = remote.run("publish", "v2026.9.4");
-      expect(result.status, result.stderr).toBe(0);
-    };
-    if (order === "linux-first") {
-      finishLinux();
-    }
-    const carry = remote.run("carry");
-    expect(carry.status, carry.stderr).toBe(0);
-    expect(fixtureRelease(remote.read(), "v2026.9.5").manifest).toBe(
-      manifest(order === "linux-first" ? "2026.9.4" : "2026.9.3"),
-    );
-    remote.update((state) => {
-      fixtureRelease(state, "v2026.9.5").isDraft = false;
-      state.latest = "v2026.9.5";
-    });
-    if (order === "core-first") {
-      finishLinux();
-    }
-    expect(fixtureRelease(remote.read(), "v2026.9.5").manifest).toBe(manifest("2026.9.4"));
-    expect(fixtureRelease(remote.read(), "v2026.9.3").manifest).toBe(manifest("2026.9.3"));
-    expect(fixtureRelease(remote.read(), "v2026.9.5").assets).toEqual([]);
-  },
-);
-
 it.each(["2026.9.3", "2026.9.4", "2026.9.5"])(
   "preserves an equal or newer valid target manifest byte-for-byte (%s)",
   (version) => {
@@ -495,19 +398,6 @@ it.each(["2026.9.3", "2026.9.4", "2026.9.5"])(
   },
 );
 
-it("does not let a late older Linux build replace a newer carried manifest", () => {
-  const remote = fixture({ latest: "v2026.9.5" });
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4");
-    state.releases["v2026.9.5"] = release("2026.9.5");
-  });
-  const result = remote.run("publish", "v2026.9.4");
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.evidence.state).toBe("unchanged");
-  expect(remote.read().uploads).toBe(0);
-  expect(fixtureRelease(remote.read(), "v2026.9.5").manifest).toBe(manifest("2026.9.5"));
-});
-
 it.each(["missing-manifest", "missing-release"])(
   "records %s as pending without a write",
   (kind) => {
@@ -525,26 +415,6 @@ it.each(["missing-manifest", "missing-release"])(
     expect(remote.read().uploads).toBe(0);
   },
 );
-
-it.each([
-  { reason: "draft", version: "2026.9.4", draft: true },
-  { reason: "prerelease flag", version: "2026.9.4", prerelease: true },
-  { reason: "beta", version: "2026.9.4-beta.1" },
-  { reason: "extended stable", version: "2026.9.33" },
-  { reason: "future stable", version: "2026.9.5" },
-])("does not propagate a $reason source", ({ version, draft, prerelease }) => {
-  const remote = fixture();
-  remote.update((state) => {
-    state.releases[`v${version}`] = release(version, {
-      isDraft: draft ?? false,
-      isPrerelease: prerelease ?? false,
-    });
-  });
-  const result = remote.run("publish", `v${version}`);
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.evidence.state).toBe("skipped");
-  expect(remote.read().uploads).toBe(0);
-});
 
 it.each([
   "cross-repository",
@@ -670,34 +540,6 @@ it("returns unchanged identity CLI output only after verifying the active writer
   expect(remote.read().calls.at(-1)?.[1]).toBe(`repos/${repository}/actions/runs/200`);
 });
 
-it("uploads binary bundles through the registered step while the exact writer remains active", () => {
-  const remote = fixture();
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4", { assets: [], manifest: undefined });
-  });
-  const result = remote.attachBundles();
-  expect(result.status, result.stderr).toBe(0);
-  expect(remote.read().binaryUploads).toEqual([["dist/release/OpenClaw-2026.9.4-amd64.AppImage"]]);
-});
-
-it.each(["cancelled", "attempt"] as const)(
-  "prevents binary upload after %s writer loss during the registered step's tag read",
-  (writerLossAtTagRead) => {
-    for (const previous of [true, false]) {
-      const remote = fixture({ writerLossAtTagRead });
-      remote.update((state) => {
-        state.releases["v2026.9.4"] = release("2026.9.4", { assets: [], manifest: undefined });
-      });
-      const result = remote.attachBundles(previous);
-      expect(result.status, result.stderr).toBe(previous ? 0 : 1);
-      expect(remote.read().binaryUploads ?? []).toHaveLength(previous ? 1 : 0);
-      if (!previous) {
-        expect(result.stderr).toContain("release workflow run");
-      }
-    }
-  },
-);
-
 it("does not let a successful parent authorize a cancelled writer through the identity CLI", () => {
   const remote = fixture({ currentRunOverrides: { status: "completed", conclusion: "cancelled" } });
   const result = remote.identity(writerCliFields.flat());
@@ -762,46 +604,6 @@ it.each([
   expect(remote.read().uploads).toBe(0);
 });
 
-it.each([
-  { reason: "stale attempt", sourceRequestOverrides: { run_attempt: 2 } },
-  { reason: "wrong path", sourceRequestOverrides: { path: ".github/workflows/other.yml" } },
-  {
-    reason: "wrong tag",
-    sourceRequestOverrides: {
-      display_title: "Linux App Release Request [v2026.9.3] desktop=false",
-    },
-  },
-  { reason: "cancelled request", sourceRequestOverrides: { conclusion: "cancelled" } },
-  { reason: "another tooling SHA", sourceRequestOverrides: { head_sha: "c".repeat(40) } },
-  { reason: "another branch", sourceRequestOverrides: { head_branch: "release/2026.9.4" } },
-])(
-  "refuses native manifest publication after a request with $reason",
-  ({ sourceRequestOverrides }) => {
-    const remote = fixture({ latest: "v2026.9.5", sourceRequestOverrides });
-    remote.update((state) => {
-      state.releases["v2026.9.4"] = release("2026.9.4");
-      state.releases["v2026.9.5"] = release("2026.9.5", { manifest: manifest("2026.9.3") });
-    });
-    const result = remote.run("publish", "v2026.9.4");
-    expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/release workflow run|Linux release request/u);
-    expect(result.evidence.state).toBe("failed");
-    expect(remote.read().uploads).toBe(0);
-  },
-);
-
-it("does not substitute prepared carry authority for a native Linux request", () => {
-  const remote = fixture({ latest: "v2026.9.5" });
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4");
-    state.releases["v2026.9.5"] = release("2026.9.5", { manifest: manifest("2026.9.3") });
-  });
-  const result = remote.run("publish", "v2026.9.4", true);
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain("requires its Linux release request");
-  expect(remote.read().uploads).toBe(0);
-});
-
 it("reuses complete same-tag Linux assets after matching checksums to GitHub digests", () => {
   const remote = fixture();
   remote.update((state) => {
@@ -810,11 +612,85 @@ it("reuses complete same-tag Linux assets after matching checksums to GitHub dig
   const result = remote.run("status", "v2026.9.4");
   expect(result.status, result.stderr).toBe(0);
   expect(result.evidence.state).toBe("published");
+  expect(result.evidence.assetsComplete).toBe(true);
+  expect(result.evidence.needsChannelPublication).toBe(true);
   expect(result.evidence.version).toBe("2026.9.4");
   expect(result.evidence.needsUpdaterPublication).toBe(false);
   expect(remote.read().uploads).toBe(0);
   expect(readFileSync(join(result.output, "latest.json"), "utf8")).toBe(manifest("2026.9.4"));
 });
+
+it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
+  "checks the actual same-tag legacy selector and REST identities (%s)",
+  (kind) => {
+    const remote = fixture();
+    remote.update((state) => {
+      const source = completeRelease("2026.9.4");
+      const checksumBytes = expectDefined(source.checksums, "checksums");
+      const proof = {
+        schemaVersion: 1,
+        releaseId: 42,
+        sourceSha,
+        toolingSha,
+        channelSha: sourceSha,
+        publicKeySha256: "d".repeat(64),
+        assets: [
+          ...source.assets.map((name, index) => ({
+            id: index + 1,
+            name,
+            size: 1024,
+            sha256: expectDefined(source.digests?.[name], "bundle digest").slice(7),
+          })),
+          {
+            id: 3,
+            name: "SHA256SUMS.linux-app.txt",
+            size: Buffer.byteLength(checksumBytes),
+            sha256: createHash("sha256").update(checksumBytes).digest("hex"),
+          },
+        ],
+      };
+      source.immutable = manifest("2026.9.4", { linuxPublication: proof });
+      source.manifest =
+        kind === "missing" ? undefined : kind === "older" ? manifest("2026.9.3") : source.immutable;
+      if (kind === "replaced-release") {
+        source.restId = 43;
+      }
+      if (kind === "replaced-asset") {
+        source.assetIds = { "OpenClaw-2026.9.4-amd64.AppImage": 99 };
+      }
+      state.releases["v2026.9.4"] = source;
+      state.releases["linux-stable"] = {
+        isDraft: false,
+        isPrerelease: true,
+        assets: [],
+        manifest: source.immutable,
+      };
+    });
+    const result = remote.run("status", "v2026.9.4");
+    if (kind === "replaced-release" || kind === "replaced-asset") {
+      expect(result.status).toBe(1);
+      expect(result.evidence.state).toBe("failed");
+      const dispatch = remote.dispatch();
+      expect(dispatch.status).toBe(1);
+      expect(remote.read().uploads).toBe(0);
+      expect(remote.read().requests ?? []).toEqual([]);
+      return;
+    }
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.evidence).toMatchObject({
+      assetsComplete: true,
+      needsUpdaterPublication: kind !== "current",
+      needsChannelPublication: false,
+    });
+    const dispatch = remote.dispatch();
+    expect(dispatch.status, dispatch.stderr).toBe(0);
+    expect(dispatch.evidence.state).toBe(
+      kind === "current" ? "published-assets-reused" : "request-dispatched",
+    );
+    expect(remote.read().uploads).toBe(0);
+    expect(remote.read().requests ?? []).toHaveLength(kind === "current" ? 0 : 1);
+  },
+);
 
 it.each(["missing", "older", "newer"])(
   "reports whether complete Linux assets need propagation into a %s latest manifest",
@@ -916,14 +792,12 @@ it.each(["absent", "complete", "partial", "propagation"])(
     const result = remote.dispatch();
     expect(result.status, result.stderr).toBe(kind === "partial" ? 1 : 0);
     expect(result.evidence.state).toBe(
-      kind === "absent" || kind === "propagation"
+      kind === "absent" || kind === "propagation" || kind === "complete"
         ? "request-dispatched"
-        : kind === "complete"
-          ? "published-assets-reused"
-          : "dispatch-unconfirmed",
+        : "dispatch-unconfirmed",
     );
     expect(remote.read().requests ?? []).toEqual(
-      kind === "absent" || kind === "propagation"
+      kind === "absent" || kind === "propagation" || kind === "complete"
         ? [
             {
               ref: "main",
@@ -948,6 +822,100 @@ it("reports a refused Linux workflow dispatch without a success receipt or retry
   expect(
     remote.read().calls.filter((args) => args.some((arg) => arg.endsWith("/dispatches"))),
   ).toHaveLength(1);
+});
+
+function pendingLinuxFixture(initial: Partial<Remote> = {}) {
+  return fixture({
+    releases: { "v2026.9.4": release("2026.9.4", { assets: [], manifest: undefined }) },
+    ...initial,
+  });
+}
+
+function linuxRequest(overrides: Partial<ActionRun> = {}): ActionRun {
+  return {
+    id: 455,
+    run_attempt: 1,
+    repository: { full_name: repository },
+    head_sha: "c".repeat(40),
+    head_branch: "main",
+    path: ".github/workflows/linux-app-release-request.yml",
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    display_title: "Linux App Release Request [v2026.9.4] desktop=false",
+    ...overrides,
+  };
+}
+
+it.each(["requested", "waiting", "pending", "queued", "in_progress", "completed"])(
+  "reuses a manual same-tag Linux request in %s state without another build request",
+  (status) => {
+    const remote = pendingLinuxFixture({
+      requestRuns: [
+        linuxRequest({ status, conclusion: status === "completed" ? "success" : null }),
+      ],
+    });
+    const result = remote.dispatch();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.evidence).toMatchObject({
+      state: "request-reused",
+      requestRunId: "455",
+      workflowSha: "c".repeat(40),
+    });
+    expect(remote.read().requests ?? []).toEqual([]);
+  },
+);
+
+it("reuses its earlier request when a parent resumes before Linux assets arrive", () => {
+  const remote = pendingLinuxFixture();
+  const first = remote.dispatch();
+  expect(first.status, first.stderr).toBe(0);
+  expect(first.evidence.state).toBe("request-dispatched");
+  const resumed = remote.dispatch();
+  expect(resumed.status, resumed.stderr).toBe(0);
+  expect(resumed.evidence).toMatchObject({ state: "request-reused", requestRunId: "456" });
+  expect(remote.read().requests).toHaveLength(1);
+});
+
+it("finds a desktop-inclusive Linux request beyond the first history page", () => {
+  const remote = pendingLinuxFixture({
+    requestRuns: [
+      ...Array.from({ length: 100 }, () =>
+        linuxRequest({ display_title: "Linux App Release Request [v2026.9.3] desktop=false" }),
+      ),
+      linuxRequest({ display_title: "Linux App Release Request [v2026.9.4] desktop=true" }),
+    ],
+  });
+  const result = remote.dispatch();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.evidence).toMatchObject({ state: "request-reused", requestRunId: "455" });
+  expect(remote.read().requests ?? []).toEqual([]);
+});
+
+it.each([
+  { reason: "failed", overrides: { conclusion: "failure" } },
+  { reason: "cancelled", overrides: { conclusion: "cancelled" } },
+  { reason: "another branch", overrides: { head_branch: "feature" } },
+  { reason: "another event", overrides: { event: "push" } },
+  {
+    reason: "another tag",
+    overrides: { display_title: "Linux App Release Request [v2026.9.3] desktop=false" },
+  },
+])("does not reuse a Linux request that is $reason", ({ overrides }) => {
+  const remote = pendingLinuxFixture({ requestRuns: [linuxRequest(overrides)] });
+  const result = remote.dispatch();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.evidence.state).toBe("request-dispatched");
+  expect(remote.read().requests).toHaveLength(1);
+});
+
+it("refuses another Linux request when request history cannot be read", () => {
+  const remote = pendingLinuxFixture({ requestReadRejected: true });
+  const result = remote.dispatch();
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("request history unavailable");
+  expect(result.evidence.state).toBe("dispatch-unconfirmed");
+  expect(remote.read().requests ?? []).toEqual([]);
 });
 
 it("refuses a moved tag even when the dispatch caller suppresses shell errexit", () => {

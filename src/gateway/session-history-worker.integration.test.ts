@@ -7,10 +7,107 @@ import {
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
+
+it.each([
+  { agentId: "Other", sessionKey: "agent:other:fenced-history" },
+  { agentId: "other", sessionKey: "Agent:Other:Fenced-History" },
+])(
+  "validates worker admission for normalized logical inputs in a shared store: %j",
+  async (input) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        env: state.env,
+        path: state.statePath("shared-history.sqlite"),
+      });
+      const target = {
+        agentId: "other",
+        sessionKey: "agent:other:fenced-history",
+        sessionId: "requested-fenced-history",
+        storePath: database.path,
+      };
+      const entry = { sessionId: target.sessionId, updatedAt: 1 };
+      await replaceSessionEntry(target, entry);
+      await replaceTranscriptEvents(target, [
+        { type: "session", version: 3, id: target.sessionId },
+        {
+          type: "message",
+          id: "before",
+          parentId: null,
+          message: { role: "user", content: "Visible requested history" },
+        },
+        {
+          type: "message",
+          id: "admitted",
+          parentId: "before",
+          message: { role: "user", content: "Current turn" },
+        },
+        {
+          type: "message",
+          id: "later",
+          parentId: "admitted",
+          message: { role: "assistant", content: "After the admitted boundary" },
+        },
+      ]);
+      await waitForSessionTranscriptProjection(target);
+      const anchor = readActiveTranscriptEntryAnchor({ ...target, entryId: "admitted" });
+      if (!anchor) {
+        throw new Error("expected current-turn transcript anchor");
+      }
+      expect(anchor).toMatchObject({
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: database.path,
+      });
+      expect(database.agentId).toBe("main");
+      const admission = { ...anchor, logicalTurnId: "worker-fence", role: "user" as const };
+      const readRpc = () =>
+        readChatHistoryPage({
+          entry,
+          provider: undefined,
+          sessionId: target.sessionId,
+          storePath: target.storePath,
+          sessionAgentId: input.agentId,
+          canonicalKey: input.sessionKey,
+          max: 10,
+          maxHistoryBytes: 100_000,
+          effectiveMaxChars: 8000,
+          offset: undefined,
+          messageId: undefined,
+        });
+      const readHttp = () =>
+        readSessionHistorySnapshotAsync({
+          target: { ...target, ...input, sessionEntry: entry },
+          limit: 10,
+        });
+      const page = await runWithSessionTranscriptReadFence(admission, readRpc);
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["before", "admitted", "later"]);
+      const http = await runWithSessionTranscriptReadFence(admission, readHttp);
+      expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([
+        "before",
+        "admitted",
+        "later",
+      ]);
+      expect(http.transcriptPath).toBe(input.sessionKey);
+      // Display rows remain visible, but normalization must not lose admission validation.
+      const invalidAdmission = { ...admission, storePath: `${database.path}.other` };
+      await expect(runWithSessionTranscriptReadFence(invalidAdmission, readRpc)).rejects.toThrow(
+        "different transcript store",
+      );
+      await expect(runWithSessionTranscriptReadFence(invalidAdmission, readHttp)).rejects.toThrow(
+        "different transcript store",
+      );
+    });
+  },
+);
 
 it("reads a sparse page in the transcript worker and shares equivalent queued requests", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

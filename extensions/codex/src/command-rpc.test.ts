@@ -17,6 +17,10 @@ import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { createClientHarness } from "./app-server/test-support.js";
@@ -111,6 +115,8 @@ describe("Codex command RPC helpers", () => {
       resetPluginRuntimeStateForTest();
     }
     harness.client.close();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
     vi.unstubAllEnvs();
@@ -156,6 +162,73 @@ describe("Codex command RPC helpers", () => {
     expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
     expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { scope: "user home", transport: "stdio" as const, homeScope: "user" as const },
+    {
+      scope: "remote supervision",
+      transport: "websocket" as const,
+      homeScope: "agent" as const,
+      url: "ws://codex.test",
+    },
+  ])("settles a detached $scope fork without acquiring session auth", async (connection) => {
+    const onResponse = vi.fn();
+    await codexControlRequest(
+      {},
+      "thread/fork",
+      { threadId: "source-thread", excludeTurns: true },
+      {
+        startOptions: {
+          transport: connection.transport,
+          homeScope: connection.homeScope,
+          ...("url" in connection ? { url: connection.url } : {}),
+          command: "codex",
+          args: ["app-server"],
+          headers: {},
+        },
+        authProfileId: null,
+        onResponse,
+      },
+    );
+    expect(acquiredOptions()).toMatchObject({ authProfileId: null });
+    expect(acquiredOptions().preparedAuth).toBeUndefined();
+    expect(onResponse).toHaveBeenCalledWith(resumeResponse, harness.client, {
+      authProfileId: undefined,
+      assertCurrent: expect.any(Function),
+    });
+  });
+
+  it.each([
+    { method: "thread/resume" as const, explicitConnection: true },
+    { method: "thread/fork" as const, explicitConnection: false },
+  ])(
+    "requires session authority for $method without its native fork selection",
+    async (testCase) => {
+      await expect(
+        codexControlRequest(
+          {},
+          testCase.method,
+          { threadId: "source-thread" },
+          {
+            ...(testCase.explicitConnection
+              ? {
+                  startOptions: {
+                    transport: "stdio" as const,
+                    homeScope: "user" as const,
+                    command: "codex",
+                    args: ["app-server"],
+                    headers: {},
+                  },
+                }
+              : {}),
+            authProfileId: null,
+            onResponse: vi.fn(),
+          },
+        ),
+      ).rejects.toThrow("requires admitted session authority");
+      expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");

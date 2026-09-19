@@ -34,7 +34,6 @@ import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adop
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
-  resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
 import { formatClawHubSkillRequestError } from "./clawhub-request-error.js";
 import {
@@ -48,6 +47,7 @@ import {
   type ClawHubSkillFileLock,
   type ClawHubSkillVerificationLock,
 } from "./clawhub-store.js";
+import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 export type Logger = {

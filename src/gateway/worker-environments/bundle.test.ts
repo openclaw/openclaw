@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -36,20 +37,19 @@ async function writeFixture(
     })}\n`,
     "utf8",
   );
-  await fs.writeFile(path.join(packageRoot, "dist", "worker", "worker.mjs"), workerSource, {
-    encoding: "utf8",
-    mode: 0o755,
-  });
-  await fs.writeFile(
-    path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
-    "export const launcher = true;\n",
-    { encoding: "utf8", mode: 0o755 },
-  );
-  await fs.writeFile(
-    path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
-    "export const receiver = true;\n",
-    { encoding: "utf8", mode: 0o755 },
-  );
+  for (const [artifactName, contents] of [
+    ["github-exec-launcher.mjs", "export const launcher = true;\n"],
+    ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
+    ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
+    ["service-child-relay.mjs", "export const relay = true;\n"],
+    ["worker.mjs", workerSource],
+    ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
+  ] as const) {
+    await fs.writeFile(path.join(packageRoot, "dist", "worker", artifactName), contents, {
+      encoding: "utf8",
+      mode: 0o755,
+    });
+  }
 }
 
 async function listTarball(tarballPath: string): Promise<string[]> {
@@ -132,18 +132,30 @@ describe("worker bundle producer", () => {
       expect(second.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
         "github-exec-launcher.mjs",
+        "image-processor.worker.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
       const extractRoot = path.join(root, "extract");
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
-      await expect(fs.readFile(path.join(extractRoot, "worker.mjs"), "utf8")).resolves.toContain(
-        "worker = true",
-      );
-      await expect(
-        fs.readFile(path.join(extractRoot, "workspace-rsync-receiver.mjs"), "utf8"),
-      ).resolves.toContain("receiver = true");
+      for (const [artifactName, expectedContents] of [
+        ["github-exec-launcher.mjs", "export const launcher = true;\n"],
+        ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
+        ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
+        ["service-child-relay.mjs", "export const relay = true;\n"],
+        ["worker.mjs", "export const worker = true;\n"],
+        ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
+      ] as const) {
+        await expect(fs.readFile(path.join(extractRoot, artifactName), "utf8")).resolves.toBe(
+          expectedContents,
+        );
+        if (process.platform !== "win32") {
+          expect((await fs.stat(path.join(extractRoot, artifactName))).mode & 0o777).toBe(0o700);
+        }
+      }
       await expect(fs.access(path.join(extractRoot, "package.json"))).rejects.toThrow();
       await expect(fs.access(path.join(extractRoot, "node_modules"))).rejects.toThrow();
     });
@@ -163,26 +175,23 @@ describe("worker bundle producer", () => {
       const unrelated = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
       expect(unrelated.bundleHash).toBe(first.bundleHash);
 
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "worker.mjs"),
-        "export const value = 2;\n",
-      );
-      const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(changed.bundleHash).not.toBe(first.bundleHash);
-
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
-        "export const receiver = false;\n",
-      );
-      const receiverChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(receiverChanged.bundleHash).not.toBe(changed.bundleHash);
-
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
-        "export const launcher = false;\n",
-      );
-      const launcherChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(launcherChanged.bundleHash).not.toBe(receiverChanged.bundleHash);
+      let previousHash = first.bundleHash;
+      for (const artifactName of [
+        "github-exec-launcher.mjs",
+        "image-processor.worker.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
+        "worker.mjs",
+        "workspace-rsync-receiver.mjs",
+      ]) {
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "worker", artifactName),
+          "export const changed = true;\n",
+        );
+        const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+        expect(changed.bundleHash, artifactName).not.toBe(previousHash);
+        previousHash = changed.bundleHash;
+      }
     });
   });
 
@@ -217,6 +226,31 @@ describe("worker bundle producer", () => {
     });
   });
 
+  it("skips retention reads when the cache has no cleanup candidates", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-noop-prune-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot);
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+      for (const name of ["keep-me.txt", "not-a-hash.tgz", ".staging"]) {
+        await fs.writeFile(path.join(cacheDir, name), "operator-owned");
+      }
+      const before = (await fs.readdir(cacheDir)).toSorted();
+      const readRetained = vi.fn(() => []);
+
+      await owner.prune(readRetained);
+
+      expect(readRetained).not.toHaveBeenCalled();
+      expect((await fs.readdir(cacheDir)).toSorted()).toEqual(before);
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
   it("prunes only unretained bundles for an exclusive cache owner", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
       const packageRoot = path.join(root, "package");
@@ -236,7 +270,7 @@ describe("worker bundle producer", () => {
       const removedPath = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
       await fs.writeFile(removedPath, "historical");
 
-      await owner.prune([retained.bundleHash]);
+      await owner.prune(() => [retained.bundleHash]);
 
       await expect(fs.stat(retained.tarballPath)).resolves.toBeDefined();
       await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
@@ -301,11 +335,11 @@ describe("worker bundle producer", () => {
         const retained = () =>
           listRetainedWorkerBundleHashes({ environments: reopened.list(), placements: [] });
 
-        await successor.prune(retained());
+        await successor.prune(retained);
         await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
 
         reopened.transition({ environmentId: "preparing", from: "provisioning", to: "failed" });
-        await successor.prune(retained());
+        await successor.prune(retained);
         await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
       } finally {
@@ -335,12 +369,124 @@ describe("worker bundle producer", () => {
       await fs.writeFile(temporary, "partial");
       await fs.writeFile(unknown, "operator-owned");
 
-      await owner.prune([]);
+      await owner.prune(() => []);
 
       await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(temporary)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
       await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it.each(["all", "staging", "temporary"] as const)(
+    "preserves cleanup candidates when retention cannot be read (%s)",
+    async (kind) => {
+      await withTestDir({ prefix: "openclaw-worker-bundle-retention-error-" }, async (root) => {
+        const packageRoot = path.join(root, "package");
+        const cacheDir = path.join(root, "cache");
+        await writeFixture(packageRoot);
+        const owner = createWorkerBundleProducer({
+          packageRoot,
+          cacheDir,
+          cacheOwnership: "exclusive",
+        });
+        const current = await owner.prepare();
+        const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
+        const staging = path.join(cacheDir, ".staging-stale");
+        const temporary = path.join(
+          cacheDir,
+          `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+        );
+        const candidates =
+          kind === "all"
+            ? [historical, staging, temporary]
+            : [kind === "staging" ? staging : temporary];
+        if (candidates.includes(historical)) {
+          await fs.writeFile(historical, "historical");
+        }
+        if (candidates.includes(staging)) {
+          await fs.mkdir(staging);
+          await fs.writeFile(path.join(staging, "partial"), "staged");
+        }
+        if (candidates.includes(temporary)) {
+          await fs.writeFile(temporary, "partial");
+        }
+        const failure = new Error("Retention records are unavailable");
+
+        await expect(
+          owner.prune(() => {
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+
+        for (const candidate of candidates) {
+          const file = candidate === staging ? path.join(staging, "partial") : candidate;
+          const contents =
+            candidate === historical ? "historical" : candidate === staging ? "staged" : "partial";
+          await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+        }
+        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+
+        await owner.prune(() => []);
+        for (const removed of candidates) {
+          await expect(fs.stat(removed)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+      });
+    },
+  );
+
+  it("reads retention when queued pruning runs", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-queued-prune-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot);
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+      const firstHash = "a".repeat(64);
+      const secondHash = "b".repeat(64);
+      const obsolete = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
+      for (const hash of [firstHash, secondHash]) {
+        await fs.writeFile(path.join(cacheDir, `${hash}.tgz`), hash);
+      }
+      await fs.writeFile(obsolete, "obsolete");
+      const inspectingObsolete = createDeferred();
+      const releaseInspection = createDeferred();
+      const originalLstat = fs.lstat;
+      const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+        if (target === obsolete) {
+          inspectingObsolete.resolve();
+          await releaseInspection.promise;
+        }
+        return originalLstat(target, options);
+      });
+      const first = owner.prune(() => [firstHash, secondHash]);
+      let second: Promise<void> | undefined;
+      let retained = [firstHash];
+      const readRetained = vi.fn(() => retained);
+      try {
+        await inspectingObsolete.promise;
+        second = owner.prune(readRetained);
+        expect(readRetained).not.toHaveBeenCalled();
+        retained = [firstHash, secondHash];
+        releaseInspection.resolve();
+        await Promise.all([first, second]);
+
+        expect(readRetained).toHaveBeenCalledTimes(1);
+        for (const hash of [firstHash, secondHash]) {
+          await expect(fs.readFile(path.join(cacheDir, `${hash}.tgz`), "utf8")).resolves.toBe(hash);
+        }
+        await expect(fs.stat(obsolete)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+      } finally {
+        releaseInspection.resolve();
+        await Promise.allSettled([first, ...(second ? [second] : [])]);
+        lstat.mockRestore();
+      }
     });
   });
 
@@ -356,7 +502,7 @@ describe("worker bundle producer", () => {
       });
 
       await expect(shared.prepare()).rejects.toThrow("worker deploy artifact is missing");
-      await shared.prune([]);
+      await shared.prune(() => []);
       await expect(fs.readFile(historical, "utf8")).resolves.toBe("historical");
     });
   });
@@ -441,6 +587,9 @@ describe("worker bundle producer", () => {
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
         "github-exec-launcher.mjs",
+        "image-processor.worker.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -450,6 +599,9 @@ describe("worker bundle producer", () => {
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
       "github-exec-launcher.mjs",
+      "image-processor.worker.mjs",
+      "service-child-group-anchor.mjs",
+      "service-child-relay.mjs",
       "worker.mjs",
       "workspace-rsync-receiver.mjs",
     ]) {

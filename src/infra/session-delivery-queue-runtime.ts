@@ -1,5 +1,6 @@
 // Process-local retry scheduler for the durable session delivery queue.
 import { createDeferredCore } from "../shared/deferred.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
 import {
   drainPendingSessionDelivery,
@@ -10,10 +11,11 @@ import {
 import {
   loadPendingSessionDeliveries,
   loadPendingSessionDelivery,
-  type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
+import type { QueuedSessionDelivery } from "./session-delivery-queue.records.js";
 
 type SessionDeliveryRuntime = {
+  queueContext: OpenClawStateWorkerContext;
   deliver: DeliverSessionDeliveryFn;
   drain?: typeof drainPendingSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
@@ -122,6 +124,7 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
   try {
     pending = await (activeRuntime.drain ?? drainPendingSessionDelivery)({
       id,
+      queueContext: activeRuntime.queueContext,
       logLabel: "session delivery",
       log: activeRuntime.log,
       deliver: activeRuntime.deliver,
@@ -177,10 +180,26 @@ export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () 
 }
 
 /** Schedule one durable entry when a gateway runtime is available. */
-export async function scheduleSessionDelivery(id: string): Promise<boolean> {
+export async function scheduleSessionDelivery(
+  id: string,
+  queueContext: OpenClawStateWorkerContext,
+): Promise<boolean> {
   const generation = runtimeGeneration;
   const activeRuntime = runtime;
   if (!activeRuntime) {
+    return false;
+  }
+  try {
+    queueContext.admission.assertCurrent();
+    activeRuntime.queueContext.admission.assertCurrent();
+    if (queueContext.admission.identity.key !== activeRuntime.queueContext.admission.identity.key) {
+      activeRuntime.log.error(`session delivery: ${id} belongs to another state database`);
+      return false;
+    }
+  } catch (error) {
+    activeRuntime.log.error(
+      `session delivery: cannot schedule ${id} for a retired state owner: ${String(error)}`,
+    );
     return false;
   }
   const settled = createDeferredCore();
@@ -188,7 +207,10 @@ export async function scheduleSessionDelivery(id: string): Promise<boolean> {
   try {
     let entry: QueuedSessionDelivery | null;
     try {
-      entry = await (activeRuntime.reloadPending ?? loadPendingSessionDelivery)(id);
+      entry = await (activeRuntime.reloadPending ?? loadPendingSessionDelivery)(
+        id,
+        activeRuntime.queueContext,
+      );
     } catch (error) {
       activeRuntime.log.error(`session delivery: failed to load ${id}: ${String(error)}`);
       armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, generation);
@@ -217,7 +239,9 @@ export async function schedulePendingSessionDeliveries(): Promise<void> {
   try {
     let entries: QueuedSessionDelivery[];
     try {
-      entries = await (activeRuntime.listPending ?? loadPendingSessionDeliveries)();
+      entries = await (activeRuntime.listPending ?? loadPendingSessionDeliveries)(
+        activeRuntime.queueContext,
+      );
     } catch (error) {
       activeRuntime.log.error(`session delivery: failed to scan pending entries: ${String(error)}`);
       armPendingScan(generation);

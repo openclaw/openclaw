@@ -4,6 +4,7 @@
  * Shared by registry read/write helpers for active in-memory run state.
  */
 import { isDeepStrictEqual } from "node:util";
+import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -13,6 +14,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 // registration, so in-place lifecycle field edits never require re-indexing.
 const collectorRunIdByChildSessionKey = new Map<string, string>();
 const runsByChildSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
+const runsByRequesterSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
 const runsByCollectorGroupKey = new Map<string, Map<string, SubagentRunRecord>>();
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
@@ -129,6 +131,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
             : { state: "superseded" };
       }
     }
+    publishSubagentRunChanges([entry.childSessionKey]);
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
@@ -143,12 +146,14 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         observed.state = "retired";
       }
     }
+    publishSubagentRunChanges([entry.childSessionKey]);
   }
 
   override set(runId: string, entry: SubagentRunRecord): this {
     const prev = this.get(runId);
     if (prev) {
       removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
+      removeIndexedSubagentRun(runsByRequesterSessionKey, prev.requesterSessionKey, runId, prev);
       removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
       if (prev.collect === true && prev.childSessionKey) {
         collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
@@ -156,6 +161,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
     super.set(runId, entry);
     indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
+    indexSubagentRun(runsByRequesterSessionKey, entry.requesterSessionKey, runId, entry);
     indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
     if (entry.collect === true && entry.childSessionKey) {
       collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
@@ -167,6 +173,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const prev = this.get(runId);
     if (prev) {
       removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
+      removeIndexedSubagentRun(runsByRequesterSessionKey, prev.requesterSessionKey, runId, prev);
       removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
     }
     if (
@@ -187,7 +194,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     super.clear();
     collectorRunIdByChildSessionKey.clear();
     runsByChildSessionKey.clear();
+    runsByRequesterSessionKey.clear();
     runsByCollectorGroupKey.clear();
+    publishSubagentRunChanges();
   }
 }
 
@@ -198,6 +207,13 @@ export function getSubagentRunsForChildSession(
   childSessionKey: string,
 ): Iterable<SubagentRunRecord> {
   return runsByChildSessionKey.get(childSessionKey)?.values() ?? [];
+}
+
+/** Current requester-owned generations, without restoring or scanning retained rows. */
+export function getSubagentRunsForRequesterSession(
+  requesterSessionKey: string,
+): Iterable<SubagentRunRecord> {
+  return runsByRequesterSessionKey.get(requesterSessionKey)?.values() ?? [];
 }
 
 /** Iterate live collector members for one requester/group archive decision. */

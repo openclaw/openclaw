@@ -2,6 +2,10 @@
 import type { FlowRecordPatch } from "./task-flow-registry.records.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
+export type TaskFlowRegistryMirroredSync =
+  | { changed: false; flow: TaskFlowRecord | null }
+  | { changed: true; flow: TaskFlowRecord; previous: TaskFlowRecord };
+
 export type TaskFlowRegistryUpdate = {
   flowId: string;
   expectedRevision: number;

@@ -117,11 +117,11 @@ it.each([
 });
 
 it.each([
-  { status: 1, stdout: "" },
-  { status: 0, stdout: "malformed census" },
-  { status: 0, stdout: "" },
-  { status: 0, stdout: `${owner} ${owner + 1} S\n` },
-])("keeps failed Darwin ownership uncertain (%j)", (result) => {
+  { failure: "ps failure", result: { status: 1, stdout: "" } },
+  { failure: "malformed census", result: { status: 0, stdout: "malformed census" } },
+  { failure: "missing owner", result: { status: 0, stdout: "" } },
+  { failure: "wrong process group", result: { status: 0, stdout: `${owner} ${owner + 1} S\n` } },
+])("keeps failed Darwin ownership uncertain ($failure)", ({ result }) => {
   mockProcessPlatform("darwin");
   census.mockReturnValue(result);
   expect(hasLiveOwnedProcessGroupMembers()).toBeUndefined();

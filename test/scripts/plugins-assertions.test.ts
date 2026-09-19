@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
@@ -285,14 +286,43 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
-  it.each(
-    (["capture", "logged"] as const).flatMap((mode) =>
+  it.each([
+    ...(["capture", "logged"] as const).flatMap((mode) =>
       [0, 23, 124].flatMap((status) =>
-        [false, true].map((traceEnabled) => ({ mode, status, traceEnabled })),
+        [false, true].map((traceEnabled) => ({
+          mode,
+          status,
+          traceEnabled,
+          traceValue: traceEnabled ? "1" : "0",
+          changeAfterSource: false,
+        })),
       ),
     ),
-  )(
-    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled",
+    ...(
+      [
+        ["1", true],
+        ["true", true],
+        ["TRUE", true],
+        ["yes", true],
+        ["YES", true],
+        [undefined, false],
+        ["", false],
+        ["0", false],
+        ["True", false],
+        ["Yes", false],
+        ["on", false],
+        [" true ", false],
+        ["1 ", false],
+      ] as const
+    ).map(([traceValue, traceEnabled]) => ({
+      mode: "logged" as const,
+      status: 0,
+      traceEnabled,
+      traceValue,
+      changeAfterSource: true,
+    })),
+  ])(
+    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled ($traceValue, changed after source: $changeAfterSource)",
     (testCase) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-diagnostics-"));
       const outputFile = path.join(root, "plugins-git-inspect.json");
@@ -323,6 +353,13 @@ export OPENCLAW_PLUGINS_TMP_DIR="$SCRATCH_ROOT"
 export OPENCLAW_PLUGINS_CLI_TIMEOUT=1s
 export OPENCLAW_ENTRY=fixture-entry
 source scripts/e2e/lib/plugins/sweep.sh
+${
+  testCase.changeAfterSource
+    ? testCase.traceValue === undefined
+      ? "unset OPENCLAW_PLUGIN_LIFECYCLE_TRACE"
+      : `export OPENCLAW_PLUGIN_LIFECYCLE_TRACE=${shellQuote(testCase.traceValue)}`
+    : ""
+}
 umask 000
 openclaw_e2e_maybe_timeout() {
   local raw_stderr_file
@@ -352,7 +389,11 @@ ${command}
             CAPTURED_STDERR: capturedError,
             CAPTURE_STATUS: String(testCase.status),
             OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "192",
-            OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.traceEnabled ? "1" : "0",
+            OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.changeAfterSource
+              ? testCase.traceEnabled
+                ? "0"
+                : "1"
+              : testCase.traceValue,
             OUTPUT_FILE: outputFile,
             SCRATCH_ROOT: root,
           },
@@ -394,7 +435,7 @@ ${command}
         } else {
           expect(result.stderr).toBe("");
         }
-        if (testCase.traceEnabled) {
+        if (testCase.traceValue === "1") {
           expect(result.stderr).toContain("[plugins:lifecycle]");
         } else {
           expect(result.stderr).not.toContain("[plugins:lifecycle]");
@@ -419,9 +460,10 @@ ${command}
     try {
       const passRoot = path.join(root, "pass");
       mkdirSync(passRoot, { recursive: true });
+      const markerPrefix = 'Skipping "demo';
       writeFileSync(
         path.join(passRoot, "plugins-dir-update.log"),
-        `Skipping "demo-plugin-dir" (source: path).\n${"x".repeat(256 * 1024)}`,
+        `${"x".repeat(64 * 1024 - markerPrefix.length)}${markerPrefix}-plugin-dir" (source: path).\n${"x".repeat(256 * 1024)}`,
         "utf8",
       );
       const pass = await runAssertionAsync(["plugin-dir-update-skipped"], {
@@ -856,6 +898,52 @@ fs.renameSync = (source, destination) => {
           child.once("close", resolve);
         });
       }
+    }
+  });
+
+  it("serves scoped candidate tarballs through canonical npm shrinkwrap paths", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-scoped-tarball-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "openclaw-ai-2026.7.34.tgz");
+    const archive = "scoped candidate package archive";
+    writeFileSync(tarballPath, archive, "utf8");
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/ai",
+        "2026.7.34",
+        tarballPath,
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", stderr.append);
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    try {
+      for (let attempt = 0; attempt < 100 && !existsSync(portFile); attempt += 1) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      }
+      const port = Number(readFileSync(portFile, "utf8"));
+      for (const pathname of [
+        "/@openclaw/ai/-/ai-2026.7.34.tgz",
+        "/@openclaw%2Fai/-/ai-2026.7.34.tgz",
+        "/@openclaw%2Fai/-/openclaw-ai-2026.7.34.tgz",
+      ]) {
+        const response = await requestFixtureRegistry(port, pathname);
+        expect(response.statusCode, `${pathname}: ${stderr.text()}`).toBe(200);
+        expect(response.body).toBe(archive);
+      }
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
     }
   });
 
@@ -1836,14 +1924,114 @@ fs.renameSync = (source, destination) => {
     }
   });
 
-  it("rejects ClawHub install paths that resolve outside the managed extensions root", () => {
+  it.each([
+    {
+      name: "rejects ClawHub install paths that resolve outside the managed extensions root",
+      escaped: true,
+      recordOverrides: {},
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "accepts legacy ZIP without later ClawPack or npm fields",
+      recordOverrides: {},
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "rejects a legacy artifact with the wrong format before later metadata",
+      recordOverrides: { artifactFormat: "tgz" },
+      errorPrefix: "missing ClawHub legacy ZIP artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects a non-legacy artifact kind before ClawPack metadata",
+      recordOverrides: { artifactKind: "other" },
+      errorPrefix: "missing ClawHub artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects missing ClawPack metadata before npm metadata",
+      recordOverrides: { artifactKind: "npm-pack", artifactFormat: "tgz" },
+      errorPrefix: "missing ClawHub ClawPack metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects a string ClawPack size",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: "0",
+      },
+      errorPrefix: "missing ClawHub ClawPack metadata",
+      pathError: false,
+    },
+    {
+      name: "accepts zero size before rejecting missing npm metadata",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+      },
+      errorPrefix: "missing ClawHub npm artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "accepts zero size and truthy non-string metadata with a real npm peer",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: { digest: 1 },
+        clawpackSize: 0,
+        npmIntegrity: 1,
+        npmShasum: true,
+        npmTarballName: ["package.tgz"],
+      },
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "rejects an empty install path before invalid metadata",
+      recordOverrides: { artifactFormat: "tgz", installPath: "" },
+      errorPrefix: null,
+      pathError: true,
+    },
+    {
+      name: "rejects a non-string install path before invalid metadata",
+      recordOverrides: { artifactFormat: "tgz", installPath: 42 },
+      errorPrefix: null,
+      pathError: true,
+    },
+  ])("$name", ({ escaped, recordOverrides, errorPrefix, pathError }) => {
     const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
     const home = path.join(root, "home");
     const scratchRoot = path.join(root, "scratch");
     const extensionsRoot = path.join(home, ".openclaw", "extensions");
-    const escapedInstallPath = `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`;
+    const installPath = escaped
+      ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
+      : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
     mkdirSync(extensionsRoot, { recursive: true });
-    mkdirSync(escapedInstallPath, { recursive: true });
+    mkdirSync(installPath, { recursive: true });
+    const record = {
+      artifactFormat: "zip",
+      artifactKind: "legacy-zip",
+      clawhubFamily: "code-plugin",
+      clawhubPackage: "@openclaw/kitchen-sink",
+      installPath,
+      source: "clawhub",
+      spec: "clawhub:@openclaw/kitchen-sink",
+      ...recordOverrides,
+    };
+    if (record.artifactKind === "npm-pack") {
+      mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      symlinkSync(
+        process.cwd(),
+        path.join(installPath, "node_modules", "openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
 
     writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
       plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
@@ -1853,15 +2041,7 @@ fs.renameSync = (source, destination) => {
     });
     writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
       installRecords: {
-        "openclaw-kitchen-sink-fixture": {
-          artifactFormat: "zip",
-          artifactKind: "legacy-zip",
-          clawhubFamily: "code-plugin",
-          clawhubPackage: "@openclaw/kitchen-sink",
-          installPath: escapedInstallPath,
-          source: "clawhub",
-          spec: "clawhub:@openclaw/kitchen-sink",
-        },
+        "openclaw-kitchen-sink-fixture": record,
       },
     });
 
@@ -1872,12 +2052,28 @@ fs.renameSync = (source, destination) => {
         CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
         CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
         HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
         OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
       },
     });
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("ClawHub install path resolved outside");
+    if (escaped) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ClawHub install path resolved outside");
+    } else if (pathError) {
+      expect(result.status).toBe(1);
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+        "missing ClawHub install path for openclaw-kitchen-sink-fixture",
+      );
+    } else if (errorPrefix) {
+      expect(result.status).toBe(1);
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+        `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
+      );
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+    }
   });
 
   it("times out stalled ClawHub package metadata requests", async () => {

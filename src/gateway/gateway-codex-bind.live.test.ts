@@ -438,7 +438,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
         const activeClient = client;
 
-        seedPluginConversationBindingApprovalForTest({
+        await seedPluginConversationBindingApprovalForTest({
           pluginRoot: resolveCodexPluginRoot(),
           pluginId: "codex",
           pluginName: "Codex",

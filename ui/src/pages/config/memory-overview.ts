@@ -14,10 +14,13 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/memory-overview.css";
 import type { MemoryEngineSelection } from "./memory-schema.ts";
 import { selectedEngineId } from "./memory-schema.ts";
+
+registerSettingsEnglish();
 
 export type MemoryOverviewStatus =
   | { kind: "idle" | "loading" }

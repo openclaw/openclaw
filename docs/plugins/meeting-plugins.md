@@ -44,9 +44,11 @@ In `bidi` mode, recoverable provider diagnostics are logged without stopping the
 Stopping a meeting requests cancellation of any active agent consult. In `agent` mode, OpenClaw finishes active output and turn events before closing the session, then ignores late speech synthesis and audio delivery results.
 
 The bounded live transcript remains available only in `transcribe` mode. In all
-three modes, browser joins also persist completed caption rows and a derived
-summary to the shared state database. Leaving the meeting finalizes visible
-captions and writes the summary; use [`openclaw transcripts`](/cli/transcripts)
+three modes, browser joins also persist completed caption rows and meeting notes
+to the shared state database. Notes update about every five minutes when new
+speech is saved, using the meeting agent's utility model with primary-model and
+heuristic fallbacks. Leaving the meeting finalizes visible captions and writes
+the final summary; use [`openclaw transcripts`](/cli/transcripts)
 to list, inspect, or export it. This durable notes path does not change the live
 agent-consult transcript or create an audio/video recording.
 

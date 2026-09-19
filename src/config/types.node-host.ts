@@ -8,6 +8,11 @@ export type NodeHostBrowserProxyConfig = {
 };
 
 export type NodeHostConfig = {
+  /** Automatic updates for long-running packaged headless node hosts. */
+  autoUpdate?: {
+    /** Check hourly and activate only while idle (default: true). */
+    enabled?: boolean;
+  };
   /** Sensitive native agent execution exposed by the headless node host. */
   agentRuns?: {
     claude?: {

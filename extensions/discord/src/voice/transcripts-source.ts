@@ -36,7 +36,6 @@ type DiscordTranscriptsManager = {
     listener: (state: { occupied: boolean }) => void,
   ) => () => void;
 };
-const managersByAccountId = new Map<string, DiscordTranscriptsManager>();
 type CaptureRegistration = NonNullable<VoiceSessionEntry["transcripts"]> & {
   source: CaptureSource;
   readonly subscriptionToken: symbol;
@@ -44,7 +43,43 @@ type CaptureRegistration = NonNullable<VoiceSessionEntry["transcripts"]> & {
   channelName?: string;
   onStatus: TranscriptStartRequest["onStatus"];
 };
-const captures = new Map<string, CaptureRegistration>();
+type ManagerWaiter = {
+  accountId?: string;
+  resolve: () => void;
+};
+type DiscordTranscriptsGlobalState = {
+  managersByAccountId: Map<string, DiscordTranscriptsManager>;
+  captures: Map<string, CaptureRegistration>;
+  managerWaiters: Set<ManagerWaiter>;
+};
+
+// Capability publication can load the Discord source graph through a separate
+// runtime path from the channel monitor. Keep their transient ownership state
+// process-global so published providers see the live voice managers.
+const DISCORD_TRANSCRIPTS_STATE_KEY = Symbol.for("openclaw.discordTranscriptsState");
+let discordTranscriptsState: DiscordTranscriptsGlobalState | undefined;
+
+function resolveDiscordTranscriptsGlobalState(): DiscordTranscriptsGlobalState {
+  if (!discordTranscriptsState) {
+    // SAFETY: globalThis is an object; this view only adds a symbol-keyed property.
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    // SAFETY: this module is the sole writer for the process-global symbol.
+    discordTranscriptsState = (globalStore[DISCORD_TRANSCRIPTS_STATE_KEY] as
+      | DiscordTranscriptsGlobalState
+      | undefined) ?? {
+      managersByAccountId: new Map(),
+      captures: new Map(),
+      managerWaiters: new Set(),
+    };
+    globalStore[DISCORD_TRANSCRIPTS_STATE_KEY] = discordTranscriptsState;
+  }
+  return discordTranscriptsState;
+}
+
+const TRANSCRIPTS_STATE = resolveDiscordTranscriptsGlobalState();
+const managersByAccountId = TRANSCRIPTS_STATE.managersByAccountId;
+const captures = TRANSCRIPTS_STATE.captures;
+const managerWaiters = TRANSCRIPTS_STATE.managerWaiters;
 const logger = createSubsystemLogger("discord/voice");
 
 function captureKey(source: CaptureSource): string {
@@ -84,11 +119,6 @@ export function resolveDiscordTranscriptsCapture(
     ? captures.get(captureKey(source))
     : undefined;
 }
-const managerWaiters = new Set<{
-  accountId?: string;
-  resolve: () => void;
-}>();
-
 const ACCOUNT_ID_ERROR_MAX_CHARS = 64;
 const ACCOUNT_ID_ERROR_MAX_ENTRIES = 4;
 

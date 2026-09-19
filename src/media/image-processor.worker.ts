@@ -4,13 +4,16 @@ import { createLocalImageProcessor } from "./image-processor-config.js";
 import type { ImageProcessorReply, ImageProcessorRequest } from "./image-processor.types.js";
 
 // Native codecs stay in the caller, whose subprocess lifetime survives worker cancellation.
-const processor = createLocalImageProcessor("internal");
+const defaultProcessor = createLocalImageProcessor("internal");
 
 serveWorkerTasks<ImageProcessorReply>(
   async (input) => {
     // SAFETY: The owning image pool is the sole sender and builds this private request with the worker.
     const request = input as ImageProcessorRequest;
     try {
+      const processor = request.limits
+        ? createLocalImageProcessor("internal", request.limits)
+        : defaultProcessor;
       switch (request.kind) {
         case "encode": {
           const value = await processor.encode(request.input, request.options);

@@ -37,6 +37,7 @@ function createAuthorityHarness(
 ): GatewayAux {
   const aux = createGatewayAuxHandlers({
     log: {},
+    getNativeApprovalRouteCoordinator: () => undefined,
     activateRuntimeSecrets: async () => {
       throw new Error("unexpected secrets reload");
     },

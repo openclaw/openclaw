@@ -9,6 +9,10 @@ import {
   resetConfigOverrides,
   setConfigOverride,
 } from "../config/runtime-overrides.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
@@ -390,6 +394,7 @@ describe("createGatewayKernel", () => {
           gateway: { auth: sourceAuth, controlUi: { enabled: false }, port },
           logging: { level: "silent", consoleLevel: "silent" },
           messages: { visibleReplies: "automatic" },
+          plugins: { allow: [] },
         });
         state.applyEnv();
         kernel = await createGatewayKernel(port, {
@@ -401,13 +406,16 @@ describe("createGatewayKernel", () => {
         });
         expect(kernel.minimalTestGateway).toBe(false);
         expect(kernel.generatedStartupAuthToken).toBe(mode === "generated token");
+        expect(kernel.gatewayPluginConfigAtStart).not.toBe(kernel.cfgAtStart);
+        expect(getRuntimeConfigSnapshot()).toBe(kernel.gatewayPluginConfigAtStart);
+        expect(getRuntimeConfigSourceSnapshot()).toBe(kernel.configSnapshot.sourceConfig);
         if (startupAuth?.mode === "token") {
           startupAuth.token = "mutated-caller-token";
           startupAuth.rateLimit.maxAttempts = 99;
         }
         expect(setConfigOverride("messages.visibleReplies", "message_tool").ok).toBe(true);
         expect(setConfigOverride("gateway.port", port).ok).toBe(true);
-        const previousSourceConfig = kernel.startupLastGoodSnapshot.sourceConfig;
+        const previousSourceConfig = kernel.configSnapshot.sourceConfig;
         const sourcePort = (port % 65_535) + 1;
         const sourceConfig = {
           ...previousSourceConfig,
@@ -923,6 +931,7 @@ describe("createGatewayKernel", () => {
         "gateway.request-runtime",
         "gateway.config-revision-key",
         "gateway.request-context",
+        "sessions.projection",
       ]);
     } finally {
       try {

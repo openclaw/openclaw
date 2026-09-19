@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -267,15 +268,7 @@ describe("plugin management Gateway handlers", () => {
         skills: [],
         dangerousConfigFlags: [],
       },
-      components: {
-        mapped: [],
-        skills: [],
-        mcpServers: [],
-        commands: [],
-        hooks: [],
-        lspServers: [],
-        unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
-      },
+      components: emptyInstalledPluginComponents(),
       grants: {
         hooks: {
           allowPromptInjection: { effective: false },
@@ -592,8 +585,14 @@ describe("plugin management Gateway handlers", () => {
         mutationAllowed: true,
       });
       managementMocks.inspect.mockResolvedValue({
-        declared: { mcpServers: [], skills: ["Local planning"] },
-        components: { skills: ["Local planning"] },
+        declared: { mcpServers: ["workboard", "unsupported"], skills: ["Local planning"] },
+        components: {
+          ...emptyInstalledPluginComponents(),
+          mapped: ["skills", "mcpServers"],
+          skills: ["Local planning"],
+          mcpServers: ["workboard"],
+          unavailable: { capabilities: [], mcpServers: ["unsupported"], lspServers: [] },
+        },
       });
       catalogMocks.detail.mockRejectedValue(new Error("ClawHub offline"));
 
@@ -603,7 +602,11 @@ describe("plugin management Gateway handlers", () => {
       if (matches) {
         expect(result.response).toMatchObject({
           plugin: { local: { pluginId: "workboard", installed: true, action: "manage" } },
-          detail: { origin: "local", skills: [{ name: "Local planning" }] },
+          detail: {
+            origin: "local",
+            mcpServers: ["workboard"],
+            skills: [{ name: "Local planning" }],
+          },
         });
       } else {
         expect(result.response).toBeUndefined();
@@ -657,52 +660,57 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
-  it("unifies All search with unpublished bundled results before ClawHub matches", async () => {
-    const remote = {
-      packageName: "@alice/memory-plus",
-      displayName: "Memory Plus",
-      family: "code-plugin" as const,
-      isOfficial: false,
-      categories: ["memory"],
-      runtimeId: "memory-plus",
-    };
-    catalogMocks.browse.mockResolvedValue({ items: [remote] });
-    managementMocks.list.mockResolvedValue({
-      plugins: [
-        {
-          id: "memory-bundle",
-          name: "Memory Bundle",
-          packageName: "@openclaw/memory-bundle",
-          origin: "bundled",
-          installed: false,
-          enabled: false,
-          state: "not-installed",
-        },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    });
+  it.each([undefined, "openclaw-control-ui"])(
+    "keeps local results private while forwarding catalog search attribution: %s",
+    async (searchSource) => {
+      const remote = {
+        packageName: "@alice/memory-plus",
+        displayName: "Memory Plus",
+        family: "code-plugin" as const,
+        isOfficial: false,
+        categories: ["memory"],
+        runtimeId: "memory-plus",
+      };
+      catalogMocks.browse.mockResolvedValue({ items: [remote] });
+      managementMocks.list.mockResolvedValue({
+        plugins: [
+          {
+            id: "memory-bundle",
+            name: "Memory Bundle",
+            packageName: "@openclaw/memory-bundle",
+            origin: "bundled",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+          },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
 
-    const result = await callHandler("plugins.catalog.browse", {
-      query: "memory",
-      intent: "all",
-      pageSize: 25,
-    });
+      const result = await callHandler("plugins.catalog.browse", {
+        query: "memory",
+        intent: "all",
+        pageSize: 25,
+        ...(searchSource ? { searchSource } : {}),
+      });
 
-    expect(catalogMocks.browse).toHaveBeenCalledWith({
-      query: "memory",
-      intent: "all",
-      category: undefined,
-      cursor: undefined,
-      limit: 25,
-    });
-    expect(result.response).toMatchObject({
-      items: [
-        { catalog: { name: "Memory Bundle", publishedToClawHub: false } },
-        { catalog: { name: "Memory Plus", publishedToClawHub: true } },
-      ],
-    });
-  });
+      expect(catalogMocks.browse).toHaveBeenCalledWith({
+        query: "memory",
+        intent: "all",
+        category: undefined,
+        cursor: undefined,
+        limit: 25,
+        ...(searchSource ? { searchSource } : {}),
+      });
+      expect(result.response).toMatchObject({
+        items: [
+          { catalog: { name: "Memory Bundle", publishedToClawHub: false } },
+          { catalog: { name: "Memory Plus", publishedToClawHub: true } },
+        ],
+      });
+    },
+  );
 
   it("keeps queried Bundled requests limited to unpublished bundled plugins", async () => {
     managementMocks.list.mockResolvedValue({
@@ -801,7 +809,7 @@ describe("plugin management Gateway handlers", () => {
         skills: ["Workboard planning"],
         dangerousConfigFlags: [],
       },
-      components: { skills: ["Workboard planning"] },
+      components: emptyInstalledPluginComponents(),
       grants: {
         hooks: {
           allowPromptInjection: { effective: false },
@@ -831,8 +839,8 @@ describe("plugin management Gateway handlers", () => {
       detail: {
         origin: "local",
         packageName: "@openclaw/workboard",
-        mcpServers: ["workboard"],
-        skills: [{ name: "Workboard planning" }],
+        mcpServers: [],
+        skills: [],
       },
     });
   });

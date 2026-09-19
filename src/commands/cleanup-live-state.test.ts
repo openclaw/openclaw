@@ -4,12 +4,15 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntime } from "../runtime.js";
+import { registerMaintenanceCommands } from "../cli/program/register.maintenance.js";
+import { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as cleanupUtils from "./cleanup-utils.js";
 
 const gatewayService = vi.hoisted(() => ({
   notLoadedText: "is not installed",
@@ -56,6 +59,7 @@ afterEach(async () => {
   liveOwners.clear();
   testStates.clear();
   configState.isNixMode = false;
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   const failures = results.filter((result) => result.status === "rejected");
   if (failures.length > 0) {
@@ -119,6 +123,78 @@ async function readFiles(paths: readonly string[]): Promise<Buffer[]> {
 }
 
 describe("destructive cleanup with a live unmanaged state owner", () => {
+  describe.each([
+    ["reset", "--scope", "full"],
+    ["uninstall", "--state", "--workspace"],
+  ])("registered %s workspace guard", (...args) => {
+    it.each([
+      {
+        scenario: "missing numeric workspace",
+        agentId: "123",
+        warningPath: 'agents.entries["123"].workspace',
+      },
+      {
+        scenario: "missing constructor workspace",
+        agentId: "constructor",
+        warningPath: "agents.entries.constructor.workspace",
+      },
+      { scenario: "unrelated constructor warning", agentId: "123", warningPath: undefined },
+    ])("handles $scenario before removal", async ({ agentId, warningPath }) => {
+      const state = await createOpenClawTestState({
+        prefix: "openclaw-cleanup-workspace-warning-",
+        layout: "split",
+        scenario: "minimal",
+        applyEnv: true,
+        env: { OPENCLAW_TEST_MISSING_WORKSPACE: undefined },
+      });
+      testStates.add(state);
+      await state.writeConfig({
+        ...(!warningPath
+          ? { env: { vars: { constructor: "${OPENCLAW_TEST_MISSING_WORKSPACE}" } } }
+          : {}),
+        agents: {
+          entries: {
+            [agentId]: {
+              workspace: warningPath ? "${OPENCLAW_TEST_MISSING_WORKSPACE}" : state.workspaceDir,
+            },
+            main: { default: true, workspace: state.workspaceDir },
+          },
+        },
+      });
+      const removeState = vi
+        .spyOn(cleanupUtils, "removeStateAndLinkedPaths")
+        .mockResolvedValue(true);
+      const removeWorkspaces = vi.spyOn(cleanupUtils, "removeWorkspaceDirs").mockResolvedValue([]);
+      const removePath = vi.spyOn(cleanupUtils, "removePath").mockResolvedValue({ ok: true });
+      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation(createNonExitingRuntime().exit);
+      const program = new Command();
+      registerMaintenanceCommands(program);
+      const run = program
+        .parseAsync([...args, "--yes", "--non-interactive"], { from: "user" })
+        .then(() => undefined);
+
+      if (warningPath) {
+        await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(warningPath));
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining("workspace configuration could not be resolved"),
+        );
+        expect(removeState).not.toHaveBeenCalled();
+        expect(removeWorkspaces).not.toHaveBeenCalled();
+      } else {
+        await expect(run).resolves.toBeUndefined();
+        expect(removeState).toHaveBeenCalledOnce();
+        expect(removeWorkspaces).toHaveBeenCalledWith([state.workspaceDir], defaultRuntime, {
+          dryRun: false,
+          removeStateRows: false,
+        });
+      }
+      expect(removePath).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     {
       command: "unmanaged reset --scope full",

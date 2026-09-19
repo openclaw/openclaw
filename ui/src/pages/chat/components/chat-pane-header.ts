@@ -303,6 +303,9 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   return html`
     <div
       class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      role="group"
+      aria-label=${props.title}
+      tabindex="-1"
       @mousedown=${beginNativeWindowDrag}
     >
       <div class="chat-pane__header-leading">

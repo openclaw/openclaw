@@ -9,12 +9,6 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
-import {
-  isTrustedMessageActionTurnIngress,
-  mintMessageActionTurnCapability,
-  resolveMessageActionTurnCapabilityLifetime,
-  revokeMessageActionTurnCapability,
-} from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import {
@@ -47,7 +41,6 @@ export async function runEmbeddedFallbackCandidate(
     allowTransientCooldownProbe?: boolean;
     notifyUserAboutCompaction: boolean;
     messageToolDeliveryState: MessageToolDeliveryState;
-    githubPublicationAvailable: boolean;
     onCompactionFacts: (facts: {
       accounting?: CompactionAccountingFact;
       postCompactionModelAttempted: boolean;
@@ -104,42 +97,6 @@ export async function runEmbeddedFallbackCandidate(
     (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
       ? "openclaw"
       : undefined);
-  const messageActionCapabilitySessionKey =
-    turn.runtimePolicySessionKey ?? embeddedContext.sessionKey;
-  const messageActionTurnCapability =
-    isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider) &&
-    !turn.isHeartbeat &&
-    embeddedContext.agentId &&
-    messageActionCapabilitySessionKey &&
-    embeddedContext.messageProvider &&
-    embeddedContext.currentChannelId
-      ? mintMessageActionTurnCapability({
-          agentId: embeddedContext.agentId,
-          runId: params.runId,
-          sessionKey: messageActionCapabilitySessionKey,
-          sourceReplySessionKey: embeddedContext.sessionKey,
-          sessionId: embeddedContext.sessionId,
-          requesterAccountId: embeddedContext.agentAccountId,
-          requesterSenderId: senderContext.senderId,
-          requesterSenderName: senderContext.senderName,
-          requesterSenderUsername: senderContext.senderUsername,
-          requesterSenderE164: senderContext.senderE164,
-          toolContext: {
-            currentChannelId: embeddedContext.currentChannelId,
-            currentChatType: embeddedContext.chatType,
-            currentMessagingTarget: embeddedContext.currentMessagingTarget,
-            currentGraphChannelId: embeddedContext.currentGraphChannelId,
-            currentChannelProvider: embeddedContext.currentChannelProvider,
-            currentThreadTs: embeddedContext.currentThreadTs,
-            currentMessageId: embeddedContext.currentMessageId,
-            currentSourceTurnId: embeddedContext.currentSourceTurnId,
-            replyToMode: embeddedContext.replyToMode,
-            hasRepliedRef: embeddedContext.hasRepliedRef,
-            sameChannelThreadRequired: embeddedContext.sameChannelThreadRequired,
-          },
-          ...resolveMessageActionTurnCapabilityLifetime(runBaseParams.timeoutMs),
-        })
-      : undefined;
   let attemptCompactionCount = 0;
   let postCompactionModelAttempted = false;
   let compactionAccounting: CompactionAccountingFact | undefined;
@@ -163,9 +120,8 @@ export async function runEmbeddedFallbackCandidate(
     const result = await params.timing.measure("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         preparedRunAdmission: params.preparedRunAdmission,
-        githubPublicationAvailable: params.githubPublicationAvailable,
         ...embeddedContext,
-        messageActionTurnCapability,
+        messageActionTurnCapability: params.messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
         trigger: turn.isHeartbeat ? "heartbeat" : "user",
@@ -205,6 +161,7 @@ export async function runEmbeddedFallbackCandidate(
         // Heartbeat ambient routes are delivery context, never implicit message recipients.
         // Omit false so subagent sessions keep their downstream default.
         ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
+        cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,
@@ -234,6 +191,7 @@ export async function runEmbeddedFallbackCandidate(
         abortSignal: params.runAbortSignal,
         replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,
+        onAttemptStart: lifecycleBackstop.beginAttempt,
         onCompactionAccounting: (fact) => {
           compactionAccounting = fact;
         },
@@ -416,6 +374,5 @@ export async function runEmbeddedFallbackCandidate(
           }
         : undefined);
     params.onCompactionFacts({ accounting, postCompactionModelAttempted });
-    revokeMessageActionTurnCapability(messageActionTurnCapability);
   }
 }

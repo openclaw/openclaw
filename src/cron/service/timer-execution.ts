@@ -1,4 +1,3 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   type HeartbeatRunResult,
@@ -16,8 +15,6 @@ import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
-  CronDeliveryTrace,
-  CronResolvedDeliveryState,
   CronJob,
   CronStoredJob,
   CronNextCheckProposal,
@@ -26,8 +23,9 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
 import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
-import type { CronServiceState } from "./state.js";
+import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 import {
+  type CronJobExecutionResult,
   type CronTriggerEvalOutcome,
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
@@ -43,21 +41,7 @@ export async function executeJobCore(
   job: CronStoredJob,
   abortSignal?: AbortSignal,
   options?: ExecuteJobCoreOptions,
-): Promise<
-  CronRunOutcome &
-    CronRunTelemetry & {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-      nextCheck?: CronNextCheckProposal;
-      scriptStateChanged?: boolean;
-      scriptState?: unknown;
-      triggerEval?: CronTriggerEvalOutcome;
-    }
-> {
+): Promise<CronJobExecutionResult> {
   const resolveAbortError = () => ({
     status: "error" as const,
     error: abortErrorMessage(abortSignal),
@@ -188,17 +172,17 @@ export async function executeJobCore(
           scheduledEveryMs:
             effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
         };
-    options?.onHeartbeatExecutionStarted?.(heartbeatWake);
+    const heartbeatWaitLifecycle = options?.onHeartbeatExecutionStarted?.(heartbeatWake);
     const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
       options?.activeJobMarker,
       options?.owningCronLaneTaskMarker,
     );
     let heartbeatResult: HeartbeatRunResult;
     try {
-      heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(
-        heartbeatWake,
-        abortSignal ? { abortSignal } : {},
-      ) ?? { status: "failed", reason: "heartbeat wake settlement unavailable" });
+      heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(heartbeatWake, {
+        ...(abortSignal ? { abortSignal } : {}),
+        ...heartbeatWaitLifecycle,
+      }) ?? { status: "failed", reason: "heartbeat wake settlement unavailable" });
     } finally {
       releaseHeartbeatWait();
     }
@@ -241,12 +225,8 @@ async function executeMainSessionCronJob(
   owningCronLaneTaskMarker?: CommandLaneTaskMarker,
 ): Promise<
   CronRunOutcome &
-    CronRunTelemetry & {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      delivery?: CronDeliveryTrace;
-    }
+    CronRunTelemetry &
+    Pick<CronRunDeliveryResult, "delivered" | "deliveryAttempted" | "deliveryError" | "delivery">
 > {
   const text = resolveJobPayloadTextForMain(job);
   if (!text) {
@@ -281,7 +261,7 @@ async function executeMainSessionCronJob(
   const removeQueuedSystemEvent = () =>
     removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
   if (job.wakeMode === "now" && state.deps.requestHeartbeatAndWait) {
-    onHeartbeatExecutionStarted?.(heartbeatWake);
+    const heartbeatWaitLifecycle = onHeartbeatExecutionStarted?.(heartbeatWake);
     const waitStartedAt = state.deps.nowMs();
     const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
       activeJobMarker,
@@ -292,6 +272,7 @@ async function executeMainSessionCronJob(
     try {
       heartbeatResult = await state.deps.requestHeartbeatAndWait(heartbeatWake, {
         abortSignal,
+        ...heartbeatWaitLifecycle,
         stopWaitingOnRetry: (result, retryAtMs) => {
           // Only busy/guard deferrals spend this budget; an executing turn still
           // owns completion. Detaching leaves the queue's original retry intact.
@@ -338,16 +319,7 @@ async function executeDetachedCronJob(
   abortSignal: AbortSignal | undefined,
   options?: ExecuteJobCoreOptions,
 ): Promise<
-  CronRunOutcome &
-    CronRunTelemetry & {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-      nextCheck?: CronNextCheckProposal;
-    }
+  CronRunOutcome & CronRunTelemetry & CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
 > {
   const interrupted = () => {
     const error = abortErrorMessage(abortSignal);
@@ -375,7 +347,15 @@ async function executeDetachedCronJob(
       job,
       abortSignal,
     });
-    if (abortSignal?.aborted) {
+    if (
+      abortSignal?.aborted &&
+      !(
+        abortSignal.reason instanceof Error &&
+        abortSignal.reason.name === "TimeoutError" &&
+        res.failureNotificationDetail?.kind === "command-timeout" &&
+        res.failureNotificationDetail.mode === "wall-clock"
+      )
+    ) {
       return interrupted();
     }
     return {

@@ -7,7 +7,7 @@ import {
   invokeTalkSpeakDirect,
   type TalkSpeakTestPayload,
   withSpeechProviders,
-} from "./talk.test-helpers.js";
+} from "./talk/test-helpers.js";
 
 const synthesizeSpeechMock = vi.hoisted(() =>
   vi.fn<typeof import("../tts/tts.js").synthesizeSpeech>(async () => ({
@@ -102,7 +102,7 @@ function expectSingleSynthesizeSpeechCall() {
 
 describe("gateway talk runtime", () => {
   beforeAll(async () => {
-    await import("./server-methods/talk.js");
+    await import("./talk/handlers/index.js");
     await import("../config/config.js");
   });
 

@@ -46,7 +46,18 @@ The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
 the transport callback instead of dispatching an event that was not made
 durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
-rejects an id or lane mismatch before delivery.
+rejects an id or lane mismatch before delivery. Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
+preparation. Supporting hosts prefer it over `inspect` in both admission and
+claim validation. Keep `inspect` as a synchronous fallback for older hosts, which
+ignore the companion. Both callbacks must derive the same identity and lane.
+The standard raw-event convenience monitor retains its synchronous inspection contract.
+
+Asynchronous inspection stays inside the existing admission order. Shutdown and `waitForIdle()` join
+accepted inspections and their durable appends, including pending claim inspection
+when the channel owns its separate delivery grace. Claim inspection rechecks shutdown
+and claim cancellation before delivery. Pending claim inspections consume the
+existing start slots and keep `onActivityChange` busy until they finish or transfer
+to delivery.
 
 `onDurableAdmission(raw, context)` runs after every durable enqueue, including
 duplicates. `context.isNew` is `true` if and only if this admission inserted the
@@ -113,6 +124,20 @@ Keep transport-specific redaction, raw-envelope validation, non-retryable
 classification, and persisted payload shape in the plugin. Webhook transports
 should acknowledge only after `admit` resolves; non-replay transports should
 surface durable append exhaustion rather than silently dispatching.
+
+### Deferred claim heartbeats
+
+Forward both `onDeferredHeartbeat` and `deferredHeartbeatIntervalMs` when a
+plugin wraps the ingress lifecycle or maps it to `turnAdoptionLifecycle`.
+`bindIngressLifecycleToReplyOptions(...)` forwards both. The drain derives the
+optional cadence from its adoption-stall timeout; fan-in uses the shortest
+positive, finite source cadence. The queue renews only while it owns the
+lifecycle, stopping after adoption, completion, ownership loss, or callback
+failure. A heartbeat does not adopt or complete a claim.
+
+Wrappers that omit the cadence remain valid but do not enable periodic renewal;
+their deferred claims can still reach the adoption watchdog timeout. Plugins
+must not run independent timers that keep abandoned work alive.
 
 ## Adapter
 
@@ -364,7 +389,8 @@ preview, and reply pipeline options.
 ### Migrating from channel-message
 
 `openclaw/plugin-sdk/channel-message` is a deprecated compatibility entrypoint.
-It still re-exports `channel-outbound` and preserves three dispatch aliases.
+It retains its published outbound exports and three dispatch aliases. New outbound
+helpers are exported only from `openclaw/plugin-sdk/channel-outbound`.
 Migrate those aliases to `openclaw/plugin-sdk/channel-inbound`:
 
 | Deprecated alias                   | Replacement                         |

@@ -6,19 +6,24 @@ import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
+import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import {
-  intersectIncludePatterns,
   loadPatternListFromEnv,
+  matchesVitestGlob,
   relativizeScopedPatterns,
 } from "../test/vitest/vitest.pattern-file.ts";
 import { loadVitestPerformanceConfig } from "../test/vitest/vitest.performance-config.ts";
+import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
   sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
-import { uiNodeDrivenBrowserTestFiles } from "../test/vitest/vitest.ui-paths.mjs";
+import {
+  uiNodeDrivenBrowserTestFiles,
+  uiTimingTestFiles,
+} from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -104,6 +109,7 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
   const selected = intersectIncludePatterns(
     patterns.map((pattern) => path.posix.normalize(`ui/${pattern}`)),
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+    matchesVitestGlob,
   );
   return selected ? selected.map((pattern) => path.posix.relative("ui", pattern)) : patterns;
 }
@@ -120,6 +126,7 @@ const sharedUiTestConfig = {
   hookTimeout: 60_000,
 } as const;
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
+const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [
@@ -157,10 +164,23 @@ const chromiumLaunchOptions = resolveChromiumLaunchOptions();
 export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
-    plugins: [controlUiLocaleModulesPlugin()],
+    plugins: [controlUiLocaleModulesPlugin(), createRedactingReporterPlugin()],
     optimizeDeps: {
       include: [
+        // These controls share wa-popup's eager registration. Optimize them together
+        // so later test imports cannot re-register a rebuilt common chunk.
+        // Sidebar fixtures also load lazy dialogs, tabs, and narration. Prepare their
+        // dependency graph before tests rather than reloading the active Lit registry.
+        "@awesome.me/webawesome/dist/components/dialog/dialog.js",
+        "@awesome.me/webawesome/dist/components/tab-group/tab-group.js",
+        "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js",
+        "@awesome.me/webawesome/dist/components/tab/tab.js",
+        "@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
+        "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
+        "@awesome.me/webawesome/dist/components/popover/popover.js",
+        "@awesome.me/webawesome/dist/components/popup/popup.js",
         "@lit/context",
+        "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
         "@openclaw/uirouter",
@@ -168,12 +188,28 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "file-type",
         "highlight.js/lib/core",
         "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
+        "ipaddr.js",
+        "json5",
         "lit/async-directive.js",
         "lit/directive.js",
+        "lit/directives/if-defined.js",
+        "lit/directives/keyed.js",
+        "lit/directives/ref.js",
+        "lit/directives/repeat.js",
+        "lit/directives/style-map.js",
         "lit/directives/unsafe-html.js",
+        "lit/static-html.js",
         "markdown-it",
         "markdown-it-task-lists",
+        "mdast-util-from-markdown",
+        "mdast-util-gfm-table",
+        "micromark-extension-gfm-table",
+        "pretty-ms",
         "remend",
+        "typebox/compile",
+        "typebox/guard",
+        "typebox/value",
+        "zod",
       ],
     },
     resolve: {
@@ -206,6 +242,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
 
 export default defineConfig({
   root: here,
+  plugins: [createRedactingReporterPlugin()],
   resolve: {
     alias: workspaceSourceAliases,
   },
@@ -273,6 +310,7 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit-node",
+          exclude: timingTests,
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
@@ -286,6 +324,22 @@ export default defineConfig({
         },
       },
       { ...createUiBrowserVitestConfig(), extends: false },
+      {
+        extends: false,
+        plugins: [controlUiLocaleModulesPlugin()],
+        resolve: { alias: workspaceSourceAliases },
+        test: {
+          ...sharedUiTestConfig,
+          deps: jsdomOptimizedDeps,
+          name: "unit-timing",
+          isolate: true,
+          // Finish other UI tests before measuring full-render wall time.
+          sequence: { groupOrder: 1 },
+          include: includeUiTests(timingTests),
+          environment: "jsdom",
+          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+        },
+      },
     ],
   },
 });

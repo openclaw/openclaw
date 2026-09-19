@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Observation
 import OpenClawChatUI
 import os
 import Testing
@@ -314,6 +315,7 @@ private func waitUntil(
             #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
             #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.modelSelectionPolicy))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
@@ -412,6 +414,7 @@ private func waitUntil(
         #expect(withoutApprovalScope.caps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.modelSelectionPolicy,
         ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
@@ -2106,9 +2109,12 @@ private func waitUntil(
             probe.results.continuation.finish()
             await connectTask.value
             #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "explicit-fingerprint")
+            #expect(controller.hasPendingConnectionHandoff)
 
             controller.declinePendingTrustPrompt(controller.pendingTrustPrompt)
+            await waitUntil { !controller.hasPendingConnectionHandoff }
 
+            #expect(!controller.hasPendingConnectionHandoff)
             #expect(!controller._test_didAutoConnect())
             #expect(!controller._test_isAutoConnectSuppressed())
             #expect(appModel.activeGatewayConnectConfig == nil)
@@ -2762,6 +2768,96 @@ private func waitUntil(
         #expect(appModel.chatSessionKey == focusedSessionKey)
         #expect(appModel._test_hasGatewayLoopTasks().node)
         #expect(appModel._test_hasGatewayLoopTasks().operator)
+    }
+
+    private enum PickerHandoffOutcome: CaseIterable {
+        case commit
+        case cancel
+        case supersede
+        case failure
+    }
+
+    @Test(arguments: PickerHandoffOutcome.allCases)
+    @MainActor
+    private func `picker protection outlives acceptance until handoff or cancellation finishes`(
+        outcome: PickerHandoffOutcome) async throws
+    {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let currentID = "manual|127.0.0.1|1"
+        let targetID = "manual|127.0.0.1|2"
+        #expect(saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: currentID))
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: targetID,
+            kind: .manual,
+            name: "Target",
+            host: "127.0.0.1",
+            port: 2,
+            useTLS: false,
+            lastConnectedAtMs: nil)))
+        let appModel = NodeAppModel()
+        let resetRelease = AsyncStream<Void>.makeStream()
+        defer {
+            resetRelease.continuation.finish()
+            appModel._test_setGatewaySessionResetTask(nil)
+            appModel.disconnectGateway()
+        }
+        let config = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "ws://127.0.0.1:1")),
+            stableID: currentID)
+        appModel.applyGatewayConnectConfig(config)
+        let previousOwnerID = appModel.chatViewModelOwnerID
+        appModel._test_setGatewaySessionResetTask(Task {
+            for await _ in resetRelease.stream { return }
+        })
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            forceReconnectReset: { _ in })
+
+        appModel.isGatewayPickerRequestInFlight = true
+        let result = await controller.switchToGateway(stableID: targetID)
+        // Mirror the picker request's defer. This must not unlock Chat: the
+        // connection owner still has a queued handoff behind the reset barrier.
+        appModel.isGatewayPickerRequestInFlight = false
+        #expect(result == .accepted)
+        #expect(controller.hasPendingConnectionHandoff)
+        #expect(appModel.chatViewModelOwnerID == previousOwnerID)
+
+        let expectedID: String
+        switch outcome {
+        case .commit:
+            expectedID = targetID
+        case .cancel:
+            controller.cancelPendingConnectionAttempts()
+            expectedID = currentID
+        case .supersede:
+            let replacement = await controller.connectManual(host: "127.0.0.1", port: 3, useTLS: false)
+            #expect(replacement == .accepted)
+            expectedID = "manual|127.0.0.1|3"
+        case .failure:
+            let failed = await controller.connectManual(host: "127.0.0.1", port: 70000, useTLS: false)
+            #expect(failed == .failed("This paired gateway has an invalid saved endpoint."))
+            expectedID = currentID
+        }
+        #expect(controller.hasPendingConnectionHandoff)
+        #expect(appModel.chatViewModelOwnerID == previousOwnerID)
+
+        // In cancellation/failure cases only the queued restoration generation
+        // remains. Its completion must invalidate a SwiftUI observation too.
+        let invalidated = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking {
+            _ = controller.hasPendingConnectionHandoff
+        } onChange: {
+            invalidated.withLock { $0 = true }
+        }
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
+        await waitUntil { !controller.hasPendingConnectionHandoff }
+
+        #expect(!controller.hasPendingConnectionHandoff)
+        #expect(invalidated.withLock { $0 })
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == expectedID)
     }
 
     @Test @MainActor func `switch to manual gateway applies its stable I D and URL`() async {

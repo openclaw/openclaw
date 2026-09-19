@@ -36,6 +36,18 @@ export type OpenClawAgentDatabaseReadOnlyResult<T> =
   | { found: true; value: T }
   | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
 
+/** Recheck committed admission facts before using an existing read-only connection. */
+export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
+  const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
+  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
+  const schemaMeta = readExistingAgentSchemaMeta(database.db);
+  if (!schemaMeta) {
+    return false;
+  }
+  assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
+  return true;
+}
+
 /** Apply the same missing-table policy to fresh and borrowed read-only queries. */
 export function readOpenClawAgentDatabaseReadOnly<T>(
   database: OpenClawAgentReadOnlyDatabase,
@@ -99,21 +111,18 @@ export function openOpenClawAgentDatabaseReadOnly(
     if (closed) {
       return;
     }
-    closed = true;
     clearNodeSqliteKyselyCacheForDatabase(db);
     db.close();
+    closed = true;
   };
   try {
     registerOpenClawAgentDatabaseIdentity(db);
-    const userVersion = assertSupportedAgentSchemaVersion(db, pathname);
-    assertCanonicalAgentPersistenceVersion(db, pathname, userVersion);
-    const schemaMeta = readExistingAgentSchemaMeta(db);
-    if (!schemaMeta) {
+    const database = { agentId, db, path: pathname, close };
+    if (!hasOpenClawAgentReadOnlySchema(database)) {
       close();
       return { found: false, reason: "schema-missing" };
     }
-    assertExistingAgentSchemaOwner(schemaMeta, agentId, pathname);
-    return { found: true, database: { agentId, db, path: pathname, close } };
+    return { found: true, database };
   } catch (error) {
     close();
     throw error;

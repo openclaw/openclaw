@@ -23,7 +23,6 @@ import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js
 import { setActivePluginRegistry, waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayMemoryCloseRegistryFactory } from "./server-close.memory.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
@@ -149,8 +148,8 @@ it.each(["active", "closing-memory"] as const)(
     let refuseMemory = true;
     let completedMemoryCloses = 0;
     try {
-      const aPort = await getFreePort(),
-        bPort = await getFreePort();
+      const aPort = await fixture.reservePort(),
+        bPort = await fixture.reservePort();
       const aServer = await fixture.start(aPort),
         bServer = await fixture.start(bPort);
       const a = fixture.kernels.get(aPort),

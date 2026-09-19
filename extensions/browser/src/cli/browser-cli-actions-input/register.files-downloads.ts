@@ -6,8 +6,8 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveExistingUploadPaths } from "../../browser/paths.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
-  callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  runBrowserCliRequest,
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
@@ -22,37 +22,6 @@ async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
     throw new Error(result.error);
   }
   return result.paths;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Browser request result type is shared between request and success formatter.
-async function runBrowserPostAction<T>(params: {
-  parent: BrowserParentOpts;
-  profile: string | undefined;
-  path: string;
-  body: Record<string, unknown>;
-  timeoutMs: number;
-  describeSuccess: (result: T) => string;
-}): Promise<void> {
-  try {
-    const result = await callBrowserRequest<T>(
-      params.parent,
-      {
-        method: "POST",
-        path: params.path,
-        query: params.profile ? { profile: params.profile } : undefined,
-        body: params.body,
-      },
-      { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
-    );
-    if (params.parent?.json) {
-      defaultRuntime.writeJson(result);
-      return;
-    }
-    defaultRuntime.log(params.describeSuccess(result));
-  } catch (err) {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  }
 }
 
 /** Registers Browser file chooser, dialog, and download commands. */
@@ -73,7 +42,7 @@ export function registerBrowserFilesAndDownloadsCommands(
   ) => {
     const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
     const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
-    await runBrowserPostAction<{ download: { path: string } }>({
+    await runBrowserCliRequest<{ download: { path: string } }>({
       parent,
       profile,
       path: request.path,
@@ -82,8 +51,9 @@ export function registerBrowserFilesAndDownloadsCommands(
         targetId,
         timeoutMs,
       },
-      timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
-      describeSuccess: (result) => `downloaded: ${shortenHomePath(result.download.path)}`,
+      timeoutMs: withBrowserActionTimeoutSlack(timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS),
+      errorPolicy: "inline",
+      successMessage: (result) => `downloaded: ${shortenHomePath(result.download.path)}`,
     });
   };
 
@@ -108,7 +78,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
         const normalizedPaths = await normalizeUploadPaths(paths);
         const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
-        await runBrowserPostAction({
+        await runBrowserCliRequest({
           parent,
           profile,
           path: "/hooks/file-chooser",
@@ -120,8 +90,9 @@ export function registerBrowserFilesAndDownloadsCommands(
             targetId,
             timeoutMs,
           },
-          timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
-          describeSuccess: () => `upload armed for ${paths.length} file(s)`,
+          timeoutMs: withBrowserActionTimeoutSlack(timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS),
+          errorPolicy: "inline",
+          successMessage: `upload armed for ${paths.length} file(s)`,
         });
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
@@ -202,7 +173,7 @@ export function registerBrowserFilesAndDownloadsCommands(
         return;
       }
       const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
-      await runBrowserPostAction({
+      await runBrowserCliRequest({
         parent,
         profile,
         path: "/hooks/dialog",
@@ -213,8 +184,9 @@ export function registerBrowserFilesAndDownloadsCommands(
           targetId,
           timeoutMs,
         },
-        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
-        describeSuccess: () => "dialog armed",
+        timeoutMs: withBrowserActionTimeoutSlack(timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS),
+        errorPolicy: "inline",
+        successMessage: "dialog armed",
       });
     });
 }

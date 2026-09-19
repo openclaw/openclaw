@@ -12,6 +12,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case appearance = "app.appearance"
     case notificationsEnabled = "app.notificationsEnabled"
     case showDockIcon = "app.showDockIcon"
+    case nativeExperienceEnabled = "app.nativeExperienceEnabled"
     case iconStyle = "app.iconStyle"
     case iconAnimationsEnabled = "app.iconAnimationsEnabled"
     case launchAtLogin = "app.launchAtLogin"
@@ -251,6 +252,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
     public struct App: Encodable, Sendable {
         public let showDockIcon: Bool?
+        public let nativeExperienceEnabled: Bool?
         public let iconStyle: IconStyle?
         public let iconAnimationsEnabled: Bool?
         public let launchAtLogin: Bool?
@@ -264,6 +266,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
         public init(
             showDockIcon: Bool? = nil,
+            nativeExperienceEnabled: Bool? = nil,
             iconStyle: IconStyle? = nil,
             iconAnimationsEnabled: Bool? = nil,
             launchAtLogin: Bool? = nil,
@@ -275,6 +278,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             notificationsEnabled: Bool? = nil)
         {
             self.showDockIcon = showDockIcon
+            self.nativeExperienceEnabled = nativeExperienceEnabled
             self.iconStyle = iconStyle
             self.iconAnimationsEnabled = iconAnimationsEnabled
             self.launchAtLogin = launchAtLogin

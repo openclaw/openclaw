@@ -114,6 +114,10 @@ export type WorkerDesktopEndpoint = {
   port: number;
   /** Absolute on-box path to the per-lease password file; read by the owning transport, never persisted as plaintext. */
   passwordFilePath?: string;
+  /** Managed desktop account for ARD authentication; its password stays in passwordFilePath. */
+  username?: string;
+  /** False restricts a native desktop from the provider-wide virtual display resize capability. */
+  allowsResize?: boolean;
   /** Closed application metadata advertised by the provider for this desktop. */
   apps?: WorkerDesktopApp[];
 };
@@ -321,6 +325,8 @@ export type WorkerProvider = {
       profileId?: string;
       /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
       signal?: AbortSignal;
+      /** Modern hosts supply authority; legacy optionality is source compatibility only. */
+      assertCurrent?: () => void;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
       os?: string;

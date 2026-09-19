@@ -20,15 +20,11 @@ import type {
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
 import {
-  ControlUiGitHubError,
-  fetchGitHubJson,
-  GITHUB_API_ORIGIN,
-  resolveGitHubApiCredentialScope,
-} from "./control-ui-github-api.js";
-import {
   loadSessionPullRequestReferences,
   releaseSessionPullRequestReferenceCache,
 } from "./control-ui-session-pr-references.js";
+import { fetchSessionPullRequestCheckRollup } from "./control-ui-session-prs-checks.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -230,7 +226,7 @@ function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRe
   return value.draft === true ? "draft" : "open";
 }
 
-function parsePullListItem(value: unknown): PullListItem | null {
+export function parsePullListItem(value: unknown): PullListItem | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -274,7 +270,7 @@ function pullsByHeadUrl(owner: string, repo: string, head: string): string {
   const encOwner = encodeURIComponent(owner);
   const encRepo = encodeURIComponent(repo);
   const encHead = encodeURIComponent(head);
-  return `${GITHUB_API_ORIGIN}/repos/${encOwner}/${encRepo}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
+  return `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encOwner}/${encRepo}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
 }
 
 async function fetchParentRepo(
@@ -283,8 +279,8 @@ async function fetchParentRepo(
   fetchImpl: typeof fetch,
   token: string | undefined,
 ): Promise<{ owner: string; repo: string } | null> {
-  const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  const value = await fetchGitHubJson(url, fetchImpl, token);
+  const url = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const value = await gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token);
   return resolveGitHubForkParent(value) ?? null;
 }
 
@@ -292,66 +288,9 @@ async function fetchParentRepo(
 // serves stale chips with the rate-limit flag); anything else just drops the
 // optional field the sub-fetch would have filled.
 function rethrowRateLimit(error: unknown): undefined {
-  if (error instanceof ControlUiGitHubError && error.statusCode === 429) {
+  if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429) {
     throw error;
   }
-  return undefined;
-}
-
-const FAILING_CHECK_CONCLUSIONS = new Set([
-  "failure",
-  "timed_out",
-  "cancelled",
-  "action_required",
-  "startup_failure",
-]);
-const CHECK_PAGE_SIZE = 100;
-const MAX_CHECK_PAGES = 10;
-// GitHub repeats verbose application/output metadata on every run. Keep that
-// budget local to checks; other JSON requests retain the shared 256 KiB cap.
-const CHECK_PAGE_BYTES = 1024 * 1024;
-
-async function fetchChecks(
-  item: PullListItem,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
-): Promise<ControlUiSessionPullRequest["checks"]> {
-  if (!item.headSha || !/^[0-9a-f]{40}$/i.test(item.headSha)) {
-    return undefined;
-  }
-  const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/commits/${item.headSha}/check-runs?per_page=${CHECK_PAGE_SIZE}`;
-  const counts = { passed: 0, failed: 0, skipped: 0, running: 0 };
-  for (let page = 1; page <= MAX_CHECK_PAGES; page += 1) {
-    const value = await fetchGitHubJson(`${url}&page=${page}`, fetchImpl, token, CHECK_PAGE_BYTES);
-    if (
-      !isRecord(value) ||
-      !Array.isArray(value.check_runs) ||
-      value.check_runs.length > CHECK_PAGE_SIZE
-    ) {
-      return undefined;
-    }
-    for (const runValue of value.check_runs) {
-      const run = isRecord(runValue) ? runValue : {};
-      const conclusion = readNonBlankString(run.conclusion);
-      // GitHub's "stale" conclusion invalidates the previous verdict.
-      if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
-        counts.failed += 1;
-      } else if (run.status !== "completed" || conclusion === "stale") {
-        counts.running += 1;
-      } else {
-        counts[conclusion === "skipped" ? "skipped" : "passed"] += 1;
-      }
-    }
-    const seen = counts.passed + counts.failed + counts.skipped + counts.running;
-    if (seen > 0 && seen === value.total_count) {
-      const state = counts.failed > 0 ? "failing" : counts.running > 0 ? "pending" : "passing";
-      return { state, ...counts };
-    }
-    if (value.check_runs.length < CHECK_PAGE_SIZE) {
-      return undefined;
-    }
-  }
-  // An incomplete page sequence must never advertise a partial green rollup.
   return undefined;
 }
 
@@ -368,6 +307,9 @@ function stateOnlyPullRequestChip(item: PullListItem, branch: string): ControlUi
     title: item.title,
     url: item.url,
     state: item.state,
+    ...(item.headSha && /^[0-9a-f]{40}$/i.test(item.headSha)
+      ? { headSha: item.headSha.toLowerCase() }
+      : {}),
     ...(item.author ? { author: item.author } : {}),
   };
 }
@@ -385,10 +327,11 @@ async function finishPullRequest(
   if (item.state !== "open" && item.state !== "draft") {
     return chip;
   }
-  const detailUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
+  const detailUrl = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
   const [details, checks] = await Promise.all([
-    knownDetails ?? fetchGitHubJson(detailUrl, fetchImpl, token).catch(rethrowRateLimit),
-    fetchChecks(item, fetchImpl, token).catch(rethrowRateLimit),
+    knownDetails ??
+      gitHubPublicApi.fetchGitHubJson(detailUrl, fetchImpl, token).catch(rethrowRateLimit),
+    fetchSessionPullRequestCheckRollup(item, fetchImpl, token).catch(rethrowRateLimit),
   ]);
   return {
     ...chip,
@@ -427,7 +370,11 @@ async function fetchBranchPullRequests(
   const hasWorkingBranch = Boolean(context.branch && context.branch !== context.defaultBranch);
   let items = hasWorkingBranch
     ? parsePullList(
-        await fetchGitHubJson(pullsByHeadUrl(context.owner, context.repo, head), fetchImpl, token),
+        await gitHubPublicApi.fetchGitHubJson(
+          pullsByHeadUrl(context.owner, context.repo, head),
+          fetchImpl,
+          token,
+        ),
       )
     : [];
   if (hasWorkingBranch && items.length === 0) {
@@ -435,7 +382,11 @@ async function fetchBranchPullRequests(
     const parent = await fetchParentRepo(context.owner, context.repo, fetchImpl, token);
     if (parent) {
       items = parsePullList(
-        await fetchGitHubJson(pullsByHeadUrl(parent.owner, parent.repo, head), fetchImpl, token),
+        await gitHubPublicApi.fetchGitHubJson(
+          pullsByHeadUrl(parent.owner, parent.repo, head),
+          fetchImpl,
+          token,
+        ),
       );
     }
   }
@@ -461,15 +412,15 @@ async function fetchBranchPullRequests(
       referenced.push(existing);
       continue;
     }
-    const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}/pulls/${number}`;
+    const url = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}/pulls/${number}`;
     let details: unknown;
     try {
-      details = await fetchGitHubJson(url, fetchImpl, token);
+      details = await gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token);
     } catch (error) {
-      if (error instanceof ControlUiGitHubError && error.statusCode === 404) {
+      if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 404) {
         continue;
       }
-      if (error instanceof ControlUiGitHubError && error.statusCode === 429) {
+      if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429) {
         rateLimited = true;
         break;
       }
@@ -515,7 +466,7 @@ async function fetchBranchPullRequests(
       referencesIncomplete,
     };
   } catch (error) {
-    if (!(error instanceof ControlUiGitHubError && error.statusCode === 429)) {
+    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429)) {
       throw error;
     }
     // Quota ran out between the list fetch and the per-PR detail fetches:
@@ -549,6 +500,7 @@ async function refreshBranchPullRequests(
           retained.delete(identity(item));
           return previous &&
             item.state === previous.state &&
+            item.headSha === previous.headSha &&
             (item.state === "open" || item.state === "draft")
             ? { ...previous, ...item }
             : item;
@@ -568,7 +520,8 @@ async function refreshBranchPullRequests(
     };
     return result;
   } catch (error) {
-    const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
+    const rateLimited =
+      error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
     entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
       return {
@@ -581,7 +534,7 @@ async function refreshBranchPullRequests(
       };
     }
     if (entry.lastGood) {
-      return { ...entry.lastGood, rateLimited: false };
+      return { ...entry.lastGood, rateLimited: false, status: "unavailable" };
     }
     throw error;
   }
@@ -648,21 +601,18 @@ export async function loadControlUiSessionPullRequests(
       status: "unavailable",
     };
   }
-  const {
-    mergedHeads,
-    workingBranchHasLivePullRequest,
-    referencesIncomplete: _referencesIncomplete,
-    ...snapshot
-  } = result;
+  const { mergedHeads, workingBranchHasLivePullRequest, referencesIncomplete, ...snapshot } =
+    result;
   const branch = workingBranchHasLivePullRequest
     ? undefined
     : await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return {
     ...snapshot,
     ...(branch ? { branch } : {}),
-    ...(referencesUnavailable &&
-    (!context.branch || context.branch === context.defaultBranch) &&
-    snapshot.pullRequests.length === 0
+    ...(referencesIncomplete ||
+    (referencesUnavailable &&
+      (!context.branch || context.branch === context.defaultBranch) &&
+      snapshot.pullRequests.length === 0)
       ? { status: "unavailable" as const }
       : {}),
   };
@@ -694,9 +644,9 @@ async function cachedBranchPullRequests(
   requestedReferences: readonly number[] | undefined,
   params: ControlUiSessionPullRequestsParams,
 ): Promise<BranchPullRequestsSnapshot> {
-  let identity: ReturnType<typeof resolveGitHubApiCredentialScope>;
+  let identity: ReturnType<typeof gitHubPublicApi.resolveGitHubApiCredentialScope>;
   try {
-    identity = resolveGitHubApiCredentialScope();
+    identity = gitHubPublicApi.resolveGitHubApiCredentialScope();
   } catch (error) {
     branchCache.release(deps.cacheSignal);
     throw error;

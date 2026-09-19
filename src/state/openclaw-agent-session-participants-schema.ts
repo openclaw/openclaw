@@ -1,9 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-db-contract.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-
-export const SESSION_PARTICIPANTS_TABLE = "session_participants";
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 

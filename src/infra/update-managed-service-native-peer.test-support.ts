@@ -18,6 +18,7 @@ type RetainedNativeTestPeer = {
 export async function prepareRetainedNativeTestPeer(params: {
   assertCurrent: () => void;
   timeoutMs?: number;
+  scheduleTimeout?: (command: string, onTimeout: () => void, timeoutMs: number) => () => void;
 }): Promise<RetainedNativeTestPeer | undefined> {
   if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1") {
     return undefined;
@@ -48,7 +49,7 @@ export async function prepareRetainedNativeTestPeer(params: {
         const retention = assertEffect ? setInterval(() => {}, 1_000) : undefined;
         const cleanup = () => {
           settled = true;
-          clearTimeout(timer);
+          cancelTimeout();
           clearInterval(retention);
           process.stdin.off("data", onData).off("end", onEnd).off("error", fail);
           process.stdout.off("error", fail);
@@ -63,7 +64,7 @@ export async function prepareRetainedNativeTestPeer(params: {
             reject(error);
           } else if (!failure) {
             failure = error;
-            clearTimeout(timer);
+            cancelTimeout();
             try {
               process.stdout.write("cancel-native\n", () => {});
             } catch {
@@ -109,7 +110,15 @@ export async function prepareRetainedNativeTestPeer(params: {
             fail(new Error("Managed native control exceeded its reply limit."));
           }
         };
-        const timer = setTimeout(
+        // Test clocks deliver asynchronously and return an idempotent cancellation.
+        const scheduleTimeout =
+          params.scheduleTimeout ??
+          ((_command, onTimeout, delayMs) => {
+            const timer = setTimeout(onTimeout, delayMs);
+            return () => clearTimeout(timer);
+          });
+        const cancelTimeout = scheduleTimeout(
+          command,
           () => fail(new Error("Managed native control acknowledgement timed out.")),
           timeoutMs,
         );

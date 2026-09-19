@@ -385,20 +385,22 @@ function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: st
   }
 }
 
-function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
+async function readLocalDeviceAuthTokens(deviceId: string, env: NodeJS.ProcessEnv = process.env) {
   try {
-    return loadDeviceAuthTokens({ deviceId, env });
+    return await loadDeviceAuthTokens({ deviceId, env });
   } catch {
     return [];
   }
 }
 
-function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): LocalDeviceAuthIssue[] {
+async function collectLocalDeviceAuthIssues(
+  snapshot: DoctorPairingSnapshot,
+): Promise<LocalDeviceAuthIssue[]> {
   const identity = readLocalIdentity();
   if (!identity) {
     return [];
   }
-  const localTokens = readLocalDeviceAuthTokens(identity.deviceId);
+  const localTokens = await readLocalDeviceAuthTokens(identity.deviceId);
   const paired = snapshot.paired.find((device) => device.deviceId === identity.deviceId);
   if (!paired) {
     return [];
@@ -468,22 +470,20 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): LocalDev
   return issues;
 }
 
-/** Warn about legacy devices/*.json files the startup SQLite import has not archived. */
+/** Warn about retired pairing stores that still need Doctor repair. */
 async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<HealthFinding[]> {
   if (cfg.gateway?.mode === "remote") {
     return [];
   }
-  // Lazy import keeps the migration module a startup-only boundary.
-  const { listLegacyDevicePairingStoreFiles } =
-    await import("../infra/device-pairing-migration.js");
-  return (await listLegacyDevicePairingStoreFiles()).map((filePath): HealthFinding => ({
+  const { listLegacyPairingStoreFiles } = await import("../infra/pairing-files.js");
+  return (await listLegacyPairingStoreFiles()).map((filePath): HealthFinding => ({
     checkId: DEVICE_PAIRING_CHECK_ID,
     severity: "warning",
-    message: `Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`,
+    message: `Legacy pairing store ${filePath} has not been imported into SQLite. Stop the Gateway and run openclaw doctor --fix. Unreadable sources remain in place for repair.`,
     path: "devices.legacy-store",
     requirement: "pairing-store-legacy-file",
     fixHint:
-      "Restart the gateway so it imports the legacy store; if the file persists, fix or move it aside first.",
+      "Stop the Gateway and run openclaw doctor --fix to import and archive the legacy pairing stores.",
   }));
 }
 
@@ -564,7 +564,7 @@ export async function collectDevicePairingHealthFindings(params: {
     ...legacyStoreFindings,
     ...collectPendingPairingIssues(snapshot).map(pendingPairingIssueToHealthFinding),
     ...collectPairedRecordIssues(snapshot).map(pairedRecordIssueToHealthFinding),
-    ...collectLocalDeviceAuthIssues(snapshot).map(localDeviceAuthIssueToHealthFinding),
+    ...(await collectLocalDeviceAuthIssues(snapshot)).map(localDeviceAuthIssueToHealthFinding),
   ];
 }
 

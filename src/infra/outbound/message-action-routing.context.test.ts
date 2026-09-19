@@ -14,6 +14,10 @@ import {
 
 const contextFixture = createMessageActionContextFixture();
 const { handleForumAction, handleWorkspaceAction } = contextFixture;
+const crossProviderRestrictedConfig: OpenClawConfig = {
+  ...workspaceConfig,
+  tools: { message: { crossContext: { allowAcrossProviders: false } } },
+};
 
 describe("runMessageAction context isolation", () => {
   beforeEach(() => contextFixture.setup());
@@ -276,9 +280,9 @@ describe("runMessageAction context isolation", () => {
 
   it.each([
     {
-      name: "blocks cross-provider sends by default",
+      name: "blocks cross-provider sends when disabled",
       action: "send" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -288,9 +292,9 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks cross-provider message mutations by default",
+      name: "blocks cross-provider message mutations when disabled",
       action: "edit" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -301,9 +305,9 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks cross-provider delete mutations by default",
+      name: "blocks cross-provider delete mutations when disabled",
       action: "delete" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -313,9 +317,9 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks cross-provider pin mutations by default",
+      name: "blocks cross-provider pin mutations when disabled",
       action: "pin" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -325,9 +329,9 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks cross-provider unpin mutations by default",
+      name: "blocks cross-provider unpin mutations when disabled",
       action: "unpin" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -337,9 +341,9 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks cross-provider topic creation by default",
+      name: "blocks cross-provider topic creation when disabled",
       action: "topic-create" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -349,9 +353,9 @@ describe("runMessageAction context isolation", () => {
       message: /Cross-context messaging denied/,
     },
     {
-      name: "blocks cross-provider topic edits by default",
+      name: "blocks cross-provider topic edits when disabled",
       action: "topic-edit" as const,
-      cfg: workspaceConfig,
+      cfg: crossProviderRestrictedConfig,
       actionParams: {
         channel: "forum",
         target: "@opsbot",
@@ -452,11 +456,15 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(message);
   });
 
-  it.each(["topic-create", "topic-edit"] as const)(
-    "denies cross-provider %s before provider adapter dispatch",
-    async (action) => {
+  it.each(
+    (["topic-create", "topic-edit"] as const).flatMap((action) =>
+      ["C12345678", undefined].map((currentChannelId) => ({ action, currentChannelId })),
+    ),
+  )(
+    "enforces explicit cross-provider restrictions for $action with current target $currentChannelId before provider adapter dispatch",
+    async ({ action, currentChannelId }) => {
       const outcome = await runMessageAction({
-        cfg: workspaceConfig,
+        cfg: crossProviderRestrictedConfig,
         action,
         params: {
           channel: "forum",
@@ -465,7 +473,7 @@ describe("runMessageAction context isolation", () => {
           ...(action === "topic-edit" ? { messageThreadId: "42" } : {}),
         },
         toolContext: {
-          currentChannelId: "C12345678",
+          currentChannelId,
           currentChannelProvider: "workspace",
         },
         dryRun: false,
@@ -487,11 +495,8 @@ describe("runMessageAction context isolation", () => {
       toolContext: { currentChannelId: "@opsbot", currentChannelProvider: "forum" },
     },
     {
-      name: "explicit cross-provider opt-in",
-      cfg: {
-        ...workspaceConfig,
-        tools: { message: { crossContext: { allowAcrossProviders: true } } },
-      } as OpenClawConfig,
+      name: "default cross-provider access",
+      cfg: workspaceConfig,
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "workspace" },
     },
   ])("dispatches topic actions for $name", async ({ cfg, toolContext }) => {
@@ -554,10 +559,10 @@ describe("runMessageAction context isolation", () => {
     expect(handleWorkspaceAction).toHaveBeenCalledOnce();
   });
 
-  it("retains cross-provider policy for direct operators", async () => {
+  it("retains explicit cross-provider restrictions for direct operators", async () => {
     await expect(
       runMessageAction({
-        cfg: workspaceConfig,
+        cfg: crossProviderRestrictedConfig,
         action: "pin",
         params: {
           channel: "forum",

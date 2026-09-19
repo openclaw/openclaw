@@ -274,24 +274,43 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_OUTPUT_PATH, JSON.stringify({
     await expect(fs.access(sourceConfigPath!)).rejects.toThrow();
   });
 
-  it("reports error on a non-zero finalize exit", async () => {
-    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({
+  it.each([
+    { code: 1, stdout: undefined },
+    { code: 1, stdout: "not JSON" },
+    {
       code: 1,
-      stderr: "convergence failed",
-    }));
-    const outcome = await runPostCoreFinalizeAfterGatewayUpdate({
-      result: gitOkResult(),
-      resolveEntrypoint: resolveEntrypointOk,
-      spawnFinalize,
-    });
-    expect(outcome).toEqual({
-      status: "error",
-      reason: "nonzero-exit",
-      entrypoint: ENTRYPOINT,
-      exitCode: 1,
-      message: "convergence failed",
-    });
-  });
+      stdout: JSON.stringify({ status: "error", mode: "finalize", reason: "update-ledger-busy" }),
+    },
+    {
+      code: 1,
+      stdout: JSON.stringify({ status: "skipped", mode: "unknown", reason: "update-ledger-busy" }),
+    },
+    {
+      code: null,
+      stdout: JSON.stringify({ status: "skipped", mode: "finalize", reason: "update-ledger-busy" }),
+    },
+  ])(
+    "preserves finalizer failure without a completed deferred report (%j)",
+    async ({ code, stdout }) => {
+      const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({
+        code,
+        stdout,
+        stderr: "convergence failed",
+      }));
+      const outcome = await runPostCoreFinalizeAfterGatewayUpdate({
+        result: gitOkResult(),
+        resolveEntrypoint: resolveEntrypointOk,
+        spawnFinalize,
+      });
+      expect(outcome).toEqual({
+        status: "error",
+        reason: "nonzero-exit",
+        entrypoint: ENTRYPOINT,
+        ...(code === null ? {} : { exitCode: code }),
+        message: "convergence failed",
+      });
+    },
+  );
 
   it("reports error when the finalize spawn throws", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => {

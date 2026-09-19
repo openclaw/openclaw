@@ -35,6 +35,22 @@ export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
 const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+
+export function createStartupMigrationActivityProbe(isActive: () => boolean) {
+  return vi.fn<
+    typeof import("../../infra/startup-migration-checkpoint.js").hasActiveStartupMigrationLease
+  >((params) => {
+    const active = isActive();
+    if (active) {
+      params?.onActivity?.({
+        owner: "migration-owner",
+        pid: 8000,
+        heartbeatAt: monotonicClock.nowMs,
+      });
+    }
+    return active;
+  });
+}
 export const readActiveGatewayLockIdentity = vi.fn();
 export const readGatewayOwnerLease =
   vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
@@ -73,6 +89,7 @@ vi.mock("../../gateway/probe-auth.js", () => ({
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
+  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
 }));
 
 vi.mock("../../infra/gateway-owner-lease.js", () => ({

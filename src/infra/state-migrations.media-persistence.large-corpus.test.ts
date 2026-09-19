@@ -6,6 +6,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { mergeProcessEnv } from "./process-env.js";
 
 const SESSION_COUNT = 2_640;
@@ -260,7 +261,8 @@ describe("legacy media persistence large corpus", () => {
     try {
       createSessionWindowCorpus(stateDir);
       const result = spawnSync(
-        process.execPath,
+        // Old-space limits are a V8/Node contract; keep this resource proof on that owner.
+        resolveTestNodeExecPath(),
         [
           "--max-old-space-size=128",
           "--import",
@@ -289,7 +291,7 @@ describe("legacy media persistence large corpus", () => {
     try {
       createCorpus(stateDir);
       const result = spawnSync(
-        process.execPath,
+        resolveTestNodeExecPath(),
         ["--max-old-space-size=256", "--import", "tsx", "--input-type=module", "-e", CHILD_SCRIPT],
         {
           cwd: process.cwd(),

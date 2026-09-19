@@ -64,6 +64,9 @@ reconcile dependencies before the remote wrapper starts.
 Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
 runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
+The script erasability gate uses Node's strip-only parser, including when package
+checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
+
 The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
@@ -144,10 +147,21 @@ of worker compilation.
 Other worker-thread entries and arbitrary source CLI fixtures remain outside
 this declared set.
 
+The agent database module-identity test shares the compiled host and SQLite SDK
+entries while forcing a separate plugin transform of the SDK. Its standalone and
+watch runs retain a disposable build from current source because this regression
+specifically checks a packaged graph. Both modes use the same assertions and
+subprocess deadline.
+
 The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
+
+Native Bash output-lifecycle fixtures also prepare the real tool and executor
+roots in this generation. Each scenario still uses a fresh process and real
+shell, pipe, and spill file; its unchanged child deadline covers prepared
+JavaScript startup and output handling instead of repeated TypeScript compilation.
 
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 
@@ -184,9 +198,12 @@ they impose resource limits. Third-party dependencies remain external except for
 the always-bundled OpenClaw packages. fs-safe remains external so its native loader
 resolves the optional platform package from fs-safe's own dependency scope, including
 nested pnpm installs. Compiled workers use that same installed package; they do not
-copy native binaries. The default stays off, and the existing `off`/`auto`/`require`
-opt-ins retain their behavior. Sealed portable worker bundles use guarded JavaScript
-only and explicitly disable native loading.
+copy native binaries. Native mode defaults to `auto` on macOS, Linux, and Windows.
+No-clobber Root moves require native support; Windows secure credential reads
+require the matching helper for descriptor-bound ACL checks. Explicit
+`off`/`auto`/`require` settings and programmatic configuration retain their
+precedence. Sealed portable worker bundles use guarded JavaScript only and
+explicitly disable native loading.
 
 Watch mode deliberately keeps the existing live-source path, including tsx for
 Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch

@@ -17,8 +17,9 @@ export const REFUSAL_BODY = "Secret egress proxy refused the request.\n";
 const UPSTREAM_ERROR_BODY = "Secret egress proxy could not reach the upstream host.\n";
 const MAX_BUFFERED_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 const BUFFERED_REQUEST_WRITE_BYTES = 64 * 1024;
+const MAX_BUFFERED_UPGRADE_BYTES = 64 * 1024;
 
-export type UpgradeRequest = { stream: PassThrough };
+export type UpgradeRequest = { stream: PassThrough; stopBuffering: () => void };
 export type RequestHandler = (
   request: IncomingMessage,
   response: ServerResponse,
@@ -57,10 +58,37 @@ export function handleUpgradeRequest(
     request.socket.destroy();
     return;
   }
-  // Buffer early frames with stream backpressure while waiting for the upstream
-  // handshake. Unlike a paused socket, this still observes a disconnect with no data.
-  const stream = new PassThrough();
-  request.socket.once("close", () => stream.destroy());
+  // Retain parser-owned head bytes and bounded early frames while the upstream
+  // handshake is pending. Flowing reads let a FIN behind an early frame cancel
+  // the request; a full buffer closes instead of leaving that FIN unread.
+  const stream = new PassThrough({ highWaterMark: MAX_BUFFERED_UPGRADE_BYTES });
+  let buffering = true;
+  const stopBuffering = () => {
+    if (!buffering) {
+      return;
+    }
+    buffering = false;
+    request.socket.pause();
+    request.socket.off("data", onData);
+    request.socket.off("end", onEnd);
+  };
+  const onData = (chunk: Buffer) => {
+    if (!stream.write(chunk)) {
+      stopBuffering();
+      response.destroy();
+      request.socket.destroy();
+    }
+  };
+  const onEnd = () => stream.end();
+  request.socket.on("data", onData);
+  request.socket.once("end", onEnd);
+  request.socket.once("close", () => {
+    stopBuffering();
+    stream.destroy();
+    if (!response.writableEnded) {
+      response.destroy();
+    }
+  });
   response.once("finish", () => {
     if (response.socket) {
       stream.destroy();
@@ -68,10 +96,12 @@ export function handleUpgradeRequest(
     }
   });
   if (head.length > 0) {
-    stream.write(head);
+    onData(head);
   }
-  request.socket.pipe(stream);
-  handler(request, response, { stream });
+  if (request.socket.destroyed) {
+    return;
+  }
+  handler(request, response, { stream, stopBuffering });
 }
 
 /** Forwards one authorized HTTPS request, retaining ownership across a WebSocket upgrade. */
@@ -225,7 +255,16 @@ function sendSecretEgressRequest(
     if (head.length > 0) {
       clientSocket.write(head);
     }
-    forward.upgrade.stream.pipe(upstreamSocket).pipe(clientSocket);
+    const bufferedClientFrames = forward.upgrade.stream;
+    forward.upgrade.stopBuffering();
+    bufferedClientFrames.once("end", () => {
+      if (!clientSocket.destroyed && !upstreamSocket.destroyed) {
+        clientSocket.pipe(upstreamSocket);
+      }
+    });
+    bufferedClientFrames.pipe(upstreamSocket, { end: false });
+    bufferedClientFrames.end();
+    upstreamSocket.pipe(clientSocket);
   });
   if (forward.upgrade) {
     upstream.end();

@@ -4,6 +4,7 @@ import {
   type AnyAgentTool,
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createLazyFileTransferNodeInvokePolicy } from "./src/shared/lazy-node-invoke-policy.js";
 import {
   DIR_FETCH_TOOL_DESCRIPTOR,
@@ -11,6 +12,7 @@ import {
   FILE_FETCH_TOOL_DESCRIPTOR,
   FILE_WRITE_TOOL_DESCRIPTOR,
 } from "./src/tools/descriptors.js";
+import { registerNodeWorkspaces } from "./src/workspace-service.js";
 
 type FileTransferToolDescriptor = Pick<
   AnyAgentTool,
@@ -41,7 +43,18 @@ function createLazyTool(
 
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
+    command: "file.stat",
+    cap: "file",
+    dangerous: true,
+    handle: async (paramsJSON) => {
+      const { handleFileStat } = await import("./src/node-host/file-stat.js");
+      const params = asOptionalRecord(readNodeCommandParams(paramsJSON)) ?? {};
+      return JSON.stringify(await handleFileStat(params));
+    },
+  },
+  {
     command: "file.fetch",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -53,6 +66,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
   {
     command: "dir.list",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -64,6 +78,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
   {
     command: "dir.fetch",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -75,6 +90,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
   {
     command: "file.write",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -92,6 +108,7 @@ export default definePluginEntry({
   description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
+    registerNodeWorkspaces(api);
     api.registerCli(
       async ({ program }) => {
         const { registerFileTransferCli } = await import("./src/cli.js");

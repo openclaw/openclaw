@@ -111,11 +111,10 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   response is the allowed catalog, including dynamically discovered models
   for `provider/*` entries. Otherwise the response is the full gateway
   catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.modelPolicy.allow` is
-  configured, it still wins, including published rows matched by
-  `provider/*` entries. Without an allowlist, the response uses explicit
-  `models.providers.<provider>.models` entries, falling back to the full
-  catalog only when no configured model rows exist.
+- `"configured"`: a compact catalog that also retains configured defaults and
+  fallbacks for current-model controls. These metadata rows are not necessarily
+  permitted manual choices. Published rows matched by `provider/*` remain
+  included. Without an allowlist, configured and authenticated rows remain visible.
 - `"provider-config"`: source-authored `models.providers.*.models` inventory,
   independent of picker allowlists. Rows include public model capabilities and
   route-aware availability, but omit provider endpoints, auth material, and
@@ -123,10 +122,25 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
+Clients that advertise `model-selection-policy` in connect `caps` receive
+`manualSelectionAllowed` on every `models.list` row. The same fact appears in
+their initial `models.snapshot`. Filter rows with `false` only when deriving
+manual choices; keep the complete catalog for current-model capabilities and
+readiness. Scoped configured reads also retain known metadata for the current
+session model, without changing its selection or granting permission.
+
+The fact is independent of `available` and does not authorize a session write.
+The server checks the current policy again when a model is selected. Capless
+connections retain the previous row shape. Generic client libraries do not opt
+in: a proxy forwarding a capable connection must support its negotiated row
+shape, or use a capless context for an older closed-schema consumer.
+
 Ordinary requests read the published catalog without starting provider discovery.
 Views select rows; they do not decide whether discovery runs. If the owner is not
 published yet, the request reports that the model catalog is not ready. A result
-whose owner becomes stale during projection is rejected for retry.
+whose owner becomes stale during projection is rejected with `UNAVAILABLE`,
+`retryable: true`, and `retryAfterMs: 0`. The Control UI shares one retry across
+catalog consumers, retaining cancellation and any explicit request deadline.
 
 - `preparedOnly: true` remains supported for automatic clients. Ordinary reads
   are passive with or without this flag.
@@ -147,6 +161,11 @@ For a new draft, `authProfileId` previews a retained account owned by the
 identified caller with `operator.read` access. It does not save an account
 default. `sessionKey` and `authProfileId` are mutually exclusive.
 
+Saved-session metadata stays current across unrelated session writes. Before
+publishing, the Gateway rechecks the selected session's identity and canonical
+metadata, runtime configuration, and current access authority. Recreating a row
+with identical session facts does not invalidate the read.
+
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
 locator. The `provider-config` view remains shared authored inventory and omits
@@ -158,6 +177,16 @@ The Gateway advertises `session-scoped-model-catalog` for this contract.
 `chat.metadata` remains available to legacy clients; the Control UI reads models
 directly and keeps commands in its metadata cache. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
+Metadata refresh publishes model-owner facts without preparing every agent's
+commands and model projections. Requests prepare their agent's metadata on demand;
+a slow agent does not delay other agents. Retained commands and projections are
+bounded and do not retain completed requests' session documents. Account selection
+is projected for the current session even when its model catalog is shared.
+Provider renewal with unchanged inventory and auth metadata preserves cached metadata
+without broadcasting `chat.metadata.changed`. Discovery progress alone does not
+invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Shared model or account replacement still gates these reads, and history
+uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then
 requests `refresh: true` the first time a primary, utility, or fallback model
 picker opens for the current core-data snapshot. Pending opens share that page's request; completed reopens read the

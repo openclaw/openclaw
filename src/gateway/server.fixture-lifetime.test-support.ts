@@ -257,8 +257,9 @@ test("observes startup cleanup ownership through fixture teardown", async () => 
       const owner = retain();
       metadataRetains++;
       return { ...owner, close: async (...args) => {
-        await own(owner.close(...args));
+        const result = await own(owner.close(...args));
         metadataReleases++;
+        return result;
       } };
     });
     restorers.push(() => metadataSpy.mockRestore());

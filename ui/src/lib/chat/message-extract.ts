@@ -128,6 +128,7 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
   path: string;
   mediaType: string | undefined;
   fileName: string | undefined;
+  origin?: "paste" | "file";
   sizeBytes?: number;
   durationMs?: number;
   width?: number;
@@ -145,6 +146,7 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
             path,
             mediaType: fact.contentType ?? fact.kind,
             fileName: fact.fileName,
+            ...(fact.origin ? { origin: fact.origin } : {}),
             ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
             ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
             ...(fact.width !== undefined ? { width: fact.width } : {}),

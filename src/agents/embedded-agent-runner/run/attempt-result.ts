@@ -66,6 +66,7 @@ export function createAttemptCarryover() {
 }
 
 export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
+  answerSegments?: EmbeddedAttemptSubscription["answerSegments"];
   successfulNestedToolNames?: string[];
 };
 
@@ -224,6 +225,7 @@ export function completeEmbeddedAttemptResult(
     lastAssistant: settled.lastAssistant,
     currentAttemptAssistant: settled.currentAttemptAssistant,
     currentAttemptCompletedAssistant: settled.currentAttemptCompletedAssistant,
+    hasSuccessfulModelResponse: subscription.hasSuccessfulModelResponse(),
     successfulNestedToolNames: settled.successfulNestedToolNames,
     attemptUsage: settled.attemptUsage,
     promptCache: sessionRuntime.state.promptCache,
@@ -366,6 +368,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
     assistantTexts,
+    answerSegments: subscription.answerSegments,
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
     latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),

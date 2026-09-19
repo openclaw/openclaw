@@ -89,6 +89,7 @@ export async function runPreparedEmbeddedLoop(
     "runtime",
     () =>
       prepareEmbeddedRunRuntime({
+        assertCurrent: input.laneController.throwIfAborted,
         runParams: params,
         sessionAdmission: input.sessionAdmission,
         provider,
@@ -145,17 +146,12 @@ export async function runPreparedEmbeddedLoop(
     } = preparedRuntime.snapshot());
   };
   const traceAttempts: TraceAttempt[] = [];
-  const resolveRuntimeFallbackReason = (): string | null => {
-    const fallbackAttempt = traceAttempts.findLast(
+  const resolveRuntimeFallbackReason = (): string | null =>
+    traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
-    );
-    return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
-  };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
+    )?.reason ?? lastRetryFailoverReason;
+  const { sessionKey, config, agentId } = params;
+  const { sessionAgentId } = resolveSessionAgentIds({ sessionKey, config, agentId });
   const strictAgenticActive = isStrictAgenticExecutionContractActive({
     config: params.config,
     sessionKey: params.sessionKey,
@@ -176,12 +172,7 @@ export async function runPreparedEmbeddedLoop(
   let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   let overloadProfileRotations = 0;
   const terminalRetryState = createEmbeddedRunTerminalRetryState();
-  // Cost-runaway breaker for #76293. State lives at the run-loop level
-  // on purpose so it survives across attempt boundaries and across
-  // profile/auth retries within this embedded run (a wrapper-local
-  // counter would reset on every iteration). The helper is pure and
-  // unit-tested in run/idle-timeout-breaker.test.ts; the run loop just
-  // feeds it the outcome of each attempt.
+  // Keep the idle-timeout cost breaker across attempts and auth-profile retries.
   const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
   // Post-compaction loop guard for #77474. Armed at each compaction-success
   // site below; observed from the live tool-outcome path so it can abort
@@ -213,18 +204,15 @@ export async function runPreparedEmbeddedLoop(
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
   let codexAppServerRecoveryRetries = 0;
-  // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
-  // end a turn with stopReason="error" + zero output tokens, producing no
-  // user-visible text. This is an orthogonal, model-agnostic resubmission
-  // for errored turns; stopReason="stop" empty zero-token turns use the
-  // visible-answer retry instruction instead.
   let emptyErrorRetries = 0;
-  const sessionPromptState = createEmbeddedRunSessionPromptState({
+  const sessionPromptState = await createEmbeddedRunSessionPromptState({
     runParams: params,
     sessionAgentId,
     resolvedSessionKey,
     lifecycleGeneration,
+    onInterrupt: (reason) => input.laneController.laneTaskAbortController.abort(reason),
   });
+  input.onInitialWriterPrepared(sessionPromptState);
   const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
     params.sessionPersistence !== "detached" &&
@@ -333,6 +321,7 @@ export async function runPreparedEmbeddedLoop(
       }
       params.assistantErrorTranscript?.clear();
       beginRunAttempt(runRetryBudget);
+      params.onAttemptStart?.();
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
       attemptedThinking.add(thinkLevel);
@@ -408,9 +397,7 @@ export async function runPreparedEmbeddedLoop(
       }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      failoverRetryController.setTransientRetryBudget(
-        dispatchedAttempt.rawAttempt.providerRetryMaxRetries,
-      );
+      failoverRetryController.observeAttempt(dispatchedAttempt.rawAttempt);
       attemptCarryover.apply(refresh.applyDeliveryState(dispatchedAttempt.rawAttempt));
       const normalization = {
         runInput: admittedRunInput,
@@ -440,17 +427,13 @@ export async function runPreparedEmbeddedLoop(
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
       }
-      if (normalizedAttempt.action === "retry") {
-        bootstrapPromptWarningSignaturesSeen =
-          normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
-        lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
-        accumulatedReplayState = normalizedAttempt.replayState;
-        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
-        continue;
-      }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
       lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
       accumulatedReplayState = normalizedAttempt.replayState;
+      if (normalizedAttempt.action === "retry") {
+        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
+        continue;
+      }
       if (permissionChanges.prepareRestart()) {
         input.laneController.throwIfAborted();
         sessionPromptState.continueFromCurrentTranscript();

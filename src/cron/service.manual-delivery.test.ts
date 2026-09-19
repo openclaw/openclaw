@@ -61,7 +61,6 @@ describe("manual cron delivery occurrence", () => {
               const text = "Fresh result from this invocation.";
               const sessionKey = `agent:main:cron:${job.id}`;
               const delivery = await dispatchCronDelivery({
-                cfg,
                 cfgWithAgentDefaults: cfg,
                 deps: {},
                 job,
@@ -72,7 +71,6 @@ describe("manual cron delivery occurrence", () => {
                 lifecycleRevision: "manual-delivery-revision",
                 sessionUpdatedAt: now,
                 runStartedAt: now,
-                runEndedAt: now,
                 timeoutMs: 30_000,
                 resolvedDelivery: { ok: true, channel: "telegram", to: "123", mode: "explicit" },
                 deliveryRequested: true,
@@ -94,13 +92,15 @@ describe("manual cron delivery occurrence", () => {
                 abortSignal,
                 isAborted: () => abortSignal?.aborted === true,
                 abortReason: () => "aborted",
-                withRunSession: (result) => ({
-                  ...result,
-                  sessionId: "manual-delivery-run",
-                  sessionKey,
-                }),
               });
-              return { status: "ok", ...delivery.result, ...delivery };
+              const failure =
+                delivery.disposition?.kind === "error" ? delivery.disposition : undefined;
+              return {
+                ...delivery,
+                status: failure ? "error" : "ok",
+                error: failure?.error,
+                errorKind: failure?.errorKind,
+              };
             },
           });
           try {

@@ -9,8 +9,14 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { enforceSqliteSessionHistoryDiskBudget } from "../config/sessions/session-history-eviction.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabasesAsync,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
 import { sessionsCommand } from "./sessions.js";
 
 const ACP_SESSION_KEY = "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9";
@@ -116,6 +122,8 @@ describe("sessionsCommand ACP model display", () => {
         ),
       );
     } finally {
+      await closeOpenClawAgentDatabasesAsync(stateDir);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawAgentDatabases(stateDir);
       closeOpenClawStateDatabase();
       clearRuntimeConfigSnapshot();

@@ -9,7 +9,7 @@ import {
   enrichCronJsonWithStatus,
   getCronChannelOptions,
   parseAt,
-  parseCronToolsAllow,
+  parseCronStringList,
   parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
@@ -898,19 +898,19 @@ describe("getCronChannelOptions", () => {
   });
 });
 
-describe("parseCronToolsAllow", () => {
+describe("parseCronStringList", () => {
   it.each([
     { input: "exec,read,write", expected: ["exec", "read", "write"] },
     { input: "exec, read, write", expected: ["exec", "read", "write"] },
     { input: "exec read write", expected: ["exec", "read", "write"] },
     { input: " exec  read,write ", expected: ["exec", "read", "write"] },
     { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+    { input: undefined, expected: undefined },
+    { input: "", expected: [] },
+    { input: " ,  ", expected: [] },
+    { input: [], expected: [] },
   ])("parses $input", ({ input, expected }) => {
-    expect(parseCronToolsAllow(input)).toEqual(expected);
-  });
-
-  it("returns undefined for empty input", () => {
-    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+    expect(parseCronStringList(input)).toEqual(expected);
   });
 });
 

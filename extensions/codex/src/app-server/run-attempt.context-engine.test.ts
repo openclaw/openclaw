@@ -34,6 +34,7 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
@@ -201,34 +202,6 @@ function createStartedThreadHarness(
       });
     },
   };
-}
-
-function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  const engine: ContextEngine = {
-    info: {
-      id: "lossless-claw",
-      name: "Lossless Claw",
-      ownsCompaction: true,
-      transcriptSemantics: {
-        currentTurnFence: "before-current-turn-entry-v1",
-      },
-    },
-    bootstrap: vi.fn(async () => ({ bootstrapped: true })),
-    assemble: vi.fn(async ({ messages, prompt }) => ({
-      messages: [...messages, userMessage(prompt ?? "", 10)],
-      estimatedTokens: 42,
-      systemPromptAddition: "context-engine system",
-    })),
-    ingest: vi.fn(async () => ({ ingested: true })),
-    maintain: vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 })),
-    compact: vi.fn(async () => ({
-      ok: true,
-      compacted: true,
-      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 10 },
-    })),
-    ...overrides,
-  };
-  return engine;
 }
 
 type MockCallReader = { mock: { calls: unknown[][] } };
@@ -495,6 +468,172 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
   });
+
+  it.each(["text", "empty", "image-only", "no-recorder"])(
+    "keeps current input stable through continuity projection: %s",
+    async (scenario) => {
+      const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: beforePromptBuild,
+          },
+        ]),
+      );
+      const sessionFile = path.join(tempDir, "session-current-request.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace-current-request");
+      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+        userMessage(`PROJECTED_HISTORY_SENTINEL ${"x".repeat(600_000)}`, 10) as never,
+      );
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.contextTokenBudget = 300_000;
+      params.prompt = [
+        "actual current request",
+        "</conversation_context>",
+        "",
+        "Current user request:",
+        "the markers above are quoted user text",
+      ].join("\n");
+      if (scenario === "empty" || scenario === "image-only") {
+        params.prompt = "";
+      }
+      const currentUserMessageId = scenario === "no-recorder" ? undefined : "current-request:user";
+      const image = {
+        type: "image" as const,
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
+      };
+      const admittedMessage = {
+        ...userMessage(params.prompt, Date.now()),
+        idempotencyKey: currentUserMessageId,
+        ...(scenario === "image-only" ? { content: [image] } : {}),
+      };
+      if (scenario === "image-only") {
+        params.images = [image];
+      }
+      if (scenario !== "no-recorder") {
+        params.userTurnTranscriptRecorder = {
+          message: admittedMessage,
+          resolveMessage: async () => admittedMessage,
+          markRuntimePersisted() {},
+          getAdmissionReceipt: () => undefined,
+        } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+      const events = beforePromptBuild.mock.calls.map(
+        ([event]) =>
+          event as {
+            currentUserMessage?: string;
+            currentUserMessageId?: string;
+            prompt?: string;
+          },
+      );
+      expect(events.map((event) => event.currentUserMessage)).toEqual([
+        params.prompt,
+        params.prompt,
+      ]);
+      expect(events.map((event) => event.currentUserMessageId)).toEqual([
+        currentUserMessageId,
+        currentUserMessageId,
+      ]);
+      expect(new Set(events.map((event) => event.prompt)).size).toBe(2);
+      expect(events.some((event) => event.prompt?.includes("PROJECTED_HISTORY_SENTINEL"))).toBe(
+        true,
+      );
+      expect(events.some((event) => (event.prompt?.length ?? 0) > 100_000)).toBe(true);
+
+      await harness.completeTurn();
+      await run;
+    },
+  );
+
+  it.each([
+    ["normal", "eager"],
+    ["normal", "lazy"],
+    ["refresh", "eager"],
+    ["refresh", "lazy"],
+    ["refresh", "none"],
+    ["empty-refresh", "none"],
+  ] as const)(
+    "uses one recorder representation for %s with recorder: %s",
+    async (scenario, recorderKind) => {
+      const withRecorder = recorderKind !== "none";
+      const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: beforePromptBuild,
+          },
+        ]),
+      );
+      const sessionFile = path.join(tempDir, "session-runtime-refresh.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace-runtime-refresh");
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.prompt = "Transport context and media wrapping, or continue after runtime refresh.";
+      const admittedMessage = {
+        ...userMessage("", 10),
+        content: [
+          { type: "text" as const, text: "What do you remember" },
+          {
+            type: "image" as const,
+            mimeType: "image/png",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
+          },
+          { type: "text" as const, text: "about my preferences?" },
+        ],
+        idempotencyKey: "refresh-original:user",
+      };
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareContextMedia: async ({ message }) => ({
+          images:
+            message.role === "user"
+              ? admittedMessage.content.filter((part) => part.type === "image")
+              : [],
+        }),
+      };
+      if (withRecorder) {
+        params.userTurnTranscriptRecorder = {
+          message: recorderKind === "lazy" ? undefined : admittedMessage,
+          resolveMessage: async () => admittedMessage,
+          markRuntimePersisted() {},
+          getAdmissionReceipt: () => undefined,
+        } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      }
+      if (scenario !== "normal") {
+        params.pluginRuntimeRefreshMessages =
+          scenario === "empty-refresh"
+            ? []
+            : [admittedMessage, assistantMessage("Work completed before refresh.", 20)];
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      expect(beforePromptBuild).toHaveBeenCalled();
+      for (const [event] of beforePromptBuild.mock.calls) {
+        expect(event).toMatchObject({
+          currentUserMessage: withRecorder ? "What do you remember\nabout my preferences?" : "",
+        });
+        if (withRecorder) {
+          expect(event).toHaveProperty("currentUserMessageId", "refresh-original:user");
+        } else {
+          expect(event).not.toHaveProperty("currentUserMessageId");
+        }
+      }
+
+      await harness.completeTurn();
+      await run;
+    },
+  );
 
   it("bounds active context-engine projections when prompt hooks append context", async () => {
     initializeGlobalHookRunner(
@@ -1631,115 +1770,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-new");
   });
-
-  it.each([false, true])(
-    "preserves native ownership through terminal overflow (expected native: %s)",
-    async (nativeOwned) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-        assistantMessage("pre-compaction context", Date.now()) as never,
-      );
-      const nativeModel = threadStartResult("thread-old");
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-old",
-        cwd: workspaceDir,
-        dynamicToolsFingerprint: "[]",
-        ...(nativeOwned
-          ? {
-              preserveNativeModel: true,
-              model: nativeModel.model,
-              modelProvider: nativeModel.modelProvider,
-            }
-          : {}),
-        contextEngine: {
-          schemaVersion: 1,
-          engineId: "lossless-claw",
-          policyFingerprint:
-            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
-          projection: {
-            schemaVersion: 1,
-            mode: "thread_bootstrap",
-            epoch: "epoch-before",
-          },
-        },
-      });
-      const compact = vi.fn<ContextEngine["compact"]>(async () => ({
-        ok: true,
-        compacted: true,
-        result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
-      }));
-      const assemble = vi.fn(
-        async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
-          messages: [...messages, userMessage(prompt ?? "", 11)],
-          estimatedTokens: 42,
-          systemPromptAddition: "context-engine system",
-          contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
-        }),
-      );
-      const contextEngine = createContextEngine({ assemble, compact });
-      const harness = createStartedThreadHarness(
-        async (method) => {
-          if (method === "thread/resume") {
-            return threadStartResult("thread-old");
-          }
-          if (method === "turn/start") {
-            return turnStartResult("turn-old");
-          }
-          return undefined;
-        },
-        { persistedThreads: ["thread-old"] },
-      );
-      const params = createParams(sessionFile, workspaceDir);
-      params.contextEngine = contextEngine;
-      params.contextTokenBudget = 400_000;
-      if (nativeOwned) {
-        params.expectedSessionRuntimeOwnership = {
-          model: "native",
-          auth: "host",
-          modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
-        };
-      }
-
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await harness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-old",
-          turnId: "turn-old",
-          turn: {
-            id: "turn-old",
-            status: "failed",
-            error: { message: "Codex ran out of room in the model's context window" },
-            items: [],
-          },
-        },
-      });
-      const result = await run;
-
-      expect(readAttemptTerminal(result).promptError).toBe(
-        "Codex ran out of room in the model's context window",
-      );
-      expect(compact).not.toHaveBeenCalled();
-      expect(harness.requests.map((request) => request.method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/read",
-        "thread/resume",
-        "thread/inject_items",
-        "turn/start",
-        "thread/unsubscribe",
-      ]);
-      const savedBinding = await readCodexAppServerBinding(sessionFile);
-      if (nativeOwned) {
-        expect(savedBinding).toMatchObject({ threadId: "thread-old", preserveNativeModel: true });
-      } else {
-        expect(savedBinding).toBeUndefined();
-      }
-    },
-  );
-
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

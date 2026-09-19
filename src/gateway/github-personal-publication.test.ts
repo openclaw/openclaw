@@ -48,7 +48,6 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
-  root,
 } from "./github-publication.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
@@ -1009,7 +1008,7 @@ describe("personal publication authority and recovery", () => {
         })
       )[1],
     ).toMatchObject({ result: { status: "published" }, confirmation: null });
-    const storePath = path.join(root, "sessions.json");
+    const storePath = session.storePath;
     await patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY, storePath }, () => ({
       archivedAt: Date.now(),
     }));

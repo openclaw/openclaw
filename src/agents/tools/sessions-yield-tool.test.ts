@@ -1,6 +1,8 @@
 // sessions_yield tool tests cover cooperative turn yielding and unsupported
 // context errors.
 import { describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { isToolResultError } from "../tool-result-error.js";
 import { createSessionsYieldTool } from "./sessions-yield-tool.js";
 
 type SessionsYieldDetails = {
@@ -10,6 +12,41 @@ type SessionsYieldDetails = {
 };
 
 describe("sessions_yield tool", () => {
+  it("defers without error or yielding when earlier async results are unobserved", async () => {
+    const claimYield = vi.fn(() => true);
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({ sessionId: "test-session", claimYield, onYield });
+    const result = await runWithAgentToolExecutionContext(
+      {
+        assistantMessage: {
+          role: "assistant",
+          content: [],
+          api: "test-api",
+          provider: "test-provider",
+          model: "test-model",
+          stopReason: "toolUse",
+          timestamp: 0,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        },
+        toolCall: { type: "toolCall", id: "call-1", name: "sessions_yield", arguments: {} },
+        hasUnobservedAsyncToolResults: true,
+      },
+      () => tool.execute("call-1", {}),
+    );
+
+    expect(result.details).toMatchObject({ status: "deferred" });
+    expect(isToolResultError(result)).toBe(false);
+    expect(claimYield).not.toHaveBeenCalled();
+    expect(onYield).not.toHaveBeenCalled();
+  });
+
   it("returns error when no sessionId is provided", async () => {
     const onYield = vi.fn();
     const tool = createSessionsYieldTool({ onYield });
@@ -106,9 +143,23 @@ describe("sessions_yield tool", () => {
     expect(result.details).toMatchObject({
       status: "error",
       error:
-        "No pending child completion is owned by this turn. Continue working because independent background operations complete separately.",
+        'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".',
     });
     expect(onYield).not.toHaveBeenCalled();
+  });
+
+  it("passes explicit message intent to its owner without treating private text as intent", async () => {
+    const claimYield = vi.fn(() => true);
+    const onYield = vi.fn();
+    const tool = createSessionsYieldTool({ sessionId: "child-session", claimYield, onYield });
+    await tool.execute("private-text", { message: 'waitFor: "message"' });
+    expect(claimYield).toHaveBeenLastCalledWith(undefined);
+    await tool.execute("explicit-message", { waitFor: "message" });
+    expect(claimYield).toHaveBeenLastCalledWith({ waitFor: "message" });
+    const invalid = await tool.execute("invalid-intent", { waitFor: "anything" });
+    expect(invalid.details).toMatchObject({ status: "error" });
+    expect(claimYield).toHaveBeenCalledTimes(2);
+    expect(onYield).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a claim rejection reason instead of the generic error", async () => {

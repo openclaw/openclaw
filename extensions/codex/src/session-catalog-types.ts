@@ -12,6 +12,8 @@ import type {
 } from "./app-server/protocol.js";
 
 export type CodexCatalogHome = {
+  /** Revalidate discovery before a new operation captures its source. */
+  assertCurrent(): void;
   sourceHomeId: string;
   hostId: string;
   label: string;
@@ -48,6 +50,10 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Canonical node-owned home identity; absent from older read-only node pages. */
+  sourceHomeId?: string;
+  /** The node's selected source must explicitly support Chat continuation. */
+  canContinueCodex?: boolean;
   /** Internal provenance filtered before this page reaches the provider catalog. */
   managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
@@ -75,6 +81,8 @@ export type CodexSessionCatalogControl = {
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
+  /** Lifecycle hydration; listPage only reads the resident snapshot. */
+  initialize(): Promise<void>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
   requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
@@ -89,18 +97,23 @@ export type CodexSessionCatalogControl = {
 };
 
 export type CodexSessionCatalogControlFactory = {
+  hasActiveWork(this: void): boolean;
+  /** Drain node-owned state and transports while permitting the next connection. */
+  disconnect(this: void): Promise<void>;
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
   /** Native default, with the shipped agent selector retained for explicitly configured sources. */
-  forNode(agentId?: string): {
+  forNode(agentId?: string): Promise<{
+    assertCurrent(): void;
     control: CodexSessionCatalogControl;
     sourceHomeId: string;
     codexHome: string;
-  };
-  homesForAgent(agentId: string): readonly CodexCatalogHome[];
+    transport: CodexAppServerRuntimeOptions["start"]["transport"];
+  }>;
+  homesForAgent(agentId: string): Promise<readonly CodexCatalogHome[]>;
   forUpstream(
     agentId: string,
     connectionFingerprint: string,
-  ): CodexSessionCatalogControl | undefined;
+  ): Promise<CodexSessionCatalogControl | undefined>;
 };
 
 export type CodexSessionCatalogError = {

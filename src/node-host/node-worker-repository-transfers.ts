@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "../gateway/github-repository-publication-snapshot.js";
-import {
-  parseWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkerWorkspaceReconciliationJournal,
+import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceReconciliationJournal,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../gateway/worker-environments/workspace-reconcile.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
@@ -28,7 +28,7 @@ export async function readNodeRepositoryCheckpointBase(params: {
     ),
     "utf8",
   );
-  const base = parseWorkerWorkspaceManifest(raw, params.baseManifestRef);
+  const base = await parseWorkspaceManifest(raw, params.baseManifestRef);
   if (!base.baseCommit || base.baseCommit !== params.current.baseCommit) {
     throw new Error("Repository checkpoint does not match the cloned commit");
   }

@@ -28,6 +28,18 @@ type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
   | { type: "unsupported" };
 
+type WorkspaceFileContents =
+  | (Extract<WorkspaceFileSnapshot, { type: "file" }> & { content: Buffer })
+  | { type: "unsupported" };
+
+type WorkspaceFileRead = {
+  expectedPath: string;
+  maxBytes: number | ((openedSize: number) => number);
+  root?: string;
+  signal?: AbortSignal;
+  readBuffers?: Buffer[];
+};
+
 function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
 }
@@ -56,6 +68,33 @@ export async function readWorkspaceFileSnapshotWithLimit(
   signal?: AbortSignal,
   readBuffers?: Buffer[],
 ): Promise<WorkspaceFileSnapshot> {
+  return await readWorkspaceFile({
+    expectedPath,
+    maxBytes,
+    root,
+    signal,
+    readBuffers,
+    contents: false,
+  });
+}
+
+export async function readWorkspaceFileContentsWithLimit(
+  expectedPath: string,
+  maxBytes: number,
+): Promise<WorkspaceFileContents> {
+  return await readWorkspaceFile({ expectedPath, maxBytes, contents: true });
+}
+
+function readWorkspaceFile(
+  params: WorkspaceFileRead & { contents: true },
+): Promise<WorkspaceFileContents>;
+function readWorkspaceFile(
+  params: WorkspaceFileRead & { contents: false },
+): Promise<WorkspaceFileSnapshot>;
+async function readWorkspaceFile(
+  params: WorkspaceFileRead & { contents: boolean },
+): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
+  const { expectedPath, maxBytes, root, signal, readBuffers } = params;
   signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
@@ -77,7 +116,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
-    let sha256 = hashMemo?.get(identity);
+    let sha256 = params.contents ? undefined : hashMemo?.get(identity);
     let size = Number(before.size);
     if (sha256) {
       if (metrics) {
@@ -86,14 +125,17 @@ export async function readWorkspaceFileSnapshotWithLimit(
     } else {
       const hashStartedAt = performance.now();
       const hash = createHash("sha256");
-      buffer = readBuffers?.pop() ?? Buffer.allocUnsafe(readBuffers ? 256 * 1024 : 64 * 1024);
+      buffer = params.contents
+        ? Buffer.allocUnsafe(Number(before.size) + 1)
+        : (readBuffers?.pop() ?? Buffer.allocUnsafe(readBuffers ? 256 * 1024 : 64 * 1024));
       size = 0;
       for (;;) {
         signal?.throwIfAborted();
+        const offset = params.contents ? size : 0;
         const { bytesRead } = await handle.read(
           buffer,
-          0,
-          Math.min(buffer.length, byteLimit - size + 1),
+          offset,
+          Math.min(buffer.length - offset, byteLimit - size + 1),
           size,
         );
         if (bytesRead === 0) {
@@ -106,7 +148,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
           }
           return { type: "unsupported" };
         }
-        hash.update(buffer.subarray(0, bytesRead));
+        hash.update(buffer.subarray(offset, offset + bytesRead));
       }
       sha256 = hash.digest("hex");
       if (metrics) {
@@ -120,14 +162,17 @@ export async function readWorkspaceFileSnapshotWithLimit(
       throw new Error("Gateway workspace file changed while it was being read");
     }
     hashMemo?.set(identity, sha256);
-    return {
-      type: "file",
+    const snapshot = {
+      type: "file" as const,
       mode: gitFileMode(Number(after.mode & 0o777n)),
       size,
       sha256,
     };
+    return params.contents && buffer
+      ? { ...snapshot, content: buffer.subarray(0, size) }
+      : snapshot;
   } finally {
-    if (buffer && readBuffers) {
+    if (buffer && readBuffers && !params.contents) {
       readBuffers.push(buffer);
     }
     await handle.close();
@@ -140,7 +185,7 @@ export async function readActualWorkspaceManifestImpl(params: {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
   signal?: AbortSignal;
-}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
+}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   params.signal?.throwIfAborted();
   let root: string;
   let isStagedInput: ReturnType<typeof createStagedInputPathMatcher>;
@@ -424,5 +469,6 @@ export async function readActualWorkspaceManifestImpl(params: {
   return {
     manifestRef,
     manifest,
+    rawManifest: raw,
   };
 }

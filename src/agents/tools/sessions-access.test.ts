@@ -2,7 +2,7 @@
 // and agent-to-agent allow rules.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { pageExecutionDecisionFactsForContext } from "../../audit/execution-decision-facts.js";
+import { pageExecutionDecisionFactsForContextInDatabase } from "../../audit/execution-decision-facts.js";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import {
   createExecutionIdentityAdmissionToken,
@@ -21,6 +21,11 @@ import {
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   formatSessionToolAccessDenial,
@@ -41,6 +46,11 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
 
 beforeEach(() => {
   gatewayMocks.callGateway.mockReset();
+});
+
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -637,12 +647,10 @@ describe("createSessionVisibilityGuard", () => {
       await stopWriter();
     }
 
-    const page = pageExecutionDecisionFactsForContext({
-      context: token,
-      limit: 10,
-      now: now + 1,
-      database,
-    });
+    const page = pageExecutionDecisionFactsForContextInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: token, limit: 10, now: now + 1 },
+    );
     expect(page.receipts).toHaveLength(1);
     expect(page.receipts[0]).toMatchObject({
       contextId: token.contextId,
@@ -808,9 +816,11 @@ describe("createSessionVisibilityGuard", () => {
 
   it("keeps incognito targets hidden from scoped grants", async () => {
     const targetSessionKey = "agent:main:dashboard:incognito-private";
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(() => ({
-      expectedSessionId: "incognito-incarnation",
-    }));
+    const asyncProvider = vi.fn(async () => ({ expectedSessionId: "incognito-incarnation" }));
+    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(
+      () => ({ expectedSessionId: "incognito-incarnation" }),
+      { resolveAsync: asyncProvider },
+    );
     try {
       const gateway = vi.fn();
       const access = await resolveSessionToolAccess({
@@ -842,6 +852,7 @@ describe("createSessionVisibilityGuard", () => {
         ).toBe(`Session not visible from session tools: ${targetSessionKey}`);
       }
       expect(gateway).not.toHaveBeenCalled();
+      expect(asyncProvider).not.toHaveBeenCalled();
     } finally {
       unregister();
     }

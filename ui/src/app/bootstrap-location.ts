@@ -9,13 +9,11 @@ import { pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
   isUiGlobalSessionKey,
-  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConversationIdentity,
   resolveUiConfiguredMainKey,
@@ -26,12 +24,8 @@ import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
+import { releasedSessionQuery, resolvePersistedAgentId } from "./released-session-query.ts";
 import { loadGatewaySessionSelection } from "./settings.ts";
-
-type ReleasedSessionQuery = {
-  face: BoardFace;
-  sessionKey: string;
-};
 
 // Saved selection only fills an implicit landing. Agent paths and plugin slug
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
@@ -42,45 +36,6 @@ function isPersistedSessionLanding(location: RouteLocation, basePath: string): b
     (routeIdFromPath(location.pathname, basePath) === null ||
       /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
   );
-}
-
-function resolvePersistedAgentId(
-  selectedAgentId: string | null | undefined,
-  agentsList: AgentsListResult | null,
-): string | null {
-  const selectedId = selectedAgentId?.trim();
-  if (!selectedId || !agentsList) {
-    return null;
-  }
-  const normalizedId = normalizeAgentId(selectedId);
-  return agentsList.agents.some((agent) => normalizeAgentId(agent.id) === normalizedId)
-    ? normalizedId
-    : null;
-}
-
-function releasedSessionQuery(
-  location: RouteLocation,
-  basePath: string,
-): ReleasedSessionQuery | null {
-  const params = new URLSearchParams(location.search);
-  if (!params.has("session")) {
-    return null;
-  }
-  const chatRoot = pathForRoute("chat", basePath);
-  const dashboardRoot = pathForRoute("dashboard", basePath);
-  const pathFace =
-    location.pathname === chatRoot || location.pathname === `${chatRoot}/`
-      ? "chat"
-      : location.pathname === dashboardRoot || location.pathname === `${dashboardRoot}/`
-        ? "dashboard"
-        : null;
-  if (!pathFace) {
-    return null;
-  }
-  return {
-    face: params.get("face") === "dashboard" ? "dashboard" : pathFace,
-    sessionKey: params.get("session")?.trim() ?? "",
-  };
 }
 
 async function normalizeReleasedSessionQueryLocation(params: {
@@ -317,7 +272,11 @@ export function subscribeForegroundChatBootstrap({
   agentSelection,
   connectionBootstrap,
   initialChatRoute,
-}: Pick<ApplicationContext, "gateway" | "agents" | "agentSelection" | "connectionBootstrap"> & {
+  chatSubmissions,
+}: Pick<
+  ApplicationContext,
+  "gateway" | "agents" | "agentSelection" | "connectionBootstrap" | "chatSubmissions"
+> & {
   router: ApplicationRouter;
   initialChatRoute: boolean;
 }): () => void {
@@ -336,8 +295,10 @@ export function subscribeForegroundChatBootstrap({
     const data = asOptionalRecord(match?.data);
     const key =
       data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    // Admission previews have no transcript controller and cannot claim its
+    // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
-      match?.routeId !== "chat"
+      match?.routeId !== "chat" || chatSubmissions.creation
         ? null
         : match.status === "pending"
           ? undefined
@@ -356,11 +317,12 @@ export function subscribeForegroundChatBootstrap({
             : null,
     );
   };
-  const stopRoute = router.subscribe(synchronizeRoute);
-  const stopSelection = agentSelection.subscribe(() => synchronizeRoute(router.getState()));
-  return () => {
-    stopConnection();
-    stopRoute();
-    stopSelection();
-  };
+  const synchronize = () => synchronizeRoute(router.getState());
+  const stops = [
+    stopConnection,
+    router.subscribe(synchronizeRoute),
+    agentSelection.subscribe(synchronize),
+    chatSubmissions.subscribeCreate(synchronize),
+  ];
+  return () => stops.forEach((stop) => stop());
 }

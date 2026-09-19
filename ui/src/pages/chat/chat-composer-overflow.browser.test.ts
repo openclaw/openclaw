@@ -1,13 +1,17 @@
 import { html, nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { SessionGoal } from "../../api/types.ts";
 import { renderComposerMenu } from "../../components/composer-menu.ts";
+import { createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
 import { renderChatGoal } from "./components/chat-composer-goal.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
+import { renderChatComposer } from "./components/chat-composer.ts";
 import baseStyles from "../../styles/base.css?inline";
+import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
 import goalStyles from "../../styles/chat/composer-progress.css?inline";
+import composerSurfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
 
 const attachments = Array.from({ length: 7 }, (_, index) => ({
@@ -27,7 +31,13 @@ describe("composer overflow presentation", () => {
   beforeEach(async () => {
     await page.viewport(1200, 800);
     styles = document.createElement("style");
-    styles.textContent = [baseStyles, composerStyles, goalStyles].join("\n");
+    styles.textContent = [
+      baseStyles,
+      composerStyles,
+      composerSurfaceStyles,
+      contextStripStyles,
+      goalStyles,
+    ].join("\n");
     document.head.append(styles);
     container = document.createElement("div");
     container.className = "agent-chat__input";
@@ -49,6 +59,236 @@ describe("composer overflow presentation", () => {
   function rail() {
     return container.querySelector<HTMLElement>(".chat-attachments-preview")!;
   }
+
+  it.each([390, 1440])(
+    "keeps long reply context and its dismiss control inside the composer at %ipx",
+    async (width) => {
+      await page.viewport(width, 900);
+      container.className = "";
+      container.style.width = `${Math.min(width - 32, 760)}px`;
+      render(
+        renderChatComposer(
+          createComposerProps({
+            goalDraftMode: { action: "start" },
+            replyTarget: {
+              messageId: "context-strip-reply",
+              senderLabel: "A very long sender name ".repeat(12),
+              text: "A long message excerpt that must leave room for cancellation. ".repeat(8),
+            },
+          }),
+        ),
+        container,
+      );
+      await afterLayout();
+
+      const composer = container.querySelector<HTMLElement>(".agent-chat__input")!;
+      const reply = container.querySelector<HTMLElement>(".chat-reply-preview")!;
+      const goal = container.querySelector<HTMLElement>(".agent-chat__goal-mode")!;
+      const text = reply.querySelector<HTMLElement>(".chat-reply-preview__text")!;
+      const dismiss = reply.querySelector<HTMLButtonElement>("button")!;
+      const composerBox = composer.getBoundingClientRect();
+      const replyBox = reply.getBoundingClientRect();
+      const dismissBox = dismiss.getBoundingClientRect();
+
+      expect(dismissBox.width).toBeGreaterThan(0);
+      expect(dismissBox.left).toBeGreaterThanOrEqual(replyBox.left);
+      expect(dismissBox.right).toBeLessThanOrEqual(replyBox.right);
+      expect(replyBox.left).toBeGreaterThanOrEqual(composerBox.left);
+      expect(replyBox.right).toBeLessThanOrEqual(composerBox.right);
+      expect(composer.scrollWidth).toBeLessThanOrEqual(composer.clientWidth + 1);
+      expect(text.getBoundingClientRect().width).toBeGreaterThan(0);
+      expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
+      expect(text.scrollHeight).toBeLessThanOrEqual(text.clientHeight + 1);
+
+      const surface = (element: HTMLElement) => {
+        const style = getComputedStyle(element);
+        return {
+          background: style.backgroundColor,
+          border: style.border,
+          borderRadius: style.borderRadius,
+          padding: style.padding,
+          margin: style.margin,
+        };
+      };
+      expect(surface(reply)).toEqual(surface(goal));
+      expect(replyBox.height).toBeCloseTo(goal.getBoundingClientRect().height, 0);
+    },
+  );
+
+  it.each([
+    ["reply", "ltr"],
+    ["goal", "ltr"],
+    ["mentions", "ltr"],
+    ["combined", "rtl"],
+  ] as const)(
+    "places %s context before attachments and multiline input in %s",
+    async (kind, dir) => {
+      await page.viewport(390, 900);
+      container.className = "";
+      container.dir = dir;
+      container.style.width = "358px";
+      render(
+        renderChatComposer(
+          createComposerProps({
+            draft: "@Jordan Rivera\nReview the attached file.\nKeep this third line.",
+            attachments: attachments.slice(0, 1),
+            ...(kind === "reply" || kind === "combined"
+              ? {
+                  replyTarget: { messageId: "order-reply", text: "Original message" },
+                }
+              : {}),
+            ...(kind === "goal" || kind === "combined"
+              ? { goalDraftMode: { action: "start" as const } }
+              : {}),
+            ...(kind === "mentions" || kind === "combined"
+              ? {
+                  mentions: [{ profileId: "jordan", start: 0, end: 14 }],
+                }
+              : {}),
+          }),
+        ),
+        container,
+      );
+      await afterLayout();
+      const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
+      expect(strips).toHaveLength(kind === "combined" ? 3 : 1);
+      const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
+      const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
+      const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();
+      for (const strip of strips) {
+        const box = strip.getBoundingClientRect();
+        expect(box.height).toBeCloseTo(45, 0);
+        expect(box.bottom).toBeLessThanOrEqual(attachmentBox.top);
+        expect(box.left).toBeGreaterThanOrEqual(composerBox.left);
+        expect(box.right).toBeLessThanOrEqual(composerBox.right);
+        expect(getComputedStyle(strip).borderBottomWidth).toBe("1px");
+      }
+      expect(attachmentBox.height).toBeGreaterThan(0);
+      expect(attachmentBox.bottom).toBeLessThanOrEqual(textareaBox.top);
+    },
+  );
+
+  it.each([
+    [390, "ltr"],
+    [390, "rtl"],
+    [1440, "ltr"],
+    [1440, "rtl"],
+  ] as const)("dismisses only the intended stacked context at %ipx in %s", async (width, dir) => {
+    await page.viewport(width, 900);
+    container.className = "";
+    container.dir = dir;
+    container.style.width = `${Math.min(width - 32, 760)}px`;
+    const onClearReply = vi.fn();
+    const onGoalDraftModeChange = vi.fn();
+    const onDraftChange = vi.fn();
+    render(
+      renderChatComposer(
+        createComposerProps({
+          draft: "@Jordan Rivera Review this file.",
+          mentions: [{ profileId: "jordan", start: 0, end: 14 }],
+          replyTarget: { messageId: "touch-reply", text: "Original message" },
+          goalDraftMode: { action: "start" },
+          onClearReply,
+          onGoalDraftModeChange,
+          onDraftChange,
+        }),
+      ),
+      container,
+    );
+    await afterLayout();
+
+    const contexts = [
+      [".agent-chat__goal-mode", onGoalDraftModeChange, [null]],
+      [
+        '.composer-context-strip[role="status"]',
+        onDraftChange,
+        ["@Jordan Rivera Review this file.", []],
+      ],
+      [".chat-reply-preview:not([role])", onClearReply, []],
+    ] as const;
+    const targetSize = width === 390 ? 44 : 24;
+    for (const [selector, callback, args] of contexts) {
+      const button = container.querySelector<HTMLButtonElement>(`${selector} button`)!;
+      const box = button.getBoundingClientRect();
+      expect(box.width).toBeGreaterThanOrEqual(24);
+      expect(box.height).toBeGreaterThanOrEqual(24);
+      const icon = button.querySelector("svg")!.getBoundingClientRect();
+      expect(icon.width).toBe(14);
+      expect(icon.height).toBe(14);
+      const center = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      const inset = targetSize / 2 - 0.5;
+      const points =
+        width === 390
+          ? [
+              [-inset, -inset],
+              [-inset, inset],
+              [inset, -inset],
+              [inset, inset],
+            ]
+          : [
+              [-inset, 0],
+              [inset, 0],
+              [0, -inset],
+              [0, inset],
+            ];
+      for (const [x, y] of points) {
+        expect(button.contains(document.elementFromPoint(center.x + x!, center.y + y!))).toBe(true);
+      }
+
+      const containerBox = container.getBoundingClientRect();
+      await page.elementLocator(container).click({
+        position: {
+          x: center.x - inset - containerBox.left,
+          y: center.y - (width === 390 ? inset : 0) - containerBox.top,
+        },
+      });
+      expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
+      for (const [, otherCallback] of contexts) {
+        if (otherCallback !== callback) {
+          expect(otherCallback).not.toHaveBeenCalled();
+        }
+      }
+      callback.mockClear();
+    }
+  });
+
+  it("restores full mention names after narrowing and reconnecting the composer", async () => {
+    container.className = "";
+    const part = render(
+      renderChatComposer(
+        createComposerProps({
+          draft: "@Jordan Rivera @Morgan Williams",
+          mentions: [
+            { profileId: "jordan", start: 0, end: 14 },
+            { profileId: "morgan", start: 15, end: 31 },
+          ],
+        }),
+      ),
+      container,
+    );
+    const strip = container.querySelector<HTMLElement>('[role="status"]')!;
+    const visibleNames = () =>
+      [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
+        .filter((person) => !person.hidden)
+        .map((person) => person.title);
+    await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
+    for (const avatar of strip.querySelectorAll<HTMLElement>('[role="img"]')) {
+      expect(avatar.getBoundingClientRect().width).toBe(16);
+      expect(avatar.getBoundingClientRect().height).toBe(16);
+    }
+    container.style.width = "300px";
+    await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
+    const more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
+    expect(more.hidden).toBe(false);
+    expect(more.textContent).toBe("+1");
+    expect(more.title).toBe("@Morgan Williams");
+    expect(strip.getBoundingClientRect().height).toBeCloseTo(41, 0);
+    part.setConnected(false);
+    container.style.width = "760px";
+    part.setConnected(true);
+    await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
+    expect(more.hidden).toBe(true);
+  });
 
   async function expectEdges(
     element: HTMLElement,

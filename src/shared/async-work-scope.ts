@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
@@ -6,6 +6,10 @@ import { resolveGlobalSingleton } from "./global-singleton.js";
 const currentWorkScope = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScope"),
   () => new AsyncLocalStorage<AsyncWorkScope>(),
+);
+const detachedAsyncContext = resolveGlobalSingleton(
+  Symbol.for("openclaw.detachedAsyncContext"),
+  () => new AsyncResource("openclaw.detached-async-context"),
 );
 
 /** Joins cooperating descendants even when their caller returns a cached value first. */
@@ -116,6 +120,16 @@ export async function trackAsyncWork<T>(run: () => T | Promise<T>): Promise<T> {
 export function captureAsyncWorkTracker(): typeof trackAsyncWork {
   const scope = currentWorkScope.getStore();
   return async (run) => await (scope ? scope.track(run) : currentWorkScope.exit(run));
+}
+
+/** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
+export function runOutsideAsyncWorkScope<T>(run: () => T): T {
+  return currentWorkScope.exit(run);
+}
+
+/** Runs under the context-free async root initialized before managed work can begin. */
+export function runInDetachedAsyncContext<T>(run: () => T): T {
+  return detachedAsyncContext.runInAsyncScope(run);
 }
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {

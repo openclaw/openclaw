@@ -16,6 +16,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const PROVIDERS = ["route-proof-stable", "route-proof-dynamic"] as const;
@@ -25,8 +26,10 @@ type Counts = Record<string, { resolve: number; prepare: number }>;
 
 // This fixture records calls through the public provider and Gateway APIs. Its
 // model output remains deterministic; observation never changes routing policy.
-async function writeProviderProbe(pluginDir: string) {
+async function writeProviderProbe(pluginDir: string, signal: AbortSignal) {
+  signal.throwIfAborted();
   await fs.mkdir(pluginDir, { recursive: true });
+  signal.throwIfAborted();
   await fs.writeFile(
     path.join(pluginDir, "package.json"),
     JSON.stringify({
@@ -37,6 +40,7 @@ async function writeProviderProbe(pluginDir: string) {
       peerDependencies: { openclaw: ">=2026.1.1" },
     }),
   );
+  signal.throwIfAborted();
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
@@ -46,6 +50,7 @@ async function writeProviderProbe(pluginDir: string) {
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
+  signal.throwIfAborted();
   await fs.writeFile(
     path.join(pluginDir, "index.js"),
     `
@@ -77,31 +82,22 @@ module.exports = {
 };
 `,
   );
+  signal.throwIfAborted();
 }
 
 describe("Gateway route model reuse", () => {
   it(
     "bounds stable resolution reuse and refreshes generation facts without suppressing dynamic preparation",
     { timeout: 180_000 },
-    async () => {
+    async (context) => {
       const repoRoot = process.cwd();
-      const head = resolveGitHead({ cwd: repoRoot });
-      expect(head).toMatch(/^[0-9a-f]{40}$/u);
-      await fs.access(path.join(repoRoot, "dist/index.js"));
-      for (const [file, field] of [
-        [BUILD_STAMP_FILE, "head"],
-        [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-        ["build-info.json", "commit"],
-      ] as const) {
-        expect(
-          JSON.parse(await fs.readFile(path.join(repoRoot, "dist", file), "utf8"))[field],
-          file,
-        ).toBe(head);
-      }
+      let head: ReturnType<typeof resolveGitHead> | undefined;
       const requests: Array<{ model: string; maxTokens: string | undefined }> = [];
       let unexpectedCredential = false;
+      const handlers = new Set<Promise<void>>();
+      const handlerFailures: unknown[] = [];
       const server = createServer((request, response) => {
-        void (async () => {
+        const handling = (async () => {
           if (request.method !== "POST" || request.url !== "/v1/responses") {
             request.resume();
             response.writeHead(200, { "content-type": "application/json" });
@@ -123,16 +119,49 @@ describe("Gateway route model reuse", () => {
             messageId: `msg_${requests.length}`,
             responseId: `resp_${requests.length}`,
           });
-        })().catch((error: unknown) => response.writeHead(500).end(String(error)));
+        })().catch((error: unknown) => {
+          if (!response.destroyed) {
+            response.writeHead(500).end(String(error));
+          }
+        });
+        handlers.add(handling);
+        void handling.then(
+          () => handlers.delete(handling),
+          (error: unknown) => {
+            handlers.delete(handling);
+            handlerFailures.push(error);
+          },
+        );
       });
       let instance: OpenClawTestInstance | undefined;
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
-      await runQaGatewayFixture(
-        async () => {
+      let providerListening = false;
+      const proof = await runQaGatewayTestFixture(
+        context,
+        async ({ signal, verifyCleanup }) => {
+          head = resolveGitHead({ cwd: repoRoot });
+          expect(head).toMatch(/^[0-9a-f]{40}$/u);
+          await fs.access(path.join(repoRoot, "dist/index.js"));
+          signal.throwIfAborted();
+          for (const [file, field] of [
+            [BUILD_STAMP_FILE, "head"],
+            [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
+            ["build-info.json", "commit"],
+          ] as const) {
+            const metadata = JSON.parse(
+              await fs.readFile(path.join(repoRoot, "dist", file), "utf8"),
+            );
+            signal.throwIfAborted();
+            expect(metadata[field], file).toBe(head);
+          }
           await new Promise<void>((resolve, reject) => {
             server.once("error", reject);
-            server.listen(0, "127.0.0.1", resolve);
+            server.listen(0, "127.0.0.1", () => {
+              providerListening = true;
+              resolve();
+            });
           });
+          signal.throwIfAborted();
           const address = server.address();
           if (!address || typeof address === "string") {
             throw new Error("Synthetic provider has no port");
@@ -140,6 +169,8 @@ describe("Gateway route model reuse", () => {
           instance = await createOpenClawTestInstance({
             name: "route-model-reuse",
             cwd: repoRoot,
+            signal,
+            verifyCleanup,
             stopTimeoutMs: 10_000,
             env: {
               VITEST: undefined,
@@ -150,9 +181,11 @@ describe("Gateway route model reuse", () => {
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
             },
           });
+          signal.throwIfAborted();
           const gateway = instance;
           const pluginDir = path.join(gateway.state.stateDir, "proof-provider");
-          await writeProviderProbe(pluginDir);
+          await writeProviderProbe(pluginDir, signal);
+          signal.throwIfAborted();
           const capacityModels = Array.from({ length: 65 }, (_, index) => capacityModelId(index));
           const modelIds = ["warmup", "stable", "dynamic", ...capacityModels];
           const definitions = modelIds.map((id) => ({
@@ -224,6 +257,7 @@ describe("Gateway route model reuse", () => {
             tools: { profile: "minimal" },
           } satisfies OpenClawConfig;
           await gateway.state.writeConfig(cfg);
+          signal.throwIfAborted();
           await gateway.state.writeAuthProfiles(
             {
               version: 1,
@@ -236,8 +270,11 @@ describe("Gateway route model reuse", () => {
             },
             "main",
           );
+          signal.throwIfAborted();
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
+          signal.throwIfAborted();
           await gateway.startGateway();
+          signal.throwIfAborted();
           const gatewayPid = gateway.child?.pid;
           expect(gatewayPid).toBeTypeOf("number");
           client = await acquireGatewayTestClient(
@@ -253,23 +290,33 @@ describe("Gateway route model reuse", () => {
               timeoutMs: 30_000,
               timeoutMessage: "Route-model Gateway did not connect",
               closeMessage: "Route-model Gateway closed",
+              signal,
+              verifyCleanup,
             },
           );
+          signal.throwIfAborted();
           const activeClient = client;
           // Measure reuse after startup publication has settled its runtime facts.
-          await activeClient.request("models.list", {
-            agentId: "main",
-            view: "all",
-            refresh: true,
-          });
+          await activeClient.request(
+            "models.list",
+            { agentId: "main", view: "all", refresh: true },
+            { signal },
+          );
+          signal.throwIfAborted();
           await expect
             .poll(
-              async () => {
+              async ({ signal: pollSignal }) => {
+                signal.throwIfAborted();
                 const catalog = await activeClient.request<{
                   models: Array<{ id: string; provider: string }>;
                   pendingProviders?: string[];
                   refreshFailed?: boolean;
-                }>("models.list", { agentId: "main", view: "all" });
+                }>(
+                  "models.list",
+                  { agentId: "main", view: "all" },
+                  { signal: AbortSignal.any([signal, pollSignal]) },
+                );
+                signal.throwIfAborted();
                 expect(catalog.refreshFailed).not.toBe(true);
                 expect(catalog.models).toEqual(
                   expect.arrayContaining([
@@ -282,14 +329,18 @@ describe("Gateway route model reuse", () => {
               { timeout: 30_000 },
             )
             .toBeUndefined();
+          signal.throwIfAborted();
           const stats = () =>
             activeClient.request<{ counts: Counts; reloadSettled: boolean }>(
               "routeModelProof.stats",
               {},
+              { signal },
             );
           const turn = async (provider: string, model: string) => {
+            signal.throwIfAborted();
             const key = `${provider}/${model}`;
             const before = (await stats()).counts[key] ?? { resolve: 0, prepare: 0 };
+            signal.throwIfAborted();
             const beforeRequests = requests.length;
             const started = performance.now();
             const sessionKey = `agent:main:route-model-${randomUUID()}`;
@@ -304,21 +355,27 @@ describe("Gateway route model reuse", () => {
                 deliver: false,
                 idempotencyKey: randomUUID(),
               },
+              { signal },
             );
+            signal.throwIfAborted();
             expect(accepted.status).toBe("accepted");
             const terminal = await activeClient.request<{ status: string }>(
               "agent.wait",
               { runId: accepted.runId, timeoutMs: 60_000 },
-              { timeoutMs: 65_000 },
+              { timeoutMs: 65_000, signal },
             );
+            signal.throwIfAborted();
             expect(terminal.status, gateway.logs()).toBe("ok");
             expect(requests.length).toBe(beforeRequests + 1);
             expect(requests.at(-1)?.model).toBe(model);
             expect(unexpectedCredential).toBe(false);
             const elapsedMs = performance.now() - started;
-            const history = await activeClient.request<{ messages: unknown[] }>("chat.history", {
-              sessionKey,
-            });
+            const history = await activeClient.request<{ messages: unknown[] }>(
+              "chat.history",
+              { sessionKey },
+              { signal },
+            );
+            signal.throwIfAborted();
             expect(history.messages).toEqual(
               expect.arrayContaining([
                 expect.objectContaining({
@@ -330,6 +387,7 @@ describe("Gateway route model reuse", () => {
               ]),
             );
             const after = (await stats()).counts[key];
+            signal.throwIfAborted();
             assert(after, `Provider observations missing for ${key}`);
             return {
               resolve: after.resolve - before.resolve,
@@ -359,7 +417,13 @@ describe("Gateway route model reuse", () => {
           const oldestAfter65 = await turn(PROVIDERS[0], capacityModelId(0));
           const newestAfter65 = await turn(PROVIDERS[0], capacityModelId(64));
           expect(requests.at(-1)?.maxTokens).toBe("1024");
-          const currentConfig = await activeClient.request<{ hash: string }>("config.get", {});
+          signal.throwIfAborted();
+          const currentConfig = await activeClient.request<{ hash: string }>(
+            "config.get",
+            {},
+            { signal },
+          );
+          signal.throwIfAborted();
           expect(currentConfig.hash).toBeTypeOf("string");
           const updatedDefinitions = structuredClone(definitions);
           for (const model of updatedDefinitions) {
@@ -380,12 +444,27 @@ describe("Gateway route model reuse", () => {
                 },
               }),
             },
-            { timeoutMs: 60_000 },
+            { timeoutMs: 60_000, signal },
           );
+          signal.throwIfAborted();
           await expect
-            .poll(async () => (await stats()).reloadSettled, { timeout: 30_000 })
+            .poll(
+              async ({ signal: pollSignal }) => {
+                signal.throwIfAborted();
+                const value = await activeClient.request<{ reloadSettled: boolean }>(
+                  "routeModelProof.stats",
+                  {},
+                  { signal: AbortSignal.any([signal, pollSignal]) },
+                );
+                signal.throwIfAborted();
+                return value.reloadSettled;
+              },
+              { timeout: 30_000 },
+            )
             .toBe(true);
+          signal.throwIfAborted();
           const afterReload = await turn(PROVIDERS[0], capacityModelId(64));
+          signal.throwIfAborted();
           expect(requests.at(-1)?.maxTokens).toBe("2048");
           expect(gateway.child?.pid).toBe(gatewayPid);
           const churn = {
@@ -396,25 +475,22 @@ describe("Gateway route model reuse", () => {
             oldestAfter65,
             newestAfter65,
           };
-          console.info(
-            "[route-model-runtime-proof]",
-            JSON.stringify({
-              head,
-              gatewayPid,
-              stable,
-              dynamic,
-              churn,
-              afterReload,
-              requests: requests.length,
-              responseTextVerified: true,
-              generationHeader: "1024→2048",
-              sameGatewayProcess: true,
-            }),
-          );
           expect(dynamic[0].prepare).toBeGreaterThan(0);
           expect(dynamic[1].prepare).toBe(dynamic[0].prepare);
           expect(stable[0].resolve).toBeGreaterThan(0);
           expect(stable[1].resolve).toBeLessThan(stable[0].resolve);
+          return {
+            head,
+            gatewayPid,
+            stable,
+            dynamic,
+            churn,
+            afterReload,
+            requests: requests.length,
+            responseTextVerified: true,
+            generationHeader: "1024→2048",
+            sameGatewayProcess: true,
+          };
         },
         async () => {
           await client?.stopAndWait({ timeoutMs: 1_000 });
@@ -423,12 +499,29 @@ describe("Gateway route model reuse", () => {
           await instance?.cleanup();
         },
         async () => {
-          server.closeAllConnections();
-          await new Promise<void>((resolve, reject) => {
+          if (!providerListening) {
+            return;
+          }
+          const closed = new Promise<void>((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
           });
+          server.closeAllConnections();
+          await runQaGatewayFixture(
+            () => closed,
+            async () => {
+              while (handlers.size > 0) {
+                await Promise.allSettled(handlers);
+              }
+              if (handlerFailures.length > 0) {
+                throw new AggregateError(handlerFailures, "Route provider handler cleanup failed");
+              }
+            },
+          );
+          providerListening = false;
         },
       );
+      context.signal.throwIfAborted();
+      console.info("[route-model-runtime-proof]", JSON.stringify(proof));
     },
   );
 });

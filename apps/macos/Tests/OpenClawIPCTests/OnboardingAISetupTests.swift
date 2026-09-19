@@ -256,15 +256,19 @@ private func detectedSetupResponse(
     id: String,
     kind: String = "claude-cli",
     credentials: Bool = false,
-    modelRef: String = "claude-cli/claude-opus-4-8"
+    modelRef: String = "claude-cli/claude-opus-4-8",
+    utility: Bool = false,
+    manualUtility: Bool = false
 ) -> Data {
-    Data(
+    let targetField = utility ? ",\"modelTarget\":\"utility\"" : ""
+    let manualTargetField = manualUtility ? ",\"modelTarget\":\"utility\"" : ""
+    return Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
           "candidates":[{"kind":"\(kind)","label":"Test AI","detail":"installed",
-            "modelRef":"\(modelRef)","recommended":false,"credentials":\(credentials)}],
+            "modelRef":"\(modelRef)","recommended":false,"credentials":\(credentials)\(targetField)}],
           "manualProviders":[{"id":"openai-api-key","brandId":"openai","icon":"fixture-key-icon",
-            "label":"OpenAI API key","hint":null}],
+            "label":"OpenAI API key","hint":null\(manualTargetField)}],
           "prepareOptions":[
             {"id":"ollama","brandId":"ollama","label":"Ollama",
               "hint":"Connect to an Ollama server and select a cloud or local model",
@@ -773,13 +777,15 @@ private func successfulActivationResponse(
     id: String,
     modelRef: String,
     latencyMs: Int,
-    gatewayRestartRequired: Bool = false
+    gatewayRestartRequired: Bool = false,
+    utility: Bool = false
 ) -> Data {
     let restartField = gatewayRestartRequired ? ",\"gatewayRestartRequired\":true" : ""
+    let targetField = utility ? ",\"modelTarget\":\"utility\"" : ""
     return Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
-          "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]\(restartField)}}
+          "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]\(restartField)\(targetField)}}
         """.utf8
     )
 }
@@ -1021,7 +1027,7 @@ struct OnboardingAISetupTests {
             icon: nil,
             website: nil,
             kind: "custom",
-            featured: false
+            featured: false, modelTarget: nil
         )
 
         model.startProviderAuth(option)
@@ -1117,28 +1123,32 @@ struct OnboardingAISetupTests {
                 label: "Ollama",
                 detail: "available locally",
                 modelRef: "ollama/qwen3:8b",
-                credentials: true
+                credentials: true,
+                modelTarget: nil
             ),
             OnboardingAISetupModel.Candidate(
                 kind: "provider-auto:other-choice",
                 label: "LM Studio",
                 detail: "available locally",
                 modelRef: "lmstudio/qwen3-8b-instruct",
-                credentials: true
+                credentials: true,
+                modelTarget: nil
             ),
             OnboardingAISetupModel.Candidate(
                 kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
                 label: "Vendor Local",
                 detail: "available locally",
                 modelRef: "vendor/model",
-                credentials: true
+                credentials: true,
+                modelTarget: nil
             ),
             OnboardingAISetupModel.Candidate(
                 kind: "provider-auto:llama-cpp",
                 label: "Local model (llama.cpp)",
                 detail: "credentials required",
                 modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
-                credentials: false
+                credentials: false,
+                modelTarget: nil
             ),
         ]
         let advertised = [
@@ -1149,7 +1159,8 @@ struct OnboardingAISetupTests {
                 actionLabel: "Choose connection",
                 brandId: "ollama",
                 icon: "https://cdn.simpleicons.org/ollama",
-                website: "https://ollama.com/download"
+                website: "https://ollama.com/download",
+                modelTarget: nil
             ),
             OnboardingAISetupModel.PrepareOption(
                 id: "llama-cpp",
@@ -1158,7 +1169,8 @@ struct OnboardingAISetupTests {
                 actionLabel: "Review download",
                 brandId: "llama-cpp",
                 icon: nil,
-                website: nil
+                website: nil,
+                modelTarget: nil
             ),
             OnboardingAISetupModel.PrepareOption(
                 id: "lmstudio-local",
@@ -1167,7 +1179,8 @@ struct OnboardingAISetupTests {
                 actionLabel: "Connect server",
                 brandId: "lmstudio",
                 icon: "https://cdn.simpleicons.org/lmstudio",
-                website: "https://lmstudio.ai/download"
+                website: "https://lmstudio.ai/download",
+                modelTarget: nil
             ),
             OnboardingAISetupModel.PrepareOption(
                 id: "vendor/local:v1%beta?x#y",
@@ -1176,7 +1189,8 @@ struct OnboardingAISetupTests {
                 actionLabel: nil,
                 brandId: "different-namespace",
                 icon: nil,
-                website: nil
+                website: nil,
+                modelTarget: nil
             ),
         ]
 
@@ -1879,7 +1893,7 @@ struct OnboardingAISetupTests {
                 model.startProviderWizard(
                     OnboardingAISetupModel.AuthOption(
                         id: "test-provider", brandId: nil, label: "Test provider", hint: nil,
-                        groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false
+                        groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
                     ),
                     kind: kind
                 )
@@ -2226,7 +2240,7 @@ struct OnboardingAISetupTests {
         let model = harness.model(defaults: defaults)
         let option = OnboardingAISetupModel.AuthOption(
             id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false
+            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
         )
 
         await model.detectConnections()
@@ -2332,7 +2346,7 @@ struct OnboardingAISetupTests {
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         let option = OnboardingAISetupModel.AuthOption(
             id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false
+            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
         )
 
         await model.detectConnections()
@@ -2471,7 +2485,7 @@ struct OnboardingAISetupTests {
             let model = makeAISetupModel(gateway: gateway, defaults: defaults)
             let option = OnboardingAISetupModel.AuthOption(
                 id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-                groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false
+                groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
             )
 
             await model.detectConnections()
@@ -2600,7 +2614,7 @@ struct OnboardingAISetupTests {
             let model = makeAISetupModel(gateway: gateway, defaults: defaults)
             let option = OnboardingAISetupModel.AuthOption(
                 id: "test-provider-login", brandId: nil, label: "Test provider", hint: nil,
-                groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false
+                groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
             )
 
             await model.detectConnections()
@@ -2651,22 +2665,91 @@ struct OnboardingAISetupTests {
         ) == nil)
     }
 
+    @Test(arguments: ["oauth", "install"], ["done", "lost-reply", "missing-utility"])
+    func `utility provider authentication acknowledges and reconciles its selected role`(
+        authKind: String, outcome: String
+    ) async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUtilityAuthTests"))
+        let detections = AISetupSocketGeneration()
+        let refreshed = LockIsolated(false)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "openclaw.setup.detect":
+                let afterAuth = detections.claim() > 0
+                let utilityField = afterAuth && outcome != "missing-utility"
+                    ? #", "utilityModel":"fixture/utility""# : ""
+                if afterAuth { refreshed.setValue(true) }
+                return Data("""
+                {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                  "candidates":[],"manualProviders":[],"configuredModel":"fixture/primary",
+                  "setupComplete":true\(utilityField),"authOptions":[{
+                    "id":"fixture-utility","label":"Fixture utility provider","kind":"\(authKind)",
+                    "featured":true,"modelTarget":"utility"}]}}
+                """.utf8)
+            case "openclaw.setup.auth.start":
+                #expect(request.params["authChoice"] as? String == "fixture-utility")
+                #expect(request.params["modelTarget"] as? String == "utility")
+                if outcome == "lost-reply" {
+                    return Data(#"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"UNAVAILABLE","message":"Authentication reply was lost"}}"#.utf8)
+                }
+                return wizardDoneResponse(
+                    id: request.id,
+                    sessionID: try #require(request.params["sessionId"] as? String))
+            case "wizard.cancel":
+                return Data(#"{"type":"res","id":"\#(request.id)","ok":false,"error":{"code":"INVALID_REQUEST","message":"wizard not found"}}"#.utf8)
+            default:
+                Issue.record("Unexpected utility authentication request: \(request.method)")
+                return nil
+            }
+        }
+        let model = harness.model(defaults: defaults)
+        await model.detectConnections()
+        let option = try #require(model.authOptions.first)
+        #expect(option.modelTarget == .utility)
+        model.startProviderAuth(option)
+        try await waitForOnboardingEntry("utility provider authentication settled") {
+            model.connected || (refreshed.value && model.phase == .ready && model.activeAuthOption == nil)
+        }
+
+        if outcome == "missing-utility" {
+            #expect(!model.connected)
+            #expect(model.phase == .ready)
+        } else {
+            #expect(model.phase == .connected(.custodianOnboarding))
+            #expect(model.authError == nil)
+        }
+        let requests = await harness.recorder.snapshot().methods
+        #expect(requests == (outcome == "lost-reply"
+                ? ["openclaw.setup.detect", "openclaw.setup.auth.start", "wizard.cancel", "openclaw.setup.detect"]
+                : ["openclaw.setup.detect", "openclaw.setup.auth.start", "openclaw.setup.detect"]))
+        model.resetForGatewayChange()
+        await harness.gateway.shutdown()
+    }
+
     @Test func `provider auth reconciliation only trusts its own completed flow`() {
-        #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
-            pending: false,
-            setupComplete: true,
-            configuredModel: "openai/gpt-5.5"
-        ))
-        #expect(!OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
-            pending: true,
-            setupComplete: false,
-            configuredModel: "openai/gpt-5.5"
-        ))
-        #expect(OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
-            pending: true,
-            setupComplete: true,
-            configuredModel: "openai/gpt-5.5"
-        ))
+        let ready = OnboardingAISetupModel.PersistedActivationState(
+            setupComplete: true, configuredModel: "openai/gpt-5.5", utilityModel: nil)
+        let acceptsWithoutPendingFlow: Bool = OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: nil,
+            state: ready
+        )
+        let acceptsIncompletePrimary: Bool = OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: .init(modelTarget: nil),
+            state: .init(setupComplete: false, configuredModel: "openai/gpt-5.5", utilityModel: nil)
+        )
+        let acceptsCompletedPrimary: Bool = OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: .init(modelTarget: nil),
+            state: ready
+        )
+        let acceptsMissingUtility: Bool = OnboardingAISetupModel.canAcceptProviderAuthReconciliation(
+            pending: .init(modelTarget: .utility),
+            state: ready)
+
+        #expect(!acceptsWithoutPendingFlow)
+        #expect(!acceptsIncompletePrimary)
+        #expect(acceptsCompletedPrimary)
+        #expect(!acceptsMissingUtility)
     }
 
     @Test func `codex activation covers install probe and finalization`() {
@@ -2775,22 +2858,68 @@ struct OnboardingAISetupTests {
         #expect(!OnboardingAISetupModel.activationFailureIsDefinitive(CancellationError()))
     }
 
-    @Test func `successful activation hands off and completion clears its owned receipt`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingCompletedActivationTests"))
+    @Test(arguments: [false, true], ["claude-cli", "existing-model", "api-key"])
+    func `successful activation hands off and completion clears its owned receipt`(
+        utility: Bool, kind: String
+    ) async throws {
+        let suiteName = "OnboardingCompletedActivationTests-\(UUID().uuidString)"
+        let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
         let url = try #require(URL(string: "ws://example.invalid"))
-        let harness = AISetupHarness(url: url, preparationKind: "claude-cli") { _, request, _ in
-            request.method == "openclaw.setup.activate" ? verifiedSetupResponse(id: request.id) : nil
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "openclaw.setup.detect":
+                return detectedSetupResponse(
+                    id: request.id, kind: kind, modelRef: "fixture/model", utility: utility, manualUtility: utility
+                )
+            case "openclaw.setup.activate":
+                #expect(request.params["modelTarget"] as? String == (utility ? "utility" : nil))
+                if kind == "api-key" {
+                    #expect(request.params["authChoice"] as? String == "openai-api-key")
+                    #expect(request.params["apiKey"] as? String == "synthetic-manual-key")
+                    #expect(request.params["modelRef"] == nil)
+                    let callbackDefaults = try #require(UserDefaults(suiteName: suiteName))
+                    let receipt = OnboardingSystemAgentResumeStore.activationModel(
+                        for: "local",
+                        activationOwner: OnboardingSystemAgentResumeStore.activationOwner(
+                            for: "local", defaults: callbackDefaults),
+                        defaults: callbackDefaults)
+                    #expect(receipt?.modelTarget == (utility ? .utility : nil))
+                    #expect(receipt?.utilityModel == nil)
+                }
+                return successfulActivationResponse(
+                    id: request.id, modelRef: "fixture/model", latencyMs: 42, utility: utility
+                )
+            default:
+                return nil
+            }
         }
         let model = harness.model(defaults: defaults)
         var handedOff = false
         model.onConnected = { handedOff = true }
 
         await model.detectConnections()
-        await model.activate(kind: "claude-cli")
+        if kind == "api-key" {
+            model.manualKey = "synthetic-manual-key"
+            let submission = try #require(model.submitManualKey())
+            await submission.value
+        } else {
+            await model.activate(kind: kind)
+        }
 
         #expect(model.connected)
+        let expected: OnboardingDashboardHandoff = utility || kind != "existing-model"
+            ? .custodianOnboarding : .dashboard
+        #expect(model.phase == .connected(expected))
+        #expect(model.verifiedExistingInference == (expected == .dashboard))
         #expect(handedOff)
         #expect(pendingState(defaults) == .completed)
+        let receipt = OnboardingSystemAgentResumeStore.activationModel(
+            for: "local",
+            activationOwner: storedActivationOwner(defaults),
+            defaults: defaults
+        )
+        #expect(receipt?.modelTarget == (utility ? .utility : nil))
+        #expect(receipt?.utilityModel == (utility ? "fixture/model" : nil))
 
         model.clearCompletedHandoffIfOwned()
 
@@ -3458,20 +3587,27 @@ struct OnboardingAISetupTests {
         #expect(handoffs == [.dashboard])
     }
 
-    @Test func `pending handoff connects only after route-bound live verification`() async throws {
+    @Test(arguments: [false, true])
+    func `pending handoff connects only after route-bound live verification`(utility: Bool) async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingOwnerlessVerificationTests"))
         let url = try #require(URL(string: "ws://example.invalid"))
         let harness = AISetupHarness(url: url) { _, request, _ in
-            request.method == "openclaw.setup.verify" ? verifiedSetupResponse(id: request.id) : nil
+            guard request.method == "openclaw.setup.verify" else { return nil }
+            #expect(request.params["modelTarget"] as? String == (utility ? "utility" : nil))
+            return successfulActivationResponse(
+                id: request.id, modelRef: "openai/gpt-5.5", latencyMs: 42, utility: utility)
         }
-        let model = harness.model()
+        let model = harness.model(defaults: defaults)
 
-        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5", modelTarget: utility ? .utility : nil)
         await model.verifyPendingConfiguredInference()
 
         let requests = await harness.recorder.snapshot()
         #expect(requests.methods == ["openclaw.setup.verify"])
         #expect(model.connected)
         #expect(model.selectedKind == "existing-model")
+        #expect(model.phase == .connected(utility ? .custodianOnboarding : .dashboard))
+        await harness.gateway.shutdown()
     }
 
     @Test func `overlapping pending verification callers share one route-bound request`() async throws {
@@ -3771,7 +3907,8 @@ struct OnboardingAISetupTests {
         #expect(pendingState(defaults) == .none)
     }
 
-    @Test func `ownerless completed receipt never authorizes a relaunch handoff`() async throws {
+    @Test(arguments: [false, true])
+    func `ownerless completed receipt never authorizes a relaunch handoff`(utility: Bool) async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingOwnerlessReceiptGuardTests"))
         // The durable state a keychain-unavailable activation leaves behind when
         // its response raced a lease change: an ownerless completed record.
@@ -3780,23 +3917,29 @@ struct OnboardingAISetupTests {
 
         let url = try #require(URL(string: "ws://example.invalid"))
         let harness = AISetupHarness(url: url) { _, request, _ in
-            request.method == "openclaw.setup.verify"
-                ? verifiedSetupResponse(id: request.id)
-                : unavailableGatewayResponse(id: request.id)
+            guard request.method == "openclaw.setup.verify" else {
+                return unavailableGatewayResponse(id: request.id)
+            }
+            #expect(request.params["modelTarget"] as? String == (utility ? "utility" : nil))
+            return successfulActivationResponse(
+                id: request.id, modelRef: "openai/gpt-5.5", latencyMs: 42, utility: utility)
         }
         let model = harness.model(defaults: defaults)
 
-        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5", modelTarget: utility ? .utility : nil)
         let outcome = await model.verifyPendingConfiguredInference()
 
-        // Live inference succeeded, but an unbound receipt can belong to
+        // Live inference succeeded, but an ownerless receipt can belong to
         // replaced credentials; setup must repeat a fresh activation instead.
-        guard case .freshSetupAllowed = outcome else {
+        switch outcome {
+        case .freshSetupAllowed:
+            break
+        default:
             Issue.record("Expected verification to permit caller-owned setup recovery")
-            return
         }
         #expect(!model.connected)
         #expect(pendingState(defaults) == .none)
+        await harness.gateway.shutdown()
     }
 
     @Test func `activation proceeds ownerless when Keychain binding is unavailable`() async throws {
@@ -4759,18 +4902,13 @@ struct OnboardingAISetupTests {
         let recorder = AISetupRequestRecorder()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: "route-b", password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupHealth(task: task, request: request) {
-                        return
-                    }
-                    await recorder.record(message)
-                    if request.method == "openclaw.setup.detect" {
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
-                    }
-                })
-            }))
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder)
+            { task, request in
+                if request.method == "openclaw.setup.detect" {
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                }
+            })
         )
         let relaunched = OnboardingAISetupModel(
             gateway: gateway,
@@ -4906,34 +5044,29 @@ struct OnboardingAISetupTests {
         let replacementID = "replacement-after-relaunch"
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: "shared-route", password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupHealth(task: task, request: request) {
-                        return
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder)
+            { task, request in
+                switch request.method {
+                case "openclaw.setup.verify":
+                    if let callbackDefaults = UserDefaults(suiteName: suiteName),
+                       let originalOwner = OnboardingSystemAgentResumeStore.activationOwner(
+                           for: "local",
+                           defaults: callbackDefaults
+                       )
+                    {
+                        let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
+                            id: replacementID,
+                            routeFingerprint: originalOwner.routeFingerprint
+                        )
+                        markPending(callbackDefaults, for: "local", owner: replacementOwner)
+                        markCompleted(callbackDefaults, for: "local", owner: replacementOwner)
                     }
-                    await recorder.record(message)
-                    switch request.method {
-                    case "openclaw.setup.verify":
-                        if let callbackDefaults = UserDefaults(suiteName: suiteName),
-                           let originalOwner = OnboardingSystemAgentResumeStore.activationOwner(
-                               for: "local",
-                               defaults: callbackDefaults
-                           )
-                        {
-                            let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-                                id: replacementID,
-                                routeFingerprint: originalOwner.routeFingerprint
-                            )
-                            markPending(callbackDefaults, for: "local", owner: replacementOwner)
-                            markCompleted(callbackDefaults, for: "local", owner: replacementOwner)
-                        }
-                        task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                    default:
-                        break
-                    }
-                })
-            }))
+                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
+                default:
+                    break
+                }
+            })
         )
         let route = try #require(await gateway.captureRoute())
         let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
@@ -5223,7 +5356,7 @@ struct OnboardingAISetupTests {
         let model = harness.model(defaults: defaults)
         let option = OnboardingAISetupModel.AuthOption(
             id: "test-provider", brandId: nil, label: "Test provider", hint: nil,
-            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false
+            groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
         )
         var handoffs = 0
         model.onConnected = { handoffs += 1 }
@@ -5717,16 +5850,12 @@ struct OnboardingAISetupTests {
         let recorder = AISetupRequestRecorder()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupPreparation(task: task, request: request, kind: "codex-cli") {
-                        return
-                    }
-                    await recorder.record(message)
-                    task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-                })
-            }))
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder,
+                preparationKind: "codex-cli")
+            { task, request in
+                task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
+            })
         )
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         var scheduledRoutes: [String] = []
@@ -5753,34 +5882,30 @@ struct OnboardingAISetupTests {
         let markerObservation = ActivationMarkerObservation()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupPreparation(task: task, request: request, kind: "codex-cli") {
-                        return
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder,
+                preparationKind: "codex-cli")
+            { task, request in
+                if let callbackDefaults = UserDefaults(suiteName: suiteName) {
+                    let pendingState = OnboardingSystemAgentResumeStore.pendingState(
+                        for: "local",
+                        defaults: callbackDefaults
+                    )
+                    if case let .activating(deadline) = pendingState {
+                        await markerObservation.record(deadline: deadline)
                     }
-                    await recorder.record(message)
-                    if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
-                            for: "local",
-                            defaults: callbackDefaults
-                        )
-                        if case let .activating(deadline) = pendingState {
-                            await markerObservation.record(deadline: deadline)
-                        }
-                        let owner = try #require(storedActivationOwner(callbackDefaults))
-                        #expect(OnboardingSystemAgentResumeStore.clear(
-                            ifOwnedBy: "local",
-                            activationOwner: owner,
-                            defaults: callbackDefaults
-                        ))
-                        #expect(OnboardingSystemAgentResumeStore.pendingState(
-                            for: "local", defaults: callbackDefaults
-                        ) == .none)
-                    }
-                    task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-                })
-            }))
+                    let owner = try #require(storedActivationOwner(callbackDefaults))
+                    #expect(OnboardingSystemAgentResumeStore.clear(
+                        ifOwnedBy: "local",
+                        activationOwner: owner,
+                        defaults: callbackDefaults
+                    ))
+                    #expect(OnboardingSystemAgentResumeStore.pendingState(
+                        for: "local", defaults: callbackDefaults
+                    ) == .none)
+                }
+                task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
+            })
         )
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         var scheduledDeadlines: [(deadline: Date, routeIdentity: String)] = []
@@ -5825,40 +5950,35 @@ struct OnboardingAISetupTests {
         let recorder = AISetupRequestRecorder()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupHealth(task: task, request: request) {
-                        return
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder)
+            { task, request in
+                switch request.method {
+                case "openclaw.setup.activate":
+                    if let callbackDefaults = UserDefaults(suiteName: suiteName) {
+                        let owner = try #require(storedActivationOwner(callbackDefaults))
+                        #expect(OnboardingSystemAgentResumeStore.clear(
+                            ifOwnedBy: "local",
+                            activationOwner: owner,
+                            defaults: callbackDefaults
+                        ))
+                        #expect(pendingState(callbackDefaults) == .none)
                     }
-                    await recorder.record(message)
-                    switch request.method {
-                    case "openclaw.setup.activate":
-                        if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                            let owner = try #require(storedActivationOwner(callbackDefaults))
-                            #expect(OnboardingSystemAgentResumeStore.clear(
-                                ifOwnedBy: "local",
-                                activationOwner: owner,
-                                defaults: callbackDefaults
-                            ))
-                            #expect(pendingState(callbackDefaults) == .none)
-                        }
-                        task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-                    case "agents.list":
-                        task.emitReceiveSuccess(.data(configuredModelResponse(id: request.id)))
-                    case "openclaw.setup.verify":
-                        task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                    case "openclaw.setup.detect":
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(
-                            id: request.id,
-                            kind: "codex-cli",
-                            modelRef: "openai/gpt-5.5"
-                        )))
-                    default:
-                        break
-                    }
-                })
-            }))
+                    task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
+                case "agents.list":
+                    task.emitReceiveSuccess(.data(configuredModelResponse(id: request.id)))
+                case "openclaw.setup.verify":
+                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
+                case "openclaw.setup.detect":
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(
+                        id: request.id,
+                        kind: "codex-cli",
+                        modelRef: "openai/gpt-5.5"
+                    )))
+                default:
+                    break
+                }
+            })
         )
         let view = makeAISetupView(
             state: appState,

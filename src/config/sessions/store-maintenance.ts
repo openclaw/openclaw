@@ -428,7 +428,11 @@ export function resolveQuotaSuspensionEntryMaintenance(params: {
   return { patch: null, cleared: false };
 }
 
-function getSessionMaintenanceActivityAt(entry: SessionEntry | undefined): number {
+export function getSessionMaintenanceActivityAt(
+  entry:
+    | Pick<SessionEntry, "updatedAt" | "lastInteractionAt" | "lastActivityAt" | "sessionStartedAt">
+    | undefined,
+): number {
   return Math.max(
     entry?.lastInteractionAt ?? 0,
     entry?.lastActivityAt ?? 0,

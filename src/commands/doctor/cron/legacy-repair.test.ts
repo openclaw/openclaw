@@ -13,7 +13,10 @@ import {
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import type { CronJob } from "../../../cron/types.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -23,6 +26,7 @@ import {
 let tempRoot: string | undefined;
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });

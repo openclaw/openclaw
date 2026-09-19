@@ -15,6 +15,20 @@ import {
   type CronJobPatch,
 } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
+import type { CronServiceState } from "./state.js";
+
+export async function resolveConfiguredChannelsForValidation(
+  state: CronServiceState,
+): Promise<readonly string[] | undefined> {
+  try {
+    return await state.deps.listConfiguredChannels?.();
+  } catch {
+    // Channel discovery is advisory at mutation time. Runtime delivery remains
+    // authoritative, so discovery failures must not create false rejections.
+    state.deps.log.debug({}, "cron: configured channel validation skipped");
+    return undefined;
+  }
+}
 
 function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
   if (!script.trim()) {

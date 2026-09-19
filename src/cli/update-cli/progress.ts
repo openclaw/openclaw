@@ -1,10 +1,14 @@
-// Update command presentation helpers: spinner lifecycle, failure hints, and result summaries.
 import { spinner } from "@clack/prompts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunPhase, UpdateRunRecord } from "../../infra/update-run-record.js";
+import {
+  updateStepDiagnostics,
+  type UpdateRunPhase,
+  type UpdateRunRecord,
+} from "../../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
@@ -23,10 +27,6 @@ import type { UpdateCommandOptions } from "./shared.js";
 const activeUpdateProgress = new Map<string, (record: UpdateRunRecord | undefined) => void>();
 const UPDATE_PROGRESS_POLL_MS = 250;
 
-function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
-  return step.advisory !== undefined;
-}
-
 // These CLI-only callbacks can render the row just committed by their ledger owner.
 export type UpdateDisplayProgress = {
   onHeartbeat?: UpdateStepProgress["onHeartbeat"];
@@ -40,7 +40,6 @@ export type UpdateDisplayProgress = {
   ) => void;
 };
 
-/** Runner-facing progress callbacks plus terminal spinner cleanup. */
 type ProgressController = {
   progress: UpdateDisplayProgress;
   stop: () => void;
@@ -49,7 +48,6 @@ type ProgressController = {
   dispose: () => void;
 };
 
-/** Create a progress adapter for the updater runner without coupling runner code to terminal UI. */
 export function createUpdateProgress(
   enabled: boolean,
   run?: UpdateCommandOptions["run"],
@@ -155,13 +153,14 @@ export function createUpdateProgress(
     },
     dispose: () => {
       try {
-        flush(read());
+        renderRecord(read());
       } finally {
         observation = "disposed";
         clearTimer();
         if (run && activeUpdateProgress.get(run.runId) === flush) {
           activeUpdateProgress.delete(run.runId);
         }
+        stop();
       }
     },
   };
@@ -177,6 +176,7 @@ type DisplayStep = Pick<
   | "stderrTail"
   | "termination"
   | "signal"
+  | "failureFacts"
 >;
 
 function printStep(step: DisplayStep): void {
@@ -188,16 +188,24 @@ function printStep(step: DisplayStep): void {
         ? ` — interrupted (${step.signal})`
         : "";
   defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
-  if (!isAdvisoryStep(step) && step.exitCode === 0) {
+  if (step.advisory === undefined && step.exitCode === 0) {
     return;
+  }
+  if (!step.advisory && step.failureFacts?.length) {
+    for (const fact of step.failureFacts) {
+      defaultRuntime.log(`    ${theme.error(formatUpdateFailureFact(fact))}`);
+    }
   }
   // Build tools often report failures on stdout. Keep the final diagnostic from
   // each stream, so npm's stderr footer cannot hide the actual build error.
-  const color = isAdvisoryStep(step) ? theme.warn : theme.error;
+  const color = step.advisory !== undefined ? theme.warn : theme.error;
   if (step.advisory) {
     defaultRuntime.log(`    ${color(step.advisory.message)}`);
   }
-  for (const output of [step.stdoutTail, step.stderrTail]) {
+  const tails = step.advisory
+    ? [step.stdoutTail, step.stderrTail]
+    : updateStepDiagnostics(step).tails;
+  for (const output of tails) {
     for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
       if (line.trim()) {
         defaultRuntime.log(`    ${color(line)}`);
@@ -210,7 +218,7 @@ function formatStepStatus(step: {
   exitCode: number | null;
   advisory?: UpdateStepAdvisory;
 }): string {
-  if (isAdvisoryStep(step)) {
+  if (step.advisory !== undefined) {
     return theme.warn("!");
   }
   if (step.exitCode === 0) {
@@ -222,7 +230,6 @@ function formatStepStatus(step: {
   return theme.error("\u2717");
 }
 
-/** Render a completed updater run as JSON or terminal output. */
 export function printResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
@@ -236,7 +243,10 @@ export function printResult(
   if (result.runId) {
     activeUpdateProgress.get(result.runId)?.(run);
   }
-  const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), reportHints);
+  const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), {
+    ...reportHints,
+    mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+  });
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));
   for (const line of report.lines) {

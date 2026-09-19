@@ -96,6 +96,27 @@ After an unexpected disconnect, check `openclaw gateway status` and the native
 service logs from an external shell before retrying. Standalone CLI lifecycle
 commands retain their service-management behavior.
 
+### Pin the service runtime
+
+Use `--runtime-path` to keep the service on an operator-selected Node or Bun
+executable instead of automatic runtime selection:
+
+```bash
+openclaw gateway install --runtime-path "/absolute/path/to/node" --force
+```
+
+The path must be absolute, executable, and match `--runtime` when that option is
+also supplied. The runtime must pass the current Node/Bun and SQLite capability
+checks. Paths containing spaces are supported; quote them in your shell.
+
+The pin is saved in machine-state metadata for this managed service.
+Forced reinstall, update, and definition repair preserve it. A missing or
+unsupported pin fails with a diagnostic rather than silently switching runtimes.
+To replace it, supply another `--runtime-path`; to return to automatic selection,
+run `openclaw gateway install --runtime node --force` without `--runtime-path`.
+An explicit wrapper still controls the executable and takes precedence over a pin.
+Installation starts the service and may restart an existing Gateway.
+
 ### Install with a wrapper
 
 Use `--wrapper` when the managed service must start through another executable, for example a secrets manager shim or a run-as helper. The wrapper receives the normal Gateway args and is responsible for eventually exec'ing `openclaw` or Node with those args.
@@ -129,7 +150,7 @@ openclaw gateway restart
 <AccordionGroup>
   <Accordion title="Command options">
     - `gateway status`: `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-    - `gateway install`: `--port`, `--runtime <node|bun>` (default: `node`), `--token`, `--wrapper <path>`, `--force`, `--json`
+    - `gateway install`: `--port`, `--runtime <node|bun>` (default: `node`), `--runtime-path <path>`, `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--preserve-definition`, `--json`
     - `gateway uninstall|start`: `--json`
     - `gateway stop`: `--disable`, `--force`, `--json`
@@ -137,7 +158,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Service runtime">
     - Node is the primary, default, and recommended managed Gateway runtime.
-    - `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
+    - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
     - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>
@@ -148,6 +169,7 @@ openclaw gateway restart
     - On Linux, `gateway start` and `gateway restart` also refuse ineffective repairs when an operator-owned systemd drop-in overrides the command or working directory. Inspect the effective unit with `systemctl --user cat <unit>.service`, then update or remove that drop-in. `gateway install --force` rewrites only the managed base unit and warns if the override remains; `Environment=` drop-ins remain supported.
     - `gateway restart --preserve-definition` restarts only an inspectable native service, skips automatic definition repair, and checks health at the installed launcher's port. It does not recover an unmanaged listener and cannot be combined with `--safe` or external supervision. On macOS it can bootstrap an unloaded readable plist without rewriting the plist, environment, wrapper, or permissions; denied native activation fails without file repair. On Windows it also retains existing Startup entries. The `daemon restart` alias accepts the same option.
     - During writable Linux service installs or refreshes, keep the unit and state directories stationary and avoid concurrent manual edits. OpenClaw serializes its own writers and aborts on detected changes, but cannot coordinate arbitrary filesystem edits. Moving or replacing a parent directory mid-publication can leave a temporary file inside the moved directory; inspect it before retrying.
+    - On macOS, rollback of a failed LaunchAgent replacement restores the previous plist bytes and permission bits, including binary plists. If restoration cannot finish, the command reports the failure.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
     - The running Gateway records its process identity, listener mode, and supervisor in shared state. Restart preserves a verified live owner while it boots, even before its listener opens; a health timeout does not make that owner stale. A recorded foreground owner receives a targeted restart even when a native service is installed. Scheduled Task cleanup preserves external supervisors and other tasks, identifying their owner in the error. Older Gateways without a recorded identity remain terminable when their arguments exactly match the installed task command. Without that attribution, a held coordinator leaves the process running and asks you to retry after startup. Unverified listeners are reported instead of being killed.
     - In a non-interactive shell, `gateway stop` requires `--force`. Interactive terminals keep the existing prompt-free behavior. For automation and tests, prefer `gateway run --dev` or an isolated `--profile` with a free port.
@@ -170,6 +192,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Auth and SecretRefs at install time">
     - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
+    - Reinstall and update preserve existing service values for active env SecretRefs, including Gateway tokens and passwords. On Linux and macOS, legacy inline values move into the generated owner-only env file before the unit or LaunchAgent is rewritten. This does not make service credentials available to interactive CLI commands.
     - If token auth requires a token and the configured token SecretRef is unresolved, install fails closed instead of persisting fallback plaintext.
     - For password auth on `gateway run`, prefer `OPENCLAW_GATEWAY_PASSWORD`, `--password-file`, or a SecretRef-backed `gateway.auth.password` over inline `--password`.
     - In inferred auth mode, shell-only `OPENCLAW_GATEWAY_PASSWORD` does not relax install token requirements; use durable config (`gateway.auth.password` or config `env`) when installing a managed service.

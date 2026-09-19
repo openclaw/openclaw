@@ -1,3 +1,29 @@
+.tasks-transcript {
+  margin: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.tasks-transcript__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.tasks-transcript__header h2 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-base);
+}
+
+.tasks-transcript .chat-task-detail__content {
+  max-height: 55vh;
+}
+
 .tasks-page-list {
   display: grid;
   gap: var(--space-5);

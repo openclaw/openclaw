@@ -103,7 +103,10 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           respond,
           context: {
             getRuntimeConfig: () => ({}),
-            loadGatewayModelCatalog: vi.fn(async () => []),
+            loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+              entries: [],
+              routeVariants: [],
+            })),
             broadcastToConnIds: vi.fn(),
             getSessionEventSubscriberConnIds: () => new Set(),
             chatAbortControllers: new Map(),
@@ -261,7 +264,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       );
       const context = {
         getRuntimeConfig: () => ({}),
-        loadGatewayModelCatalog: vi.fn(async () => []),
+        loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
         broadcastToConnIds: vi.fn(),
         getSessionEventSubscriberConnIds: () => new Set(),
         chatAbortControllers: new Map(),

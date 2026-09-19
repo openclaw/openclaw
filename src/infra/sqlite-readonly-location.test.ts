@@ -224,19 +224,16 @@ describe("prepareSqliteReadOnlyLocation", () => {
         mode: "async backup",
         prepare: prepareSqliteReadOnlyLocationInProcess,
         empty: false,
-        sync: false,
       },
       {
         mode: "async copy",
         prepare: prepareSqliteReadOnlyLocationInProcess,
         empty: true,
-        sync: false,
       },
       {
         mode: "sync copy",
         prepare: prepareSqliteReadOnlyLocationSyncInProcess,
         empty: false,
-        sync: true,
       },
     ].flatMap((scenario) =>
       ["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS"].map((code) =>
@@ -245,7 +242,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     ),
   )(
     "identifies $mode private cache allocation failure $code before backup or copying",
-    async ({ code, empty, prepare, sync }) => {
+    async ({ code, empty, prepare }) => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");
       const databasePath = createTempDatabasePath();
       const sqlite = requireNodeSqlite();
@@ -263,13 +260,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
       });
       const backup = vi.spyOn(sqlite, "backup");
       const write = vi.spyOn(fs, "writeSync");
-      if (sync) {
-        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
-          throw allocationError;
-        });
-      } else {
-        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(allocationError);
-      }
+      vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+        throw allocationError;
+      });
 
       await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
         const error = await Promise.resolve()
@@ -289,11 +282,11 @@ describe("prepareSqliteReadOnlyLocation", () => {
   );
 
   it.each([
-    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess, sync: false },
-    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess, sync: true },
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
   ])(
     "identifies sanitized $mode Windows allocation failures without losing their causes",
-    async ({ prepare, sync }) => {
+    async ({ prepare }) => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-windows-allocation-");
       const databasePath = createTempDatabasePath();
       const sqlite = requireNodeSqlite();
@@ -307,13 +300,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
         `Unable to create private Windows SQLite directory: ${directoryPath}`,
         { cause: allocationError },
       );
-      if (sync) {
-        vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
-          throw windowsError;
-        });
-      } else {
-        vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(windowsError);
-      }
+      vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
+        throw windowsError;
+      });
 
       await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
         const error = await Promise.resolve()

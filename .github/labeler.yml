@@ -777,6 +777,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic-vertex/**"
+"extensions: apple-fm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apple-fm/**"
+          - "docs/plugins/apple-fm.md"
+          - "docs/plugins/reference/apple-fm.md"
 "extensions: brave":
   - changed-files:
       - any-glob-to-any-file:
@@ -819,6 +825,11 @@
           - "extensions/fireworks/**"
           - "docs/providers/fireworks.md"
           - "docs/plugins/reference/fireworks.md"
+"extensions: github":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github/**"
+          - "docs/plugins/github.md"
 "extensions: github-copilot":
   - changed-files:
       - any-glob-to-any-file:

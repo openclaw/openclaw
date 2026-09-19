@@ -3,11 +3,13 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import chokidar from "chokidar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markGatewaySigusr1RestartHandled } from "../infra/restart.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -16,20 +18,19 @@ import {
   CHANNEL_BINDING_IDS,
   clearInstanceBindingProbeCoordinators,
   INSTANCE_BINDING_PROBE_METHOD,
-  installInstanceBindingProbeCoordinator,
-  writeChannelBindingProbePlugin,
-  writeInstanceBindingProbePlugin,
-  withPluginServiceStopDeadline,
   type ChannelBindingMonitor,
   type ChannelBindingProof,
   type InstanceBindingProbeCoordinator,
   type InstanceBindingProbeResult,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
+  prepareInstanceBindingFixture,
   installInstanceBindingConfigIo,
   patchInstanceBindingTestConfig,
   requireBoundRuntime,
   requestInstanceBindingProbe,
+  requestSettledInstanceBindingProbe,
+  reloadInstanceBindingAfterServiceDeadline,
 } from "./server-plugins.lifecycle.test-support.js";
 import {
   connectWebchatClient,
@@ -46,86 +47,15 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 let restoreChannelRuntimeLoader: (() => void) | undefined;
 
-async function prepareInstanceBindingTest(options?: {
-  serviceStopFailure?: InstanceBindingProbeCoordinator["serviceStopFailure"];
-  channels?: boolean;
-  channelIds?: readonly string[];
-}) {
-  const coordinator = installInstanceBindingProbeCoordinator(options);
-  const bundledRoot = tempDirs.make("openclaw-instance-binding-");
-  await writeInstanceBindingProbePlugin(bundledRoot, coordinator.channelName);
-  if (options?.channels) {
-    await writeChannelBindingProbePlugin(bundledRoot, coordinator.channelName, options.channelIds);
-  }
-  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-  process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("gateway test hooks did not install OPENCLAW_CONFIG_PATH");
-  }
-  const config = {
-    plugins: {
-      enabled: true,
-      allow: [
-        "instance-binding-probe",
-        ...(options?.channels ? ["instance-binding-channels"] : []),
-      ],
-      entries: {
-        "instance-binding-probe": { enabled: true },
-        ...(options?.channels ? { "instance-binding-channels": { enabled: true } } : {}),
-      },
-    },
-  };
-  const { loadPluginLookUpTable } = await import("../plugins/plugin-lookup-table.js");
-  expect(loadPluginLookUpTable({ config, env: process.env }).startup.pluginIds).toContain(
-    "instance-binding-probe",
+async function prepareInstanceBindingTest(
+  options?: Parameters<typeof prepareInstanceBindingFixture>[1],
+) {
+  const fixture = await prepareInstanceBindingFixture(
+    tempDirs.make("openclaw-instance-binding-"),
+    options,
   );
-  await fs.writeFile(configPath, `${JSON.stringify(config)}\n`);
-  if (coordinator.channelProof) {
-    // Keep the real host factory in Vitest's module graph; fixture plugins still
-    // load normally, with their original registry and instance runtime options.
-    const [loaderModule, sdkAlias, fullRuntime] = await Promise.all([
-      import("../plugins/loader-module-runtime.js"),
-      import("../plugins/sdk-alias.js"),
-      import("../plugins/runtime/index.js"),
-    ]);
-    const observation = {
-      phase: "runtime-module-loader",
-      resolvedTargets: [] as string[],
-      factoryCalls: 0,
-    };
-    coordinator.channelProof.observations.push(observation);
-    const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
-    const createLoader = loaderModule.createPluginModuleLoader;
-    const loaderSpy = vi
-      .spyOn(loaderModule, "createPluginModuleLoader")
-      .mockImplementation((loaderOptions) => {
-        const load = createLoader(loaderOptions);
-        return (modulePath) => {
-          if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
-            observation.resolvedTargets.push(modulePath);
-            return {
-              createPluginRuntime: (
-                ...args: Parameters<typeof fullRuntime.createPluginRuntime>
-              ) => {
-                observation.factoryCalls += 1;
-                return fullRuntime.createPluginRuntime(...args);
-              },
-            };
-          }
-          return load(modulePath);
-        };
-      });
-    restoreChannelRuntimeLoader = () => {
-      loaderSpy.mockRestore();
-      resolveRuntime.mockRestore();
-    };
-  }
-  return { coordinator, bundledRoot };
+  restoreChannelRuntimeLoader = fixture.restoreChannelRuntimeLoader;
+  return fixture;
 }
 
 installInstanceBindingConfigIo();
@@ -368,7 +298,7 @@ describe("gateway plugin instance bindings", () => {
       const firstRegistry = getActivePluginRegistry();
       expect(firstRegistry).toBeTruthy();
       const firstProbes = await Promise.all(
-        firstMonitors.map(({ runtime }) => requestInstanceBindingProbe(runtime)),
+        firstMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
       );
       expect(firstProbes[0]).toEqual(firstProbes[1]);
 
@@ -393,7 +323,7 @@ describe("gateway plugin instance bindings", () => {
       expect(new Set(proof.monitors.map(({ runtimeId }) => runtimeId)).size).toBe(2);
       expect(new Set(proof.monitors.map(({ abortSignal }) => abortSignal)).size).toBe(4);
       const secondProbes = await Promise.all(
-        secondMonitors.map(({ runtime }) => requestInstanceBindingProbe(runtime)),
+        secondMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
       );
       expect(secondProbes[0]).toEqual(secondProbes[1]);
       for (const secondProbe of secondProbes) {
@@ -408,7 +338,9 @@ describe("gateway plugin instance bindings", () => {
       ).toBe(true);
       expect(stopHooks).toEqual([]);
       await expect(
-        Promise.all(firstMonitors.map(({ runtime }) => requestInstanceBindingProbe(runtime))),
+        Promise.all(
+          firstMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
+        ),
       ).resolves.toEqual(firstProbes);
       proof.observations.push({ phase: "two-gateways-started", firstProbes, secondProbes });
 
@@ -452,7 +384,7 @@ describe("gateway plugin instance bindings", () => {
         );
       }
       const survivingProbes = await Promise.all(
-        secondMonitors.map(({ runtime }) => requestInstanceBindingProbe(runtime)),
+        secondMonitors.map(({ runtime }) => requestSettledInstanceBindingProbe(runtime)),
       );
       expect(survivingProbes).toEqual(secondProbes);
       proof.observations.push({ phase: "second-gateway-still-bound", probes: survivingProbes });
@@ -745,8 +677,20 @@ describe("gateway plugin instance bindings", () => {
   it(
     "retains unchanged channel runtimes and renews them only when their plugin reloads",
     { timeout: 600_000 },
-    async () => {
-      const { coordinator } = await prepareInstanceBindingTest({ channels: true });
+    async ({ onTestFinished }) => {
+      const { coordinator, configPath } = await prepareInstanceBindingTest({ channels: true });
+      const watch = chokidar.watch;
+      const configWatcher = vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
+        const watchedPaths = typeof paths === "string" ? [paths] : paths;
+        if (!watchedPaths.includes(configPath)) {
+          return watch(paths, options);
+        }
+        // Explicit config writes own this case; filesystem echoes can race the next RPC.
+        const watcher = new chokidar.FSWatcher(options);
+        queueMicrotask(() => watcher.emit("ready"));
+        return watcher;
+      });
+      onTestFinished(() => configWatcher.mockRestore());
       const proof = coordinator.channelProof;
       if (!proof) {
         throw new Error("channel binding fixture was not installed");
@@ -775,7 +719,7 @@ describe("gateway plugin instance bindings", () => {
         ...CHANNEL_BINDING_IDS,
       ]);
       const initialProbes = await Promise.all(
-        initialMonitors.map((monitor) => requestInstanceBindingProbe(monitor.runtime)),
+        initialMonitors.map((monitor) => requestSettledInstanceBindingProbe(monitor.runtime)),
       );
       expect(initialProbes[0]).toEqual(initialProbes[1]);
       for (const probe of initialProbes) {
@@ -801,12 +745,7 @@ describe("gateway plugin instance bindings", () => {
         coordinator.runtimes.slice(registrationsBeforeReload),
         "reloaded",
       );
-      await expect
-        .poll(async () => (await requestInstanceBindingProbe(freshRuntime)).reloadSettled, {
-          timeout: 30_000,
-        })
-        .toBe(true);
-      const freshProbe = await requestInstanceBindingProbe(freshRuntime);
+      const freshProbe = await requestSettledInstanceBindingProbe(freshRuntime);
       for (const initialProbe of initialProbes) {
         expect(freshProbe.registryId).not.toBe(initialProbe.registryId);
         expect(freshProbe.sessionsId).toBe(initialProbe.sessionsId);
@@ -822,7 +761,9 @@ describe("gateway plugin instance bindings", () => {
       for (const monitor of initialMonitors) {
         expect(monitor.stopped).toBe(false);
         expect(monitor.abortSignal.aborted).toBe(false);
-        await expect(requestInstanceBindingProbe(monitor.runtime)).resolves.toEqual(freshProbe);
+        await expect(requestSettledInstanceBindingProbe(monitor.runtime)).resolves.toEqual(
+          freshProbe,
+        );
       }
       expect(
         proof.events
@@ -837,6 +778,13 @@ describe("gateway plugin instance bindings", () => {
       reloadEventIndex = proof.events.length;
       proof.events.push({ event: "channel-owner-reload-request" });
       const registryBeforeChannelReload = getActivePluginRegistry();
+      const channelOwner = registryBeforeChannelReload?.plugins.find(
+        (record) => record.id === "instance-binding-channels",
+      );
+      const channelInstance = channelOwner && getPluginInstance(channelOwner);
+      expect(channelInstance?.hasRetainedConsumers).toBe(true);
+      // Live monitors retain custody, so they cannot refuse replacement admission.
+      expect(() => channelInstance!.reserveReplacement()()).not.toThrow();
       const channelReload = await rpcReq(socket, "plugins.reload", {
         plugins: [{ pluginId: "instance-binding-channels" }],
       });
@@ -849,11 +797,7 @@ describe("gateway plugin instance bindings", () => {
       proof.observations.push({ phase: "successor-handoff", predecessorsStopped });
       expect(predecessorsStopped).toBe(true);
       // The receipt completes this reload; wait separately for global config settlement.
-      await expect
-        .poll(async () => (await requestInstanceBindingProbe(freshRuntime)).reloadSettled, {
-          timeout: 30_000,
-        })
-        .toBe(true);
+      await requestSettledInstanceBindingProbe(freshRuntime);
       const currentProbe = await rpcReq<InstanceBindingProbeResult>(
         socket,
         INSTANCE_BINDING_PROBE_METHOD,
@@ -871,7 +815,7 @@ describe("gateway plugin instance bindings", () => {
         placementId: freshProbe.placementId,
         reloadSettled: true,
       });
-      await expect(requestInstanceBindingProbe(freshRuntime)).resolves.toEqual(channelProbe);
+      await expect(requestSettledInstanceBindingProbe(freshRuntime)).resolves.toEqual(channelProbe);
       proof.observations.push({ phase: "channel-owner-publication", probe: channelProbe });
       for (const monitor of initialMonitors) {
         await expect(requestInstanceBindingProbe(monitor.runtime)).rejects.toThrow(
@@ -958,10 +902,10 @@ describe("gateway plugin instance bindings", () => {
   );
 
   it.each(["rejection", "timeout"] as const)(
-    "reports %s cleanup as a warning and fences its old instance while keeping the Gateway available",
+    "refuses replacement during %s cleanup while keeping the Gateway available",
     { timeout: 600_000 },
     async (serviceStopFailure) => {
-      const { coordinator } = await prepareInstanceBindingTest({ serviceStopFailure });
+      const { coordinator, bundledRoot } = await prepareInstanceBindingTest({ serviceStopFailure });
       finishServiceStops.push(coordinator.serviceStopCompletion.resolve);
       const hotReloadRecovery = vi.fn(() => {
         // No run loop consumes this synthetic emission, so release its signal-admission lease.
@@ -981,6 +925,20 @@ describe("gateway plugin instance bindings", () => {
       const initialRegistry = getActivePluginRegistry();
       const initialMetadata = getGatewayPluginMetadataSnapshot();
       const initialRegistrationCount = coordinator.runtimes.length;
+      const initialGatewayRegistrationCount = coordinator.registrationModes.filter(
+        (mode) => mode === "full",
+      ).length;
+      const expectNoGatewayReplacement = () => {
+        expect(coordinator.registrationModes.filter((mode) => mode === "full")).toHaveLength(
+          initialGatewayRegistrationCount,
+        );
+        // Model-runtime rollback may prepare auxiliary registries without activating a Gateway.
+        expect(
+          coordinator.registrationModes
+            .slice(initialRegistrationCount)
+            .filter((mode) => mode !== "discovery"),
+        ).toEqual([]);
+      };
       expect(initialRegistry).toBeDefined();
       expect(initialMetadata).toBeDefined();
       expect(coordinator.serviceStarts).toBe(1);
@@ -996,48 +954,90 @@ describe("gateway plugin instance bindings", () => {
       expect(currentConfig.ok).toBe(true);
       expect(currentConfig.payload?.hash).toBeTypeOf("string");
       expect(currentConfig.payload?.raw).toBeTypeOf("string");
-      const reload = await withPluginServiceStopDeadline(coordinator, () =>
-        rpcReq(socket, "plugins.reload", { plugins: [{ pluginId: "instance-binding-probe" }] }),
-      );
-      expect(reload, reload.error?.message).toMatchObject({
-        ok: true,
-        payload: {
-          ok: true,
-          restartRequired: false,
-          runtime: { pluginIds: ["instance-binding-probe"] },
-          warnings: expect.arrayContaining([
-            expect.stringContaining("Plugin service cleanup failed"),
-          ]),
-        },
+      const initialInstance = initialRegistry?.plugins
+        .filter((record) => record.id === "instance-binding-probe")
+        .map(getPluginInstance)[0];
+      const reload = await reloadInstanceBindingAfterServiceDeadline({
+        coordinator,
+        bundledRoot,
+        socket,
+        currentConfig,
       });
+      expect(reload, reload.error?.message).toMatchObject({
+        ok: false,
+        error: { details: { runtime: { committed: false, phase: "drain" } } },
+      });
+      expect(reload.error?.message).toContain(
+        serviceStopFailure === "rejection"
+          ? "instance-binding service cleanup rejected"
+          : "timed out",
+      );
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       expect(coordinator.serviceStops).toBe(1);
-      expect(coordinator.serviceStarts).toBe(2);
-      expect(getGatewayPluginMetadataSnapshot()).not.toBe(initialMetadata);
-      expect(getActivePluginRegistry()).not.toBe(initialRegistry);
+      const recovered = serviceStopFailure === "timeout";
+      expect(coordinator.serviceStarts).toBe(recovered ? 2 : 1);
+      expect(getGatewayPluginMetadataSnapshot()).toBe(initialMetadata);
+      if (recovered) {
+        expect(initialInstance?.disposing).toBe(true);
+        expect(coordinator.gatewayStops).toEqual([initialProbe.registryId]);
+        expect(getActivePluginRegistry()).not.toBe(initialRegistry);
+        const restored = await requireBoundRuntime(
+          coordinator.runtimes.filter(
+            (_runtime, index) =>
+              index >= initialRegistrationCount && coordinator.registrationModes[index] === "full",
+          ),
+          "restored original",
+        );
+        const restoredProbe = await requestInstanceBindingProbe(restored.runtime);
+        expect(restoredProbe.registryId).not.toBe(initialProbe.registryId);
+        expect(restoredProbe).toMatchObject({
+          sessionsId: initialProbe.sessionsId,
+          placementId: initialProbe.placementId,
+        });
+      } else {
+        expectNoGatewayReplacement();
+        expect(getActivePluginRegistry()).toBe(initialRegistry);
+      }
       await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
         'Plugin "instance-binding-probe" runtime is no longer active.',
       );
-      const successor = await requireBoundRuntime(
-        coordinator.runtimes.slice(initialRegistrationCount),
-        "replacement",
-      );
-      const successorProbe = await requestInstanceBindingProbe(successor.runtime);
-      expect(successorProbe.registryId).not.toBe(initialProbe.registryId);
-      expect(successorProbe).toMatchObject({
-        sessionsId: initialProbe.sessionsId,
-        placementId: initialProbe.placementId,
-      });
       const afterReload = await rpcReq(socket, "config.get", {});
       expect(afterReload.ok).toBe(true);
       expect(afterReload.payload?.hash).toBe(currentConfig.payload?.hash);
       expect(afterReload.payload?.raw).toBe(currentConfig.payload?.raw);
 
-      // Settle the old native stop before final close retires the live successor.
-      coordinator.serviceStopCompletion.resolve();
-      await server.close({ reason: "close after plugin cleanup warning" });
+      const beforeRetryRegistrations = coordinator.runtimes.length;
+      const retry = await rpcReq(socket, "plugins.reload", {
+        plugins: [{ pluginId: "instance-binding-probe" }],
+      });
+      if (serviceStopFailure === "timeout") {
+        expect(retry, retry.error?.message).toMatchObject({
+          ok: true,
+          payload: { restartRequired: false },
+        });
+        expect(coordinator.serviceStarts).toBe(3);
+        const successor = await requireBoundRuntime(
+          coordinator.runtimes.filter(
+            (_runtime, index) =>
+              index >= beforeRetryRegistrations && coordinator.registrationModes[index] === "full",
+          ),
+          "replacement after service stop settled",
+        );
+        const successorProbe = await requestInstanceBindingProbe(successor.runtime);
+        expect(successorProbe.registryId).not.toBe(initialProbe.registryId);
+        expect(successorProbe).toMatchObject({
+          sessionsId: initialProbe.sessionsId,
+          placementId: initialProbe.placementId,
+        });
+      } else {
+        expect(retry.ok).toBe(false);
+        expect(retry.error?.message).toContain("instance-binding service cleanup rejected");
+        expectNoGatewayReplacement();
+        expect(coordinator.serviceStarts).toBe(1);
+      }
+      await server.close({ reason: "close after plugin cleanup refusal" });
       started.splice(started.indexOf(server), 1);
-      expect(coordinator.serviceStops).toBe(2);
+      expect(coordinator.serviceStops).toBe(serviceStopFailure === "timeout" ? 3 : 1);
     },
   );
 });

@@ -1,8 +1,6 @@
-// QA Lab plugin module implements suite behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -24,12 +22,13 @@ import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suit
 import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
-import type {
-  QaSuiteEnvironment,
-  QaSuiteResult as QaSuiteBaseResult,
-  QaSuiteRunParams as QaSuiteBaseRunParams,
-  QaSuiteScenarioResult,
-  QaSuiteStartLabFn,
+import {
+  rejectRemovedQaChannelDriverSelection,
+  type QaSuiteEnvironment,
+  type QaSuiteResult as QaSuiteBaseResult,
+  type QaSuiteRunParams as QaSuiteBaseRunParams,
+  type QaSuiteScenarioResult,
+  type QaSuiteStartLabFn,
 } from "./suite-types.js";
 
 export type { QaSuiteScenarioResult, QaSuiteStartLabFn };
@@ -39,7 +38,6 @@ export async function createQaSuiteTransportAdapter(params: {
   adapterFactories?: readonly QaTransportAdapterFactory[];
   channelDriver?: QaScorecardChannelDriver | null;
   channelId?: string;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
   transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
@@ -49,13 +47,12 @@ export async function createQaSuiteTransportAdapter(params: {
   try {
     const driver = selectQaTransportDriver({
       channelDriver: params.channelDriver,
-      channelDriverSelection: params.channelDriverSelection,
       channelId: params.channelId,
       transportId: params.transportId,
     });
     const result = await createQaTransportAdapter(
       {
-        channelId: params.channelId ?? params.channelDriverSelection?.channel ?? params.transportId,
+        channelId: params.channelId ?? params.transportId,
         driver,
         outputDir: params.outputDir,
         adapterOptions: {
@@ -138,10 +135,9 @@ export function formatQaSuiteRunStartProgress(params: {
   concurrency: number;
   transportId: QaTransportId;
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelId?: string | null;
 }) {
-  const channelDriver = params.channelDriver ?? params.channelDriverSelection?.channelDriver;
-  const channel = params.channelDriverSelection?.channel;
+  const channelDriver = params.channelDriver;
   const parts = [
     `run start: scenarios=${params.selectedScenarioCount}`,
     `concurrency=${params.concurrency}`,
@@ -150,8 +146,8 @@ export function formatQaSuiteRunStartProgress(params: {
   if (channelDriver) {
     parts.push(`channelDriver=${sanitizeQaSuiteProgressValue(channelDriver)}`);
   }
-  if (channel) {
-    parts.push(`channel=${sanitizeQaSuiteProgressValue(channel)}`);
+  if (params.channelId) {
+    parts.push(`channel=${sanitizeQaSuiteProgressValue(params.channelId)}`);
   }
   return parts.join(" ");
 }
@@ -507,6 +503,7 @@ export type { QaSuiteSummaryJsonParams } from "./suite-artifacts.js";
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
+  rejectRemovedQaChannelDriverSelection(params);
   const { runQaFlowSuiteFromRuntime } = await import("./suite-run.runtime.js");
   return await runQaFlowSuiteFromRuntime(params);
 }

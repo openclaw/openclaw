@@ -23,7 +23,7 @@ const inboundBodyMock = vi.hoisted(() =>
     },
     canDetectMention: true,
     shouldBypassMention: false,
-    hasControlCommand: false,
+    commandSource: undefined,
     stickerCacheHit: true,
     locationData: undefined,
   })),

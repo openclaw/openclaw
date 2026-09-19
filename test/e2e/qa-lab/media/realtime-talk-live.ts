@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -215,7 +215,7 @@ function createRealtimeTalkEvidenceWriter(
         SOURCE_PATH,
         SMOKE_PATH,
         "extensions/openai/realtime-voice-provider.ts",
-        "ui/src/pages/chat/realtime-talk-webrtc.ts",
+        "ui/src/pages/chat/talk/webrtc.ts",
       ],
     },
   });

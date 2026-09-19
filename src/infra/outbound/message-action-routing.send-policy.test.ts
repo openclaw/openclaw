@@ -2,6 +2,7 @@
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -76,6 +77,120 @@ describe("runMessageAction core send routing", () => {
       .mockReset()
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
   });
+  it.each([
+    { name: "bound target", currentChannelId: "source-chat" },
+    { name: "missing targets" },
+    { name: "empty targets", currentChannelId: "", currentMessagingTarget: "" },
+    { name: "blank targets", currentChannelId: " ", currentMessagingTarget: "\t" },
+  ])(
+    "enforces an explicit WebChat cross-provider restriction with $name before transport",
+    async (targets) => {
+      const sendText = registerSlackTextPlugin();
+
+      await expect(
+        runMessageAction({
+          cfg: {
+            ...slackConfig,
+            tools: { message: { crossContext: { allowAcrossProviders: false } } },
+          },
+          action: "send",
+          params: {
+            channel: "slack",
+            target: "channel:C123",
+            message: "synthetic policy probe",
+            bestEffort: true,
+          },
+          toolContext: {
+            currentChannelProvider: "webchat",
+            currentChannelId: targets.currentChannelId,
+            currentMessagingTarget: targets.currentMessagingTarget,
+          },
+          dryRun: false,
+        }),
+      ).rejects.toMatchObject({
+        reasonCode: "message_cross_context_denied",
+        policyRef: "message-cross-context:provider",
+      });
+      expect(sendText).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "default access", allowed: true },
+    { name: "global opt-in", global: true, allowed: true },
+    { name: "agent opt-in", global: false, agent: true, allowed: true },
+    { name: "global restriction", global: false, allowed: false },
+    { name: "agent restriction", global: true, agent: false, allowed: false },
+  ])("preserves $name for targetless recovery", async (policy) => {
+    const sendText = registerSlackTextPlugin();
+    const cfg: OpenClawConfig = {
+      ...slackConfig,
+      tools: {
+        message: { crossContext: { allowAcrossProviders: policy.global } },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            ...(policy.agent === undefined
+              ? {}
+              : {
+                  tools: { message: { crossContext: { allowAcrossProviders: policy.agent } } },
+                }),
+          },
+        ],
+      },
+    };
+    const recovery = resolveAgentRestartRecoveryContext({
+      isRestartRecoveryResumeRun: true,
+      canUseInternalRuntimeHandoff: true,
+      expectedExistingSessionId: "session-1",
+      resolvedSessionId: "session-1",
+      runId: "recovery-run",
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "source-run",
+        restartRecoverySourceIngress: "control-ui",
+      },
+    });
+    expect(recovery?.messageChannel).toBe("webchat");
+    expect(recovery?.channel).toBeUndefined();
+
+    const send = runMessageAction({
+      cfg,
+      agentId: "main",
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "synthetic recovery policy probe",
+        bestEffort: true,
+      },
+      toolContext: { currentChannelProvider: recovery?.messageChannel },
+      dryRun: false,
+    });
+    if (!policy.allowed) {
+      await expect(send).rejects.toMatchObject({
+        reasonCode: "message_cross_context_denied",
+        policyRef: "message-cross-context:provider",
+      });
+      expect(sendText).not.toHaveBeenCalled();
+      return;
+    }
+    await expect(send).resolves.toMatchObject({
+      kind: "send",
+      channel: "slack",
+      to: "channel:C123",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text")).toMatchObject({
+      to: "channel:C123",
+      text: "synthetic recovery policy probe",
+    });
+  });
+
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
     setActivePluginRegistry(
       createTestRegistry([

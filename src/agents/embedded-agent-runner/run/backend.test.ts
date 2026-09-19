@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   getCoreTtsAttemptResultMediaUrls,
@@ -8,7 +9,6 @@ import { runEmbeddedAttemptWithBackend } from "./backend.js";
 
 const harnessMocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
-  settleRequester: vi.fn(),
 }));
 
 vi.mock("../../harness/selection.js", () => ({
@@ -16,77 +16,57 @@ vi.mock("../../harness/selection.js", () => ({
   runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
 
-vi.mock("../../subagents/registry/subagent-registry.js", () => ({
-  settleRequesterAfterSessionSpawns: harnessMocks.settleRequester,
-}));
-
 describe("embedded attempt backend", () => {
   beforeEach(() => {
     harnessMocks.runAttempt.mockReset();
-    harnessMocks.settleRequester.mockReset();
   });
 
-  it.each([
-    { yielded: true, settled: true, accepted: true, expected: true },
-    { yielded: true, settled: false, accepted: true, expected: undefined },
-    { yielded: false, settled: true, accepted: true, expected: undefined },
-    { yielded: true, settled: false, accepted: false, expected: undefined },
-  ])(
-    "requires core settlement before acknowledging continuation ($yielded/$settled/$accepted)",
-    async ({ yielded, settled, accepted, expected }) => {
-      harnessMocks.settleRequester.mockReturnValue(settled);
+  it("carries child receipts across model candidates only for the same admitted instance", async () => {
+    const instance = createOperationalRunInstanceRef("parent");
+    const accepted = {
+      runId: "child",
+      childSessionKey: "agent:main:subagent:child",
+      expectsCompletionMessage: true,
+    };
+    harnessMocks.runAttempt
+      .mockResolvedValueOnce(makeEmbeddedRunnerAttempt({ acceptedSessionSpawns: [accepted] }))
+      .mockResolvedValueOnce(makeEmbeddedRunnerAttempt({}))
+      .mockResolvedValueOnce(makeEmbeddedRunnerAttempt({}));
+    await runEmbeddedAttemptWithBackend({
+      modelId: "first-model",
+      admittedRunContext: { operationalRunInstance: instance },
+    } as never);
+    const fallback = await runEmbeddedAttemptWithBackend({
+      modelId: "second-model",
+      admittedRunContext: { operationalRunInstance: instance },
+    } as never);
+    const replacement = await runEmbeddedAttemptWithBackend({
+      admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("parent") },
+    } as never);
+    expect(fallback.acceptedSessionSpawns).toEqual([accepted]);
+    expect(replacement.acceptedSessionSpawns ?? []).toEqual([]);
+  });
+
+  it.each(["openclaw", "codex"])(
+    "does not trust attempt-supplied settlement from %s",
+    async (agentHarnessId) => {
       harnessMocks.runAttempt.mockResolvedValueOnce(
         makeEmbeddedRunnerAttempt({
-          agentHarnessId: "codex",
-          yieldDetected: yielded,
-          // A harness-supplied value must not manufacture core settlement.
+          agentHarnessId,
+          yieldDetected: true,
           requesterContinuationSettled: true,
-          acceptedSessionSpawns: accepted
-            ? [{ runId: "child", childSessionKey: "agent:main:subagent:child" }]
-            : [],
+          acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
         }),
       );
       const result = await runEmbeddedAttemptWithBackend({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        runId: "parent",
+        admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("test") },
       } as never);
-      expect(result.requesterContinuationSettled).toBe(expected);
+      expect(result.requesterContinuationSettled).toBeUndefined();
+      expect(result.acceptedSessionSpawns).toEqual([
+        { runId: "child", childSessionKey: "agent:main:subagent:child" },
+      ]);
     },
   );
-
-  it("does not return a continuation acknowledgment when registry persistence throws", async () => {
-    harnessMocks.settleRequester.mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
-    harnessMocks.runAttempt.mockResolvedValueOnce(
-      makeEmbeddedRunnerAttempt({
-        agentHarnessId: "codex",
-        yieldDetected: true,
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
-      }),
-    );
-    await expect(
-      runEmbeddedAttemptWithBackend({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        runId: "parent",
-      } as never),
-    ).rejects.toThrow("storage unavailable");
-  });
-
-  it("preserves the built-in runner's completed settlement", async () => {
-    harnessMocks.runAttempt.mockResolvedValueOnce(
-      makeEmbeddedRunnerAttempt({
-        agentHarnessId: "openclaw",
-        yieldDetected: true,
-        requesterContinuationSettled: true,
-      }),
-    );
-    const result = await runEmbeddedAttemptWithBackend({} as never);
-    expect(result.requesterContinuationSettled).toBe(true);
-    expect(harnessMocks.settleRequester).not.toHaveBeenCalled();
-  });
 
   it.each([true, false])(
     "keeps runtime model selection only for prepared ownership (%s)",
@@ -109,7 +89,9 @@ describe("embedded attempt backend", () => {
         assertCurrent: async () => {},
       };
       const result = await runEmbeddedAttemptWithBackend(
-        {} as never,
+        {
+          admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("test") },
+        } as never,
         runtimeOwned ? nativeRuntime : undefined,
       );
       if (runtimeOwned) {
@@ -132,7 +114,9 @@ describe("embedded attempt backend", () => {
     );
     harnessMocks.runAttempt.mockResolvedValueOnce(attempt);
 
-    const result = await runEmbeddedAttemptWithBackend({} as never);
+    const result = await runEmbeddedAttemptWithBackend({
+      admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("test") },
+    } as never);
 
     expect(
       getCoreTtsAttemptResultMediaUrls(result, result.toolMediaUrls, operationalRunInstance),
@@ -173,6 +157,7 @@ describe("embedded attempt backend", () => {
     });
 
     const result = await runEmbeddedAttemptWithBackend({
+      admittedRunContext: { operationalRunInstance: createOperationalRunInstanceRef("test") },
       runtimePlan: {
         resolvedRef: { provider: "groq", modelId: "openai/gpt-oss-120b" },
         auth: credentialSource ? { credentialSource } : {},

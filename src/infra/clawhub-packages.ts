@@ -120,6 +120,7 @@ export type ClawHubPackageSecurityResponse = {
     version?: string | null;
   } | null;
   overview: string;
+  verdict?: string;
   securityAuditUrl: string;
   trust: ClawHubPackageSecurityTrust;
 };
@@ -291,7 +292,9 @@ function parseOptionalSecurityRelease(value: unknown): ClawHubPackageSecurityRes
   return result;
 }
 
-function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecurityResponse {
+export function parseClawHubPackageSecurityResponse(
+  value: unknown,
+): ClawHubPackageSecurityResponse {
   if (!isJsonObject(value)) {
     throw new Error("Malformed ClawHub security response: expected an object.");
   }
@@ -327,6 +330,10 @@ function parseClawHubPackageSecurityResponse(value: unknown): ClawHubPackageSecu
     trust: parsedTrust,
   };
   const parsedPackage = parseOptionalSecurityPackage(value.package);
+  const verdict = readClawHubStringField(value, "verdict", "security response");
+  if (verdict) {
+    result.verdict = verdict;
+  }
   const parsedRelease = parseOptionalSecurityRelease(value.release);
   if (parsedPackage !== undefined) {
     result.package = parsedPackage;

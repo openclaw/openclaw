@@ -32,6 +32,7 @@ import {
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import * as runReceiptStore from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
@@ -333,22 +334,20 @@ describe("cron durable run ownership", () => {
     const job = makeCommandJob("receipt-required", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const database = openOpenClawStateDatabase().db;
-    database.exec(`
-      CREATE TRIGGER reject_cron_run_receipt
-      BEFORE INSERT ON cron_run_receipts
-      BEGIN
-        SELECT RAISE(ABORT, 'receipt unavailable');
-      END;
-    `);
+    const claim = vi
+      .spyOn(runReceiptStore, "claimCronRunReceiptInDatabase")
+      .mockImplementation(() => {
+        throw new Error("receipt unavailable");
+      });
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const cron = makeParentService(storePath, runner);
     try {
       await expect(cron.run(job.id, "force")).rejects.toThrow("receipt unavailable");
+      expect(claim).toHaveBeenCalledOnce();
       expect(runner).not.toHaveBeenCalled();
     } finally {
       cron.stop();
-      database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt");
+      claim.mockRestore();
     }
   });
 

@@ -1,3 +1,6 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
 run_hosted_prepare_gates() {
   local pr="$1"
   local current_head="$2"
@@ -19,15 +22,15 @@ run_hosted_prepare_gates() {
   if [ -z "$recent_sha" ]; then
     local parent_sha
     local parent_delta
-    if parent_sha=$(git rev-parse "${current_head}^" 2>/dev/null) &&
-      parent_delta=$(git diff --name-only "$parent_sha" "$current_head" 2>/dev/null) &&
+    if parent_sha=$(pr_git rev-parse "${current_head}^" 2>/dev/null) &&
+      parent_delta=$(pr_git diff --name-only "$parent_sha" "$current_head" 2>/dev/null) &&
       file_list_is_docsish_only "$parent_delta"; then
       recent_sha="$parent_sha"
     fi
   fi
 
   local repo
-  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  repo=$(pr_gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -47,6 +50,24 @@ run_hosted_prepare_gates() {
     args+=(--changelog-only)
   fi
   if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+    local reused_head
+    reused_head=$(jq -er '.reusedFromSha // "" | strings' .local/gates-hosted-checks.json) || return 1
+    if [ -n "$reused_head" ]; then
+      # Compare only main context incorporated into the candidate, not later main drift.
+      local reused_base current_base
+      reused_base=$(pr_git merge-base "$PR_MAIN_SHA" "$reused_head") || return 1
+      current_base=$(pr_git merge-base "$PR_MAIN_SHA" "$current_head") || return 1
+      if mainline_drift_requires_sync "$reused_base" "$reused_head" "$current_base"; then
+        echo "Hosted CI reuse declined: candidate incorporated relevant main changes; require successful CI for $current_head."
+        return 1
+      else
+        local drift_status=$?
+        if [ "$drift_status" -ne 1 ]; then
+          echo "Hosted CI reuse failed: unable to evaluate mainline input changes." >&2
+          return 1
+        fi
+      fi
+    fi
     return 0
   fi
 
@@ -78,7 +99,7 @@ ci_dispatch() {
   local pr="$1"
   shift
   local record base_sha head_ref head_sha is_cross_repository
-  record=$(gh pr view "$pr" --json baseRefOid,headRefName,headRefOid,isCrossRepository)
+  record=$(pr_gh pr view "$pr" --json baseRefOid,headRefName,headRefOid,isCrossRepository) || return 1
   base_sha=$(printf '%s\n' "$record" | jq -r .baseRefOid)
   head_ref=$(printf '%s\n' "$record" | jq -r .headRefName)
   head_sha=$(printf '%s\n' "$record" | jq -r .headRefOid)
@@ -89,6 +110,10 @@ ci_dispatch() {
   fi
   if [ "$is_cross_repository" = "true" ]; then
     echo "PR #$pr comes from a fork; release-gate workflow dispatch requires a base-repository branch at $head_sha." >&2
+    return 1
+  fi
+  if [ "$is_cross_repository" != "false" ]; then
+    echo "PR #$pr is missing repository identity for workflow dispatch." >&2
     return 1
   fi
 
@@ -211,8 +236,9 @@ require_remote_testbox_gate_stamp() {
 
 require_active_org_admin_for_crabbox_gate() {
   local actor membership
-  actor=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login) || return
-  membership=$(gh_plain api "orgs/openclaw/memberships/$actor" -H 'Cache-Control: max-age=0') || return
+  # A relay's REST /user is not necessarily the mutation writer; keep viewer authority.
+  actor=$(pr_gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login) || return
+  membership=$(pr_gh_plain api "orgs/openclaw/memberships/$actor" -H 'Cache-Control: max-age=0') || return
   if [ "$(printf '%s\n' "$membership" | jq -r .state)" != "active" ] ||
     [ "$(printf '%s\n' "$membership" | jq -r .role)" != "admin" ]; then
     echo "OPENCLAW_PR_GATES_REMOTE=crabbox-aws requires an active openclaw organization admin." >&2
@@ -226,7 +252,7 @@ read_crabbox_gate_pr_binding() {
   local expected_head="$2"
   local expected_base="${3:-}"
   local record
-  record=$(gh pr view "$pr" --json baseRefName,baseRefOid,headRefOid,isCrossRepository,state)
+  record=$(pr_gh pr view "$pr" --json baseRefName,baseRefOid,headRefOid,isCrossRepository,state) || return 1
   if [ "$(printf '%s\n' "$record" | jq -r .state)" != "OPEN" ] ||
     [ "$(printf '%s\n' "$record" | jq -r .isCrossRepository)" != "false" ] ||
     [ "$(printf '%s\n' "$record" | jq -r .baseRefName)" != "main" ] ||
@@ -321,7 +347,7 @@ write_gates_env_stamp() {
 }
 
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
+  PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true
@@ -412,7 +438,7 @@ prepare_gates() {
   fi
 
   local current_head
-  current_head=$(git rev-parse HEAD)
+  current_head=$(pr_git rev-parse HEAD)
   local previous_last_verified_head=""
   local previous_full_gates_head=""
   local remote_gates_provider=""
@@ -435,9 +461,9 @@ prepare_gates() {
   local gates_mode="full"
   local hosted_gates_head=""
   local reuse_gates=false
-  if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
+  if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && pr_git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
     local delta_since_verified
-    delta_since_verified=$(git diff --name-only "$previous_last_verified_head"..HEAD)
+    delta_since_verified=$(pr_git diff --name-only "$previous_last_verified_head"..HEAD)
     if [ -z "$delta_since_verified" ] || file_list_is_docsish_only "$delta_since_verified"; then
       reuse_gates=true
     fi
@@ -450,9 +476,9 @@ prepare_gates() {
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
-      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check "$PR_MAIN_SHA...HEAD"
+      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" pr_git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record" || return 1
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

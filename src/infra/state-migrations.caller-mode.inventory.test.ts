@@ -141,6 +141,8 @@ module.exports = { stateMigrations: [{
 
         await expect(repair()).resolves.toEqual({
           changes: ["migrated kept-owner", "migrated omitted-owner"],
+          completedPluginIds: ["kept-owner", "omitted-owner"],
+          requiredPluginIds: ["kept-owner", "omitted-owner"],
           warnings: [],
         });
         for (const pluginId of pluginIds) {
@@ -148,7 +150,12 @@ module.exports = { stateMigrations: [{
             "migrated",
           );
         }
-        await expect(repair()).resolves.toEqual({ changes: [], warnings: [] });
+        await expect(repair()).resolves.toEqual({
+          changes: [],
+          completedPluginIds: ["kept-owner", "omitted-owner"],
+          requiredPluginIds: ["kept-owner", "omitted-owner"],
+          warnings: [],
+        });
       },
       { config, env },
     );
@@ -263,11 +270,16 @@ module.exports = { stateMigrations: [{
   const refused = await runRepair(baseConfig, frozenActions.toReversed());
   expect(refused).toEqual({
     changes: [],
+    completedPluginIds: undefined,
+    requiredPluginIds: ["acpx", "codex"],
     warnings: [expect.stringContaining("immutable action order")],
+    warningDisposition: undefined,
   });
 
   await expect(runRepair(baseConfig, frozenActions)).resolves.toEqual({
     changes: ["migrated acpx", "migrated codex"],
+    completedPluginIds: ["acpx", "codex"],
+    requiredPluginIds: ["acpx", "codex"],
     warnings: [],
   });
   expect(fs.readFileSync(markerPaths.acpx, "utf8")).toBe("migrated");
@@ -440,7 +452,12 @@ module.exports = { stateMigrations: [{
         maintenanceAuthority: { assertCurrent() {} },
         plannedActions: prepared?.plannedActions,
       }),
-    ).resolves.toEqual({ changes: ["migrated session action"], warnings: [] });
+    ).resolves.toEqual({
+      changes: ["migrated session action"],
+      completedPluginIds: ["inventory-owner"],
+      requiredPluginIds: ["inventory-owner"],
+      warnings: [],
+    });
     expect(fs.readFileSync(mutationPath, "utf8")).toBe("migrated");
   },
 );

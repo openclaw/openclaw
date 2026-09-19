@@ -2,17 +2,20 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { createCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
+  isSubagentCoordinationInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
@@ -24,12 +27,96 @@ import {
   hasAssistantDisplayableNonTextContent,
   hasTranscriptMediaFacts,
   isEmptyTextOnlyContent,
-  isProjectedSessionsSendForwardedMessage,
-  isSessionsSendInterSessionUserMessage,
+  isProjectedForwardedMessage,
+  isForwardedUserMessage,
+  isCronRunMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
 
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
+
+export type SubagentCoordinationDisplayResolver = {
+  assertCurrent?: () => void;
+  isSubagentSession: (sessionKey: string) => boolean;
+  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
+};
+
+export function isSubagentCoordinationHistoryInput(
+  message: Record<string, unknown>,
+  isSubagentSession?: SubagentCoordinationDisplayResolver["isSubagentSession"],
+): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (isSubagentCoordinationInputProvenance(provenance)) {
+    return true;
+  }
+  return Boolean(
+    provenance?.kind === "inter_session" &&
+    provenance.sourceTool === "sessions_send" &&
+    provenance.sourceSessionKey &&
+    isSubagentSession?.(provenance.sourceSessionKey),
+  );
+}
+
+/** Keep coordination in the model transcript while projecting only human-facing outcomes. */
+export function createSubagentCoordinationHistoryProjection(
+  resolver?: SubagentCoordinationDisplayResolver,
+) {
+  const hiddenInputKeys = new Set<string>();
+  const visibleInputKeys = new Set<string>();
+  const visibleSteerRunIds = new Set<string>();
+  return (messages: unknown[]): unknown[] => {
+    resolver?.assertCurrent?.();
+    const projected = messages.map((message) => {
+      const record = readRecord(message);
+      if (!record) {
+        return message;
+      }
+      const metadata = readRecord(record["__openclaw"]);
+      if (isSubagentCoordinationHistoryInput(record, resolver?.isSubagentSession)) {
+        const inputKey = record.idempotencyKey ?? metadata?.idempotencyKey;
+        // Steering belongs to an already-running turn, not the sender's requested run.
+        if (typeof inputKey === "string" && !metadata?.steerTargetRunId) {
+          hiddenInputKeys.add(inputKey);
+        }
+        return record.display === false ? record : { ...record, display: false };
+      }
+      const runId = readSessionTranscriptRunId(record);
+      if (record.role === "user") {
+        const inputKey = record.idempotencyKey ?? metadata?.idempotencyKey;
+        if (typeof inputKey === "string") {
+          visibleInputKeys.add(inputKey);
+        }
+        const steerTargetRunId = metadata?.steerTargetRunId ?? runId;
+        if (typeof steerTargetRunId === "string") {
+          visibleSteerRunIds.add(steerTargetRunId);
+        }
+        return message;
+      }
+      if (record.display === false) {
+        return message;
+      }
+      if (
+        (record.role === "assistant" || record.role === "toolResult" || record.role === "custom") &&
+        runId &&
+        !visibleSteerRunIds.has(runId) &&
+        (hiddenInputKeys.has(buildRunUserTurnIdempotencyKey(runId)) ||
+          (!visibleInputKeys.has(buildRunUserTurnIdempotencyKey(runId)) &&
+            resolver?.isSubagentRunMessage(
+              runId,
+              typeof metadata?.seq === "number" ? metadata.seq : undefined,
+            )))
+      ) {
+        return { ...record, display: false };
+      }
+      return message;
+    });
+    resolver?.assertCurrent?.();
+    return projected;
+  };
+}
 
 function readTtsSupplementMarker(
   message: Record<string, unknown>,
@@ -78,9 +165,18 @@ function readAssistantTtsSupplementMarker(
   return hasSupplementBlock ? marker : undefined;
 }
 
+/** Recognize stored supplements using the same display content as full history. */
+export function isAssistantTtsSupplementMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  return (
+    record !== undefined &&
+    readAssistantTtsSupplementMarker(projectAssistantDisplayContent(record)) !== undefined
+  );
+}
+
 function readTtsSupplementTargetText(message: Record<string, unknown>): string {
   return asRoleContentMessage(message)?.role === "assistant" &&
-    !isProjectedSessionsSendForwardedMessage(message) &&
+    !isProjectedForwardedMessage(message) &&
     !readTtsSupplementMarker(message)
     ? extractProjectedText(message.content ?? message.text).trim()
     : "";
@@ -201,38 +297,45 @@ function isChatHistoryAssistantMessage(message: unknown): boolean {
   return readRecord(message)?.role === "assistant";
 }
 
+export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
+  let precedingAnnounce = false;
+  return (messages: unknown[]): unknown[] => {
+    if (sessionStartedAt === undefined || messages.length === 0) {
+      return messages;
+    }
+    let changed = false;
+    const kept: unknown[] = [];
+    for (const current of messages) {
+      if (precedingAnnounce) {
+        precedingAnnounce = false;
+        const ts = isChatHistoryAssistantMessage(current)
+          ? readChatHistoryRecordTimestampMs(current)
+          : undefined;
+        if (typeof ts === "number" && ts < sessionStartedAt) {
+          changed = true;
+          continue;
+        }
+      }
+      if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
+        const ts = readChatHistoryRecordTimestampMs(current);
+        if (typeof ts === "number" && ts < sessionStartedAt) {
+          // The adjacent assistant may arrive in the next appended chunk.
+          precedingAnnounce = true;
+          changed = true;
+          continue;
+        }
+      }
+      kept.push(current);
+    }
+    return changed ? kept : messages;
+  };
+}
+
 export function dropPreSessionStartAnnouncePairs(
   messages: unknown[],
   sessionStartedAt: number | undefined,
 ): unknown[] {
-  if (sessionStartedAt === undefined || messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const kept: unknown[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const current = messages[i];
-    if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
-      const ts = readChatHistoryRecordTimestampMs(current);
-      if (typeof ts === "number" && ts < sessionStartedAt) {
-        const next = messages[i + 1];
-        const nextTs = readChatHistoryRecordTimestampMs(next);
-        if (
-          isChatHistoryAssistantMessage(next) &&
-          typeof nextTs === "number" &&
-          nextTs < sessionStartedAt
-        ) {
-          // Skip only an assistant reply that is also pre-session-start; recent
-          // or timestampless assistants may be real fresh-session context.
-          i++;
-        }
-        changed = true;
-        continue;
-      }
-    }
-    kept.push(current);
-  }
-  return changed ? kept : messages;
+  return createPreSessionStartAnnouncePairFilter(sessionStartedAt)(messages);
 }
 
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
@@ -250,7 +353,7 @@ function shouldHideProjectedHistoryMessage(
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
-  if (isProjectedSessionsSendForwardedMessage(message)) {
+  if (isProjectedForwardedMessage(message)) {
     return false;
   }
   if (!roleContent) {
@@ -278,7 +381,7 @@ function shouldHideProjectedHistoryMessage(
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
 export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   const record = readRecord(message);
-  if (!record || isSessionsSendInterSessionUserMessage(record)) {
+  if (!record || isForwardedUserMessage(record)) {
     return false;
   }
   const roleContent = asRoleContentMessage(record);
@@ -311,7 +414,7 @@ function openclawAssistantModel(message: Record<string, unknown>): string | unde
     : undefined;
 }
 
-export function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
   const text = extractProjectedText(message.content ?? message.text).trim();
   return text ? text : undefined;
 }
@@ -354,7 +457,7 @@ function isDuplicateChannelFinalDeliveryMirror(
   if (isOpenClawDeliveryMirrorAssistantMessage(previousVisible)) {
     return false;
   }
-  if (isProjectedSessionsSendForwardedMessage(previousVisible)) {
+  if (isProjectedForwardedMessage(previousVisible)) {
     return false;
   }
   const previousMeta = readRecord(previousVisible["__openclaw"]);
@@ -419,7 +522,7 @@ export function filterVisibleProjectedHistoryMessages(
       next &&
       nextRoleContent &&
       isHeartbeatOkResponse(nextRoleContent) &&
-      !isProjectedSessionsSendForwardedMessage(next)
+      !isProjectedForwardedMessage(next)
     ) {
       changed = true;
       pendingTurnBoundary = true;
@@ -428,7 +531,7 @@ export function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= heartbeatUser && !isSessionsSendInterSessionUserMessage(current);
+      pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
       continue;
     }
     if (
@@ -452,9 +555,9 @@ export function filterVisibleProjectedHistoryMessages(
   };
 }
 
-function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
+function stripPromptPrefixFromContent(content: unknown, strip: (text: string) => string): unknown {
   if (typeof content === "string") {
-    return stripInterSessionPromptPrefixForDisplay(content);
+    return strip(content);
   }
   if (!Array.isArray(content)) {
     return content;
@@ -467,59 +570,98 @@ function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
     if (typeof record.text !== "string") {
       return block;
     }
-    const stripped = stripInterSessionPromptPrefixForDisplay(record.text);
+    const stripped = strip(record.text);
     return stripped === record.text ? block : { ...record, text: stripped };
   });
 }
 
-function extractPromptPrefixField(text: string, field: string): string | undefined {
-  const prefixIndex = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
-  if (prefixIndex === -1) {
-    return undefined;
-  }
-  const lineEnd = text.indexOf("\n", prefixIndex);
-  const header = lineEnd === -1 ? text.slice(prefixIndex) : text.slice(prefixIndex, lineEnd);
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`(?:^|\\s)${escapedField}=([^\\s]+)`).exec(header);
-  return normalizeOptionalString(match?.[1]);
+function readForwardedSender(message: Record<string, unknown>) {
+  // Only structured provenance identifies the sender; prompt headers are display text.
+  const provenance = normalizeInputProvenance(message.provenance);
+  const sourceSessionKey = provenance?.sourceSessionKey;
+  const parsed = parseAgentSessionKey(sourceSessionKey);
+  const agentId = parsed?.agentId;
+  const jobId = isCronRunMessage(message)
+    ? provenance?.jobId
+    : parsed?.rest.match(/^cron:([^:]+):run:[^:]+$/u)?.[1];
+  return { sourceSessionKey, agentId, jobId };
 }
 
-function resolveSessionsSendForwardedSenderSession(
+function resolveForwardedSenderSession(
   message: Record<string, unknown>,
-): { sessionKey?: string; agentId?: string } | undefined {
-  const provenance = normalizeInputProvenance(message.provenance);
-  const text = extractProjectedText(message.content ?? message.text);
-  const sourceSessionKey =
-    provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
-  const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
+  resolveCronJobName: (jobId: string) => string | undefined,
+): { sessionKey?: string; agentId?: string; label?: string } | undefined {
+  const { sourceSessionKey, agentId, jobId } = readForwardedSender(message);
+  const label = jobId ? (resolveCronJobName(jobId) ?? "Automation") : undefined;
   return sourceSessionKey
-    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }
+    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}), ...(label ? { label } : {}) }
     : undefined;
 }
 
-export function projectSessionsSendInterSessionMessages(
+export function projectForwardedMessages(
   messages: Array<Record<string, unknown>>,
+  resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
+  const resolve =
+    resolveCronJobName ??
+    createCronJobNameResolver(
+      messages.flatMap((message) => {
+        if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
+          return [];
+        }
+        const jobId = readForwardedSender(message).jobId;
+        return jobId ? [jobId] : [];
+      }),
+    );
+  const names = new Map<string, string | undefined>();
+  const resolveName = (jobId: string) => {
+    if (!names.has(jobId)) {
+      names.set(jobId, resolve(jobId));
+    }
+    return names.get(jobId);
+  };
   let changed = false;
   const projected = messages.map((message) => {
-    if (!isSessionsSendInterSessionUserMessage(message)) {
+    if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
       return message;
     }
+    const senderSession = resolveForwardedSenderSession(message, resolveName);
+    if (message.role === "assistant") {
+      const previous = readRecord(message.senderSession);
+      if (previous?.label === senderSession?.label) {
+        return message;
+      }
+      changed = true;
+      return {
+        ...message,
+        senderSession,
+        senderLabel: `Forwarded from ${senderSession?.label ?? senderSession?.agentId}`,
+      };
+    }
     changed = true;
-    const senderSession = resolveSessionsSendForwardedSenderSession(message);
+    const cronRun = isCronRunMessage(message);
+    const prefix = normalizeInputProvenance(message.provenance)?.sourcePromptPrefix;
+    const strip = cronRun
+      ? (text: string) =>
+          prefix && text.startsWith(prefix) ? text.slice(prefix.length).replace(/^ /u, "") : text
+      : stripInterSessionPromptPrefixForDisplay;
     const next: Record<string, unknown> = {
       ...message,
       role: "assistant",
-      senderLabel: senderSession?.agentId
-        ? `Forwarded from ${senderSession.agentId}`
-        : "Forwarded agent message",
+      ...(cronRun
+        ? { __openclaw: { ...readRecord(message["__openclaw"]), turnBoundary: true } }
+        : {}),
+      senderLabel:
+        senderSession?.label || senderSession?.agentId
+          ? `Forwarded from ${senderSession.label ?? senderSession.agentId}`
+          : "Forwarded agent message",
       ...(senderSession ? { senderSession } : {}),
     };
     if ("content" in next) {
-      next.content = stripInterSessionPromptPrefixFromContent(next.content);
+      next.content = stripPromptPrefixFromContent(next.content, strip);
     }
     if (typeof next.text === "string") {
-      next.text = stripInterSessionPromptPrefixForDisplay(next.text);
+      next.text = strip(next.text);
     }
     return next;
   });

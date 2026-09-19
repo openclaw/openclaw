@@ -234,6 +234,7 @@ describe("worker turn launcher remote handoff", () => {
       },
       {
         ...turn("run-worker-turn", true),
+        gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
         toolsAllow: ["browser"],
         workspaceDir: path.join(root, "stale-caller-workspace"),
         transcriptPrompt: "Canonical transcript request",
@@ -294,6 +295,7 @@ describe("worker turn launcher remote handoff", () => {
       turnSourceTo: "chat-worker",
       turnSourceAccountId: "worker-account",
       turnSourceThreadId: "thread-worker",
+      gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
     });
     expect(descriptor?.assignment.agentId).toBe(verifiedRuntimeIdentity?.agentId);
     expect(
@@ -306,6 +308,7 @@ describe("worker turn launcher remote handoff", () => {
     }
     expect(verifiedRuntimeIdentity).not.toHaveProperty("approvalOwnerPluginId");
     expect(descriptor?.assignment).not.toHaveProperty("admittedRunContext");
+    expect(descriptor?.assignment).not.toHaveProperty("gatewayUiCommandTarget");
     expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual(["browser"]);
     expect(descriptor?.assignment.browser).toEqual({
       cdpUrl: "http://127.0.0.1:9222",

@@ -10,6 +10,7 @@ import {
   UpdateDoctorConfigChangeSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
+import { updateRecoverySchema } from "./update-recovery.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
@@ -19,7 +20,16 @@ export const UpdateFailureFactSchema = z.object({
   message: z.string().max(200).optional(),
   affectedKey: z.string().max(128).optional(),
   pluginId: z.string().max(80).optional(),
+  errorName: z.string().max(80).nullable().optional(),
+  location: z.string().max(160).nullable().optional(),
 });
+
+const UpdateRollbackOutcomeSchema = z.object({
+  status: z.enum(["not-needed", "not-attempted", "succeeded", "failed"]),
+  reason: z.string().max(512),
+});
+
+export type UpdateRollbackOutcome = z.infer<typeof UpdateRollbackOutcomeSchema>;
 
 const text = z.string().max(UPDATE_RUN_TEXT_LIMIT);
 const timestamp = z.number().int().nonnegative();
@@ -34,6 +44,7 @@ const UpdateRunStepSchema = z.object({
   status: z.enum(UPDATE_RUN_STEP_STATUSES),
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
+  exitCode: z.number().int().nullable().optional(),
   detail: text.optional(),
   failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
   configChange: z
@@ -105,11 +116,17 @@ export const UpdateRunRecordSchema = z.object({
     kind: z.enum(["package", "git"]).optional(),
     version: text.optional(),
     sha: text.optional(),
+    installationMethod: z
+      .enum(["git-checkout", "npm-global", "pnpm-global", "bun-global", "managed-service"])
+      .nullable()
+      .optional(),
   }),
   before: version,
   after: version,
   steps: z.array(UpdateRunStepSchema).max(128),
   verification: z.object({
+    rollbackOutcome: UpdateRollbackOutcomeSchema.nullable().optional(),
+    recovery: updateRecoverySchema.nullable().optional(),
     booted: z.boolean().optional(),
     runningVersion: text.optional(),
     runningBuildId: text.optional(),

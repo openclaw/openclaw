@@ -5,12 +5,15 @@ import { renderCopyButton } from "../../components/copy-button.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
+
+registerNewSessionSetupEnglish();
 
 export type ChatPlacementStartupNoticeProps = {
   placementStartup?: ApplicationPlacementStartupStatus | null;

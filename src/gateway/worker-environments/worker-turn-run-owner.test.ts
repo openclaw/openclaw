@@ -260,7 +260,7 @@ describe("cloud worker run ownership", () => {
   it.each(["replacement", "claim-loss", "shutdown"] as const)(
     "fences retained event recorders after %s, including a reused run ID",
     async (closure) => {
-      const { captureWorkerTurnDiagnosticRecorder, createWorkerTurnRunOwner } =
+      const { captureWorkerTurnLiveEventOwner, createWorkerTurnRunOwner } =
         await import("./worker-turn-run-owner.js");
       seedActivePlacement();
       const runId = "reused-worker-run";
@@ -290,8 +290,8 @@ describe("cloud worker run ownership", () => {
         protocolFeatures: [],
         credentialExpiresAtMs: Date.now() + 60_000,
       };
-      const record = captureWorkerTurnDiagnosticRecorder(identity);
-      expect(record).toBeTypeOf("function");
+      const eventOwner = captureWorkerTurnLiveEventOwner(identity);
+      expect(eventOwner?.record).toBeTypeOf("function");
       const event = {
         kind: "tool" as const,
         payload: {
@@ -317,18 +317,19 @@ describe("cloud worker run ownership", () => {
               turn: turn(runId),
               sessionKey: SESSION_KEY,
             });
-            expect(captureWorkerTurnDiagnosticRecorder(identity)).toBeUndefined();
-            const current = captureWorkerTurnDiagnosticRecorder({
+            expect(captureWorkerTurnLiveEventOwner(identity)).toBeUndefined();
+            const current = captureWorkerTurnLiveEventOwner({
               ...identity,
               turnClaim: nextClaim,
             });
-            current?.({
+            current?.record({
               ...event,
               payload: { ...event.payload, toolCallId: "current-tool", name: "exec" },
             });
           }
         }
-        record?.(event);
+        eventOwner?.record(event);
+        expect(eventOwner?.isCancelled()).toBe(false);
         const activity = getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID });
         expect(activity.activeToolCallId).toBe(
           closure === "replacement" ? "current-tool" : undefined,

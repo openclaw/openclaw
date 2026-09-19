@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCorePluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
@@ -207,7 +208,7 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("preserves partial native OpenRouter pricing overrides in memory and across SQLite reads", async () => {
+  it("preserves native pricing and reasoning capabilities in memory and across SQLite reads", async () => {
     await withOpenRouterStateDir(async () => {
       const cost = {
         input: 2,
@@ -239,6 +240,7 @@ describe("openrouter-model-capabilities", () => {
               name: "SQLite Cached Model",
               architecture: { modality: "text+image->text" },
               supported_parameters: ["tools"],
+              reasoning: { supported_efforts: ["high", "low"], mandatory: true },
               context_length: 8765,
               max_completion_tokens: 4321,
               pricing: {
@@ -254,6 +256,7 @@ describe("openrouter-model-capabilities", () => {
                 ],
               },
             },
+            { id: "minimax/minimax-m2.7", reasoning: { mandatory: true } },
           ],
         }),
       );
@@ -270,6 +273,8 @@ describe("openrouter-model-capabilities", () => {
       expect(secondModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")).toMatchObject(
         {
           input: ["text", "image"],
+          compat: { supportedReasoningEfforts: ["high", "low"] },
+          thinkingLevelMap: { off: null },
           supportsTools: true,
           contextWindow: 8765,
           maxTokens: 4321,
@@ -277,6 +282,57 @@ describe("openrouter-model-capabilities", () => {
         },
       );
       expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(secondModule.getOpenRouterModelCapabilities("minimax/minimax-m2.7")).toMatchObject({
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+        thinkingLevelMap: { off: null },
+      });
+    });
+  });
+
+  it("retries an unavailable catalog before replacing cached rows without mandatory-reasoning metadata", async () => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "minimax/minimax-m2.7";
+      createCorePluginStateSyncKeyedStore({
+        ownerId: "core:openrouter-model-capabilities",
+        namespace: "models.v3",
+        maxEntries: 10_000,
+      }).register(modelId, {
+        name: modelId,
+        input: ["text"],
+        reasoning: true,
+        contextWindow: 32_000,
+        maxTokens: 4096,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      });
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("temporarily unavailable", { status: 503 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            data: [{ id: modelId, reasoning: { mandatory: true } }],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchSpy);
+      const cache = await importOpenRouterModelCapabilities("mandatory-metadata-cache-upgrade");
+      await cache.loadOpenRouterModelCapabilities(modelId);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(cache.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+
+      await cache.loadOpenRouterModelCapabilities(modelId);
+      expect(cache.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+        compat: { supportsReasoningEffort: false },
+        thinkingLevelMap: { off: null },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+      const reader = await importOpenRouterModelCapabilities("mandatory-metadata-cache-recovered");
+      expect(reader.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+        compat: { supportsReasoningEffort: false },
+        thinkingLevelMap: { off: null },
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
   });
 

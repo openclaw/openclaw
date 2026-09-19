@@ -286,33 +286,18 @@ describe("handleModelsCommand", () => {
       const model = { primary: `${provider}/claude-opus-4-5` };
       const command = provider === "anthropic" ? "/login anthropic" : "/login";
       it.each([
-        {
-          reason: "missing-auth",
-          catalog: "known",
-          label: "Sign-in needed",
-          recovery: `Connect with ${command}.`,
-        },
-        {
-          reason: "missing-auth",
-          catalog: "missing",
-          label: "Sign-in needed",
-          recovery: `Connect with ${command}.`,
-        },
-        {
-          reason: "auth-failed",
-          catalog: "known",
-          label: "Sign-in failed",
-          recovery: `Sign in again with ${command}.`,
-        },
-        {
-          reason: "cooldown",
-          catalog: "known",
-          label: "Temporarily unavailable",
-          recovery: "Try again later or choose another model.",
-        },
+        ["missing-auth", "known", "Sign-in needed", `Connect with ${command}.`],
+        ["missing-auth", "missing", "Sign-in needed", `Connect with ${command}.`],
+        ["auth-failed", "known", "Sign-in failed", `Sign in again with ${command}.`],
+        [
+          "cooldown",
+          "known",
+          "Temporarily unavailable",
+          "Try again later or choose another model.",
+        ],
       ] as const)(
-        "explains a retained primary with $reason and $catalog catalog entry",
-        async ({ reason, catalog, label, recovery }) => {
+        "explains a retained primary with %s and %s catalog entry",
+        async (reason, catalog, label, recovery) => {
           modelProviderAuthMocks.authenticatedProviders.delete(provider);
           modelProviderAuthMocks.unavailableReason = reason;
           const entry = { provider, id: "claude-opus-4-5", name: "Claude Opus" };

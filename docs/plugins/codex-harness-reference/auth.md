@@ -38,6 +38,10 @@ this mode. Import that file explicitly as described below. Set
 `appServer.homeScope: "user"` only when the app-server should instead own and
 use the operator's native Codex account.
 
+For a side-by-side explanation of what is handed off, who refreshes it, and how
+a shared native account affects supervised Chats, see
+[Credentials and account ownership](/plugins/codex-harness/native-features#credentials-and-account-ownership).
+
 No credential file is written in this mode, in either home. A subscription
 profile is handed over as an `account/login/start` request of type
 `chatgptAuthTokens`, which Codex installs as in-memory external auth rather

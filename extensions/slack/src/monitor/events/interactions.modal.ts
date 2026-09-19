@@ -1,4 +1,3 @@
-// Slack plugin module implements interactions.modal behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";

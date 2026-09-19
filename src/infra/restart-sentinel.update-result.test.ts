@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
@@ -10,10 +15,36 @@ import {
   markControlPlaneUpdateRestartSentinelFailure,
   writeControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+
+// Frozen v2026.9.4 reader contract; do not replace with the current recovery schema.
+// https://github.com/openclaw/openclaw/blob/3a9d69db306cd7f081e06254cb89c4bcc14a7107/src/infra/update-recovery.ts
+const releasedRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
+  z.strictObject({
+    serviceRestartSafe: z.literal(true),
+    packageRollbackVerified: z.literal(true).optional(),
+    version: z.string().trim().min(1),
+    buildId: z.string().trim().min(1).max(96).optional(),
+    service: z.enum(["healthy", "failed"]).optional(),
+  }),
+  z.strictObject({
+    serviceRestartSafe: z.literal(false),
+    packageRollbackVerified: z.boolean().optional(),
+    reason: z.enum([
+      "source-rollback-failed",
+      "state-migration-started",
+      "manager-unavailable",
+      "deps-install-failed",
+      "build-failed",
+      "rollback-checkout-dirty",
+      "runtime-verification-failed",
+    ]),
+  }),
+]);
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
   await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
@@ -26,6 +57,46 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
 }
 
 describe("control-plane update restart sentinel", () => {
+  it.each([
+    { status: "ok", reason: undefined, eligible: true },
+    { status: "error", reason: "doctor-failed", eligible: false },
+    { status: "skipped", reason: "already-current", eligible: true },
+    { status: "skipped", reason: "cancelled", eligible: false },
+  ] as const)(
+    "publishes exhausted readiness without a success continuation (status=$status, reason=$reason)",
+    ({ status, reason, eligible }) => {
+      const payload = buildUpdateRestartSentinelPayload({
+        result: {
+          status,
+          reason,
+          mode: "npm",
+          durationMs: 90_000,
+          steps: [
+            {
+              name: "gateway verification",
+              command: "gateway verification",
+              cwd: "/candidate",
+              durationMs: 90_000,
+              exitCode: 0,
+              termination: "timeout",
+              advisory: {
+                kind: "recoverable-maintenance",
+                message: "Readiness observation ended after 90s; PID 7376 still running.",
+              },
+            },
+          ],
+        },
+        meta: { continuationMessage: "Continue after success" },
+      });
+      expect(payload).toMatchObject({
+        status: eligible ? "skipped" : status,
+        stats: { reason: eligible ? "gateway-readiness-unverified" : reason },
+      });
+      expect(payload.continuation).toBeUndefined();
+      expect(isPendingControlPlaneUpdateRestartSentinel(payload)).toBe(false);
+    },
+  );
+
   it.each(["handoff", "restart", "rollback", "unsafe", "success"] as const)(
     "does not publish a targetless CLI %s notice for a restored runtime",
     async (phase) => {
@@ -327,6 +398,50 @@ describe("control-plane update restart sentinel", () => {
           }),
         );
         expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
+      });
+    },
+  );
+
+  it.each([
+    { service: "failed", reason: "channel-errors", health: "failed" },
+    { service: undefined, reason: "gateway-readiness-pending", health: "unverified" },
+  ] as const)(
+    "keeps $health rollback notifications readable by released 2026.9.4",
+    async ({ service, reason, health }) => {
+      await withRestartSentinelStateDir(async () => {
+        const persisted = {
+          serviceRestartSafe: true as const,
+          version: "2026.9.4",
+          buildId: "restored-build",
+          ...(service ? { service } : {}),
+        };
+        const result = {
+          status: "error" as const,
+          mode: "npm" as const,
+          reason: "readyz-unhealthy",
+          recovery: { ...persisted, packageRollbackVerified: true as const, reason },
+          steps: [],
+          durationMs: 1,
+        };
+        await writeControlPlaneUpdateRestartSentinel({
+          result,
+          meta: { sessionKey: "agent:main:main" },
+        });
+        const { db } = openOpenClawStateDatabase();
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+            .selectFrom("gateway_restart_sentinel")
+            .select("stats_json")
+            .where("sentinel_key", "=", "current"),
+        );
+        const stats = z
+          .object({ recovery: releasedRecoverySchema })
+          .parse(JSON.parse(row?.stats_json ?? "null"));
+        expect(stats.recovery).toEqual(persisted);
+        expect(result.recovery).toEqual({ ...persisted, packageRollbackVerified: true, reason });
+        const report = await prepareUpdateFailureReport({ attemptId: "released-reader", result });
+        expect(report.body).toContain(`Gateway health ${health} (${reason})`);
       });
     },
   );

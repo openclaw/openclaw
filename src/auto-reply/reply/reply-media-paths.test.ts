@@ -334,10 +334,32 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
-  it("stages absolute workspace media paths before sandbox mapping", async () => {
+  it("blocks absolute host-workspace media staging for sandboxed sessions with workspaceAccess none", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
+      workspaceAccess: "none",
+    });
+    const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [absolutePath],
+    });
+
+    expectNoMedia(result);
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("stages absolute workspace media paths before sandbox mapping when the workspace is mounted", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+      workspaceAccess: "rw",
     });
     const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
     const normalize = createReplyMediaPathNormalizer({

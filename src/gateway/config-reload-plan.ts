@@ -303,9 +303,9 @@ function getReloadPolicyCatalog() {
     return cachedCatalog;
   }
   const channelPlugins = listChannelPlugins();
-  const servicePolicies = (registry?.services ?? []).map(({ service }) => ({
+  const servicePolicies = (registry?.services ?? []).map(({ id, service }) => ({
     prefixes: service.reload?.configPrefixes ?? [],
-    services: [service.id],
+    services: [id],
   }));
   const channelPolicies = channelPlugins.flatMap((plugin): ReloadPolicy[] => [
     {

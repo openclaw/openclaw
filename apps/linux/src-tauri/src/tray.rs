@@ -1,14 +1,19 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::gateway_operation_queue::GatewayOperationQueue;
+use crate::keep_awake::{KeepAwake, Status as KeepAwakeStatus};
 use crate::quickchat;
 use crate::DesktopState;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tauri::menu::{CheckMenuItem, MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 const OPEN_ID: &str = "open-dashboard";
@@ -18,6 +23,7 @@ const CHECK_UPDATES_ID: &str = "check-for-updates";
 const UPDATE_ACTION_ID: &str = "update-action";
 const NO_UPDATE_ACTION_LABEL: &str = "No update action available";
 const START_AT_LOGIN_ID: &str = "start-at-login";
+const KEEP_AWAKE_ID: &str = "keep-computer-awake";
 const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
 const GLOBAL_SHORTCUT_ID: &str = "global-shortcut";
 pub(crate) const GLOBAL_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
@@ -36,6 +42,8 @@ pub struct TrayHandles {
     status_line: Arc<Mutex<StatusLine>>,
     update_action: MenuItem<tauri::Wry>,
     quickchat_shortcut: Option<CheckMenuItem<tauri::Wry>>,
+    keep_awake: CheckMenuItem<tauri::Wry>,
+    keep_awake_enabled: AtomicBool,
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
@@ -201,6 +209,14 @@ pub fn build(
         autostart_enabled,
         None::<&str>,
     )?;
+    let keep_awake = CheckMenuItem::with_id(
+        app,
+        KEEP_AWAKE_ID,
+        "Keep computer awake",
+        false,
+        false,
+        None::<&str>,
+    )?;
     let quickchat_shortcut_enabled =
         global_shortcuts_supported.then(|| quickchat::quickchat_shortcut_enabled(app));
     let quickchat_shortcut = quickchat_shortcut_enabled
@@ -237,13 +253,15 @@ pub fn build(
     let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
     let menu_builder = MenuBuilder::new(app)
         .item(&status)
+        .item(&crate::gateway_windows::menu(app.handle())?)
         .separator()
         .text(QUICKCHAT_ID, "Quick Chat")
         .text(OPEN_ID, "Open Dashboard")
         .text(CONNECTION_SETTINGS_ID, "Connection Settings")
         .text(CHECK_UPDATES_ID, "Check for Updates")
         .item(&update_action)
-        .item(&start_at_login);
+        .item(&start_at_login)
+        .item(&keep_awake);
     let menu_builder = if let Some(quickchat_shortcut) = quickchat_shortcut.as_ref() {
         menu_builder.item(quickchat_shortcut)
     } else {
@@ -346,6 +364,8 @@ pub fn build(
         })),
         update_action,
         quickchat_shortcut,
+        keep_awake,
+        keep_awake_enabled: AtomicBool::new(false),
         start,
         stop,
         restart,
@@ -375,7 +395,7 @@ pub fn open_dashboard(app: &AppHandle) {
                     if returned {
                         Ok(true)
                     } else {
-                        state.present_remote_dashboard()
+                        state.present_remote_dashboard(&current_app)
                     }
                 });
             show_window(&current_app);
@@ -425,6 +445,25 @@ fn handle_menu(
         }
         UPDATE_ACTION_ID => crate::updater::perform_action(app),
         START_AT_LOGIN_ID => toggle_autostart(app, start_at_login),
+        KEEP_AWAKE_ID => {
+            if state.is_quitting() {
+                return;
+            }
+            state.with_tray(|tray| {
+                // Native check items toggle optimistically before dispatching.
+                // Keep the visible check tied to the last confirmed OS request.
+                let _ = tray
+                    .keep_awake
+                    .set_checked(tray.keep_awake_enabled.load(Ordering::SeqCst));
+                let _ = tray.keep_awake.set_enabled(false);
+            });
+            if let Err(error) = app.state::<KeepAwake>().toggle() {
+                state.with_tray(|tray| {
+                    let _ = tray.keep_awake.set_enabled(true);
+                });
+                show_keep_awake_error(app, error);
+            }
+        }
         QUICKCHAT_SHORTCUT_ID => {
             if let Some(quickchat_shortcut) = quickchat_shortcut {
                 toggle_quickchat_shortcut(app, quickchat_shortcut);
@@ -449,6 +488,45 @@ fn handle_menu(
         }
         _ => {}
     }
+}
+
+pub fn publish_keep_awake(app: &AppHandle, status: KeepAwakeStatus) {
+    let current_app = app.clone();
+    // Worker publication must not synchronously wait for the UI: quit joins
+    // this worker after fencing new actions. Recheck that fence at delivery.
+    if let Err(error) = app.run_on_main_thread(move || {
+        let state = current_app.state::<DesktopState>();
+        if state.is_quitting() {
+            return;
+        }
+        state.with_tray(|tray| {
+            tray.keep_awake_enabled
+                .store(status.enabled, Ordering::SeqCst);
+            let _ = tray.keep_awake.set_checked(status.enabled);
+            let _ = tray
+                .keep_awake
+                .set_text(if status.enabled && !status.active {
+                    "Keep computer awake (inactive)"
+                } else {
+                    "Keep computer awake"
+                });
+            let _ = tray.keep_awake.set_enabled(true);
+        });
+        if let Some(error) = status.error {
+            show_keep_awake_error(&current_app, error);
+        }
+    }) {
+        eprintln!("Could not update Keep computer awake: {error}");
+    }
+}
+
+fn show_keep_awake_error(app: &AppHandle, error: String) {
+    eprintln!("Keep computer awake: {error}");
+    app.dialog()
+        .message(error)
+        .title("Keep computer awake")
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
 }
 
 fn toggle_quickchat_shortcut(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {

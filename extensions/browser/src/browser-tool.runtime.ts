@@ -62,7 +62,6 @@ export {
   browserDoctor,
   browserFocusTab,
   browserImportProfile,
-  normalizeBrowserTabsResult,
   browserOpenTab,
   browserProfiles,
   browserSystemProfiles,

@@ -37,7 +37,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   ): Promise<{ subscriptions: WorkboardNotificationSubscription[] }> {
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
-    const subscriptions = (await this.subscriptionStore.entries())
+    const subscriptions = (await this.subscriptionStore.entries({ boardId, cardId }))
       .map((entry) => entry.value)
       .filter(
         (entry): entry is PersistedWorkboardNotificationSubscription =>

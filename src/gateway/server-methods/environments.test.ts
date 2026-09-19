@@ -3,17 +3,17 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { listNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing, type PairedDevice } from "../../infra/device-pairing.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
-import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
+import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
   FakeWorkerServiceError,
   mockContext,
+  pairedNodeDevice,
   workerRecord,
   workerService,
 } from "./environments.test-support.js";
@@ -21,10 +21,6 @@ import {
 vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-}));
-
-vi.mock("../../infra/device-pairing-node.js", () => ({
-  listNodePairing: vi.fn(),
 }));
 
 vi.mock("../node-registry-private.js", () => ({
@@ -48,17 +44,17 @@ beforeEach(() => {
     workerBundleByNodeId: new Map(),
   };
   vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue(runtimeState);
-  vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
-  vi.mocked(listNodePairing).mockResolvedValue({
+  vi.mocked(listDevicePairing).mockResolvedValue({
+    pending: [],
     paired: [
-      {
-        nodeId: "node-offline",
+      pairedNodeDevice("node-live", { commands: ["system.run"] }),
+      pairedNodeDevice("node-offline", {
         displayName: "Offline Node",
         caps: ["screen"],
         commands: ["camera.snap"],
-      },
+      }),
     ],
-  } as never);
+  });
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -99,86 +95,6 @@ describe("environment gateway methods", () => {
       expect(summary).toMatchObject({ desktopAvailability: { state } });
     },
   );
-  it.each(["devices", "nodes"] as const)(
-    "waits for both independent pairing reads when %s finishes first",
-    async (first) => {
-      const devices = createDeferred<Awaited<ReturnType<typeof listDevicePairing>>>();
-      const nodes = createDeferred<Awaited<ReturnType<typeof listNodePairing>>>();
-      vi.mocked(listDevicePairing).mockClear().mockReturnValue(devices.promise);
-      vi.mocked(listNodePairing).mockClear().mockReturnValue(nodes.promise);
-      const context = mockContext();
-      const project = vi.spyOn(context.nodeRegistry, "listConnectedForPairingStates");
-      const respond = vi.fn();
-      const request = environmentsHandlers["environments.list"]?.({
-        params: {},
-        respond,
-        context,
-      } as never);
-
-      const liveDevice: PairedDevice = {
-        deviceId: "node-live",
-        publicKey: "public-key-live",
-        roles: ["node"],
-        tokens: { node: { token: "test-node-token", role: "node", scopes: [], createdAtMs: 1 } },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      };
-      const deviceSnapshot = {
-        paired: [
-          liveDevice,
-          { ...liveDevice, deviceId: "operator-only", roles: ["operator"], tokens: {} },
-        ],
-        pending: [],
-      };
-      const nodeSnapshot = {
-        paired: [
-          {
-            nodeId: "node-offline",
-            displayName: "Independent snapshot",
-            createdAtMs: 1,
-            approvedAtMs: 1,
-          },
-        ],
-        pending: [],
-      };
-      try {
-        expect(listDevicePairing).toHaveBeenCalledTimes(1);
-        expect(listNodePairing).toHaveBeenCalledTimes(1);
-        if (first === "devices") {
-          devices.resolve(deviceSnapshot);
-          await devices.promise;
-        } else {
-          nodes.resolve(nodeSnapshot);
-          await nodes.promise;
-        }
-        expect(project).not.toHaveBeenCalled();
-        expect(respond).not.toHaveBeenCalled();
-        devices.resolve(deviceSnapshot);
-        nodes.resolve(nodeSnapshot);
-        await request;
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            environments: expect.arrayContaining([
-              expect.objectContaining({ id: "node:node-offline", label: "Independent snapshot" }),
-            ]),
-          }),
-          undefined,
-        );
-        expect(project).toHaveBeenCalledTimes(1);
-        expect(project).toHaveBeenCalledWith(
-          new Map([["node-live", { identity: expect.any(String) }]]),
-        );
-        expect(listDevicePairing).toHaveBeenCalledTimes(1);
-        expect(listNodePairing).toHaveBeenCalledTimes(1);
-      } finally {
-        devices.resolve(deviceSnapshot);
-        nodes.resolve(nodeSnapshot);
-        await request;
-      }
-    },
-  );
-
   it("projects live node session-host capability without a worker service", async () => {
     runtimeState.sessionHostNodeIds.add("node-live");
     const [ok, payload] = await callEnvironmentMethod("environments.list", {});
@@ -223,26 +139,26 @@ describe("environment gateway methods", () => {
   });
 
   it("preserves never-connected and clean-disconnect history for offline nodes", async () => {
-    vi.mocked(listNodePairing).mockResolvedValue({
+    vi.mocked(listDevicePairing).mockResolvedValue({
+      pending: [],
       paired: [
-        {
-          nodeId: "node-never",
-          displayName: "Never Node",
-          commands: ["system.run"],
-          lastSeenAtMs: 2_000,
-          lastSeenReason: "device-token-auth",
-        },
-        {
-          nodeId: "node-lost",
-          displayName: "Lost Node",
-          commands: ["system.run"],
-          lastConnectedAtMs: 1_000,
-          lastDisconnectedAtMs: 4_000,
-          lastSeenAtMs: 3_000,
-          lastSeenReason: "silent_push",
-        },
+        pairedNodeDevice(
+          "node-never",
+          { displayName: "Never Node", commands: ["system.run"] },
+          { lastSeenAtMs: 2_000, lastSeenReason: "device-token-auth" },
+        ),
+        pairedNodeDevice(
+          "node-lost",
+          {
+            displayName: "Lost Node",
+            commands: ["system.run"],
+            lastConnectedAtMs: 1_000,
+            lastDisconnectedAtMs: 4_000,
+          },
+          { lastSeenAtMs: 3_000, lastSeenReason: "silent_push" },
+        ),
       ],
-    } as never);
+    });
 
     const [ok, payload] = await callEnvironmentMethod(
       "environments.list",
@@ -270,16 +186,16 @@ describe("environment gateway methods", () => {
   });
 
   it("projects durable offline session-host identity through list and status without slots", async () => {
-    vi.mocked(listNodePairing).mockResolvedValue({
+    vi.mocked(listDevicePairing).mockResolvedValue({
+      pending: [],
       paired: [
-        {
-          nodeId: "node-offline-host",
+        pairedNodeDevice("node-offline-host", {
           displayName: "Offline Host",
           commands: ["system.run"],
           sessionHost: true,
-        },
+        }),
       ],
-    } as never);
+    });
 
     const [, listPayload] = await callEnvironmentMethod(
       "environments.list",
@@ -466,7 +382,9 @@ describe("environment gateway methods", () => {
       const listOperatingSystems = vi.fn(async (profileId: string) =>
         profileId === "aws" ? systems : [systems[0]!],
       );
+      const list = vi.fn(() => []);
       const service = workerService({
+        list,
         listMachineOptions,
         listOperatingSystems,
         supportsExecutionMode: vi.fn(
@@ -497,8 +415,107 @@ describe("environment gateway methods", () => {
       expect(listOperatingSystems.mock.calls).toEqual([["aws"], ["zeta"]]);
       expect(profiles[1]).not.toHaveProperty("machines");
       expect(profiles[1]).not.toHaveProperty("operatingSystems");
+
+      list.mockClear();
+      vi.mocked(listDevicePairing).mockClear();
+      const projected = await callEnvironmentMethod(
+        "environments.list",
+        { projection: "profiles" },
+        { service },
+      );
+      expect(projected).toEqual([true, { environments: [], profiles }, undefined]);
+      expect(service.list).not.toHaveBeenCalled();
+      expect(listDevicePairing).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["worker", "pairing"])(
+    "isolates profile discovery from %s inventory failures without hiding default errors",
+    async (unavailable) => {
+      const list = vi.fn(() => {
+        if (unavailable === "worker") {
+          throw new Error("private worker inventory failure");
+        }
+        return [];
+      });
+      const service = workerService({ list });
+      if (unavailable === "pairing") {
+        vi.mocked(listDevicePairing).mockRejectedValue(new Error("pairing inventory unavailable"));
+      }
+      const full = await callEnvironmentMethod("environments.list", {}, { service });
+      expect(full).toEqual([
+        false,
+        undefined,
+        {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            unavailable === "worker"
+              ? "Error: environment inventory unavailable"
+              : "Error: pairing inventory unavailable",
+        },
+      ]);
+      expect(service.listMachineOptions).not.toHaveBeenCalled();
+      list.mockClear();
+      vi.mocked(listDevicePairing).mockClear();
+
+      const projected = await callEnvironmentMethod(
+        "environments.list",
+        { projection: "profiles" },
+        { service },
+      );
+      expect(projected).toEqual([
+        true,
+        {
+          environments: [],
+          profiles: [
+            { id: "aws", providerId: "crabbox" },
+            { id: "zeta", providerId: "static-ssh" },
+          ],
+        },
+        undefined,
+      ]);
+      expect(service.list).not.toHaveBeenCalled();
+      expect(listDevicePairing).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps profile summaries when their machine catalog fails", async () => {
+    const service = workerService({
+      supportsExecutionMode: vi.fn((_profileId, mode) => mode === "remote-exec"),
+      listMachineOptions: vi.fn(async () => {
+        throw new Error("provider unavailable");
+      }),
+    });
+    const context = mockContext(service);
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: { projection: "profiles" },
+      respond,
+      context,
+    } as never);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+          {
+            id: "zeta",
+            providerId: "static-ssh",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+        ],
+      },
+      undefined,
+    );
+    expect(context.logGateway.warn).toHaveBeenCalledTimes(2);
+  });
 
   it("projects trust from recorded worker isolation without guessing unknown leases", () => {
     expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(

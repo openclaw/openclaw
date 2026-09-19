@@ -3,7 +3,6 @@ import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-pro
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -134,7 +133,7 @@ function createExternalPluginPage(
   const page = document.createElement(externalPluginPageTag) as ExternalPluginPage;
   page.pluginId = "external-plugin";
   page.tabId = "panel";
-  (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+  (page as unknown as { context: ApplicationContext }).context = {
     gateway: {
       snapshot,
       subscribe: () => () => undefined,
@@ -143,7 +142,7 @@ function createExternalPluginPage(
       current: externalPluginConfig([]),
       refresh,
     },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   return page;
 }
 
@@ -433,14 +432,14 @@ describe("PluginPage", () => {
     document.body.append(page);
     try {
       await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
-      const context = (page as unknown as { context: ApplicationContext<RouteId> }).context;
+      const context = (page as unknown as { context: ApplicationContext }).context;
       const gateway = context.gateway;
       const snapshot = gateway.snapshot;
 
       snapshot.phase = "stopped";
       (
         page as unknown as {
-          updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
+          updateGatewaySource: (source: ApplicationContext["gateway"]) => void;
         }
       ).updateGatewaySource(gateway);
       await page.updateComplete;
@@ -449,7 +448,7 @@ describe("PluginPage", () => {
       snapshot.phase = "connected";
       (
         page as unknown as {
-          updateGatewaySource: (source: ApplicationContext<RouteId>["gateway"]) => void;
+          updateGatewaySource: (source: ApplicationContext["gateway"]) => void;
         }
       ).updateGatewaySource(gateway);
       await waitForFast(() => expect(page.querySelector("iframe")).not.toBeNull());
@@ -496,6 +495,49 @@ describe("PluginPage", () => {
     }
   });
 
+  it("forwards initial and live themes only while the current plugin frame is mounted", async () => {
+    const refresh = vi.fn(async () => externalPluginConfig());
+    const page = createExternalPluginPage(refresh, false);
+    document.documentElement.dataset.themeMode = "dark";
+    document.body.append(page);
+    try {
+      await page.updateComplete;
+      const frame = page.querySelector<HTMLIFrameElement>("iframe");
+      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(refresh).not.toHaveBeenCalled();
+      if (!frame?.contentWindow) {
+        throw new Error("Expected the plugin frame to be mounted.");
+      }
+      const postMessage = vi.spyOn(frame.contentWindow, "postMessage");
+
+      frame.dispatchEvent(new Event("load"));
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "openclaw:widget-theme", mode: "dark" }),
+        "*",
+      );
+
+      postMessage.mockClear();
+      document.documentElement.dataset.themeMode = "light";
+      await waitForFast(() =>
+        expect(postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+          "*",
+        ),
+      );
+
+      postMessage.mockClear();
+      page.remove();
+      await page.updateComplete;
+      document.documentElement.dataset.themeMode = "dark";
+      frame.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(postMessage).not.toHaveBeenCalled();
+    } finally {
+      page.remove();
+      delete document.documentElement.dataset.themeMode;
+    }
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const bundledView = createDeferred<TestBundledView>();
     const stop = vi.fn();
@@ -520,9 +562,9 @@ describe("PluginPage", () => {
     page.loads = new Map([["logbook/logbook", [bundledView.promise]]]);
     page.pluginId = "logbook";
     page.tabId = "logbook";
-    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+    (page as unknown as { context: ApplicationContext }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
 
     document.body.append(page);
     try {
@@ -589,19 +631,17 @@ describe("PluginPage", () => {
       };
       return {
         gateway: { snapshot, subscribe: () => () => undefined },
-      } as unknown as ApplicationContext<RouteId>;
+      } as unknown as ApplicationContext;
     };
     const page = createLogbookPage();
-    (page as unknown as { context: ApplicationContext<RouteId> }).context =
-      createContext(firstRequest);
+    (page as unknown as { context: ApplicationContext }).context = createContext(firstRequest);
     document.body.append(page);
     try {
       await waitForFast(() => expect(firstRequest).toHaveBeenCalled());
       const firstHost = bundledViewHost(page);
       expect(getLogbookState(firstHost).pollTimer).not.toBeNull();
 
-      (page as unknown as { context: ApplicationContext<RouteId> }).context =
-        createContext(secondRequest);
+      (page as unknown as { context: ApplicationContext }).context = createContext(secondRequest);
       page.requestUpdate();
       await page.updateComplete;
 
@@ -680,11 +720,11 @@ describe("PluginPage", () => {
           }
         };
       },
-    } as unknown as ApplicationContext<RouteId>["gateway"];
+    } as unknown as ApplicationContext["gateway"];
     const page = createLogbookPage();
-    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+    (page as unknown as { context: ApplicationContext }).context = {
       gateway,
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
     document.body.append(page);
     try {
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
@@ -746,9 +786,9 @@ describe("PluginPage", () => {
     ]);
     page.pluginId = "logbook";
     page.tabId = "logbook";
-    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+    (page as unknown as { context: ApplicationContext }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
-    } as unknown as ApplicationContext<RouteId>;
+    } as unknown as ApplicationContext;
 
     document.body.append(page);
     try {

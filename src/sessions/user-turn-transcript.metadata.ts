@@ -16,6 +16,10 @@ const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
 const STEER_TARGET_RUN_ID_MAX_CHARS = 512;
 
+export function buildRunUserTurnIdempotencyKey(runId: string): string {
+  return `${runId}:user`;
+}
+
 export function normalizePersistedSteerTargetRunId(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && normalized.length <= STEER_TARGET_RUN_ID_MAX_CHARS ? normalized : undefined;
@@ -88,7 +92,7 @@ export function buildPersistedUserTurnMetadata(
           },
         }
       : {}),
-    ...(input.transport ? { transport: input.transport } : {}),
+    ...(input.transport ? { transport: structuredClone(input.transport) } : {}),
     ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
     ...(input.mediaImageLayout
       ? {
@@ -246,7 +250,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const originalTransportRecord = asOptionalRecord(originalTransport);
-  const transport = originalTransportRecord ? { ...originalTransportRecord } : undefined;
+  const transport = originalTransportRecord ? structuredClone(originalTransportRecord) : undefined;
   const nextMessage = applyTranscriptSenderIdentityToWrite(message, () =>
     params.beforeMessageWrite!({
       message,

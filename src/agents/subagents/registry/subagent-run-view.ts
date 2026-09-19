@@ -32,6 +32,11 @@ export function buildSubagentRunView(params: {
     latest.push(entry);
     if (
       isRetainedUnendedSubagentRun(entry, now) ||
+      (entry.pauseReason === "sessions_yield" &&
+        !entry.killReconciliation &&
+        !entry.killIntent &&
+        entry.endedReason !== "subagent-killed" &&
+        entry.suppressAnnounceReason !== "killed") ||
       params.countPendingDescendantRuns(entry.childSessionKey) > 0
     ) {
       active.push(entry);

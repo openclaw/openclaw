@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
-import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
+import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";

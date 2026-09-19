@@ -120,6 +120,8 @@ export function extractAssistantDisplayText(
 }
 
 export async function buildAssistantReplyContent(params: {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
   payloads: ReplyPayload[];
@@ -207,6 +209,8 @@ export async function buildAssistantReplyContent(params: {
       continue;
     }
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
+      assertCurrent: params.assertCurrent,
+      abortSignal: params.abortSignal,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),

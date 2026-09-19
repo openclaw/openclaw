@@ -36,34 +36,14 @@ function resolveDirective(params: { cfg: OpenClawConfig; raw: string; agentId?: 
 
 describe("resolveModelDirectiveSelection", () => {
   it.each([
-    {
-      allow: ["fixture-route/namespace/*"],
-      raw: "fixture-route/namespace/reasoner",
-      agentAllow: undefined,
-      allowed: true,
-    },
-    {
-      allow: ["fixture-route/namespace/*"],
-      raw: "fixture-route/namespace-other/reasoner",
-      agentAllow: undefined,
-      allowed: false,
-    },
-    {
-      allow: ["openai/*"],
-      raw: "fixture-route/namespace/reasoner",
-      agentAllow: ["fixture-route/namespace/*"],
-      allowed: true,
-    },
-    {
-      allow: ["fixture-route/*"],
-      raw: "fixture-route/namespace/reasoner",
-      agentAllow: ["openai/*"],
-      allowed: false,
-    },
-    { allow: ["openai/*"], raw: "fixture-route/namespace/reasoner", agentAllow: [], allowed: true },
+    [["fixture-route/namespace/*"], "fixture-route/namespace/reasoner", undefined, true],
+    [["fixture-route/namespace/*"], "fixture-route/namespace-other/reasoner", undefined, false],
+    [["openai/*"], "fixture-route/namespace/reasoner", ["fixture-route/namespace/*"], true],
+    [["fixture-route/*"], "fixture-route/namespace/reasoner", ["openai/*"], false],
+    [["openai/*"], "fixture-route/namespace/reasoner", [], true],
   ])(
-    "preserves wildcard boundaries and per-agent replacement: %j",
-    ({ allow, raw, agentAllow, allowed }) => {
+    "preserves wildcard boundaries: allow=%j raw=%s agentAllow=%j allowed=%s",
+    (allow, raw, agentAllow, allowed) => {
       const { result } = resolveDirective({
         cfg: {
           agents: {

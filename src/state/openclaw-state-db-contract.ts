@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+
+export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
 // v17 records one-use prepared worker capacity and node workspace ownership.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
@@ -19,6 +22,7 @@ export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [
+  "local_workspace_projections",
   "update_runs",
   "session_repository_workspaces",
   "github_repository_publication_requests",
@@ -33,6 +37,7 @@ export const FIRST_USE_STATE_TABLES = [
   "execution_identity_contexts",
   "mcp_oauth_pending_authorizations",
   "node_worker_launch_containers",
+  "node_worker_launch_cleanup",
   "node_worker_launches",
   "node_worker_prepared_workspaces",
   "node_worker_turns",
@@ -104,6 +109,19 @@ export type OpenClawStateDatabase = {
   path: string;
   walMaintenance: SqliteWalMaintenance;
 };
+export type StateDatabaseHandle = Pick<OpenClawStateDatabase, "db" | "path"> &
+  Partial<Pick<OpenClawStateDatabase, "walMaintenance">> & {
+    afterClose?: () => undefined;
+  };
+export type OpenClawStateDatabaseCloseOptions = NonNullable<
+  Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0]
+> & { busyTimeoutMs?: number };
+export type OpenClawStateDatabaseLifecycleEvent =
+  | { kind: "opened"; database: OpenClawStateDatabase; identity: DatabasePathIdentity }
+  | { kind: "closed"; path: string; identity: DatabasePathIdentity }
+  | { kind: "failure-cleared"; path: string; identity?: DatabasePathIdentity }
+  | { kind: "terminal-failure"; path: string; identity?: DatabasePathIdentity; error: Error }
+  | { kind: "open-error"; path: string; identity?: DatabasePathIdentity; error: unknown };
 /** Options for resolving or overriding the shared state database path. */
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;

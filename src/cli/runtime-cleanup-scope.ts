@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
+import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   harnesses: Map<AgentHarness, () => Promise<void>>;
@@ -56,6 +58,8 @@ export function withCliCommandCleanup<T>(
     return run();
   }
   const pluginResources = new CliPluginInvocationResources();
+  const releaseSignals = installCliSignalExitHandlers();
+  pluginResources.adopt({ release: async () => releaseSignals() });
   const sdkResourceHost = new LegacyPluginSdkResourceHost();
   pluginResources.adopt({ release: () => sdkResourceHost.close() });
   const cleanup: CliHarnessCleanup = {

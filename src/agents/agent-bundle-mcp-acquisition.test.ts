@@ -8,10 +8,14 @@ import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   getSessionMcpRuntimeManagerForTesting,
+  releaseSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpProbeFixture, probeMcpServer } from "./agent-bundle-mcp-probe.test-support.js";
-import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  SESSION_MCP_MAX_LIVE_RUNTIMES,
+  SESSION_MCP_RUNTIME_MANAGER_KEY,
+} from "./agent-bundle-mcp-runtime-shared.js";
 
 const readAuthorization = vi.hoisted(() => vi.fn(async () => ({ state: "unauthenticated" })));
 vi.mock("./mcp-oauth.js", () => ({
@@ -34,6 +38,76 @@ afterEach(async () => {
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   cleanupTempDirs(tempDirs);
   readAuthorization.mockReset().mockResolvedValue({ state: "unauthenticated" });
+});
+
+it("retires excluded discovery servers while retaining prepared session tools", async () => {
+  const { params, config } = await createMcpProbeFixture(tempDirs);
+  const acquired = await acquireSessionMcpRuntime({ ...params, cfg: config() });
+  const healthy = await probeMcpServer(acquired.runtime, "healthy");
+  const excluded = await probeMcpServer(acquired.runtime, "changed");
+
+  await releaseSessionMcpRuntime(acquired, new Set(["healthy"]));
+
+  expect(() => process.kill(excluded.pid, 0)).toThrow();
+  expect(await probeMcpServer(acquired.runtime, "healthy")).toEqual(healthy);
+  await disposeAllSessionMcpRuntimes();
+  expect(() => process.kill(healthy.pid, 0)).toThrow();
+});
+
+it("preserves an excluded server until its other active acquisition releases", async () => {
+  const { params, config } = await createMcpProbeFixture(tempDirs);
+  const input = { ...params, cfg: config() };
+  const discovery = await acquireSessionMcpRuntime(input);
+  const active = await acquireSessionMcpRuntime(input);
+  const healthy = await probeMcpServer(active.runtime, "healthy");
+  const excluded = await probeMcpServer(active.runtime, "changed");
+
+  await releaseSessionMcpRuntime(discovery, new Set(["healthy"]));
+  expect(await probeMcpServer(active.runtime, "changed")).toEqual(excluded);
+
+  await releaseSessionMcpRuntime(active, new Set(["healthy"]));
+  expect(() => process.kill(excluded.pid, 0)).toThrow();
+  expect(await probeMcpServer(active.runtime, "healthy")).toEqual(healthy);
+});
+
+it("does not let stale discovery prune servers transferred to a replacement", async () => {
+  const { params, config } = await createMcpProbeFixture(tempDirs);
+  const original = await acquireSessionMcpRuntime({ ...params, cfg: config() });
+  const healthy = await probeMcpServer(original.runtime, "healthy");
+  const previous = await probeMcpServer(original.runtime, "changed");
+  const replacement = await acquireSessionMcpRuntime({ ...params, cfg: config("replacement") });
+  const changed = await probeMcpServer(replacement.runtime, "changed");
+  expect(changed.label).toBe("replacement");
+  expect(changed.pid).not.toBe(previous.pid);
+  await releaseSessionMcpRuntime(replacement);
+
+  await releaseSessionMcpRuntime(original, new Set());
+
+  expect(await probeMcpServer(replacement.runtime, "healthy")).toEqual(healthy);
+  expect(await probeMcpServer(replacement.runtime, "changed")).toEqual(changed);
+});
+
+it("releases capacity when every configured server is excluded before connection", async () => {
+  const { params, config } = await createMcpProbeFixture(tempDirs);
+  const cfg = config();
+  await expect(
+    (async () => {
+      for (let index = 0; index <= SESSION_MCP_MAX_LIVE_RUNTIMES; index += 1) {
+        const sessionKey = `agent:main:excluded-${index}`;
+        const acquired = await acquireSessionMcpRuntime({
+          ...params,
+          sessionId: `excluded-${index}`,
+          sessionKey,
+          cfg,
+        });
+        await releaseSessionMcpRuntime(acquired, new Set());
+        expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+        expect(
+          getSessionMcpRuntimeManagerForTesting().resolveSessionId(sessionKey),
+        ).toBeUndefined();
+      }
+    })(),
+  ).resolves.toBeUndefined();
 });
 
 it.each(["exported acquisition", "harness materialization"])(

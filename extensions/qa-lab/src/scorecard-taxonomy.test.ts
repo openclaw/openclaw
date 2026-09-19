@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -7,6 +8,7 @@ import {
   readQaMaturityTaxonomySource,
   qaMaturityTaxonomyIdentity,
   qaMaturityScoreObjectForScore,
+  qaProofRequirementsSchema,
   type QaMaturityScores,
   type QaMaturityTaxonomy,
   readQaScorecardProfileOptions,
@@ -326,6 +328,80 @@ describe("QA maturity YAML readers", () => {
 });
 
 describe("semantic taxonomy identity", () => {
+  it("orders proof alternatives by code units across case and Unicode", () => {
+    const taxonomy = readQaMaturityTaxonomySource(
+      path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+    );
+    const profile = taxonomy.profiles[0]!;
+    const requirements = qaProofRequirementsSchema.parse([
+      {
+        id: "synthetic-proof",
+        coverageId: "channels.dm",
+        obligation: "advisory",
+        owner: "synthetic-owner",
+        acceptedRef: "qa/fixtures/acceptance",
+        alternatives: ["Ω", "a", "😀", "ä", "Z", "A"].map((protocol) => ({ protocol })),
+        retryAcceptance: "selected-attempt",
+      },
+    ]);
+    profile.proofRequirements = requirements;
+    taxonomy.profiles = [profile];
+    taxonomy.surfaces = [];
+    const expectedProjection = {
+      profiles: [
+        {
+          id: profile.id,
+          description: profile.description,
+          includeAllCategories: profile.includeAllCategories,
+          categoryIds: [...new Set(profile.categoryIds)].toSorted(),
+          coverageIds: [...new Set(profile.coverageIds)].toSorted(),
+          channelDriver: profile.channelDriver,
+          evidenceMode: profile.evidenceMode ?? "full",
+          proofRequirements: [
+            {
+              ...requirements[0],
+              alternatives: ["A", "Z", "a", "ä", "Ω", "😀"].map((protocol) => ({ protocol })),
+            },
+          ],
+        },
+      ],
+      surfaces: [],
+    };
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual({
+      version: 1,
+      sha256: createHash("sha256").update(JSON.stringify(expectedProjection)).digest("hex"),
+    });
+  });
+
+  it("includes explicit proof meaning without assigning requirements to other profiles", () => {
+    const taxonomy = readQaMaturityTaxonomySource(
+      path.resolve(import.meta.dirname, "../../../taxonomy.yaml"),
+    );
+    const before = qaMaturityTaxonomyIdentity(taxonomy);
+    const profile = taxonomy.profiles[0]!;
+    profile.proofRequirements = qaProofRequirementsSchema.parse([
+      {
+        id: "synthetic-proof",
+        coverageId: "channels.dm",
+        obligation: "advisory",
+        owner: "synthetic-owner",
+        acceptedRef: "qa/fixtures/acceptance",
+        alternatives: [
+          { protocol: "local-http", proofClass: "fixture-only" },
+          { proofClass: "native-host" },
+        ],
+        retryAcceptance: "selected-attempt",
+      },
+    ]);
+    const captured = qaMaturityTaxonomyIdentity(taxonomy);
+    expect(captured).not.toEqual(before);
+    profile.proofRequirements[0]!.alternatives.reverse();
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual(captured);
+    profile.proofRequirements[0]!.retryAcceptance = "all-recorded-attempts";
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).not.toEqual(captured);
+    delete profile.proofRequirements;
+    expect(qaMaturityTaxonomyIdentity(taxonomy)).toEqual(before);
+  });
   const source = path.resolve(import.meta.dirname, "../../../taxonomy.yaml");
   const read = () => readQaMaturityTaxonomySource(source);
   const category = (taxonomy: QaMaturityTaxonomy) =>

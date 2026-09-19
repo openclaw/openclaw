@@ -161,6 +161,7 @@ function checkSchemaWithCurrentFormats(
 
 function isDefaultActivatedConditionalFailure(params: {
   schema: JsonSchemaValue;
+  validate: TypeBoxValidator;
   originalValue: unknown;
   defaultedValue: unknown;
 }): boolean {
@@ -170,8 +171,7 @@ function isDefaultActivatedConditionalFailure(params: {
   if (checkSchemaWithCurrentFormats(relaxedConditionalValidator, params.defaultedValue)) {
     return false;
   }
-  const originalValidator = compileSchema(params.schema);
-  return checkSchemaWithCurrentFormats(originalValidator, params.originalValue) === null;
+  return checkSchemaWithCurrentFormats(params.validate, params.originalValue) === null;
 }
 
 /**
@@ -399,13 +399,14 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const schemaError = findJsonSchemaShapeError(params.schema);
-  if (schemaError) {
-    throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
-  }
-
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+  if (!cached || cached.schema !== params.schema) {
+    const schemaError = findJsonSchemaShapeError(params.schema);
+    if (schemaError) {
+      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+    }
+  }
   const schemaFingerprint =
     !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
   if (
@@ -441,6 +442,7 @@ export function validateJsonSchemaValue(params: {
         value !== originalValue &&
         isDefaultActivatedConditionalFailure({
           schema: params.schema,
+          validate: cached.validate,
           originalValue,
           defaultedValue: value,
         })

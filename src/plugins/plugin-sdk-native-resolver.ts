@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { supportsNativeModuleAliasHooks, type BunPluginRuntime } from "./native-module-require.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginSdkHostFacts } from "./plugin-cache-sdk.js";
@@ -88,6 +89,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     packageDir: "llm-core",
     subpaths: [
       ["", "index.ts"],
+      ["model-contracts/anthropic", path.join("model-contracts", "anthropic.ts")],
       ["diagnostics", path.join("utils", "diagnostics.ts")],
       ["event-stream", path.join("utils", "event-stream.ts")],
       ["types", "types.ts"],
@@ -95,6 +97,22 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     ],
   },
 ] as const;
+const INTERNAL_CORE_EXPORTED_PACKAGE_DIRS = [
+  "media-core",
+  "normalization-core",
+  "acp-core",
+] as const;
+const BUN_NATIVE_ALIAS_FILTER = new RegExp(
+  `^(?:${[
+    "openclaw/plugin-sdk",
+    "@openclaw/plugin-sdk",
+    ...INTERNAL_CORE_PACKAGE_ALIASES.map((entry) => entry.packageName),
+    ...INTERNAL_CORE_EXPORTED_PACKAGE_DIRS.map((packageDir) => `@openclaw/${packageDir}`),
+  ]
+    .map(escapeRegExp)
+    .join("|")})(?:/|$)`,
+  "u",
+);
 let installed = false;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
@@ -246,7 +264,10 @@ function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
 ): string | undefined {
-  if (!parentUrl?.startsWith("file:")) {
+  if (
+    !parentUrl?.startsWith("file:") ||
+    (!isPluginSdkAliasSpecifier(request) && !getPluginCache().sdk.native.aliases.has(request))
+  ) {
     return undefined;
   }
   try {
@@ -306,7 +327,7 @@ function listInternalCorePackageNativeAliases(packageRoot: string): Array<{
   }> = [];
   const internalCorePackageAliases = [
     ...INTERNAL_CORE_PACKAGE_ALIASES,
-    ...["media-core", "normalization-core", "acp-core"].map((packageDir) => ({
+    ...INTERNAL_CORE_EXPORTED_PACKAGE_DIRS.map((packageDir) => ({
       packageName: `@openclaw/${packageDir}`,
       packageDir,
       subpaths: listWorkspacePackageExportAliasEntries({
@@ -340,7 +361,7 @@ function installResolver(): void {
       name: "openclaw-plugin-sdk-alias",
       setup(builder) {
         builder.onResolve(
-          { filter: /^(?:openclaw|@openclaw)\/plugin-sdk\//u, namespace: "file" },
+          { filter: BUN_NATIVE_ALIAS_FILTER, namespace: "file" },
           ({ path: request, importer }) => {
             const target = resolveAliasTargetForParentPath(request, importer);
             return target ? { path: target, namespace: "file" } : undefined;

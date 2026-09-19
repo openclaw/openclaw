@@ -148,11 +148,9 @@ describe("OpenAI provider Codex transport hooks", () => {
         title: "OpenAI Codex device code",
         code: "ABCD-EFGH",
         expiresInMinutes: 15,
-        message: [
-          "Open this URL in your LOCAL browser and enter the code below.",
-          "URL: <https://auth.openai.com/codex/device>",
-        ].join("\n"),
+        message: "Enter this one-time code on the sign-in page.",
       });
+      expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
       expect(note).not.toHaveBeenCalled();
     },
   );

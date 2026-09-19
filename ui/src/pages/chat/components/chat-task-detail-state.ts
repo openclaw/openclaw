@@ -4,8 +4,10 @@ import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
+import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
-import { setExpansionState, type AssistantMessageExpansionState } from "../chat-thread.ts";
+import { setExpansionState } from "../chat-thread.ts";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 const TASK_TRANSCRIPT_REFRESH_MS = 2_000;
@@ -34,14 +36,15 @@ type TaskDetailState = {
   fullMessages: Map<string, AssistantMessageExpansionState>;
 };
 
-export type TaskDetailHost = UiSessionDefaultsHost & {
-  sessionKey: string;
+export type TaskTranscriptHost = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   connectionEpoch?: number;
   requestUpdate?: () => void;
   taskDetailState?: TaskDetailState;
 };
+
+export type TaskDetailHost = TaskTranscriptHost & UiSessionDefaultsHost & { sessionKey: string };
 
 function clearRefreshTimer(state: TaskDetailState) {
   if (state.refreshTimer !== null) {
@@ -50,7 +53,7 @@ function clearRefreshTimer(state: TaskDetailState) {
   }
 }
 
-export function resetTaskDetail(host: TaskDetailHost) {
+export function resetTaskDetail(host: TaskTranscriptHost) {
   const current = host.taskDetailState;
   if (!current) {
     return;
@@ -61,7 +64,7 @@ export function resetTaskDetail(host: TaskDetailHost) {
 }
 
 export async function requestTaskFullMessage(
-  host: TaskDetailHost,
+  host: TaskTranscriptHost,
   {
     loader,
     ...request
@@ -113,7 +116,7 @@ export async function requestTaskFullMessage(
   host.requestUpdate?.();
 }
 
-function scheduleTranscriptLoad(host: TaskDetailHost, state: TaskDetailState) {
+function scheduleTranscriptLoad(host: TaskTranscriptHost, state: TaskDetailState) {
   if (host.taskDetailState !== state || state.inFlight) {
     return;
   }
@@ -153,7 +156,11 @@ function transcriptOverlap(earlier: unknown[], later: unknown[]): number {
   });
 }
 
-async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, cursor?: string) {
+async function loadTranscriptPage(
+  host: TaskTranscriptHost,
+  state: TaskDetailState,
+  cursor?: string,
+) {
   if (host.taskDetailState !== state || state.inFlight) {
     return;
   }
@@ -183,7 +190,7 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
       limit: TASK_TRANSCRIPT_REQUEST_LIMIT,
       ...(cursor ? { cursor } : {}),
     });
-    const messages = visibleChatHistoryMessages(result.messages);
+    const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
     const previousMessages = previous?.messages ?? [];
     const earlier = cursor ? messages : previousMessages;
     const later = cursor ? previousMessages : messages;
@@ -234,7 +241,7 @@ async function loadTranscriptPage(host: TaskDetailHost, state: TaskDetailState, 
 }
 
 export function readTaskTranscript(
-  host: TaskDetailHost,
+  host: TaskTranscriptHost,
   selection: { taskId: string },
 ): TaskTranscriptLoad {
   const client = host.client;
@@ -268,14 +275,14 @@ export function readTaskTranscript(
   return next.load;
 }
 
-export function loadOlderTaskTranscript(host: TaskDetailHost) {
+export function loadOlderTaskTranscript(host: TaskTranscriptHost) {
   const state = host.taskDetailState;
   if (state?.load.status === "loaded" && state.load.nextCursor) {
     void loadTranscriptPage(host, state, state.load.nextCursor);
   }
 }
 
-export function retryTaskTranscript(host: TaskDetailHost) {
+export function retryTaskTranscript(host: TaskTranscriptHost) {
   const state = host.taskDetailState;
   if (!state) {
     host.requestUpdate?.();
@@ -290,7 +297,7 @@ export function retryTaskTranscript(host: TaskDetailHost) {
 }
 
 export function observeTaskDetailEvent(
-  host: TaskDetailHost,
+  host: TaskTranscriptHost,
   event:
     | { action: "upserted"; task: TaskSummary }
     | { action: "deleted"; taskId: string }

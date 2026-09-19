@@ -470,10 +470,11 @@ export async function prepareCliBundleMcpConfig(params: {
       agentDir: params.agentDir,
       cfg: runtimeConfig,
       toolOverrides: params.toolOverrides,
+      toolDenylist: params.nativeMcpPolicy.capabilityProfile.policy.explicitToolDenylist,
     });
-    let policy: Awaited<ReturnType<typeof prepareNativeMcpPolicy>>;
+    let retainedServerNames: ReadonlySet<string> | undefined;
     try {
-      policy = await prepareNativeMcpPolicy({
+      const policy = await prepareNativeMcpPolicy({
         runtime: acquisition.runtime,
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -481,42 +482,43 @@ export async function prepareCliBundleMcpConfig(params: {
         runtimeToolsAllow: params.nativeMcpPolicy.runtimeToolsAllow,
         warn: params.warn ?? (() => {}),
       });
-    } finally {
-      await releaseSessionMcpRuntime(acquisition);
-    }
-    effectiveConfig = {
-      mcpServers: {
-        ...applyPreparedNativeMcpPolicy(policyConfig, policy).mcpServers,
-        ...Object.fromEntries(
-          Object.entries(effectiveConfig.mcpServers).filter(([serverName]) =>
-            additionalServerNames.has(serverName),
+      effectiveConfig = {
+        mcpServers: {
+          ...applyPreparedNativeMcpPolicy(policyConfig, policy).mcpServers,
+          ...Object.fromEntries(
+            Object.entries(effectiveConfig.mcpServers).filter(([serverName]) =>
+              additionalServerNames.has(serverName),
+            ),
           ),
+        },
+      };
+      const preservedAdditionalDenials = Object.fromEntries(
+        Object.entries(params.toolOverrides?.mcpToolsDeny ?? {}).filter(([serverName]) =>
+          additionalServerNames.has(serverName),
         ),
-      },
-    };
-    const preservedAdditionalDenials = Object.fromEntries(
-      Object.entries(params.toolOverrides?.mcpToolsDeny ?? {}).filter(([serverName]) =>
-        additionalServerNames.has(serverName),
-      ),
-    );
-    const combinedDenials = {
-      ...preparedNativeMcpDenials(policy),
-      ...preservedAdditionalDenials,
-    };
-    effectiveDenials = Object.keys(combinedDenials).length > 0 ? combinedDenials : undefined;
+      );
+      const combinedDenials = {
+        ...preparedNativeMcpDenials(policy),
+        ...preservedAdditionalDenials,
+      };
+      effectiveDenials = Object.keys(combinedDenials).length > 0 ? combinedDenials : undefined;
 
-    // Policy discovery can refresh OAuth. Reproject the final survivors afterward
-    // so the external runtime receives the same current credential.
-    const refreshedBearerConfig = await resolveMcpBearerBundleConfig({
-      config: selectBundleMcpServers(mergedConfig, effectiveConfig),
-      cfg: params.config,
-      agentDir: params.agentDir,
-      env: params.env,
-      omitUnavailableOAuthServers: true,
-      onServerUnavailable: warnUnavailableOAuthServer,
-    });
-    effectiveConfig = selectBundleMcpServers(effectiveConfig, refreshedBearerConfig.config);
-    effectiveEnv = refreshedBearerConfig.env;
+      // Policy discovery can refresh OAuth. Reproject the final survivors afterward
+      // so the external runtime receives the same current credential.
+      const refreshedBearerConfig = await resolveMcpBearerBundleConfig({
+        config: selectBundleMcpServers(mergedConfig, effectiveConfig),
+        cfg: params.config,
+        agentDir: params.agentDir,
+        env: params.env,
+        omitUnavailableOAuthServers: true,
+        onServerUnavailable: warnUnavailableOAuthServer,
+      });
+      effectiveConfig = selectBundleMcpServers(effectiveConfig, refreshedBearerConfig.config);
+      effectiveEnv = refreshedBearerConfig.env;
+      retainedServerNames = new Set(Object.keys(effectiveConfig.mcpServers));
+    } finally {
+      await releaseSessionMcpRuntime(acquisition, retainedServerNames);
+    }
   }
 
   return await prepareModeSpecificBundleMcpConfig({

@@ -14,10 +14,8 @@ import {
   type ConfigAuditRecord,
 } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
-import {
-  createSqliteAuditRecordStore,
-  type SequencedSqliteAuditRecordEntry,
-} from "../../infra/sqlite-audit-record-store.js";
+import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
+import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,

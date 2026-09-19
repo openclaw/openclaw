@@ -147,7 +147,6 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
       SessionKey: "agent:main:main",
     });
 
@@ -228,7 +227,6 @@ describe("dispatchReplyFromConfig", () => {
     try {
       await dispatchReplyFromConfig({
         ctx: buildTestCtx({
-          Provider: "whatsapp",
           SessionKey: "agent:main:main",
           MessageSid: "prepared",
         }),
@@ -742,8 +740,6 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
       SessionKey: "agent:main:whatsapp:direct:chat-1",
       BodyForAgent: "text turn",
     });

@@ -541,7 +541,9 @@ vi.mock("./chrome.js", () => ({
     };
   }),
   resolveOpenClawUserDataDir: vi.fn(() => chromeUserDataDir.dir),
-  stopOwnedOpenClawChrome: vi.fn(async () => false),
+  stopOwnedOpenClawChrome: vi.fn<typeof import("./chrome.js").stopOwnedOpenClawChrome>(
+    async () => ({ status: "not-running" }),
+  ),
   stopOpenClawChrome: vi.fn(async () => {
     state.reachable = false;
   }),

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { testing } from "./managed-gateway-service-lifecycle-product-proof.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({

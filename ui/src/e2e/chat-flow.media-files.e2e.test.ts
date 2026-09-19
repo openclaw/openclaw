@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -17,6 +17,75 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("renders relative assistant media through the session-scoped ticket route", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const source = "openclaw/tmp/github-panel/v2-proof/github-pr-diff-light.png";
+    const caption = "Browser proof from this task's workspace.";
+    const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
+    const requests: URL[] = [];
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      expect(url.searchParams.get("sessionKey")).toBe("agent:main:main");
+      expect(url.searchParams.get("agentId")).toBe("main");
+      if (url.searchParams.get("meta") === "1") {
+        expect(route.request().headers().authorization).toBe("Bearer e2e-device-token");
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify(
+            url.searchParams.get("source") === source
+              ? {
+                  available: true,
+                  mediaTicket: "ticket-relative-image",
+                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+                }
+              : { available: false, code: "file-not-found", reason: "File not found" },
+          ),
+        });
+        return;
+      }
+      expect(url.searchParams.get("source")).toBe(source);
+      expect(url.searchParams.get("mediaTicket")).toBe("ticket-relative-image");
+      expect(route.request().headers().authorization).toBeUndefined();
+      await route.fulfill({ contentType: "image/png", body: imageBytes });
+    });
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: `${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png`,
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText(caption, { exact: false }).first().waitFor();
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "relative-media-initial.png") });
+      }
+      const image = page.locator('img.chat-message-image[src*="github-pr-diff-light.png"]');
+      await expect
+        .poll(async () =>
+          (await image.count()) === 1
+            ? image.evaluate((element) =>
+                element instanceof HTMLImageElement ? element.naturalWidth : 0,
+              )
+            : 0,
+        )
+        .toBeGreaterThan(0);
+      await page.getByText("File not found", { exact: true }).waitFor();
+      expect((await page.locator("body").textContent()) ?? "").not.toContain("MEDIA:");
+      expect(requests.some((url) => url.searchParams.get("source") === "missing.png")).toBe(true);
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(suite.artifactDir, "relative-media-ready.png") });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

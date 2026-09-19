@@ -19,6 +19,7 @@ import type { SessionEntry, SessionToolOverrides } from "../../../config/session
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../../../gateway/ui-command-target.types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
@@ -194,7 +195,10 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    /** Prepared source delivery ownership; a lost source must not restore host media reads. */
+    mediaNormalizationOwner?: "gateway";
     clientCaps?: string[];
+    gatewayUiCommandTarget?: GatewayUiCommandTarget;
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
@@ -233,6 +237,8 @@ export type FollowupRun = {
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
+    /** Session belongs to a spawn-owned child; applies the subagent fallback ladder. */
+    subagentSpawnLineage?: boolean;
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
@@ -297,99 +303,4 @@ export function resolveFollowupAbortSignal(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
-}
-
-const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
-const admittedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
-const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promise<void>>();
-const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
-const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
-const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
-
-type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
-
-export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
-  const lifecycle = run.turnAdoptionLifecycle;
-  if (lifecycle && !enqueuedTurnAdoptionLifecycles.has(lifecycle)) {
-    if (lifecycle.onDeferred?.() === false) {
-      return false;
-    }
-    enqueuedTurnAdoptionLifecycles.add(lifecycle);
-  }
-  return true;
-}
-
-export function retireFollowupRunCancellation(run: FollowupLifecycleRun): void {
-  const lifecycle = run.turnAdoptionLifecycle;
-  if (!lifecycle || retiredTurnAdoptionCancellationLifecycles.has(lifecycle)) {
-    return;
-  }
-  retiredTurnAdoptionCancellationLifecycles.add(lifecycle);
-  lifecycle.onCancellationRetired?.();
-}
-
-export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Promise<void> {
-  const lifecycle = run.turnAdoptionLifecycle;
-  if (!lifecycle || admittedTurnAdoptionLifecycles.has(lifecycle)) {
-    return;
-  }
-  const existing = admittingTurnAdoptionLifecycles.get(lifecycle);
-  if (existing) {
-    await existing;
-    return;
-  }
-  if (completedTurnAdoptionLifecycles.has(lifecycle)) {
-    throw new Error("followup run lifecycle completed before admission");
-  }
-
-  const admission = Promise.resolve().then(async () => {
-    if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
-      await lifecycle.onAdopted();
-      admittedTurnAdoptionLifecycles.add(lifecycle);
-    }
-  });
-
-  admittingTurnAdoptionLifecycles.set(lifecycle, admission);
-  try {
-    await admission;
-  } finally {
-    admittingTurnAdoptionLifecycles.delete(lifecycle);
-  }
-}
-
-export function completeFollowupRunLifecycle(
-  run: FollowupLifecycleRun,
-  disposition?: "consumed",
-): void {
-  run.steerPending?.settle(false);
-  const lifecycle = run.turnAdoptionLifecycle;
-
-  const finish = () => {
-    if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
-      return;
-    }
-    completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-    // Async onAbandoned work must contain its own rejections; core guarantees a
-    // non-rejecting promise. onSettled must still run after a synchronous throw.
-    try {
-      if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
-        lifecycle.onAbandoned?.();
-      }
-    } finally {
-      lifecycle.onSettled?.();
-    }
-  };
-
-  if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
-    completedTurnAdoptionLifecycles.add(lifecycle);
-  }
-
-  const admission = lifecycle ? admittingTurnAdoptionLifecycles.get(lifecycle) : undefined;
-  if (!admission) {
-    finish();
-    return;
-  }
-  // Completion closes future admission immediately, but the callback waits for
-  // the in-flight admission attempt so adoption and abandonment cannot race.
-  void admission.then(finish, finish).catch(() => {});
 }

@@ -134,15 +134,28 @@ export function readOpenClawAgentDatabaseRegistryRows(database: DatabaseSync, pa
   ).rows;
 }
 
-function readRegisteredAgentDatabases(
+export function readAgentDatabasePreflightTargets(database: DatabaseSync, registryPath: string) {
+  return readOpenClawAgentDatabaseRegistryRows(database, registryPath).flatMap((row) =>
+    typeof row.agent_id === "string" && typeof row.path === "string"
+      ? [
+          {
+            agentId: row.agent_id,
+            path: resolveOpenClawRegisteredAgentDatabasePath(registryPath, row.path),
+          },
+        ]
+      : [],
+  );
+}
+
+export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: false,
 ): OpenClawRegisteredAgentDatabase[];
-function readRegisteredAgentDatabases(
+export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: true,
 ): Promise<OpenClawRegisteredAgentDatabase[]>;
-function readRegisteredAgentDatabases(
+export function readRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions,
   artifactPreserving: boolean,
 ): OpenClawRegisteredAgentDatabase[] | Promise<OpenClawRegisteredAgentDatabase[]> {

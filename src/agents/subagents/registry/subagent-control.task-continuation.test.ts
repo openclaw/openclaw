@@ -15,7 +15,7 @@ import {
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";

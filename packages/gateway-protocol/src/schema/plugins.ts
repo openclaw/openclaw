@@ -2,8 +2,18 @@
 import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import {
+  ControlUiLinkReaderMetadataSchema,
+  ControlUiLinkReaderDescriptorSchema,
+} from "./control-ui-link-reader.js";
+import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import type { PluginDeclaredSurfaceGroup } from "./plugin-declared-surface-groups.js";
 import { NonEmptyString } from "./primitives.js";
+
+export {
+  ControlUiLinkReaderMetadataSchema,
+  ControlUiLinkReaderDescriptorSchema,
+} from "./control-ui-link-reader.js";
 
 /**
  * Plugin control-surface protocol schemas.
@@ -26,7 +36,9 @@ export const PluginControlUiDescriptorSchema = closedObject({
     Type.Literal("settings"),
     Type.Literal("tab"),
     Type.Literal("widget"),
+    Type.Literal("link-reader"),
   ]),
+  linkReader: Type.Optional(ControlUiLinkReaderMetadataSchema),
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
   icon: Type.Optional(Type.String()),
@@ -69,6 +81,7 @@ export const PluginsUiDescriptorsResultSchema = closedObject({
   methods: Type.Optional(Type.Array(NonEmptyString)),
   controlUiTabs: Type.Optional(Type.Array(ControlUiPluginTabSchema)),
   controlUiWidgetKinds: Type.Optional(Type.Array(ControlUiPluginWidgetKindSchema)),
+  controlUiLinkReaders: Type.Optional(Type.Array(ControlUiLinkReaderDescriptorSchema)),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
 });
 
@@ -455,6 +468,7 @@ export const PluginDiscoveryEntrySchema = closedObject({
 
 export const PluginsCatalogBrowseParamsSchema = closedObject({
   query: Type.Optional(Type.String({ maxLength: 200 })),
+  searchSource: Type.Optional(Type.Literal("openclaw-control-ui")),
   intent: Type.Optional(PluginDiscoveryIntentSchema),
   category: Type.Optional(
     Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z][a-z0-9-]*$" }),
@@ -510,12 +524,15 @@ export const PluginDiscoveryDetailSchema = closedObject({
       handle: Type.Optional(NonEmptyString),
       displayName: Type.Optional(NonEmptyString),
       imageUrl: Type.Optional(NonEmptyString),
+      official: Type.Optional(Type.Boolean()),
     }),
   ),
   topics: Type.Array(NonEmptyString),
   createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   readme: Type.Optional(Type.String({ maxLength: 524_288 })),
+  repositoryUrl: Type.Optional(NonEmptyString),
+  documentationUrl: Type.Optional(NonEmptyString),
   compatibility: Type.Optional(PluginDiscoveryCompatibilitySchema),
   configuration: Type.Array(PluginDiscoveryConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
@@ -558,6 +575,14 @@ export const PluginInstalledComponentsSchema = closedObject({
   /** Runtime-supported capability families; item arrays may be empty when names are unavailable. */
   mapped: Type.Array(NonEmptyString),
   skills: Type.Array(NonEmptyString),
+  skillDetails: Type.Optional(
+    Type.Array(
+      closedObject({
+        name: NonEmptyString,
+        description: Type.Optional(Type.String()),
+      }),
+    ),
+  ),
   mcpServers: Type.Array(NonEmptyString),
   commands: Type.Array(NonEmptyString),
   hooks: Type.Array(NonEmptyString),
@@ -572,6 +597,15 @@ export const PluginInstalledComponentsSchema = closedObject({
 /** Consent snapshot plus the installed-version presentation projection used by Control UI. */
 export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
+  overview: Type.Optional(
+    closedObject({
+      readme: Type.Optional(Type.String({ maxLength: 524_288 })),
+      repositoryUrl: Type.Optional(NonEmptyString),
+      documentationUrl: Type.Optional(NonEmptyString),
+      publisherName: Type.Optional(NonEmptyString),
+    }),
+  ),
+  credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
   plugin: closedObject({
     id: NonEmptyString,
     name: NonEmptyString,

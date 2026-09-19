@@ -15,7 +15,7 @@ import {
 import { mergeModelMediaInput, resolveConfiguredFallbackReasoning } from "./model.compat.js";
 import {
   clampModelMaxTokensToContextWindow,
-  hasConfiguredFallbackSurface,
+  hasConfiguredModelRouteSupport,
   mergeConfiguredRuntimeModelParams,
   mergeConfiguredModelCost,
   resolveConfiguredProviderConfig,
@@ -57,7 +57,7 @@ export function buildConfiguredFallbackModel(params: {
     modelId,
     createProviderModelCatalogIdNormalizer(provider),
   );
-  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
+  if (!configuredModel && !providerConfig?.baseUrl?.trim()) {
     return undefined;
   }
   const staticCatalogModel = params.getStaticCatalogModel?.();
@@ -115,6 +115,16 @@ export function buildConfiguredFallbackModel(params: {
     workspaceDir,
     runtimeHooks,
   });
+  if (
+    !hasConfiguredModelRouteSupport({
+      ...params,
+      configuredModel,
+      catalogModel: staticCatalogModel,
+      route: fallbackTransport,
+    })
+  ) {
+    return undefined;
+  }
   const fallbackCompat = resolveCatalogOwnedModelCompat({
     ...(staticCatalogModel ? { catalogRoute: staticCatalogModel } : {}),
     catalogCompat: staticCatalogModel?.compat,

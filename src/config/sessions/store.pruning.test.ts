@@ -147,7 +147,7 @@ describe("pruneStaleEntries", () => {
 
   it.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }, "age-retention"],
-    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:main" }, "age-retention"],
+    ["agent:main:dashboard:child", { parentSessionKey: "agent:main:work" }, "age-retention"],
     ["agent:main:subagent:child", {}, undefined],
   ] as const)("drops a stale child pin on %s %j", (key, lineage, archiveReason) => {
     const stale = { ...makeEntry(Date.now() - 31 * DAY_MS), pinnedAt: 1, ...lineage };
@@ -158,19 +158,23 @@ describe("pruneStaleEntries", () => {
     );
   });
 
-  it.each(["archivedAt", "pinnedAt"] as const)(
-    "preserves %s until protection is removed, then archives the same identity",
-    (field) => {
+  it.each([
+    ["archivedAt", "protected", {}],
+    ["pinnedAt", "protected", {}],
+    ["pinnedAt", "agent:main:dashboard:protected", { parentSessionKey: "agent:main:main" }],
+  ] as const)(
+    "preserves %s on %s until protection is removed, then archives the same identity",
+    (field, key, lineage) => {
       const now = Date.now();
-      const original = { ...makeEntry(now - 31 * DAY_MS), [field]: now - DAY_MS };
-      const store = makeStore([["protected", { ...original }]]);
+      const original = { ...makeEntry(now - 31 * DAY_MS), [field]: now - DAY_MS, ...lineage };
+      const store = makeStore([[key, { ...original }]]);
 
       expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
-      expect(store.protected).toEqual(original);
+      expect(store[key]).toEqual(original);
 
-      delete store.protected?.[field];
+      delete store[key]?.[field];
       expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
-      expect(store.protected).toMatchObject({
+      expect(store[key]).toMatchObject({
         sessionId: original.sessionId,
         archivedAt: expect.any(Number),
         archiveReason: "age-retention",
@@ -743,9 +747,8 @@ describe("capEntryCount", () => {
       ["newest", makeEntry(now)],
     ]);
 
-    const evicted = capEntryCount(store, 3);
+    expect(capEntryCount(store, 3)).toBe(2);
 
-    expect(evicted).toBe(2);
     expect(Object.keys(store)).toHaveLength(5);
     expect(store).toHaveProperty(threadKey);
     expect(store.newest?.archivedAt).toBeUndefined();
@@ -766,26 +769,26 @@ describe("capEntryCount", () => {
       ["agent:main:slack:channel:C3:thread:3", makeEntry(now - DAY_MS)],
     ]);
 
-    const evicted = capEntryCount(store, 2);
+    expect(capEntryCount(store, 2)).toBe(0);
 
     // Every entry is now protected (main + threads), so nothing is evicted and `main` survives.
     expect(store).toHaveProperty(mainKey);
-    expect(evicted).toBe(0);
     expect(Object.keys(store)).toHaveLength(4);
   });
 
-  it("preserves model-locked harness sessions when capping", () => {
+  it.each([
+    ["agent:main:harness-owned:locked", { modelSelectionLocked: true }],
+    ["agent:main:dashboard:pinned", { pinnedAt: 1, parentSessionKey: "agent:main:main" }],
+  ])("preserves protected %s when capping", (lockedKey, protection) => {
     const now = Date.now();
-    const lockedKey = "agent:main:harness-owned:locked";
     const store = makeStore([
-      [lockedKey, { ...makeEntry(now - 10 * DAY_MS), modelSelectionLocked: true }],
+      [lockedKey, { ...makeEntry(now - 10 * DAY_MS), ...protection }],
       ["recent", makeEntry(now)],
       ["old", makeEntry(now - DAY_MS)],
     ]);
 
-    const evicted = capEntryCount(store, 2);
+    expect(capEntryCount(store, 2)).toBe(1);
 
-    expect(evicted).toBe(1);
     expect(store).toHaveProperty(lockedKey);
     expect(store).toHaveProperty("recent");
     expect(store.old?.archivedAt).toEqual(expect.any(Number));

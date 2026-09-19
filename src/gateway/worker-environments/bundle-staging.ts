@@ -4,16 +4,8 @@ import { sha256File } from "../../infra/directory-durability.js";
 import { root, type Root } from "../../infra/fs-safe.js";
 import {
   WORKER_BUNDLE_ARTIFACT_MODE,
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+  WORKER_BUNDLE_ARTIFACT_PATHS,
 } from "../../shared/worker-bundle-hash.js";
-
-const WORKER_DEPLOY_ARTIFACT_PATHS = [
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-] as const;
 
 export type WorkerBundleManifestEntry = {
   path: string;
@@ -26,7 +18,7 @@ async function stageWorkerDeployArtifact(params: {
   sourceRoot: string;
   source: Root;
   staging: Root;
-  artifactPath: (typeof WORKER_DEPLOY_ARTIFACT_PATHS)[number];
+  artifactPath: (typeof WORKER_BUNDLE_ARTIFACT_PATHS)[number];
 }): Promise<WorkerBundleManifestEntry> {
   const relativeSourcePath = `dist/worker/${params.artifactPath}`;
   const sourcePath = path.join(params.sourceRoot, relativeSourcePath);
@@ -88,7 +80,7 @@ export async function collectWorkerBundleManifest(
   });
   const staging = await root(stagingRoot, { maxBytes: Infinity });
   const manifest: WorkerBundleManifestEntry[] = [];
-  for (const artifactPath of WORKER_DEPLOY_ARTIFACT_PATHS) {
+  for (const artifactPath of WORKER_BUNDLE_ARTIFACT_PATHS) {
     manifest.push(await stageWorkerDeployArtifact({ sourceRoot, source, staging, artifactPath }));
   }
   return manifest;

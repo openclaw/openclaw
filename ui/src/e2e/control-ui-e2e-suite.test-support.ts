@@ -26,6 +26,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
+  installControlUiRpcDiagnostics,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -483,6 +484,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
         async () => {
           const page = await context.newPage();
           fixture = { context, page };
+          installControlUiRpcDiagnostics(page);
           try {
             return await run(fixture);
           } catch (error) {

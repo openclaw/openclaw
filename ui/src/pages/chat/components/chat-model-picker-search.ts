@@ -174,6 +174,9 @@ export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
 }
 
 export function handleModelSearchKeydown(event: KeyboardEvent): void {
+  if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
   if (event.key !== "Enter" && event.key !== "ArrowDown" && event.key !== "ArrowUp") {
     return;
   }

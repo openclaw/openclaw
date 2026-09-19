@@ -133,7 +133,7 @@ beforeEach(() => {
 function authDeps(apiKey = "verified-key") {
   const resolvedAuth = profileAuth("openai:verified", apiKey);
   return {
-    ensureAuthProfileStore: profileStore("openai:verified", { ...profile, key: apiKey }),
+    loadAuthProfileStoreForRuntime: profileStore("openai:verified", { ...profile, key: apiKey }),
     resolveApiKeyForProvider: vi.fn(async () => resolvedAuth),
     resolveAgentHarnessAuthBindingFingerprint: vi.fn(
       async (
@@ -343,12 +343,12 @@ describe("verified OpenClaw inference binding", () => {
       },
       {
         ...pluginArtifactDeps(),
-        ensureAuthProfileStore: profileStore("anthropic:oauth", credential),
+        loadAuthProfileStoreForRuntime: profileStore("anthropic:oauth", credential),
       },
     );
 
     const current = await revalidate(binding, oauthConfig, {
-      ensureAuthProfileStore: profileStore("anthropic:oauth", {
+      loadAuthProfileStoreForRuntime: profileStore("anthropic:oauth", {
         ...credential,
         access: "access-b",
         refresh: "refresh-b",
@@ -374,7 +374,7 @@ describe("verified OpenClaw inference binding", () => {
         },
         {
           ...pluginArtifactDeps(),
-          ensureAuthProfileStore: profileStore("openai:verified", {
+          loadAuthProfileStoreForRuntime: profileStore("openai:verified", {
             type: "api_key",
             provider: "openai",
             keyRef: { source: "file", provider: "vault", id: "/openai/key" },
@@ -586,7 +586,6 @@ describe("verified OpenClaw inference binding", () => {
         ...pluginArtifactDeps(),
         ...cliRuntimeArtifactDeps(),
         loadAuthProfileStoreForRuntime: ensureStore,
-        ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
       },
@@ -605,7 +604,6 @@ describe("verified OpenClaw inference binding", () => {
       revalidate(binding, cliConfig, {
         ...cliRuntimeArtifactDeps(),
         loadAuthProfileStoreForRuntime: ensureStore,
-        ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
       }),
@@ -762,7 +760,7 @@ describe("verified OpenClaw inference binding", () => {
     const resolveAuth = vi.fn(async () => resolvedAuth);
     const deps = {
       ...pluginArtifactDeps(),
-      ensureAuthProfileStore: profileStore("openai:verified", profile),
+      loadAuthProfileStoreForRuntime: profileStore("openai:verified", profile),
       resolveApiKeyForProvider: resolveAuth,
     };
     const binding = await createBinding(
@@ -818,7 +816,7 @@ describe("verified OpenClaw inference binding", () => {
     );
     const deps = {
       ...pluginArtifactDeps(),
-      ensureAuthProfileStore: profileStore("openai:work", credential),
+      loadAuthProfileStoreForRuntime: profileStore("openai:work", credential),
       resolveAgentHarnessAuthBindingFingerprint: resolveHarnessAuth,
     };
     const binding = await createBinding(

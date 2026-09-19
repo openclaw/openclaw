@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
+// v21 records canonical-session invalidation under node, window and policy mutations.
 // v20 records authoritative cold transcript archives; older readers cannot treat absent raw rows as empty history.
 // v19 qualifies immutable creator namespaces without deriving authority from sandbox policy.
 // v18 separates participant identity namespaces and preserves unknown historical times.
@@ -22,8 +23,9 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated migrations, so v2 main DBs and
 // pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 20;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 21;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
+export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -51,3 +53,5 @@ export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "owned"; agentId: string }
   | { status: "unowned" }
   | { status: "unreadable" };
+
+export const SESSION_PARTICIPANTS_TABLE = "session_participants";

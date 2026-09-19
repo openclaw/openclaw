@@ -1,4 +1,5 @@
 // Vitest extension codex app server support config wires the extension codex app server support test shard.
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const coveredAppServerPatterns = [
@@ -41,7 +42,7 @@ function createExtensionCodexAppServerSupportVitestConfig(
   return createScopedVitestConfig(["extensions/codex/src/app-server/**/*.test.ts"], {
     dir: "extensions",
     env,
-    exclude: coveredAppServerPatterns,
+    exclude: [...coveredAppServerPatterns, ...databaseWorkerExtensionTestFiles],
     fileParallelism: false,
     name: "extension-codex-app-server-support",
     passWithNoTests: true,

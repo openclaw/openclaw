@@ -12,13 +12,14 @@ import {
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
+import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import {
   composerContext,
   renderComposer,
   resetComposerTestFixtures,
 } from "./composer.test-support.ts";
-import { NewSessionComposerTextareaController } from "./composer.ts";
-import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionBody } from "./draft-body.ts";
+import { renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
@@ -526,7 +527,7 @@ describe("new-session composer keyboard submission", () => {
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
     expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.classList.contains("agent-chat__composer-underlaps")).toBe(true);
+    expect(notice?.classList.contains("agent-chat__composer-status")).toBe(true);
     expect(notice?.getAttribute("data-tone")).toBe("info");
     expect(notice?.querySelector(".agent-chat__composer-status-band")).not.toBeNull();
     expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");

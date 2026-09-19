@@ -39,9 +39,15 @@ describe("imessage targets", () => {
     });
   });
 
-  it("normalizes handles", () => {
-    expect(normalizeIMessageHandle("Name@Example.com")).toBe("name@example.com");
-    expect(normalizeIMessageHandle(" +1 (555) 222-3333 ")).toBe("+15552223333");
+  it.each([
+    ["Name@Example.com", "name@example.com"],
+    [" +1 (555) 222-3333 ", "+15552223333"],
+    ["Alice Smith", "AliceSmith"],
+    ["auto:Alice Smith", "AliceSmith"],
+    ["sms:auto:Alice Smith", "AliceSmith"],
+    ["auto:chatident:AbC", "chat_identifier:AbC"],
+  ])("normalizes handle %s", (input, expected) => {
+    expect(normalizeIMessageHandle(input)).toBe(expected);
   });
 
   it("normalizes chat_id prefixes case-insensitively", () => {
@@ -197,6 +203,7 @@ describe("imessage targets", () => {
 
   it("accepts the all-digit edge of the 32-hex identifier contract", () => {
     const identifier = "1".repeat(32);
+    expect(normalizeIMessageHandle(identifier)).toBe(`chat_identifier:${identifier}`);
     expect(parseIMessageTarget(identifier)).toEqual({
       kind: "chat_identifier",
       chatIdentifier: identifier,

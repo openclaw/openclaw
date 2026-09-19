@@ -55,6 +55,16 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
     `requestHeartbeatNow(...)` is tracked as `plugin-runtime-api-compat-aliases` in the [compatibility registry](/plugins/compatibility#current-compatibility-areas) with a `removeAfter` date of 2026-10-01; use `requestHeartbeat({ source, intent, reason })` in new code.
 
+    The `openclaw/plugin-sdk/system-event-runtime` helpers resolve legacy session
+    aliases at the SDK boundary. Pass a resolved `agentId` alongside `sessionKey`
+    to `api.runtime.system.enqueueSystemEvent(...)` to retain the plugin runtime's
+    lifecycle checks. Standalone callers can use
+    `enqueueRoutedSystemEvent(text, { agentId, sessionKey })`. Read the same owner's
+    events with `peekSystemEventEntries(sessionKey, agentId)`; this keeps `global`
+    queues separate for each agent. Calls without an explicit owner retain
+    configured-owner alias resolution and reject ambiguous agent selection.
+    Explicit owners that cannot normalize to an agent ID are rejected.
+
     `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
 
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
@@ -108,7 +118,6 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     await store.register("key-1", { value: "hello" });
     const claimed = await store.registerIfAbsent("dedupe-key", { value: "first" });
     const value = await store.lookup("key-1");
-    await store.deleteIf?.("key-1", (current) => current.value === "hello");
     await store.consume("key-1");
     await store.clear();
 
@@ -127,7 +136,31 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     const blob = await blobs.lookup("artifact-1");
     ```
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values up to 1 MiB of UTF-8 encoded JSON, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
+
+    To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
+
+    ```typescript
+    const history = api.runtime.state.openKeyedStore<MyRecord>({
+      namespace: "conversation-history",
+      retention: "retained",
+    });
+    await history.register("room-a:0000000042", { value: "hello" });
+    ```
+
+    `OpenKeyedStoreOptions` remains the bounded option type. `OpenRetainedKeyedStoreOptions` describes retained settings, and `OpenAsyncKeyedStoreOptions` is the async opener's union. Synchronous openers accept bounded settings only.
+
+    Retained stores use the existing SQLite table under an internal `@retained.` namespace prefix, which cannot collide with a valid caller-supplied namespace. They do not consume bounded-store row quotas. They reject `maxEntries`, `overflowPolicy`, default TTL, and per-write TTL; records remain until explicitly deleted or cleared. The per-value JSON limit still applies, and the plugin owns disk growth and deletion policy. Caller-supplied namespaces keep their existing validation and length limits.
+
+    `entriesInKeyRange({ keyStartInclusive, keyEndExclusive, limit, order })` reads a lexical key range, including the lower bound and excluding the upper bound. `limit` must be a positive safe integer; `order` is `"asc"` by default or `"desc"`. Storage applies ordering and the limit before returning values. Encode sortable keys when native identifiers do not sort lexically. Use bounded pages rather than `entries()` to read a growing retained store.
+
+    `moveEntriesFrom({ namespace, entries: [{ sourceKey, targetKey }] })` promotes at most 10,000 rows from a bounded namespace owned by the same plugin into the receiving retained store. One transaction rereads and moves the source records without decoding or rewriting their payloads. Existing destination records win, missing source records are no-ops, and a retry after a completed move is idempotent. Live source records with TTL reject the whole operation; expired records are not revived. The returned number counts settled source rows. This operation does not create another table or require a Doctor step.
+
+    These two methods remain optional in the public store type for existing adapters. A plugin using retained storage must require the host capabilities it needs; do not silently fall back to an evicting store or retry failed reads through a different path. Retained runtime handles reject operations after their owning capability closes.
+
+    <Warning>
+    Retained storage does not add a database-version fence. Older OpenClaw binaries still apply older cache and plugin-quota rules and must not write to expanded retained state. Before downgrading, restore a compatible pre-update backup; matching SQLite schema versions alone do not establish safe retention behavior.
+    </Warning>
 
     `lookupMany(keys)` is an optional keyed-store capability for at most 10,000 exact keys per call. Results have the same length and order as the input, including duplicates. Each position is a `Result<T | undefined, PluginStateStoreError>`: `{ ok: true, value }` on success, including `value: undefined` for missing or expired keys, or `{ ok: false, error }` for corrupt stored JSON. An empty request returns `[]`. Keys use the same trimming and 512-byte UTF-8 limit as `lookup`; invalid keys or an oversized request fail with `PLUGIN_STATE_INVALID_INPUT` and operation `lookup` before reading. Database acquisition and query errors fail the whole call. Corrupt-JSON errors retain the `lookup` error code and operation in their per-key result. Inspect each result only when the reader reaches that position, and throw `result.error` if it is not `ok`; this lets a reader stop at an earlier missing or invalid chunk without raising a later corruption error. Each call uses one expiry cutoff and one SQLite selection in the same plugin and namespace, without creating a missing database. Separate calls, including metadata reads, do not share a snapshot; chunked formats must retain their generation, digest, and reader-lifetime checks.
 
@@ -166,6 +199,11 @@ Use `api.runtime.state.openKeyedStore` with the same namespace and options, then
 await its operations. The opener itself still returns a store synchronously.
 Both interfaces use the same plugin-scoped data, so no data migration is needed.
 
+Deferred runtime code without a bound plugin API can import
+`createPluginStateKeyedStore` from `openclaw/plugin-sdk/plugin-state-store-runtime`.
+Pass the plugin ID and the same namespace options, then await each operation.
+Keep this import lazy because the factory loads the state database runtime.
+
 ```typescript
 const store = api.runtime.state.openKeyedStore<MyRecord>({
   namespace: "my-feature",
@@ -175,20 +213,81 @@ await store.register("key-1", { value: "hello" });
 const value = await store.lookup("key-1");
 ```
 
-The async store's `update` updater and `deleteIf` predicate remain synchronous
-callbacks inside the transaction containing the authoritative read and mutation.
+The async store's `update` updater and `deleteIf` predicate are deprecated
+compatibility methods. They still run synchronously on the main thread inside
+the transaction containing the authoritative read and mutation, and remain
+supported through the next Plugin SDK major.
 Finish asynchronous planning before calling these methods; do not make their
 callbacks async or replace atomic operations with separate lookups and writes.
 Returning `undefined` from an updater leaves the entry unchanged. `update`,
 `deleteIf`, `lookupMany`, and `count` remain optional in public store types, so preserve
 capability checks for supported older hosts and third-party adapters.
 
+For new atomic mutations, use the optional `observe` and `compareAndApply`
+methods. `observe(key)` prepares a mutation through canonical writable database
+admission and may create or open state. It returns `{ value, comparison }`; use
+`lookup` for a plain, noncreating read. No transaction remains open while the
+caller prepares the next value.
+
+`compareAndApply(key, comparison, intent)` compares the current live row before
+changing it in the same worker-owned transaction. The opaque comparison binds
+the actual database, plugin, namespace, key, stored JSON bytes, creation time,
+and expiry. It compares content and metadata; it is not an incarnation token or
+permission to act. Another store or key rejects the comparison with
+`PLUGIN_STATE_INVALID_INPUT`.
+
+The intent is explicit:
+
+- `{ operation: "update", action: "set", value, ttlMs? }` writes a defined value
+  and refreshes its creation time and TTL, even when the value is unchanged.
+- `{ operation: "update", action: "keep" }` leaves the entry unchanged while
+  retaining writable admission and the existing namespace expiry sweep.
+- `{ operation: "delete", action: "delete" }` removes a matching live entry.
+- `{ operation: "delete", action: "keep" }` retains writable admission without
+  an expiry sweep or entry mutation.
+
+The result is `{ status: "applied" }`, `{ status: "unchanged" }`, or
+`{ status: "conflict", current }`. A conflict does not change plugin-state rows
+and supplies a fresh observation. An entry that expires after observation
+conflicts; missing and expired entries otherwise share logical-absence semantics.
+Existing quotas, eviction order, validation, and store errors still apply.
+
+On an explicit conflict, a plugin may recompute a named pure decision from
+`current.value` and try again. Prepare clocks, randomness, and external effects
+outside that decision. Never retry transport failures, unknown outcomes, or
+arbitrary callbacks. Check both optional methods before using this capability;
+there is no safe fallback consisting of a separate lookup and unconditional write.
+
+`registerIfAbsent` and the optional `deleteIfEqual(key, expected)` operation use
+the shared-state SQLite worker. `deleteIfEqual` accepts a string, finite number,
+boolean, or `null`, and compares it with the decoded live value in the same
+transaction as deletion. Missing or expired entries return `false`; malformed
+stored JSON remains a typed store error. These operations share existing data,
+limits, and expiry rules with the legacy synchronous store.
+
+`register`, `lookup`, `lookupMany`, `consume`, `delete`, `entries`, `count`, and `clear`
+also execute SQLite in the same worker. Reads preserve missing-store behavior
+without creating a database. `lookupMany` returns one result per input key,
+including duplicates and per-key corrupt-value errors. `consume` reads and
+deletes atomically; a decode failure rolls back the deletion. Store creation,
+input validation, and JSON serialization remain on the calling thread.
+
+Callback-based `update` and `deleteIf` retain the native synchronous transaction;
+do not replace either with a separate lookup and write. Worker errors retain `PluginStateStoreError` codes, operation, and path. Canonical
+state errors use their existing codec; other native causes retain bounded causal
+messages and error codes. Arbitrary custom properties and original stacks do not
+cross the worker boundary.
+
+Discord and Slack use scalar conditional deletion when relinquishing a presence
+cooldown. On older hosts without that optional capability, they leave it to expire
+instead of risking deletion of a newer reservation.
+
 This deprecation adds editor annotations, documentation, and compatibility
 inventory metadata. It adds no runtime warning and changes no trust eligibility:
 the runtime openers remain limited to bundled plugins and trusted official
 installations. Runtime warnings should wait for an actionable supported upgrade.
-The async interface does not promise off-thread SQL or change callback execution;
-callback-free worker capabilities are a separate contract.
+Only the operations identified above execute on the worker. Callback execution
+is unchanged during this migration.
 
 ## Per-agent SQLite writes
 
@@ -223,6 +322,29 @@ For an already borrowed handle, pass its exact `DatabaseSync` as the third
 argument. After waiting, the helper rejects a closed or replaced handle rather
 than opening a replacement on its behalf. Keep the original borrow alive until
 the operation settles. The caller still owns transactions and authorization.
+For large native publications, `openOpenClawAgentSqliteWorkerStore(options, borrowedDb, { moduleUrl, input })`
+retains the original borrowed handle, physical identity, and a separate agent lease
+for a pooled SQLite Worker connection. Its `run(operation, assertCurrent)` joins
+the existing agent writer queue. The operation receives only the retained store's
+`execute` method; finish it before calling `close()`. Close revokes new work,
+drains accepted operations, closes native storage, and then releases custody.
+
+A backend used with this owner requests `transaction` admission after BEGIN and
+`commit` admission immediately before COMMIT through
+`requestSqliteWorkerOperationAdmission`. The host checks current authority at
+both points without waiting synchronously for the native transaction. An accepted
+commit grant orders the commit before later revocation; an earlier refusal rolls
+back. Callers must preserve committed or unknown outcomes and never replay them.
+Private file owners can use `runSqliteWorkerStoreWrite` with their own admission
+and lifetime; it does not supply the shared agent queue or lease.
+
+Backends whose failure handling can leave an unusable native connection implement
+synchronous `assertSettled()`. The broker calls it after a command returns or
+throws. A failed assertion retires the Worker and waits for native exit before
+releasing operation admission. Use `assertTransactionUsable(db)` to detect the
+transaction owner's retained failure, and reject any surviving open transaction.
+Ordinary failures that rolled back safely can still return their domain result.
+
 For example, given an existing `borrowedDb`, a live-owner `assertCurrent()` check,
 and synchronous `applyPreparedChanges(db)`:
 

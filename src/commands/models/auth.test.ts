@@ -1,5 +1,6 @@
 // Model auth tests cover provider auth status, expiry, and display helpers.
 
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,7 +47,6 @@ function readMockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unk
 const mocks = vi.hoisted(() => ({
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
-  clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
   clackPassword: vi.fn(),
   clackSelect: vi.fn(),
   clackText: vi.fn(),
@@ -130,10 +130,10 @@ vi.mock("../../plugins/provider-auth-helpers.js", () => ({
   }),
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
-  isCancel: mocks.clackIsCancel,
   password: mocks.clackPassword,
   select: mocks.clackSelect,
   text: mocks.clackText,
@@ -408,9 +408,6 @@ describe("modelsAuthLoginCommand", () => {
     lastUpdatedConfig = null;
     mocks.clackCancel.mockReset();
     mocks.clackConfirm.mockReset();
-    mocks.clackIsCancel.mockImplementation(
-      (value: unknown) => value === Symbol.for("clack:cancel"),
-    );
     mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
@@ -1624,9 +1621,7 @@ describe("modelsAuthLoginCommand", () => {
       throw new Error(`exit:${String(code ?? "")}`);
     }) as typeof process.exit);
     try {
-      const cancelSymbol = Symbol.for("clack:cancel");
-      mocks.clackPassword.mockResolvedValue(cancelSymbol);
-      mocks.clackIsCancel.mockImplementation((value: unknown) => value === cancelSymbol);
+      mocks.clackPassword.mockResolvedValue(CANCEL_SYMBOL);
 
       await expect(modelsAuthPasteTokenCommand({ provider: "openai" }, runtime)).rejects.toThrow(
         "exit:0",
@@ -1818,6 +1813,9 @@ describe("modelsAuthLoginCommand", () => {
       mode: "api_key",
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway has not confirmed applying the provider settings"),
+    );
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         params: { operation: "login", agentId: "coder" },

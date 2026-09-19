@@ -229,12 +229,12 @@ describe("pending ACP spawn authority", () => {
         const run = vi.spyOn(SessionActorQueue.prototype, "run");
         run.mockImplementationOnce(function (this: SessionActorQueue, key, op) {
           run.mockRestore();
-          return this.run(key, async () => {
+          return this.run(key, async (isCurrent) => {
             if (!childKey) {
               throw new Error("ACP actor started before its child entry existed");
             }
             await pause(childKey);
-            return await op();
+            return await op(isCurrent);
           });
         });
       } else if (stage === "initialized" || stage === "metadata") {

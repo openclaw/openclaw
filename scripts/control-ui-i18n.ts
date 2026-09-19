@@ -12,6 +12,7 @@ import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
+  extractTranslationPlaceholders,
   syncControlUiCatalogFallbackBaseline,
   verifyControlUiGeneratedCatalogs,
   verifyRuntimeLocaleConfig,
@@ -305,12 +306,6 @@ type PlaceholderMismatch = {
   sourcePlaceholders: string[];
   translatedPlaceholders: string[];
 };
-
-function extractTranslationPlaceholders(text: string): string[] {
-  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
-}
 
 export function findPlaceholderMismatches(
   sourceFlat: ReadonlyMap<string, string>,

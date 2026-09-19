@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements live transport cli behavior.
 import {
   createLiveTransportQaCliRegistration as createQaRunnerCliRegistration,
   type LiveTransportQaCommandOptions as QaRunnerCommandOptions,
@@ -10,6 +9,7 @@ import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../p
 import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 
 export type LiveTransportQaCommandOptions = QaRunnerCommandOptions & {
+  channelDriver?: string;
   concurrency?: number;
 };
 
@@ -86,6 +86,7 @@ export function createStandardLiveTransportQaCliRegistration(params: {
   channelLabel: string;
   createAdapter: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
   description: string;
+  listScenariosHelp?: string;
 }): LiveTransportQaCliRegistration {
   const adapterFactory = createLiveTransportQaAdapterFactory({
     id: params.channelId,
@@ -101,6 +102,8 @@ export function createStandardLiveTransportQaCliRegistration(params: {
         "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
     description: params.description,
+    listScenariosHelp: params.listScenariosHelp,
+    normalizeInactiveSelectionOptions: true,
     outputDirHelp: `${params.channelLabel} QA artifact directory`,
     scenarioHelp: `Run only the named ${params.channelLabel} QA scenario (repeatable)`,
     sutAccountHelp: `Temporary ${params.channelLabel} account id inside the QA gateway config`,

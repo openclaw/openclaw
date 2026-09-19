@@ -79,8 +79,6 @@ export type LobsterPetAccessory =
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
-
 export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
 
 export type LobsterPetLook = {
@@ -93,7 +91,6 @@ export type LobsterPetLook = {
   facing: 1 | -1;
   personality: LobsterPetPersonalityId;
   blinkDelayS: number;
-  build: LobsterPetBuild;
   clawSize: LobsterPetClawSize;
   tailFan: boolean;
   // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,

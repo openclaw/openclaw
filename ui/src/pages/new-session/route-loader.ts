@@ -1,13 +1,20 @@
+import type { RouteLoadCause } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
+import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
 export async function load(
   context: ApplicationContext,
   search: string,
+  cause?: RouteLoadCause,
 ): Promise<NewSessionRouteData> {
+  const restored = cause && cause !== "preload" && takeInstantThreadRestore(context, search);
+  if (restored) {
+    return restored;
+  }
   const requestedLocation = newSessionLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";

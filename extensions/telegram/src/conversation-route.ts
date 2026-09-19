@@ -1,4 +1,3 @@
-// Telegram plugin module implements conversation route behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,
@@ -55,22 +54,6 @@ type ResolveTelegramConversationRouteParams = {
   senderId?: string | number | null;
   topicAgentId?: string | null;
 };
-
-export function buildTelegramConversationRouteContext(params: {
-  chatId: number | string;
-  isGroup: boolean;
-  threadSpec: TelegramThreadSpec;
-  senderId?: string | number | null;
-  resolvedThreadId?: number;
-}) {
-  return {
-    ConversationRouteContextObserved: true,
-    ConversationRoutePeerId: params.isGroup
-      ? buildTelegramConversationId({ chatId: params.chatId, thread: params.threadSpec })
-      : resolveTelegramDirectPeerId(params),
-    ThreadParentId: buildTelegramParentPeer(params)?.id,
-  };
-}
 
 function resolveTelegramConversationRouteWithRuntimePolicy(
   params: ResolveTelegramConversationRouteParams,

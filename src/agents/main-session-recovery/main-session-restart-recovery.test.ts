@@ -33,11 +33,15 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { loadDeliveryQueueEntryInDatabase } from "../../infra/delivery-queue-sqlite-bound.js";
 import {
   loadDeliveryQueueEntry,
-  moveDeliveryQueueEntryToFailed,
   upsertDeliveryQueueEntry,
 } from "../../infra/delivery-queue-sqlite.js";
+import {
+  prepareDeliveryQueueTerminalEntry,
+  terminalizePendingDeliveryQueueEntryInDatabase,
+} from "../../infra/delivery-queue-sqlite.kernel.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { ackDelivery, enqueueDeliveryOnce } from "../../infra/outbound/delivery-queue-storage.js";
 import {
@@ -71,9 +75,13 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
@@ -99,7 +107,9 @@ import {
   waitForFast,
 } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
+import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
@@ -139,30 +149,11 @@ const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(a
   suppressed: false,
 }));
 let dispatchSettlement = createDeferred();
-const mockRecoveryRuntime = {
-  dispatchSessionMethod: vi.fn(),
-  dispatchAgent: async <T>(
-    params: Record<string, unknown>,
-    timeoutMs?: number,
-    options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-  ) => {
-    const result = (await callGateway({ method: "agent", params, timeoutMs })) as T;
-    const status = (result as { status?: unknown } | undefined)?.status;
-    if (status === undefined) {
-      options?.onStartOwner?.({
-        observe: () => ({ executionStarted: true, expiresAtMs: Date.now() + 60_000 }),
-        abort: () => false,
-      });
-      options?.onAccepted?.(result);
-      options?.onExecutionStarted?.();
-      await dispatchSettlement.promise;
-    }
-    return result;
-  },
-  waitForAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
-    (await callGateway({ method: "agent.wait", params, timeoutMs })) as T,
+const mockRecoveryRuntime = createRecoveryRuntimeFixture({
+  callGateway,
+  getDispatchSettlement: () => dispatchSettlement.promise,
   sendRecoveryNotice,
-};
+});
 
 type RecoveryParams<T extends { gatewayRuntime: unknown }> = Omit<T, "gatewayRuntime"> &
   Partial<Pick<T, "gatewayRuntime">>;
@@ -225,6 +216,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   resetGatewayWorkAdmission();
+  await cleanupSessionStateForTest({ stateDir: tmpDir });
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -523,6 +515,23 @@ function codeModeWaitCallMessage() {
   };
 }
 
+function getHarnessRecoveryFixture() {
+  return {
+    tmpDir,
+    makeSessionsDir,
+    mainSessionEntry,
+    writeStore,
+    writeTranscript,
+    expectRecovery,
+    loadSessionEntry,
+    sendRecoveryNotice,
+    dispatchSettlement,
+    discordDeliveryContext,
+    runningSessionEntry,
+    gatewayParams,
+  };
+}
+
 describe("main-session-restart-recovery", () => {
   it.each([
     { name: "stale same-id rows", keys: ["active"], live: true },
@@ -776,8 +785,6 @@ describe("main-session-restart-recovery", () => {
       } finally {
         admission?.release();
         removeAgentDeletionJournal(deletion.agentId, deletion.operationId);
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     });
   });
@@ -1645,35 +1652,7 @@ describe("main-session-restart-recovery", () => {
     expect(readStore(storePath)[fixture.sessionKey]).not.toHaveProperty("restartRecoveryRuns");
   });
 
-  it("resumes an explicit human run despite stale completion provenance", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const sessionKey = "agent:main:telegram:group:-100:topic:41818";
-    await writeStore(sessionsDir, {
-      [sessionKey]: {
-        ...runningSessionEntry("topic-41818-session"),
-        abortedLastRun: true,
-        restartRecoveryRuns: [{ runId: "human-run-2", lifecycleGeneration: "generation-old" }],
-      },
-    });
-    await writeTranscript(sessionsDir, "topic-41818-session", [
-      {
-        role: "user",
-        content: "A background task finished.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_announce",
-        },
-      },
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams().sessionKey).toBe(sessionKey);
-  });
+  registerHarnessCompletionRecoveryCases(getHarnessRecoveryFixture);
 
   it("retries when a human recovery run appears during announce reconciliation", async () => {
     const sessionsDir = await makeSessionsDir();
@@ -3110,7 +3089,28 @@ describe("main-session-restart-recovery", () => {
             stateDir: tmpDir,
           });
         } else if (ownerStatus === "failed") {
-          moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir);
+          const database = openOpenClawStateDatabase({
+            env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
+          });
+          const entry = loadDeliveryQueueEntryInDatabase(
+            database,
+            OUTBOUND_DELIVERY_QUEUE_NAME,
+            deliveryId,
+            "pending",
+          );
+          if (!entry) {
+            throw new Error("Expected the seeded outbound delivery to remain pending");
+          }
+          expect(
+            terminalizePendingDeliveryQueueEntryInDatabase(
+              database,
+              prepareDeliveryQueueTerminalEntry({
+                queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+                id: deliveryId,
+                entry,
+              }),
+            ),
+          ).toMatchObject({ status: "terminalized" });
         } else if (ownerStatus === "completed") {
           await ackDelivery(deliveryId, tmpDir);
         }
@@ -3778,6 +3778,8 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
     try {
+      await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+      dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
       await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
       await recovery.stop();
 
@@ -4197,6 +4199,8 @@ describe("main-session-restart-recovery", () => {
       try {
         await failedMark.promise;
         if (transient) {
+          await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+          dispatchSettlement.resolve(); // Retried stores share the same bounded recovery slot.
           await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
         }
         await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));

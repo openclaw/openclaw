@@ -7,6 +7,10 @@ import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./man
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import {
+  listTrustedExternalProviderPolicyOwners,
+  resolveBundledProviderPolicyOwner,
+} from "./provider-policy-owners.js";
+import {
   resolveDirectBundledProviderPolicySurface,
   extractProviderPolicySurface,
   PROVIDER_POLICY_ARTIFACT,
@@ -16,6 +20,8 @@ import {
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
+
+export { listProviderPolicyOwners } from "./provider-policy-owners.js";
 
 type ProviderPolicyRegistry = { plugins: readonly PluginManifestRecord[] };
 
@@ -41,73 +47,7 @@ function resolveBundledProviderPolicyPlugin(
     options.manifestRegistry ??
     options.loadManifestRegistry?.() ??
     loadPluginManifestRegistryCore();
-  let owner: PluginManifestRecord | null = null;
-  for (const plugin of registry.plugins) {
-    if (plugin.origin !== "bundled" || (owner && owner.id.localeCompare(plugin.id) <= 0)) {
-      continue;
-    }
-    if (pluginOwnsProviderPolicyRef(plugin, normalizedProviderId)) {
-      owner = plugin;
-    }
-  }
-
-  return owner;
-}
-
-function pluginDeclaresProviderPolicyRef(
-  plugin: PluginManifestRecord,
-  normalizedProviderId: string,
-): boolean {
-  if (!normalizedProviderId) {
-    return false;
-  }
-  for (const provider of plugin.providers) {
-    if (normalizeProviderId(provider) === normalizedProviderId) {
-      return true;
-    }
-  }
-  for (const provider of plugin.cliBackends) {
-    if (normalizeProviderId(provider) === normalizedProviderId) {
-      return true;
-    }
-  }
-  if (plugin.contracts?.embeddingProviders) {
-    for (const provider of plugin.contracts.embeddingProviders) {
-      if (normalizeProviderId(provider) === normalizedProviderId) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function pluginOwnsProviderPolicyRef(
-  plugin: PluginManifestRecord,
-  normalizedProviderId: string,
-): boolean {
-  if (pluginDeclaresProviderPolicyRef(plugin, normalizedProviderId)) {
-    return true;
-  }
-
-  const aliases = plugin.providerAuthAliases;
-  if (!aliases) {
-    return false;
-  }
-  for (const rawAlias in aliases) {
-    if (!Object.hasOwn(aliases, rawAlias)) {
-      continue;
-    }
-    const rawTarget = aliases[rawAlias];
-    if (
-      typeof rawTarget === "string" &&
-      normalizeProviderId(rawAlias) === normalizedProviderId &&
-      pluginDeclaresProviderPolicyRef(plugin, normalizeProviderId(rawTarget))
-    ) {
-      return true;
-    }
-  }
-
-  return false;
+  return resolveBundledProviderPolicyOwner(normalizedProviderId, registry);
 }
 
 /** Resolves provider policy hooks for a bundled provider or its owning plugin. */
@@ -152,18 +92,16 @@ export function resolveProviderPolicySurface(
     return null;
   }
   return (
-    loadTrustedExternalProviderPolicyArtifacts(
+    loadProviderPolicyArtifacts(
       listTrustedExternalProviderPolicyOwners(providerId, options.manifestRegistry),
     )?.surface ?? null
   );
 }
 
-/** Loads the first usable policy surface from caller-selected trusted owners. */
-export function loadTrustedExternalProviderPolicyArtifacts(
-  owners: readonly PluginManifestRecord[],
-) {
+/** Loads the first usable policy surface from caller-selected admitted owners. */
+export function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
   for (const owner of owners) {
-    const surface = resolveTrustedExternalProviderPolicySurface(owner);
+    const surface = resolveProviderPolicySurfaceForOwner(owner);
     if (surface) {
       return { owner, surface };
     }
@@ -172,26 +110,11 @@ export function loadTrustedExternalProviderPolicyArtifacts(
   return owner ? { owner, surface: null } : null;
 }
 
-/** Lists trusted installed plugins that own a provider policy reference. */
-export function listTrustedExternalProviderPolicyOwners(
-  providerId: string,
-  manifestRegistry: ProviderPolicyRegistry,
-) {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  const owners = manifestRegistry.plugins.filter(
-    (plugin) =>
-      plugin.trustedOfficialInstall === true &&
-      pluginOwnsProviderPolicyRef(plugin, normalizedProviderId),
-  );
-  owners.sort((left, right) => left.id.localeCompare(right.id));
-  return owners;
-}
-
-/** Loads policy hooks from a host-verified official external plugin install. */
-function resolveTrustedExternalProviderPolicySurface(
+/** Loads policy hooks from the selected bundled or host-verified official owner. */
+export function resolveProviderPolicySurfaceForOwner(
   record: PluginManifestRecord,
 ): ProviderPolicySurface | null {
-  if (record.trustedOfficialInstall !== true) {
+  if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
     return null;
   }
   const modulePath = resolvePluginRootPublicSurfacePath({

@@ -5,6 +5,7 @@ export { decodeChromeMcpStderrTail } from "./chrome-mcp-diagnostics.js";
 export { parseChromeMcpUnixProcessListForTest } from "./chrome-mcp-process.js";
 export {
   closeChromeMcpSession,
+  getChromeMcpPid,
   resetChromeMcpSessionsForTest,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -12,7 +13,6 @@ export {
 export {
   countChromeMcpTabs,
   ensureChromeMcpAvailable,
-  getChromeMcpPid,
   listChromeMcpTabs,
   openChromeMcpTab,
 } from "./chrome-mcp-tabs.js";

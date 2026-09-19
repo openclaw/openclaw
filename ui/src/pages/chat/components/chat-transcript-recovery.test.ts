@@ -76,6 +76,20 @@ function mountTranscript(
   return pane;
 }
 
+async function searchTranscript(pane: RecoveryTranscriptElement, query: string) {
+  if (!pane.querySelector(".agent-chat__search-bar input")) {
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
+    await pane.updateComplete;
+  }
+  const input = expectDefined(
+    pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
+    "transcript search input",
+  );
+  input.value = query;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await pane.updateComplete;
+}
+
 describe("chat transcript full-message recovery", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
@@ -93,15 +107,10 @@ describe("chat transcript full-message recovery", () => {
     });
     expect(pane.querySelector(".chat-message-disclosure__toggle")).toBeNull();
 
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
-    await pane.updateComplete;
-    const input = expectDefined(
-      pane.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
-      "transcript search input",
-    );
-    input.value = "unmatched search";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await pane.updateComplete;
+    await searchTranscript(pane, "complete answer");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Complete answer.");
+    expect(previewMessage.content).toBe("Preview\n...(truncated)...");
+    await searchTranscript(pane, "unmatched search");
     expect(pane.querySelector(".chat-bubble")).toBeNull();
 
     toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
@@ -109,6 +118,21 @@ describe("chat transcript full-message recovery", () => {
     pane.requestUpdate();
     await pane.updateComplete;
     expect(pane.textContent).toContain("Complete answer.");
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("updates an unchanged search when a hidden reply finishes recovering", async () => {
+    const pending = createDeferred<FullMessageResult>();
+    const load = vi.fn<SidebarFullMessageLoader>().mockImplementation(() => pending.promise);
+    const pane = mountTranscript("recovery-active-search", load);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    await searchTranscript(pane, "lunarneedle");
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
+
+    pending.resolve(fullMessage("The restored exhibit is lunarneedle."));
+    await vi.waitFor(() =>
+      expect(pane.querySelector(".chat-bubble")?.textContent).toContain("lunarneedle"),
+    );
     expect(load).toHaveBeenCalledOnce();
   });
 
@@ -218,6 +242,8 @@ describe("chat transcript full-message recovery", () => {
     const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue(fullMessage("First scope."));
     const pane = mountTranscript("recovery-routing", load, "global");
     await vi.waitFor(() => expect(pane.textContent).toContain("First scope."));
+    await searchTranscript(pane, "First scope");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("First scope.");
 
     load.mockResolvedValue(fullMessage("Second scope."));
     pane.props = {
@@ -227,18 +253,27 @@ describe("chat transcript full-message recovery", () => {
         : { fullMessageAgentId: "other" }),
     };
     pane.requestUpdate();
+    await pane.updateComplete;
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
     await vi.waitFor(() => expect(pane.textContent).toContain("Second scope."));
     expect(load).toHaveBeenLastCalledWith({
       sessionKey: pane.props.sessionKey,
       agentId: pane.props.fullMessageAgentId,
       messageId: "assistant-full-1",
     });
+    await searchTranscript(pane, "First scope");
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    await searchTranscript(pane, "Second scope");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Second scope.");
   });
 
   it("discards recovered bodies when their source leaves active history", async () => {
     const load = vi.fn<SidebarFullMessageLoader>().mockResolvedValue(fullMessage("Original body."));
     const pane = mountTranscript("recovery-pruning", load);
     await vi.waitFor(() => expect(pane.textContent).toContain("Original body."));
+    await searchTranscript(pane, "Original body");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Original body.");
 
     pane.props.messages = [];
     pane.requestUpdate();
@@ -246,8 +281,13 @@ describe("chat transcript full-message recovery", () => {
     load.mockResolvedValue(fullMessage("Revisited body."));
     pane.props.messages = [previewMessage];
     pane.requestUpdate();
+    await pane.updateComplete;
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(pane.textContent).toContain("Revisited body."));
+    await searchTranscript(pane, "Original body");
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
   });
 
   it("keeps recovered pending-input text until that input leaves the source", async () => {
@@ -274,6 +314,8 @@ describe("chat transcript full-message recovery", () => {
     await pane.updateComplete;
     expect(load).toHaveBeenCalledOnce();
     expect(pane.textContent).toContain("Accepted input.");
+    await searchTranscript(pane, "Accepted input");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Accepted input.");
 
     pane.props.pendingInputs = [];
     pane.requestUpdate();
@@ -281,8 +323,35 @@ describe("chat transcript full-message recovery", () => {
     load.mockResolvedValue(fullMessage("Revisited input."));
     pane.props.pendingInputs = pendingInputs;
     pane.requestUpdate();
+    await pane.updateComplete;
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
     await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops searching recovered text when the source is no longer capped", async () => {
+    const load = vi
+      .fn<SidebarFullMessageLoader>()
+      .mockResolvedValue(fullMessage("Recovered body."));
+    const pane = mountTranscript("recovery-replaced-source", load);
+    await vi.waitFor(() => expect(pane.textContent).toContain("Recovered body."));
+    await searchTranscript(pane, "Recovered body");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Recovered body.");
+
+    pane.props.messages = [
+      {
+        ...previewMessage,
+        content: "Current source body.",
+        __openclaw: { id: "assistant-full-1" },
+      },
+    ];
+    pane.requestUpdate();
+    await pane.updateComplete;
+    expect(pane.querySelector(".chat-bubble")).toBeNull();
+    await searchTranscript(pane, "Current source body");
+    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Current source body.");
+    expect(load).toHaveBeenCalledOnce();
   });
 
   it("fences a pruned request when the same message starts a new recovery", async () => {

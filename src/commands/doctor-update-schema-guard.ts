@@ -3,16 +3,17 @@ import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  preflightOpenClawDatabaseSchemas,
-  type OpenClawDatabaseSchemaPreflight,
-} from "../state/openclaw-database-preflight.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import { VERSION } from "../version.js";
+import {
+  prepareDoctorDatabasePreflight,
+  type DoctorDatabasePreflight,
+} from "./doctor-database-preflight.js";
 import {
   recordUpdateDoctorRefusal,
   resolveUpdateDoctorGitRecovery,
@@ -28,7 +29,9 @@ async function readDrivingUpdater(): Promise<
   });
   try {
     const database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+    let closeSchemaReadAdmission: (() => void) | undefined;
     try {
+      closeSchemaReadAdmission = openDoctorStateSchemaReadAdmission(database);
       const blocker = readStateSchemaPublicationBlocker(database);
       return blocker
         ? {
@@ -37,30 +40,30 @@ async function readDrivingUpdater(): Promise<
           }
         : undefined;
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(database);
-      database.close();
+      try {
+        closeSchemaReadAdmission?.();
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(database);
+        database.close();
+      }
     }
   } finally {
     await snapshot.cleanupAsync();
   }
 }
 
-/** Refuse before CLI capture or Doctor maintenance can open writable state. */
+/** Prepare reusable fleet facts and refuse before CLI bootstrap or Doctor can write state. */
 export async function guardUpdateDoctorSchemaUpgrade(options: {
-  schemas?: OpenClawDatabaseSchemaPreflight;
-  runtime: RuntimeEnv;
+  schemas?: DoctorDatabasePreflight;
+  runtime?: RuntimeEnv;
   json?: boolean;
-}): Promise<void> {
+}): Promise<DoctorDatabasePreflight | undefined> {
   if (process.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1") {
-    return;
+    return undefined;
   }
-  const schemas =
-    options.schemas ??
-    (await preflightOpenClawDatabaseSchemas({
-      env: process.env,
-    }));
+  const schemas = options.schemas ?? (await prepareDoctorDatabasePreflight());
   if (!schemas.pendingMigrations?.length) {
-    return;
+    return schemas;
   }
   let updater: Awaited<ReturnType<typeof readDrivingUpdater>>;
   try {
@@ -69,13 +72,13 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     // A missing or unreadable run cannot prove that the driver writes the ledger.
   }
   if (!updater) {
-    return;
+    return schemas;
   }
   const blockedMigrations = schemas.pendingMigrations.filter(
     (database) => database.kind === "agent" || !updater.canDeferStateSchema,
   );
   if (blockedMigrations.length === 0) {
-    return;
+    return schemas;
   }
   const recovery = await resolveUpdateDoctorGitRecovery();
   const error = new UpdateSchemaRefusalError(blockedMigrations, updater.version, {
@@ -86,8 +89,9 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     recordUpdateDoctorRefusal(error.message);
   }
   if (options.json) {
-    writeRuntimeJson(options.runtime, formatCliJsonFailure(error));
-    exitCliAfterOutput(options.runtime, 1);
+    const runtime = options.runtime ?? defaultRuntime;
+    writeRuntimeJson(runtime, formatCliJsonFailure(error));
+    exitCliAfterOutput(runtime, 1);
   }
   throw error;
 }

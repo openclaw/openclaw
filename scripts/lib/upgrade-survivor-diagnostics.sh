@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Host-only snapshot preparation/publication shared by upgrade harnesses.
 prepare_diagnostics_capture() {
-  # A previous attempt must never be published as this container's failure.
+  # A previous attempt must never be published as this container's evidence.
   if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] ||
-    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/diagnostics/last-rpc"; then
+    ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/diagnostics/last-rpc" "$ARTIFACT_DIR/summary.json" \
+      "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
+      "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \
+      "$ARTIFACT_DIR"/diagnostics/doctor-*.json; then
     echo "Upgrade survivor diagnostics missing: private capture setup failed." >&2
     return 0
   fi
@@ -20,5 +23,5 @@ publish_diagnostics() {
   diagnostic_dir="$(mktemp -d "$log_root/upgrade-survivor-$LANE_ARTIFACT_SUFFIX.XXXXXX")" || return
   (cd "$HARNESS_ROOT_DIR" && node --import "$HARNESS_ROOT_DIR/scripts/tsx.mjs" \
     "$HARNESS_ROOT_DIR/scripts/upgrade-survivor-diagnostics.mjs" \
-    publish "$private_root" "$diagnostic_dir")
+    publish "$private_root" "$diagnostic_dir" "${1:-failed}")
 }

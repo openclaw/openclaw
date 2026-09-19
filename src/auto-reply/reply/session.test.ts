@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager.test-support.js";
+import * as mcpFixture from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
@@ -1420,6 +1420,52 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionCtx.agentText).toBe(expected);
   });
 
+  it.each([
+    { name: "newline", trigger: "/steer", command: "/steer\n", resets: true },
+    { name: "tab", trigger: "/steer", command: "/steer\t", resets: true },
+    { name: "non-boundary suffix", trigger: "/steer", command: "/steering ", resets: false },
+    { name: "configured alias", trigger: "/tell", command: "/tell\n", resets: true },
+    { name: "unconfigured alias", trigger: "/steer", command: "/tell ", resets: false },
+    { name: "unconfigured canonical command", trigger: "/tell", command: "/steer ", resets: false },
+    { name: "no-argument alias with payload", trigger: "/id", command: "/id ", resets: true },
+  ])(
+    "matches configured reset trigger boundaries with $name",
+    async ({ trigger, command, resets }) => {
+      const root = await makeCaseDir("openclaw-configured-reset-boundary-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:telegram:dm:reset-boundary";
+      const sessionId = "existing-reset-boundary-session";
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId, updatedAt: Date.now(), systemSent: true },
+      });
+      const previous = expectDefined(loadSessionEntry({ storePath, sessionKey }), "seeded session");
+      const payload = "new task\nkeep this complete instruction";
+      const body = `${command}${payload}`;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          ChatType: "direct",
+          SessionKey: sessionKey,
+        },
+        cfg: { session: { store: storePath, resetTriggers: [trigger] } },
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(resets);
+      expect(result.isNewSession).toBe(resets);
+      expect(result.sessionId).toBe(sessionId);
+      if (resets) {
+        expect(result.sessionEntry.lifecycleRevision).not.toBe(previous.lifecycleRevision);
+        expect(result.bodyStripped).toBe(payload);
+      } else {
+        expect(result.sessionEntry.lifecycleRevision).toBe(previous.lifecycleRevision);
+        expect(result.bodyStripped).toBeUndefined();
+      }
+      expect(result.sessionCtx.agentText).toBe(resets ? payload : body);
+    },
+  );
+
   it.each(["@openclaw /new", "@openclaw/new"])(
     "preserves bracketed multiline payloads after group mention form %s",
     async (prefix) => {
@@ -1805,7 +1851,7 @@ describe("initSessionState RawBody", () => {
       },
     });
     enqueueSystemEvent("stale session-key event", { sessionKey });
-    enqueueSystemEvent("stale session-id event", { sessionKey: existingSessionId });
+    enqueueSystemEvent("stale session-id event", { sessionKey: `agent:main:${existingSessionId}` });
 
     const cfg = {
       session: {
@@ -1835,7 +1881,7 @@ describe("initSessionState RawBody", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
+    expect(peekSystemEvents(`agent:main:${existingSessionId}`)).toStrictEqual([]);
   });
 
   it("preserves a user model override across an implicit daily stale rollover (#90119)", async () => {
@@ -2350,80 +2396,6 @@ describe("initSessionState RawBody", () => {
       );
     }
   });
-  it.each([
-    {
-      name: "rotates local session state for /new on bound ACP sessions",
-      body: "/new",
-      to: "1478836151241412759",
-      includeBinding: true,
-    },
-    {
-      name: "rotates local session state for ACP /new when no matching conversation binding exists",
-      body: "/new",
-      to: "user:12345",
-      originatingTo: "user:12345",
-      includeBinding: false,
-    },
-    {
-      name: "keeps custom reset triggers working on bound ACP sessions",
-      body: "/fresh",
-      to: "1478836151241412759",
-      includeBinding: true,
-      resetTriggers: ["/fresh"],
-    },
-    {
-      name: "keeps normal /new behavior for unbound ACP-shaped session keys",
-      body: "/new",
-      to: "1478836151241412759",
-      includeBinding: false,
-    },
-  ])("$name", async (scenario) => {
-    const storePath = await createStorePath("openclaw-rawbody-acp-reset-");
-    const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
-    const existingSessionId = "session-existing";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: { sessionId: existingSessionId, updatedAt: Date.now(), systemSent: true },
-    });
-    const bindings = scenario.includeBinding
-      ? [
-          {
-            type: "acp" as const,
-            agentId: "codex",
-            match: {
-              channel: "discord",
-              accountId: "default",
-              peer: { kind: "channel" as const, id: "1478836151241412759" },
-            },
-            acp: { mode: "persistent" as const },
-          },
-        ]
-      : undefined;
-    const result = await initSessionState({
-      ctx: {
-        RawBody: scenario.body,
-        CommandBody: scenario.body,
-        Provider: "discord",
-        Surface: "discord",
-        SenderId: "12345",
-        From: "discord:12345",
-        To: scenario.to,
-        OriginatingTo: "originatingTo" in scenario ? scenario.originatingTo : undefined,
-        SessionKey: sessionKey,
-      },
-      cfg: {
-        session: {
-          store: storePath,
-          ...("resetTriggers" in scenario ? { resetTriggers: scenario.resetTriggers } : {}),
-        },
-        ...(bindings ? { bindings } : {}),
-        channels: { discord: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
-    });
-
-    expect(result.resetTriggered).toBe(true);
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-  });
   it("does not suppress /new when active conversation binding points to a non-ACP session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-nonacp-binding-");
     const storePath = path.join(root, "sessions.json");
@@ -2811,7 +2783,9 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionKey).toBe(sourceSessionKey);
     expect(result.sessionId).toBe(sourceSessionId);
     if ("reset" in scenario) {
-      expect(result.resetTriggered).toBe(true);
+      // The bound ACP handler owns reset; preprocessing must not rotate its transport session.
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(false);
     }
     expect(result.sessionCtx.SessionKey).toBe(sourceSessionKey);
     expect(
@@ -3006,7 +2980,7 @@ describe("initSessionState reset policy", () => {
     });
     enqueueSystemEvent("stale idle rollover event", { sessionKey });
     enqueueSystemEvent("stale idle rollover session-id event", {
-      sessionKey: existingSessionId,
+      sessionKey: `agent:main:${existingSessionId}`,
     });
 
     const cfg = {
@@ -3032,7 +3006,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
+    expect(peekSystemEvents(`agent:main:${existingSessionId}`)).toStrictEqual([]);
   });
 
   it("reuses completed run entries while the session is still fresh", async () => {
@@ -5428,12 +5402,10 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const storePath = await createStorePath("openclaw-stale-runtime-dispose-");
     const sessionKey = "agent:main:telegram:dm:runtime-stale-user";
     const existingSessionId = "stale-runtime-session";
-    const cfg = {
-      session: {
-        store: storePath,
-        reset: { mode: "idle", idleMinutes: 1 },
-      },
-    } as OpenClawConfig;
+    const cfg: OpenClawConfig = {
+      ...mcpFixture.unopenedMcpConfig,
+      session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
+    };
 
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
@@ -5442,7 +5414,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       },
     });
 
-    await getOrCreateSessionMcpRuntime({
+    await mcpFixture.getOrCreateSessionMcpRuntime({
       sessionId: existingSessionId,
       sessionKey,
       workspaceDir: path.dirname(storePath),

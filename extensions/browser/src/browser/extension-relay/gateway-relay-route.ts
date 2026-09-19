@@ -3,8 +3,11 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
-import { WebSocketServer, type WebSocket } from "ws";
+import {
+  rejectWebSocketUpgrade,
+  WebSocketServer,
+  type WebSocket,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   getBrowserControlState,

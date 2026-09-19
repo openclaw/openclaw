@@ -3,7 +3,10 @@ import { loadSettings } from "../../app/settings.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import {
+  createBackgroundTasksProps,
+  refreshBackgroundTasks,
+} from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -24,6 +27,9 @@ export function openPreferredSidebarPanel(
   layout: ChatPaneSidebarLayout,
   slot: SidebarSlotId,
 ): ChatPaneSidebarLayout {
+  if (slot === "tasks") {
+    refreshBackgroundTasks(state);
+  }
   if (slot !== "dashboard") {
     return openSlot(layout, slot);
   }

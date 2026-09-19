@@ -1,4 +1,3 @@
-// Telegram plugin module implements fetch behavior.
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -29,7 +28,8 @@ import {
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Agent, fetch as undiciFetch } from "undici";
+// The installed package retains dispatcher composition under Bun.
+import { Agent, fetch as undiciFetch } from "undici/index.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -38,6 +38,11 @@ import {
 } from "./network-config.js";
 import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
+import {
+  bindTelegramTransportAuthority,
+  findTelegramRequestAuthorityError,
+  getTelegramRequestAuthority,
+} from "./request-authority.js";
 
 const log = createSubsystemLogger("telegram/network");
 
@@ -356,17 +361,6 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   };
 }
 
-function withDispatcherIfMissing(
-  init: RequestInit | undefined,
-  dispatcher: TelegramDispatcher,
-): RequestInitWithDispatcher {
-  const withDispatcher = init as RequestInitWithDispatcher | undefined;
-  if (withDispatcher?.dispatcher) {
-    return init ?? {};
-  }
-  return init ? { ...init, dispatcher } : { dispatcher };
-}
-
 function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
   return resolveFetch(fetchImpl) ?? fetchImpl;
 }
@@ -428,6 +422,9 @@ function formatErrorCodes(err: unknown): string {
 }
 
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
+  if (findTelegramRequestAuthorityError(err)) {
+    return false;
+  }
   const ctx: TelegramTransportFallbackContext = {
     message:
       err && typeof err === "object" && "message" in err
@@ -770,6 +767,10 @@ export function resolveTelegramTransport(
   };
 
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestFetch = bindTelegramTransportAuthority(
+      sourceFetch,
+      getTelegramRequestAuthority(init),
+    );
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
@@ -795,7 +796,7 @@ export function resolveTelegramTransport(
 
     if (callerProvidedDispatcher) {
       try {
-        const response = await sourceFetch(input, init);
+        const response = await requestFetch(input, init);
         signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),
@@ -812,7 +813,7 @@ export function resolveTelegramTransport(
         if (!shouldUseTelegramTransportFallback(caught)) {
           throw caught;
         }
-        const response = await sourceFetch(input, init ?? {});
+        const response = await requestFetch(input, init ?? {});
         signal?.throwIfAborted();
         return response;
       }
@@ -836,10 +837,7 @@ export function resolveTelegramTransport(
         continue;
       }
       try {
-        const response = await sourceFetch(
-          input,
-          withDispatcherIfMissing(init, attempt.createDispatcher()),
-        );
+        const response = await requestFetch(input, init, attempt.createDispatcher());
         signal?.throwIfAborted();
         captureHttpExchange({
           url: resolveRequestUrl(input),

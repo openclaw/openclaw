@@ -17,6 +17,7 @@ export function renderChatTranscriptLayout<T>({
   scrollElementRef,
   captureInteractionResize,
   measureRowRefFor,
+  measureRows,
 }: {
   rows: readonly TranscriptRow<T>[];
   renderRow: (row: TranscriptRow<T>) => unknown;
@@ -26,11 +27,13 @@ export function renderChatTranscriptLayout<T>({
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
+  measureRows: boolean;
 }): TemplateResult {
   const virtualRows = virtualizer.getVirtualItems();
   return html`
     <div
       class="chat-thread-inner chat-thread-inner--virtual"
+      ?data-measuring-rows=${measureRows}
       ${ref(scrollElementRef)}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >

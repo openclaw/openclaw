@@ -5,6 +5,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
@@ -207,6 +208,7 @@ export async function executeCliProcess(params: {
       result = await executePluginOwnedProcess({
         context,
         execute: context.executionTarget.execute,
+        watchdogClock: params.deps.watchdogClock,
         executionCommand: params.executionCommand,
         executionArgv0: params.executionArgv0,
         executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
@@ -240,11 +242,13 @@ export async function executeCliProcess(params: {
           terminalInterruption = { reason };
           return true;
         },
+        mcpCapture: {
+          captureKey: params.initialGatewayCaptureKey,
+          beginCapture: params.toolTracking.beginGatewayCapture,
+        },
         ...(params.useManagedClaudeLiveSession
           ? {
               liveSession: {
-                captureKey: params.initialGatewayCaptureKey,
-                beginCapture: params.toolTracking.beginGatewayCapture,
                 requiredGeneration: params.cliSessionIdToUse
                   ? context.requiredClaudeLiveSessionGeneration
                   : undefined,
@@ -270,9 +274,23 @@ export async function executeCliProcess(params: {
       }
       // Startup can wait behind another scoped run. Reserve cancellation under
       // the caller's run id before awaiting the child or replacement fence.
-      const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
+      let processCancelled = false;
+      const assertProcessCurrent = () => {
+        params.assertCurrent();
+        if (processCancelled) {
+          throw new Error("CLI process authority is no longer active");
+        }
+      };
+      const abortManagedRun = () => {
+        processCancelled = true;
+        supervisor.cancel(runParams.runId, "manual-cancel");
+      };
       runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
       try {
+        params.toolTracking.beginGatewayCapture(
+          params.initialGatewayCaptureKey,
+          assertProcessCurrent,
+        );
         const managedRun = await supervisor.spawn({
           assertCurrent: params.assertCurrent,
           runId: runParams.runId,
@@ -284,6 +302,9 @@ export async function executeCliProcess(params: {
           argv0: params.executionArgv0,
           timeoutMs: runParams.timeoutMs,
           noOutputTimeoutMs: params.noOutputTimeoutMs,
+          onCancel: () => {
+            processCancelled = true;
+          },
           cwd: context.cwd ?? context.workspaceDir,
           env: params.env,
           input: params.stdin ?? "",
@@ -298,7 +319,10 @@ export async function executeCliProcess(params: {
               kind: "cli" as const,
               runId: runParams.runId,
               toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
-              cancel: () => managedRun.cancel("manual-cancel"),
+              cancel: () => {
+                processCancelled = true;
+                managedRun.cancel("manual-cancel");
+              },
             }
           : undefined;
         if (replyBackendHandle) {
@@ -306,6 +330,7 @@ export async function executeCliProcess(params: {
         }
         try {
           result = await managedRun.wait();
+          processCancelled ||= result.reason !== "exit";
         } finally {
           if (replyBackendHandle) {
             runParams.replyOperation?.detachBackend(replyBackendHandle);
@@ -453,7 +478,10 @@ export async function executeCliProcess(params: {
           accountId: runParams.agentAccountId,
         });
         params.deps.enqueueSystemEvent(stallNotice, {
-          sessionKey: resolveEventSessionKeyForPolicy(runParams.sessionKey, routing),
+          sessionKey: resolveSystemEventQueueKey(
+            resolveEventSessionKeyForPolicy(runParams.sessionKey, routing),
+            runParams.agentId,
+          ),
         });
         params.deps.requestHeartbeat(
           scopedHeartbeatWakeOptionsForPolicy(

@@ -1013,7 +1013,7 @@ describe("preflightDiscordMessage", () => {
     const threadId = "thread-webhook-hydrated-1";
     const parentId = "channel-parent-webhook-hydrated-1";
     const message = createDiscordMessage({
-      id: "m-webhook-hydrated-1",
+      id: "1001",
       channelId: threadId,
       content: "",
       author: {
@@ -1878,7 +1878,7 @@ describe("preflightDiscordMessage", () => {
     const guildId = "guild-bot-mentions-authoritative";
     const botId = "123456789012345678";
     const message = createDiscordMessage({
-      id: "m-bot-mentions-authoritative",
+      id: "1002",
       channelId,
       content: `hi <@${botId}>`,
       author: {

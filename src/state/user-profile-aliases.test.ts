@@ -14,10 +14,10 @@ import {
   readUserProfileAliasRevision,
   readUserProfileVersion,
 } from "./user-profile-events.js";
+import { listUserProfilesSync } from "./user-profile-list.js";
 import {
   ensureProfileForEmail,
   linkEmail,
-  listProfiles,
   readUserProfileAliases,
   resolveUserProfileId,
   setAvatar,
@@ -118,7 +118,7 @@ describe("profile alias reader lifecycle", () => {
         expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
         expect(read()).toEqual(new Set([source.id, target.id]));
         expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
-        expect(listProfiles(options)).toEqual(
+        expect(listUserProfilesSync(options)).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ id: source.id, mergedInto: target.id }),
             expect.objectContaining({ id: target.id, mergedInto: null }),
@@ -175,7 +175,7 @@ describe("profile alias reader lifecycle", () => {
       emails: ["source@example.com", "target@example.com"],
       hasAvatar: false,
     });
-    expect(listProfiles(options)).toContainEqual(
+    expect(listUserProfilesSync(options)).toContainEqual(
       expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
     );
   });
@@ -194,7 +194,7 @@ describe("profile alias reader lifecycle", () => {
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
     expect(resolveUserProfileId(a.id, options)).toBe(c.id);
-    expect(listProfiles(options)).toEqual(
+    expect(listUserProfilesSync(options)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: c.id }),
         expect.objectContaining({ id: b.id, mergedInto: c.id }),
@@ -213,7 +213,7 @@ describe("profile alias reader lifecycle", () => {
     expect(readUserProfileVersion()).toBe(version);
 
     expect(ensureProfileForEmail("a@example.com", options).id).toBe(b.id);
-    expect(listProfiles(options)).toEqual(
+    expect(listUserProfilesSync(options)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: a.id, mergedInto: b.id }),
         expect.objectContaining({ id: b.id, mergedInto: null }),

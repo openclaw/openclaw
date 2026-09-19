@@ -154,7 +154,7 @@ describe("gateway-backed session route resolution", () => {
     });
 
     expect(face).toBe("chat");
-    expect(target.options.pathname).toBe("/chat/roboclaw/12345678");
+    expect(target.options.pathname).toBe("/chat/roboclaw/1234567890abcdef1234567890abcdef");
     await expect(
       loadChatRoute(context, targetLocation(target), face, new AbortController().signal),
     ).resolves.toMatchObject({
@@ -164,7 +164,8 @@ describe("gateway-backed session route resolution", () => {
       // replaces the URL into the matching namespace.
       face: "dashboard",
       canonicalLocation: {
-        pathname: "/dashboard/roboclaw/default-mode-with-rare-surprises-12345678",
+        pathname:
+          "/dashboard/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef",
         search: "",
       },
     });
@@ -194,7 +195,8 @@ describe("gateway-backed session route resolution", () => {
       kind: "session",
       sessionKey: dashboardRow.key,
       canonicalLocation: {
-        pathname: "/dashboard/roboclaw/default-mode-with-rare-surprises-12345678",
+        pathname:
+          "/dashboard/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef",
         search: "",
       },
     });
@@ -331,8 +333,9 @@ describe("gateway-backed session route resolution", () => {
       kind: "session",
       sessionKey: storedRow.key,
       canonicalLocation: {
-        // Canonicalizes to the same short reference every other surface links to.
-        pathname: "/chat/roboclaw/default-mode-with-rare-surprises-12345678",
+        // Canonicalizes to the same full UUID reference as other generated links.
+        pathname:
+          "/chat/roboclaw/default-mode-with-rare-surprises-1234567890abcdef1234567890abcdef",
       },
     });
   });
@@ -603,7 +606,7 @@ describe("gateway-backed session route resolution", () => {
     expect(loaded).toMatchObject({
       kind: "session",
       sessionKey: literalKey,
-      canonicalLocation: { pathname: "/chat/main/12345678" },
+      canonicalLocation: { pathname: "/chat/main/1234567890abcdef1234567890abcdef" },
     });
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith("sessions.resolve", {

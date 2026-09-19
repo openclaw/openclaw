@@ -97,7 +97,9 @@ describe("worker placement move destination", () => {
         scope: target.storePath,
         identities,
         assertAllowed: () => undefined,
-        onInterrupt: () => observed.push("interrupt"),
+        onInterrupt: () => {
+          observed.push("interrupt");
+        },
       });
       let sourceChanged = false;
       const persistAbandonedPartial = vi.fn(async () => {

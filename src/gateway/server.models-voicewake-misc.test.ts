@@ -13,7 +13,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
-import { testing as startupTesting } from "./server-startup-post-attach.js";
+import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -616,9 +616,8 @@ describe("gateway server models + voicewake", () => {
       agentDiscoveryMock.enabled = true;
       agentDiscoveryMock.models = startupModels;
       const { getRuntimeConfig } = await import("../config/io.js");
-      await startupTesting.publishStartupModelRuntime({
+      await publishConfiguredModelRuntimeSnapshots({
         cfg: getRuntimeConfig(),
-        log: { warn: () => {} },
       });
     };
     const readMethods = [

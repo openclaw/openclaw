@@ -17,13 +17,13 @@ import {
  */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
-import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
   getLanguageFromPath,
   highlightCode,
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
+import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";

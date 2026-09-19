@@ -142,6 +142,8 @@ function requireConfigBaseHash(
     return false;
   }
   if (baseHash !== revisionProjector.projectRawHash(snapshotHash)) {
+    // A fresh write snapshot can observe an edit before the watcher invalidates reads.
+    invalidateConfigGetResponseCache();
     respond(
       false,
       undefined,
@@ -822,6 +824,9 @@ async function commitGatewayConfigWriteOrRespond(
     }
     if (!(error instanceof ConfigMutationConflictError)) {
       throw error;
+    }
+    if (error.retryable) {
+      invalidateConfigGetResponseCache();
     }
     // Non-retryable conflicts (e.g. path ownership) will fail the retry too;
     // only advise it when a fresh base hash can actually resolve the conflict.

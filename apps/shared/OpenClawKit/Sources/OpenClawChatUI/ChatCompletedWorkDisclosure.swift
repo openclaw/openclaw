@@ -16,7 +16,12 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
         } label: {
             Text(self.label)
                 .font(OpenClawChatTypography.caption)
+                #if os(iOS)
+                .foregroundStyle(Color.secondary)
+                .frame(minHeight: 44)
+                #else
                 .foregroundStyle(.secondary)
+                #endif
         }
         .accessibilityIdentifier("chat-completed-work-\(self.work.anchorID)")
         .frame(maxWidth: .infinity, alignment: .leading)

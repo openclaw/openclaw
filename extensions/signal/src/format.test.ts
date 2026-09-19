@@ -87,6 +87,20 @@ describe("markdownToSignalText", () => {
 
   it.each([
     {
+      name: "nested styles across multiple expanded links and emoji",
+      markdown: "**[😀](https://a.test) _[two](https://b.test) tail_**",
+      expected: {
+        text: "😀 (https://a.test) two (https://b.test) tail",
+        styles: [
+          { start: 0, length: 2, style: "BOLD" },
+          { start: 19, length: 4, style: "BOLD" },
+          { start: 20, length: 3, style: "ITALIC" },
+          { start: 40, length: 5, style: "BOLD" },
+          { start: 40, length: 5, style: "ITALIC" },
+        ],
+      },
+    },
+    {
       name: "nested style around an expanded link",
       markdown: "**[docs](https://example.com) _nested_ tail**",
       expected: {

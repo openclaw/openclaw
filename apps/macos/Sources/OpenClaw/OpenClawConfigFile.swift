@@ -247,12 +247,6 @@ enum OpenClawConfigFile {
         return normalized?.isEmpty == false ? normalized : nil
     }
 
-    static func browserControlEnabled(defaultValue: Bool = true) -> Bool {
-        let root = self.loadDict()
-        let browser = root["browser"] as? [String: Any]
-        return browser?["enabled"] as? Bool ?? defaultValue
-    }
-
     /// Beta macOS builds wrote this retired key after core moved it to SQLite.
     /// Repair only that app-owned shape before local Gateway validation can reject it.
     static func migrateRetiredAppMetadataForGatewayStart() -> Bool {
@@ -296,29 +290,6 @@ extension OpenClawConfigFile {
         // expose a portable source-order contract here, so ambiguous aliases fail closed.
         guard matches.count == 1 else { return nil }
         return matches.first?.value as? [String: Any]
-    }
-
-    static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
-        let root = root ?? self.loadDict()
-        guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
-        guard let plugins = root["plugins"] as? [String: Any],
-              let entry = pluginEntry(pluginId, root: root),
-              literalBoolean(entry["enabled"]) == true
-        else { return false }
-        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
-            return false
-        }
-
-        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
-        if deny.contains(pluginId) {
-            return false
-        }
-
-        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
-        if !allow.isEmpty, !allow.contains(pluginId) {
-            return false
-        }
-        return true
     }
 
     /// Mirrors configured-root activation for bundled plugins: a declared config path may
@@ -381,36 +352,6 @@ extension OpenClawConfigFile {
 
         let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         return allow.isEmpty || allow.contains(pluginId)
-    }
-
-    static func explicitlyEnabledPluginConfigFlag(
-        _ pluginId: String,
-        path: [String],
-        root: [String: Any]? = nil) -> Bool
-    {
-        let root = root ?? self.loadDict()
-        guard self.explicitlyEnabledPlugin(pluginId, root: root),
-              let entry = pluginEntry(pluginId, root: root),
-              let config = entry["config"]
-        else { return false }
-
-        var value = config
-        for key in path {
-            guard let object = value as? [String: Any], let next = object[key] else {
-                return false
-            }
-            value = next
-        }
-        return self.literalBoolean(value) == true
-    }
-
-    static func setBrowserControlEnabled(_ enabled: Bool) {
-        var root = self.loadDict()
-        var browser = root["browser"] as? [String: Any] ?? [:]
-        browser["enabled"] = enabled
-        root["browser"] = browser
-        self.saveDict(root)
-        self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
     static func gatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int? {

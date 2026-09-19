@@ -152,7 +152,7 @@ describe("ModelProvidersPage profile actions", () => {
   });
 
   it("discards a detached page's queued order before a replacement page saves", async () => {
-    const { context, request, snapshot } = createHarness("main");
+    const { context, request, snapshot, publishEvent } = createHarness("main");
     snapshot.hello = {
       ...snapshot.hello,
       type: "hello-ok",
@@ -165,6 +165,7 @@ describe("ModelProvidersPage profile actions", () => {
     request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authOrderSet") {
         savedOrder = [...((params as ModelsAuthOrderSetParams).profileIds ?? [])];
+        publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
         return requestCount(request, method) === 1 ? firstSave.promise : {};
       }
       if (method === "models.authStatus") {
@@ -326,7 +327,7 @@ describe("ModelProvidersPage profile actions", () => {
 
   it("cancels safely and logs out only the confirmed account's credential owner", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
-    const { agentSelection, context, notifySelection, publishPhase, request, snapshot } =
+    const { settingsAgentSelection, context, notifySelection, publishPhase, request, snapshot } =
       createHarness("writer");
     snapshot.hello = {
       ...snapshot.hello,
@@ -405,7 +406,7 @@ describe("ModelProvidersPage profile actions", () => {
 
       for (const invalidate of [
         () => {
-          agentSelection.state.selectedId = "main";
+          settingsAgentSelection.state.selectedId = "main";
           notifySelection();
         },
         () => publishPhase("connecting"),
@@ -419,7 +420,7 @@ describe("ModelProvidersPage profile actions", () => {
         );
         confirm.click();
         expect(requestCount(request, "models.authLogout")).toBe(0);
-        agentSelection.state.selectedId = "writer";
+        settingsAgentSelection.state.selectedId = "writer";
         notifySelection();
         publishPhase("connected");
         if (!page.isConnected) {

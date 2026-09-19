@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { desktopProofTestReport } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { hashWorkerCredential } from "../../../src/gateway/worker-environments/credential.js";
 import {
   prepareWorkerSsh,
@@ -14,6 +15,108 @@ import {
 import { createWorkerEnvironmentStore } from "../../../src/gateway/worker-environments/store.js";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../../src/plugins/types.js";
 import { runCommandWithTimeout } from "../../../src/process/exec.js";
+import type { DesktopClient } from "../components/desktop/desktop-client.ts";
+
+/** Serialized into the fixture page; observe the real client without replacing its transport. */
+export function observeDesktopProofRfbLifecycle(element: Element) {
+  const panel = element as Element & { desktopClientFactory: () => Pick<DesktopClient, "connect"> };
+  type Options = Parameters<DesktopClient["connect"]>[0];
+  type Report = ReturnType<typeof desktopProofTestReport>;
+  type ViewerResizeFailure = NonNullable<
+    Report["files"][number]["assertions"][number]["viewerResize"]
+  >;
+  type Event = NonNullable<ViewerResizeFailure["rfbLifecycle"]>["events"][number];
+  const originalFactory = panel.desktopClientFactory;
+  const events: Array<{ path: string | null; event: Event }> = [];
+  let ordinal = 0;
+  let omitted = 0;
+  const socketIndex = (key: string | null) => {
+    const sockets: unknown = Reflect.get(window, "desktopProofSockets");
+    if (key === null || !Array.isArray(sockets)) {
+      return null;
+    }
+    const matches: number[] = [];
+    sockets.forEach((socket: WebSocket, index) => {
+      const url = new URL(socket.url);
+      if (`${url.pathname}${url.search}` === key) {
+        matches.push(index);
+      }
+    });
+    return matches.length === 1 ? matches[0]! : null;
+  };
+  Object.assign(window, {
+    desktopProofRfbLifecycle: () => ({
+      events: events.map(({ path: key, event }) => ({ ...event, socketIndex: socketIndex(key) })),
+      omitted,
+    }),
+  });
+  panel.desktopClientFactory = function () {
+    const client = originalFactory.call(panel);
+    const connect = client.connect;
+    client.connect = function (options: Options) {
+      let key: string | null = null;
+      try {
+        const url = new URL(options.wsUrl, options.gatewayUrl || window.location.href);
+        key = `${url.pathname}${url.search}`;
+      } catch {
+        // No URL inference: an unbound connection remains explicitly unknown.
+      }
+      let connectedObserved = false;
+      const record = (
+        phase: Event["phase"],
+        clean: boolean | null = null,
+        securityStatus: number | null = null,
+      ) => {
+        try {
+          events.push({
+            path: key,
+            event: {
+              ordinal: ordinal++,
+              socketIndex: null,
+              phase,
+              connectedObserved,
+              clean,
+              securityStatus,
+            },
+          });
+          if (events.length > 8) {
+            events.shift();
+            omitted += 1;
+          }
+        } catch {
+          // Observation cannot suppress or replace a production callback.
+        }
+      };
+      record("connecting");
+      if (options.viewOnly) {
+        // Restore future factory calls; this real recovery client's callbacks stay observed.
+        panel.desktopClientFactory = originalFactory;
+      }
+      return connect.call(client, {
+        ...options,
+        onConnect(...args) {
+          connectedObserved = true;
+          record("connected");
+          return options.onConnect?.(...args);
+        },
+        onDisconnect(...args) {
+          record("disconnected", args[0].clean);
+          return options.onDisconnect?.(...args);
+        },
+        onSecurityFailure(...args) {
+          const status = args[0].status;
+          record(
+            "security-failure",
+            null,
+            Number.isSafeInteger(status) && status! >= 0 && status! <= 0xffff_ffff ? status! : null,
+          );
+          return options.onSecurityFailure?.(...args);
+        },
+      });
+    };
+    return client;
+  };
+}
 
 export type DesktopResizeFixture = {
   carrier: "ssh" | "node";
@@ -51,6 +154,16 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
     reject: (error: Error) => void;
   };
   const peers = new Set<Socket>();
+  const terminalEvents: Array<{
+    connectionIndex: number;
+    side: "client" | "upstream" | "fixture";
+    event: "end" | "error" | "close" | "cleanup";
+    errorCategory: "reset" | "broken-pipe" | "refused" | "timeout" | "other" | null;
+    hadError: boolean | null;
+  }> = [];
+  const pendingTerminals = new Set<() => void>();
+  let connectionCount = 0;
+  let omitted = 0;
   const tails = new Map<Socket, Buffer>();
   let pending: Probe | undefined;
   let closed = false;
@@ -106,14 +219,50 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
       return;
     }
     const upstream = net.connect({ host: "127.0.0.1", port });
+    const connectionIndex = connectionCount++;
+    let terminal = false;
+    const recordTerminal = (
+      side: (typeof terminalEvents)[number]["side"],
+      event: (typeof terminalEvents)[number]["event"],
+      errorCategory: (typeof terminalEvents)[number]["errorCategory"] = null,
+      hadError: boolean | null = null,
+    ) => {
+      if (terminal) {
+        return;
+      }
+      terminal = true;
+      pendingTerminals.delete(recordCleanup);
+      terminalEvents.push({ connectionIndex, side, event, errorCategory, hadError });
+      if (terminalEvents.length > 8) {
+        terminalEvents.shift();
+        omitted += 1;
+      }
+    };
+    const recordCleanup = () => recordTerminal("fixture", "cleanup");
+    pendingTerminals.add(recordCleanup);
     for (const socket of [client, upstream]) {
+      const side = socket === client ? "client" : "upstream";
       peers.add(socket);
-      socket.on("error", () => {
+      socket.once("end", () => recordTerminal(side, "end"));
+      socket.on("error", (error: NodeJS.ErrnoException) => {
+        const category =
+          error.code === "ECONNRESET"
+            ? "reset"
+            : error.code === "EPIPE"
+              ? "broken-pipe"
+              : error.code === "ECONNREFUSED"
+                ? "refused"
+                : error.code === "ETIMEDOUT"
+                  ? "timeout"
+                  : "other";
+        // Latch before destroying the paired socket; its later close is a consequence.
+        recordTerminal(side, "error", category);
         fail("Desktop endpoint connection failed during observation");
         client.destroy();
         upstream.destroy();
       });
-      socket.once("close", () => {
+      socket.once("close", (hadError) => {
+        recordTerminal(side, "close", null, hadError);
         peers.delete(socket);
         tails.delete(client);
         if (pending) {
@@ -132,6 +281,9 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
       closed = true;
       signal.removeEventListener("abort", abort);
       fail("Desktop endpoint observation ended before completion");
+      for (const record of pendingTerminals) {
+        record();
+      }
       const stopped = [...peers].map(
         (socket) =>
           new Promise<void>((resolve) => {
@@ -162,6 +314,7 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
   }
   return {
     port: address.port,
+    terminalSnapshot: () => ({ events: structuredClone(terminalEvents), omitted }),
     expectPacket: (bytes: number[]) => {
       signal.throwIfAborted();
       if (closed || pending || bytes.length > 32 * 1024) {

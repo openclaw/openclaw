@@ -369,6 +369,22 @@ export async function pressBrowserKey(
   });
 }
 
+export async function insertBrowserText(
+  client: BrowserRequestClient,
+  params: { targetId: string; text: string },
+) {
+  try {
+    await browserRequest(client, {
+      method: "POST",
+      path: "/act",
+      body: { kind: "insertText", ...params },
+    });
+  } catch {
+    // Transport errors can echo request bodies containing pasted passwords.
+    throw new Error(t("browser.errors.pasteFailed"));
+  }
+}
+
 export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },

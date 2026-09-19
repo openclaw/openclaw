@@ -3,7 +3,7 @@ import path from "node:path";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -80,14 +80,21 @@ function resolveCustomStoreSqlitePath(params: {
   const registeredDatabases =
     params.options.registeredDatabases ??
     listOpenClawRegisteredAgentDatabases(params.options.env ? { env: params.options.env } : {});
-  const isSameDatabasePath = params.options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath;
+  const isSameDatabasePath =
+    params.options.isSameDatabasePath ?? createOpenClawAgentDatabasePathMatcher();
   const resolvePersistedOwner = (candidatePath: string) => {
     const registeredOwners = resolveRegisteredOwners(
       candidatePath,
       registeredDatabases,
       isSameDatabasePath,
     );
-    const databaseOwner = resolveDatabaseOwner(candidatePath);
+    let databaseOwner: string | undefined;
+    if (registeredOwners.length === 1) {
+      // Registry precedence makes inspection redundant, but filesystem errors still propagate.
+      hasFilesystemEntry(candidatePath);
+    } else {
+      databaseOwner = resolveDatabaseOwner(candidatePath);
+    }
     return {
       effectiveOwner:
         registeredOwners.length === 1
@@ -98,18 +105,8 @@ function resolveCustomStoreSqlitePath(params: {
       registeredOwners,
     };
   };
-  const registeredUnsuffixedOwners = resolveRegisteredOwners(
-    unsuffixedPath,
-    registeredDatabases,
-    isSameDatabasePath,
-  );
-  const durableUnsuffixedOwner = resolveDatabaseOwner(unsuffixedPath);
-  const persistedUnsuffixedOwner =
-    registeredUnsuffixedOwners.length === 1
-      ? registeredUnsuffixedOwners[0]
-      : registeredUnsuffixedOwners.length === 0
-        ? durableUnsuffixedOwner
-        : undefined;
+  const { registeredOwners: registeredUnsuffixedOwners, effectiveOwner: persistedUnsuffixedOwner } =
+    resolvePersistedOwner(unsuffixedPath);
   const suffixedPathFor = (ownerAgentId: string) =>
     path.join(sessionsDir, `${sqliteBaseName}.${ownerAgentId}.sqlite`);
   const resolveSuffixedTarget = (ownerAgentId: string) => {
@@ -273,9 +270,15 @@ export function resolveSqliteTargetFromSessionStorePath(
     const registeredOwners = resolveRegisteredOwners(
       unsuffixedTarget.path,
       registeredDatabases,
-      options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath,
+      options.isSameDatabasePath ?? createOpenClawAgentDatabasePathMatcher(),
     );
-    const databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
+    let databaseOwner: string | undefined;
+    if (registeredOwners.length === 1) {
+      // Registry precedence makes inspection redundant, but filesystem errors still propagate.
+      hasFilesystemEntry(unsuffixedTarget.path);
+    } else {
+      databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
+    }
     const configuredDefaultAgentId = normalizeAgentId(
       options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
     );

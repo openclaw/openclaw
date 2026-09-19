@@ -2,12 +2,20 @@ import Foundation
 import OpenClawKit
 
 extension OpenClawChatViewModel {
-    static func decodeMessages(_ raw: [AnyCodable]) -> [OpenClawChatMessage] {
+    static func decodeMessages(
+        _ raw: [AnyCodable],
+        activity: [OpenClawChatHistoryActivity]? = nil) -> [OpenClawChatMessage]
+    {
+        let byID = Dictionary((activity ?? []).map { ($0.messageId, $0.items) }, uniquingKeysWith: { _, next in next })
         let decoded = raw.compactMap { item in
             (try? ChatPayloadDecoding.decode(item, as: OpenClawChatMessage.self))
                 .map { Self.stripInboundMetadata(from: $0) }
         }
-        return Self.dedupeMessages(decoded)
+        return Self.dedupeMessages(decoded.map { message in
+            var message = message
+            if let id = message.transcriptMessageID { message.activity = byID[id] }
+            return message
+        })
     }
 
     static func stripInboundMetadata(from message: OpenClawChatMessage) -> OpenClawChatMessage {
@@ -64,7 +72,8 @@ extension OpenClawChatViewModel {
             phase: message.phase,
             turnBoundary: message.turnBoundary,
             steerTargetRunID: message.steerTargetRunID,
-            streamFallback: message.streamFallback)
+            streamFallback: message.streamFallback,
+            activity: message.activity)
     }
 
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -218,7 +227,8 @@ extension OpenClawChatViewModel {
             phase: incoming.phase,
             turnBoundary: incoming.turnBoundary,
             steerTargetRunID: incoming.steerTargetRunID,
-            streamFallback: incoming.streamFallback)
+            streamFallback: incoming.streamFallback,
+            activity: incoming.activity)
     }
 
     private static func preservingLocalAudioDurations(
@@ -542,7 +552,8 @@ extension OpenClawChatViewModel {
                 phase: existing.phase,
                 turnBoundary: existing.turnBoundary,
                 steerTargetRunID: existing.steerTargetRunID,
-                streamFallback: existing.streamFallback)
+                streamFallback: existing.streamFallback,
+                activity: existing.activity)
         }
         self.replaceMessages(Self.dedupeMessages(updated))
         guard let survivingIndex = self.messages.firstIndex(where: { message in
@@ -820,7 +831,7 @@ extension OpenClawChatViewModel {
     {
         guard self.canApplyHistory(request) else { return false }
         let incoming = self.adoptingProvisionalFinalMessageIDs(
-            in: Self.decodeMessages(payload.messages ?? []))
+            in: Self.decodeMessages(payload.messages ?? [], activity: payload.activity))
         let unmatchedProvisionalFinalIDs = Set(provisionalFinalMessagesMissing(from: incoming).map(\.id))
         var retainedMessageIDs = unmatchedProvisionalFinalIDs
         if request.historyMutationGeneration != self.historyMutationGeneration {

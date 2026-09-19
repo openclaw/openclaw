@@ -1,7 +1,11 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+} from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -12,6 +16,7 @@ import {
 } from "./github-publication-controller.ts";
 import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import type { GitHubPublicationBinding, SessionGateway } from "./session-capability.ts";
+import { sessionRetryDelayMs } from "./session-retry.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -149,7 +154,7 @@ const sharedPublisher = { source: "system-configured" as const, accountId: 1, lo
 function publicationHarness() {
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method === "sessions.github.options") {
-      return { shared: sharedPublisher, personal: null, pendingPersonal: null };
+      return { shared: sharedPublisher, personal: null, pendingPersonal: null, latestShared: null };
     }
     if (method === "sessions.github.publish") {
       throw new Error("Response lost");
@@ -189,7 +194,7 @@ function publicationHarness() {
   return { ...harness, request, sessions, row, attach };
 }
 async function publicationSettled(binding: GitHubPublicationBinding) {
-  await vi.waitFor(() => expect(binding.view()?.busy).toBe(false));
+  await vi.waitFor(() => expect(binding.view()?.activity).toBeNull());
   return binding.view()!;
 }
 const publishedResult = {
@@ -239,6 +244,7 @@ describe("application-owned publication custody", () => {
         pending: null,
       },
       pendingPersonal: null,
+      latestShared: null,
     };
     const result = {
       requestId,
@@ -303,6 +309,7 @@ describe("application-owned publication custody", () => {
       shared: { source: "system-configured" as const, accountId: 3, login: "main-tools" },
       personal: null,
       pendingPersonal: null,
+      latestShared: null,
     };
     request.mockResolvedValueOnce(mainOptions);
     const main = attach({
@@ -400,6 +407,7 @@ describe("application-owned publication custody", () => {
       shared: replacementPublisher,
       personal: null,
       pendingPersonal: null,
+      latestShared: null,
     });
     const returned = attach();
     expect((await publicationSettled(returned)).selection).toEqual({
@@ -600,4 +608,201 @@ it("does not apply another agent's global-session permission event to a retained
     original,
     original,
   ]);
+});
+
+it("recovers pending publication observation when the session event subscription is restored", async () => {
+  vi.useFakeTimers();
+  const fixture = publicationHarness();
+  const failure = new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message: "Observer unavailable",
+    retryable: true,
+  });
+  const delay = sessionRetryDelayMs(failure);
+  expect(delay).not.toBeNull();
+  let subscriptions = 0;
+  const result = {
+    ...publishedResult,
+    requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc77",
+    publisher: sharedPublisher,
+  };
+  const accepted = {
+    requestId: result.requestId,
+    publisher: sharedPublisher,
+    status: "requested",
+    message: "Accepted.",
+  };
+  fixture.request.mockImplementation(async (method: string) => {
+    if (method === "sessions.github.options") {
+      return {
+        shared: sharedPublisher,
+        personal: null,
+        pendingPersonal: null,
+        latestShared: { result: accepted, confirmation: null },
+      };
+    }
+    if (method === "sessions.github.status") {
+      return { result, confirmation: null };
+    }
+    if (method === "sessions.subscribe") {
+      subscriptions += 1;
+      if (subscriptions === 1) {
+        throw failure;
+      }
+      return { subscribed: true };
+    }
+    if (method === "sessions.list") {
+      return sessionsResult([]);
+    }
+    throw new Error("Unexpected request: " + method);
+  });
+  try {
+    const binding = fixture.attach();
+    await publicationSettled(binding);
+    fixture.update({});
+    await vi.waitFor(() => expect(subscriptions).toBe(1));
+    await vi.advanceTimersByTimeAsync(delay!);
+    await vi.waitFor(() => expect(subscriptions).toBe(2));
+    await vi.waitFor(() => expect(binding.result?.status).toBe("published"));
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.status"),
+    ).toHaveLength(1);
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
+    ).toHaveLength(0);
+  } finally {
+    fixture.publish(false);
+    vi.useRealTimers();
+  }
+});
+
+describe("shared publication event ownership", () => {
+  it("coalesces publication hints into receipt reads without replaying writes", async () => {
+    const fixture = publicationHarness();
+    const result = {
+      ...publishedResult,
+      requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc77",
+      publisher: sharedPublisher,
+    };
+    const accepted = {
+      requestId: result.requestId,
+      publisher: sharedPublisher,
+      status: "requested",
+      message: "Accepted.",
+    };
+    let stored: unknown = { result: accepted, confirmation: null };
+    const status = createDeferred<unknown>();
+    fixture.request.mockImplementation(async (method: string) => {
+      if (method === "sessions.github.options") {
+        return {
+          shared: sharedPublisher,
+          personal: null,
+          pendingPersonal: null,
+          latestShared: stored,
+        };
+      }
+      if (method === "sessions.github.status") {
+        return await status.promise;
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([]);
+      }
+      throw new Error("Unexpected request: " + method);
+    });
+    const binding = fixture.attach();
+    expect((await publicationSettled(binding)).result?.status).toBe("requested");
+    const key = fixture.row("publication").key;
+    for (let i = 0; i < 10; i += 1) {
+      fixture.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { sessionKey: key, agentId: "main", reason: "github-publication" },
+      });
+    }
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.status"),
+    ).toHaveLength(1);
+    stored = { result, confirmation: null };
+    status.resolve(stored);
+    await vi.waitFor(() =>
+      expect(
+        fixture.request.mock.calls.filter(([method]) => method === "sessions.github.options"),
+      ).toHaveLength(2),
+    );
+    expect((await publicationSettled(binding)).result).toEqual(result);
+    expect(
+      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
+    ).toHaveLength(0);
+  });
+
+  it.each(["worktree", "branch", "repository"] as const)(
+    "retires an admitted presentation on a known %s replacement",
+    async (change) => {
+      const fixture = publicationHarness();
+      const original: GatewaySessionRow = {
+        ...fixture.row("publication"),
+        ...(change === "repository"
+          ? { repositoryWorkspaceId: "repository-one" }
+          : {
+              worktree: { id: "worktree-one", branch: "feature/one", repoRoot: "/workspace/demo" },
+            }),
+      };
+      const binding = fixture.attach(original);
+      const ready = await publicationSettled(binding);
+      fixture.request.mockResolvedValueOnce({
+        requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc77",
+        publisher: sharedPublisher,
+        status: "requested",
+        message: "Accepted.",
+      });
+      ready.onPublish?.();
+      const pending = await publicationSettled(binding);
+      const replacement: GatewaySessionRow = {
+        ...original,
+        ...(original.worktree ? { worktree: { ...original.worktree } } : {}),
+        updatedAt: 2,
+      };
+      if (change === "worktree") {
+        replacement.worktree!.id = "worktree-two";
+      } else if (change === "branch") {
+        replacement.worktree!.branch = "feature/two";
+      } else {
+        replacement.repositoryWorkspaceId = "repository-two";
+      }
+      fixture.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { agentId: "main", reason: "patch", session: replacement },
+      });
+      expect(binding.matches(original)).toBe(false);
+      const count = fixture.request.mock.calls.length;
+      pending.onRefresh();
+      expect(fixture.request).toHaveBeenCalledTimes(count);
+      expect((await publicationSettled(fixture.attach(replacement))).result).toBeNull();
+    },
+  );
+});
+
+it("keeps a repository publication when non-owning worktree metadata changes", async () => {
+  const fixture = publicationHarness();
+  const original = {
+    ...fixture.row("publication"),
+    repositoryWorkspaceId: "repository-owner",
+    worktree: { id: "incidental-worktree", branch: "feature/one", repoRoot: "/workspace/demo" },
+  };
+  const binding = fixture.attach(original);
+  (await publicationSettled(binding)).onPublish?.();
+  expect((await publicationSettled(binding)).locked).toBe(true);
+  const replacement = {
+    ...original,
+    worktree: { ...original.worktree, branch: "feature/two" },
+    updatedAt: 2,
+  };
+  fixture.emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { agentId: "main", reason: "patch", session: replacement },
+  });
+  expect(binding.matches(original)).toBe(true);
+  expect(binding.view()?.locked).toBe(true);
 });

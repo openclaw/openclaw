@@ -152,6 +152,8 @@ function resolveLeafExecutionBudgetMs(
     }
     case "press":
       return addNavigationGraceMs(resolveNonNegativeTimerMs(request.delayMs));
+    case "insertText":
+      return addNavigationGraceMs(0);
     case "fill": {
       const fields = Array.isArray(request.fields) ? request.fields : [];
       const fieldCount = fields.filter(

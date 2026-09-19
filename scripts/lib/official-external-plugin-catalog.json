@@ -53,6 +53,7 @@
           }
         ],
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/brave-plugin",
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10",
@@ -76,6 +77,7 @@
           ]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/codex",
           "npmSpec": "@openclaw/codex",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.1-beta.1"
@@ -368,6 +370,7 @@
           "label": "Google Meet"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/google-meet",
           "npmSpec": "@openclaw/google-meet",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.20"
@@ -480,6 +483,7 @@
           ]
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/llama-cpp-provider",
           "npmSpec": "@openclaw/llama-cpp-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.2"
@@ -497,6 +501,7 @@
           "label": "MXC Sandbox Execution"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/mxc-sandbox",
           "npmSpec": "@openclaw/mxc-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.11"
@@ -789,6 +794,7 @@
           "label": "Voice Call"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/voice-call",
           "npmSpec": "@openclaw/voice-call",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"

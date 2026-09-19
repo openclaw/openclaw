@@ -127,3 +127,9 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   }
   return event.code === `Key${combo.key.toUpperCase()}`;
 }
+
+/** Runtime controls of the lazily loaded shortcuts dialog. */
+export type KeyboardShortcutsDialogElement = HTMLElement & {
+  isOpen: boolean;
+  toggle: () => void;
+};

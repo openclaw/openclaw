@@ -18,6 +18,7 @@ import {
   getCapabilityWebFetchCommandSecretTargets,
   getCapabilityWebSearchCommandSecretTargets,
 } from "../command-secret-targets.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import {
@@ -124,19 +125,17 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--limit <n>", "Result limit")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      let failed = false;
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
           limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
-        failed = !result.ok;
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        if (!result.ok) {
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
       });
-      if (failed) {
-        defaultRuntime.exit(1);
-      }
     });
 
   web
@@ -147,19 +146,17 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--format <format>", "Format hint")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      let failed = false;
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runWebFetchCommand({
           url: String(opts.url),
           provider: opts.provider as string | undefined,
           format: opts.format as string | undefined,
         });
-        failed = !result.ok;
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
+        if (!result.ok) {
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
       });
-      if (failed) {
-        defaultRuntime.exit(1);
-      }
     });
 
   registerLocalProvidersCommand(

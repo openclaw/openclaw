@@ -860,6 +860,205 @@ describe("terminal automation evidence", () => {
   );
 });
 
+type SerializationTask = "return-value-effects" | "result-save-invalid-json";
+
+function serializationEvidence(task: SerializationTask, waiting = false) {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture(task, 1);
+  const tool =
+    task === "return-value-effects" ? "matrix_return_effect" : "matrix_serialization_seed";
+  const nonce = fixture.expected.nonce;
+  const output =
+    task === "return-value-effects"
+      ? [{ type: "text", text: fixture.expected.marker }]
+      : ["bigint", "cycle", "throwing-toJSON"].map((kind) => ({
+          type: "json",
+          value: { kind, error: `Cannot serialize ${kind}` },
+        }));
+  const events = [
+    assistantCall("probe", expectDefined(fixture.probeCode, "prescribed probe program")),
+    nestedActivity("probe", tool, task === "return-value-effects" ? { nonce } : {}, { nonce }),
+    toolOutcome(
+      "probe",
+      waiting
+        ? { status: "waiting", runId: "probe-run", output }
+        : { status: "completed", value: fixture.expected, output },
+    ),
+    ...(waiting
+      ? waitEvents("resume", "probe-run", { status: "completed", value: fixture.expected })
+      : []),
+  ];
+  const receipts =
+    task === "return-value-effects"
+      ? [receipt("call", tool, { nonce }), receipt("effect", tool, { nonce })]
+      : [receipt("call", tool)];
+  return {
+    task,
+    expected: fixture.expected,
+    probeCode: fixture.probeCode,
+    final: JSON.stringify(fixture.expected),
+    trace: collectGatewayMatrixTrace(events),
+    receipts,
+  };
+}
+
+describe("serialization probe evidence", () => {
+  it.each(["return-value-effects", "result-save-invalid-json"] as const)(
+    "accepts %s only with its program, observed value, output and fixture receipts",
+    (task) => {
+      for (const waiting of [false, true]) {
+        expect(
+          Object.values(evaluateGatewayMatrixTask(serializationEvidence(task, waiting))).every(
+            Boolean,
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each(["changed-program", "missing-program", "invented-value", "missing-invocation"] as const)(
+    "rejects %s despite a correct final serialization claim",
+    (violation) => {
+      for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
+        const evidence = serializationEvidence(task);
+        if (violation === "changed-program") {
+          expectDefined(evidence.trace.calls[0], "probe call").args.code =
+            `return ${evidence.final};`;
+        } else if (violation === "missing-program") {
+          evidence.probeCode = undefined;
+        } else if (violation === "invented-value") {
+          expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
+        } else {
+          evidence.trace.activities = [];
+        }
+        const checks = evaluateGatewayMatrixTask(evidence);
+        expect(checks.answer).toBe(true);
+        expect(Object.values(checks).every(Boolean)).toBe(false);
+      }
+    },
+  );
+
+  it.each([
+    "lost-output",
+    "duplicate-output",
+    "missing-effect",
+    "duplicate-effect",
+    "unrelated-wait-output",
+  ] as const)("rejects return-value %s", (violation) => {
+    const evidence = serializationEvidence("return-value-effects");
+    const outcome = expectDefined(evidence.trace.outcomes[0], "probe outcome");
+    if (violation === "lost-output" || violation === "unrelated-wait-output") {
+      outcome.details.output = [];
+      if (violation === "unrelated-wait-output") {
+        const unrelated = collectGatewayMatrixTrace(
+          waitEvents("unrelated", "another-run", {
+            status: "completed",
+            output: [{ type: "text", text: evidence.expected.marker }],
+          }),
+        );
+        evidence.trace.calls.push(...unrelated.calls);
+        evidence.trace.outcomes.push(...unrelated.outcomes);
+      }
+    } else if (violation === "duplicate-output") {
+      outcome.details.output = Array.from({ length: 2 }, () => ({
+        type: "text",
+        text: evidence.expected.marker,
+      }));
+    } else if (violation === "missing-effect") {
+      evidence.receipts.pop();
+    } else {
+      evidence.receipts.push(
+        receipt("effect", "matrix_return_effect", { nonce: evidence.expected.nonce }),
+      );
+    }
+    const checks = evaluateGatewayMatrixTask(evidence);
+    expect(checks.answer).toBe(true);
+    expect(Object.values(checks).every(Boolean)).toBe(false);
+  });
+
+  it.each(["missing-rejection", "missing-error", "duplicate-seed"] as const)(
+    "rejects serialization %s",
+    (violation) => {
+      const evidence = serializationEvidence("result-save-invalid-json");
+      const outcome = expectDefined(evidence.trace.outcomes[0], "probe outcome");
+      if (violation === "duplicate-seed") {
+        evidence.receipts.push(receipt("call", "matrix_serialization_seed"));
+      } else {
+        outcome.details.output = (
+          violation === "missing-rejection"
+            ? ["bigint", "cycle"]
+            : ["bigint", "cycle", "throwing-toJSON"]
+        ).map((kind) => ({
+          type: "json",
+          value: { kind, error: violation === "missing-error" ? "" : "Serialization refused" },
+        }));
+      }
+      const checks = evaluateGatewayMatrixTask(evidence);
+      expect(checks.answer).toBe(true);
+      expect(Object.values(checks).every(Boolean)).toBe(false);
+    },
+  );
+});
+
+function configReadEvidence() {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture("gateway-config-read", 1);
+  const result = {
+    ok: true,
+    result: {
+      path: "tools.codeMode",
+      config: {
+        enabled: true,
+        timeoutMs: 20_000,
+        maxOutputBytes: 16_384,
+      },
+    },
+  };
+  return {
+    task: "gateway-config-read" as const,
+    expected: fixture.expected,
+    final: JSON.stringify(fixture.expected),
+    receipts: [],
+    trace: collectGatewayMatrixTrace([
+      assistantCall("config", 'return await gateway({action:"config.get",path:"tools.codeMode"});'),
+      nestedActivity("config", "gateway", { action: "config.get", path: "tools.codeMode" }, result),
+      toolOutcome("config", { status: "completed", value: result }),
+    ]),
+  };
+}
+
+describe("Gateway config read evidence", () => {
+  it("requires the actual config settings to reach the guest unchanged", () => {
+    expect(Object.values(evaluateGatewayMatrixTask(configReadEvidence())).every(Boolean)).toBe(
+      true,
+    );
+  });
+
+  it.each(["missing-details", "missing-guest-data", "wrong-settings", "mutating-action"] as const)(
+    "rejects %s despite the correct final enabled claim",
+    (violation) => {
+      const evidence = configReadEvidence();
+      const activity = expectDefined(evidence.trace.activities[0], "config read");
+      if (violation === "missing-details") {
+        activity.result = { ok: true };
+      } else if (violation === "missing-guest-data") {
+        expectDefined(evidence.trace.outcomes[0], "config outcome").details.value = { ok: true };
+      } else if (violation === "wrong-settings") {
+        activity.result = {
+          ok: true,
+          result: {
+            path: "tools.codeMode",
+            config: { enabled: true, timeoutMs: 1, maxOutputBytes: 1 },
+          },
+        };
+      } else {
+        activity.input.action = "update.run";
+      }
+      const checks = evaluateGatewayMatrixTask(evidence);
+      expect(checks.answer).toBe(true);
+      expect(Object.values(checks).every(Boolean)).toBe(false);
+    },
+  );
+});
+
 const PROCESS = { marker: "MATRIX_PROCESS_R1_DONE", status: "completed", exitCode: 0 };
 
 function processEvidence() {

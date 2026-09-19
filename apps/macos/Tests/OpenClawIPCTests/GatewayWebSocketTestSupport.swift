@@ -12,7 +12,7 @@ extension WebSocketTasking {
 enum GatewayWebSocketTestSupport {
     static let agentCatalogPayload = """
     {
-      "defaultId": "system", "mainKey": "main", "scope": "per-agent",
+      "defaultId": "system", "mainKey": "main", "scope": "per-sender",
       "agents": [
         { "id": "system", "kind": "system" },
         { "id": "zeta", "kind": "agent", "name": " Zeta ", "workspaceGit": true },

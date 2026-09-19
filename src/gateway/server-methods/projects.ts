@@ -28,6 +28,7 @@ import {
 } from "../../projects/project-clone.js";
 import {
   listProjectRegistry,
+  listWorkspaceProjects,
   ProjectCheckoutError,
   registerProjectRegistry,
   removeProjectRegistry,
@@ -36,11 +37,11 @@ import {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
+import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
   githubApiToken,
-} from "../control-ui-github-api.js";
+} from "../github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
@@ -48,7 +49,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ProjectRegistryEntry = ReturnType<typeof listProjectRegistry>[number];
+type ProjectRegistryEntry = Awaited<ReturnType<typeof listProjectRegistry>>[number];
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
   "listRegistryRecords" | "resolveRepositoryIdentity"
@@ -418,9 +419,8 @@ function findProjectCheckoutReference(
   repoRoot: string,
 ): string | undefined {
   const normalizedRoot = path.resolve(repoRoot);
-  const workspaceReference = listProjectRegistry(cfg).find(
-    (candidate) =>
-      candidate.source === "workspace" && path.resolve(candidate.repoRoot) === normalizedRoot,
+  const workspaceReference = listWorkspaceProjects(cfg).find(
+    (candidate) => path.resolve(candidate.repoRoot) === normalizedRoot,
   );
   const worktreeReference = listRegistryWorktrees(process.env).find(
     (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
@@ -456,20 +456,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       if (!assertValidParams(params, validateProjectsListParams, "projects.list", respond)) {
         return;
       }
-      const registryProjects = listProjectRegistry(context.getRuntimeConfig());
+      const registryProjects = await listProjectRegistry(context.getRuntimeConfig());
       const projects = registryProjects.map(sanitizeProjectRecord);
       const profileId = client?.authenticatedUserProfile?.profileId;
-      const canonicalProfileId = profileId
-        ? (resolveUserProfileId(profileId) ?? profileId)
-        : undefined;
-      const recentProfileIds = canonicalProfileId
-        ? new Set([
-            canonicalProfileId,
-            ...listProfiles()
-              .filter((profile) => profile.mergedInto === canonicalProfileId)
-              .map((profile) => profile.id),
-          ])
-        : undefined;
+      const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
       const recents = recentProfileIds
         ? listProjectRecents(context.getRuntimeConfig(), recentProfileIds, registryProjects)
         : undefined;
@@ -624,7 +614,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${params.id}`),
         );
       };
-      const project = resolveProjectRegistry(context.getRuntimeConfig(), params.id);
+      const project = await resolveProjectRegistry(context.getRuntimeConfig(), params.id);
       if (!project || project.source === "workspace") {
         respondUnknownProject();
         return;

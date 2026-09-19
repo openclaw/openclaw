@@ -264,14 +264,8 @@ describe("session event wake target concurrency", () => {
 
   it("runs an unscoped wake as an exclusive barrier between targeted groups", async () => {
     vi.useFakeTimers();
-    let finishBeforeBarrier: (() => void) | undefined;
-    let finishBarrier: (() => void) | undefined;
-    const beforeBarrierFinished = new Promise<void>((resolve) => {
-      finishBeforeBarrier = resolve;
-    });
-    const barrierFinished = new Promise<void>((resolve) => {
-      finishBarrier = resolve;
-    });
+    const { promise: beforeBarrierFinished, resolve: finishBeforeBarrier } = createDeferred();
+    const { promise: barrierFinished, resolve: finishBarrier } = createDeferred();
     const handler = vi.fn(async (request: WakeRequest) => {
       if (request.reason === "before-barrier") {
         await beforeBarrierFinished;
@@ -477,14 +471,8 @@ describe("session event wake target concurrency", () => {
 
   it("aborts the disposed generation without letting its stale disposer abort a replacement", async () => {
     vi.useFakeTimers();
-    let finishOldWake: (() => void) | undefined;
-    let finishNewWake: (() => void) | undefined;
-    const oldWakeFinished = new Promise<void>((resolve) => {
-      finishOldWake = resolve;
-    });
-    const newWakeFinished = new Promise<void>((resolve) => {
-      finishNewWake = resolve;
-    });
+    const { promise: oldWakeFinished, resolve: finishOldWake } = createDeferred();
+    const { promise: newWakeFinished, resolve: finishNewWake } = createDeferred();
     let oldSignal: AbortSignal | undefined;
     let newSignal: AbortSignal | undefined;
     const oldHandler = vi.fn(async (_request: WakeRequest, signal: AbortSignal) => {

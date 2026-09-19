@@ -19,13 +19,13 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
 import {
   closeSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identity.js";
-import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
@@ -405,7 +405,7 @@ export async function recoverGatewaySession(params: {
   }
 
   if (committed.created) {
-    recordSessionCreated({
+    recordSessionCreated(params.cfg, {
       sessionKey: committed.successorKey,
       entry: committed.successorEntry,
       agentId: sourceTarget.agentId,

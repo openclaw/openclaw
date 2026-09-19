@@ -106,14 +106,12 @@ describe("encodeWindowsLauncherScript", () => {
     expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
   });
 
-  it("encodes cp949 extension syllables that Node ICU's euc-kr decoder rejects", () => {
+  it("encodes cp949 extension syllables", () => {
     resolveWindowsOemEncodingMock.mockReturnValue("euc-kr");
-    // Windows code page 949 is cp949/UHC; "똠" (8C 63) is a UHC extension syllable
-    // iconv encodes and round-trips, but new TextDecoder("euc-kr") cannot decode
-    // (KS X 1001 only). The guard must verify euc-kr with iconv, not ICU.
+    // Windows code page 949 is cp949/UHC; "똠" (8C 63) is a UHC extension syllable.
+    // Verify the same iconv codec used by the launcher instead of runtime-specific ICU behavior.
     const extensionBytes = iconv.encode("똠", "euc-kr");
     expect(iconv.decode(extensionBytes, "euc-kr")).toBe("똠");
-    expect(new TextDecoder("euc-kr").decode(extensionBytes)).not.toBe("똠");
 
     const content = `@echo off\r\ncd /d "C:\\Users\\똠이\\.openclaw"\r\nnode gateway.js\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });

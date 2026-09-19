@@ -8,9 +8,10 @@ import {
   validateSessionDiscussionOpenResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
-import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
+import { maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { hasExplicitSessionName } from "../session-title-state.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";

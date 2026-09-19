@@ -159,6 +159,15 @@ export class SessionOrganizerController {
     await operations?.stopCloudWorker(this.host, session, scope);
   }
 
+  async setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.setSessionInvolvement(this.host, session, hidden, scope);
+  }
+
   async assignSessionOwner(
     session: SidebarRecentSession,
     owner: Pick<SessionOwnerOption, "type" | "id">,
@@ -203,26 +212,21 @@ export class SessionOrganizerController {
 
   finishSidebarEntryDrag() {
     this.draggingSidebarEntry = null;
-    this.host.requestUpdate();
     this.draggingSessionKey = null;
-    this.host.requestUpdate();
     this.sidebarZoneDropTarget = null;
-    this.host.requestUpdate();
     this.sessionListRemovalDrop = false;
     this.host.requestUpdate();
   }
 
   startSessionDrag(session: SidebarRecentSession): void {
     this.draggingSessionKey = session.key;
-    this.host.requestUpdate();
     this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
     this.host.requestUpdate();
   }
 
   finishSessionDrag(): void {
-    this.finishSidebarEntryDrag();
     this.sessionDropTarget = null;
-    this.host.requestUpdate();
+    this.finishSidebarEntryDrag();
   }
 
   startSidebarSectionDrag(sectionId: string): void {
@@ -232,7 +236,6 @@ export class SessionOrganizerController {
 
   finishSidebarSectionDrag(): void {
     this.draggingSidebarSection = null;
-    this.host.requestUpdate();
     this.sidebarSectionDropTarget = null;
     this.host.requestUpdate();
   }
@@ -341,7 +344,20 @@ export class SessionOrganizerController {
     this.host.onUpdateSidebarEntries?.(next);
   }
 
+  private canRemoveSidebarEntry(serialized: string | null): boolean {
+    const entry = parseSidebarEntry(serialized);
+    return (
+      entry?.type !== "plugin" ||
+      !this.host.reconciledSidebarZone().defaultPluginNavigationKeys.has(entry.key)
+    );
+  }
+
   handleSessionListDragOver(event: DragEvent) {
+    // Default plugin links remain visible. Do not promise an unpin that the
+    // catalog would immediately undo; these entries can still move in Pages.
+    if (!this.canRemoveSidebarEntry(this.draggingSidebarEntry)) {
+      return;
+    }
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
@@ -376,7 +392,10 @@ export class SessionOrganizerController {
           : null;
     if (entry) {
       event.preventDefault();
-      this.removeSidebarEntry(serializeSidebarEntry(entry));
+      const serialized = serializeSidebarEntry(entry);
+      if (this.canRemoveSidebarEntry(serialized)) {
+        this.removeSidebarEntry(serialized);
+      }
       this.finishSidebarEntryDrag();
       return;
     }
@@ -706,13 +725,10 @@ export class SessionOrganizerController {
         );
       }
     }
-    this.finishSidebarEntryDrag();
     this.draggingSidebarSection = null;
-    this.host.requestUpdate();
     this.sessionDropTarget = null;
-    this.host.requestUpdate();
     this.sidebarSectionDropTarget = null;
-    this.host.requestUpdate();
+    this.finishSidebarEntryDrag();
   }
 
   setSessionsGrouping(grouping: SidebarSessionsGrouping) {

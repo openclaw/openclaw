@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { isSystemCreatedSessionRow } from "../../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   compareSessionRowsByUpdatedAt,
-  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   visibleSessionMatches,
 } from "./navigation.ts";

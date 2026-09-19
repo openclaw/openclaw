@@ -91,20 +91,20 @@ describe("createStdioTransport", () => {
     expect(spawnMock).toHaveBeenCalledWith("node", args, expect.any(Object));
   });
 
-  it.each(["--ws-issuer", "--ws-audience"])(
-    "preserves a subcommand-shaped %s value",
-    async (flag) => {
-      await createStdioTransport({
-        ...startOptions("codex"),
-        args: ["app-server", flag, "app-server", "-c", "model_reasoning_effort=high"],
-      });
-      expect(spawnMock).toHaveBeenCalledWith(
-        "codex",
-        ["-c", "model_reasoning_effort=high", "app-server", flag, "app-server"],
-        expect.any(Object),
-      );
-    },
-  );
+  it.each([
+    { flag: "--ws-issuer", subcommand: [] },
+    { flag: "--ws-audience", subcommand: [] },
+    { flag: "--sock", subcommand: ["proxy"] },
+  ])("preserves a subcommand-shaped $flag value", async ({ flag, subcommand }) => {
+    await createStdioTransport({
+      ...startOptions("codex"),
+      args: ["app-server", ...subcommand, flag, "app-server", "-c", "model_reasoning_effort=high"],
+    });
+    expect(spawnMock.mock.calls[0]?.slice(0, 2)).toEqual([
+      "codex",
+      ["-c", "model_reasoning_effort=high", "app-server", ...subcommand, flag, "app-server"],
+    ]);
+  });
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {

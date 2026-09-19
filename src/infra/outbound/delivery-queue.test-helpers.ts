@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -32,7 +33,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -40,7 +42,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
     }
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (!fixtureRoot) {
       return;

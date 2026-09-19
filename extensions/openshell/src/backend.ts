@@ -395,6 +395,9 @@ class OpenShellSandboxBackendImpl {
     // Hold one lease across validation and both commits, not just the remote step.
     // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
     return {
+      get pathMappings() {
+        return bridge.pathMappings;
+      },
       resolvePath: (params) => bridge.resolvePath(params),
       readFile: (params) =>
         this.runWorkspaceOperation(() => bridge.readFile(params), params.signal),

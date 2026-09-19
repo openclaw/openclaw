@@ -8,6 +8,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -67,6 +68,7 @@ const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionSt
         cancel: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
         doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+        shutdown: vi.fn(async () => {}),
         ensureSession: vi.fn(async () => ({
           backend: "acpx",
           runtimeSessionName: "agent:codex:acp:test",
@@ -163,6 +165,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   runtimeRegistry.clear();
   prepareAcpxCodexAuthConfigMock.mockClear();
@@ -237,6 +240,7 @@ function openProcessLeaseStore(ctx: OpenClawPluginServiceContext) {
 
 function createMockRuntime(overrides: Record<string, unknown> = {}) {
   return {
+    shutdown: vi.fn(async () => {}),
     ensureSession: vi.fn(),
     runTurn: vi.fn(),
     cancel: vi.fn(),
@@ -307,6 +311,7 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
 
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+    expect(runtime.shutdown).toHaveBeenCalledOnce();
   });
 
   it("publishes before probing and retracts the exact runtime through the injected lifecycle", async () => {
@@ -385,15 +390,12 @@ describe("createAcpxRuntimeService", () => {
     delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
-    let releaseProbe!: () => void;
-    const probeStarted = vi.fn();
-    const doctor = vi.fn(
-      () =>
-        new Promise<{ ok: boolean; message: string }>((resolve) => {
-          probeStarted();
-          releaseProbe = () => resolve({ ok: true, message: "ok" });
-        }),
-    );
+    const probeStarted = createDeferred<void>();
+    const releaseProbe = createDeferred<{ ok: boolean; message: string }>();
+    const doctor = vi.fn(() => {
+      probeStarted.resolve();
+      return releaseProbe.promise;
+    });
     const runtime = createMockRuntime({
       doctor,
       isHealthy: () => true,
@@ -402,25 +404,29 @@ describe("createAcpxRuntimeService", () => {
       runtimeFactory: () => runtime as never,
     });
 
-    const startPromise = service.start(ctx) as Promise<void>;
-    await vi.waitFor(() => {
-      expect(probeStarted).toHaveBeenCalledOnce();
-    });
-
     let resolved = false;
-    void startPromise.then(() => {
+    const startPromise = Promise.resolve(service.start(ctx)).then(() => {
       resolved = true;
     });
-    await Promise.resolve();
+    try {
+      await Promise.race([probeStarted.promise, startPromise]);
+      expect(doctor).toHaveBeenCalledOnce();
+      await Promise.resolve();
 
-    expect(resolved).toBe(false);
-    releaseProbe();
-    await startPromise;
+      expect(resolved).toBe(false);
+      releaseProbe.resolve({ ok: true, message: "ok" });
+      await startPromise;
 
-    expect(resolved).toBe(true);
-    expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend ready");
-
-    await service.stop?.(ctx);
+      expect(resolved).toBe(true);
+      expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend ready");
+    } finally {
+      releaseProbe.resolve({ ok: true, message: "ok" });
+      try {
+        await startPromise;
+      } finally {
+        await service.stop?.(ctx);
+      }
+    }
   });
 
   it("emits ACPX-owned startup trace subspans", async () => {

@@ -8,6 +8,7 @@ import { getDiscordRuntime } from "../runtime.js";
 import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
+import { DISCORD_REALTIME_PLAYBACK_IDLE_MS } from "./realtime-player.js";
 import {
   createVoiceReceiveRecoveryState,
   DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
@@ -32,7 +33,6 @@ import type { DiscordVoiceReceive } from "./voice-receive.js";
 import { resolveDiscordVoiceAgentRoute } from "./voice-route.js";
 
 const logger = createSubsystemLogger("discord/voice");
-const REALTIME_PLAYBACK_MAX_MISSED_FRAMES = 100;
 
 function isVoiceSessionStopped(entry: VoiceSessionEntry): boolean {
   return entry.sessionLifecycle.status === "stopped";
@@ -363,7 +363,7 @@ export class DiscordVoiceSessions {
     // Discord consumes frames every 20 ms; provider jitter must not end a live response after 100 ms.
     const player = isDiscordRealtimeVoiceMode(voiceMode)
       ? voiceSdk.createAudioPlayer({
-          behaviors: { maxMissedFrames: REALTIME_PLAYBACK_MAX_MISSED_FRAMES },
+          behaviors: { maxMissedFrames: DISCORD_REALTIME_PLAYBACK_IDLE_MS / 20 },
         })
       : voiceSdk.createAudioPlayer();
     connection.subscribe(player);
@@ -667,7 +667,7 @@ export class DiscordVoiceSessions {
           void entry.stop("realtime terminal error");
         }
       },
-      runAgentTurn: ({ context, message, toolsAllow, userId, isCurrent, signal }) =>
+      runAgentTurn: ({ context, message, toolsAllow, userId, isCurrent, signal, voiceSelection }) =>
         this.params.receive.runDiscordRealtimeAgentTurn({
           context,
           entry,
@@ -676,6 +676,7 @@ export class DiscordVoiceSessions {
           userId,
           isCurrent,
           ...(signal ? { signal } : {}),
+          voiceSelection,
         }),
       resolveSpeakerContext: (userId) =>
         this.params.receive.resolveDiscordVoiceIngressContext(entry, userId),

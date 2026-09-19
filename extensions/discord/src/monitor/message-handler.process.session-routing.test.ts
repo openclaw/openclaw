@@ -263,7 +263,10 @@ describe("processDiscordMessage session routing", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("does not inject the bot's previous message body when users reply to it", async () => {
+  it.each([
+    'Automation "daily update" failed 1 times\nCheck automation history for details.',
+    "The deployment is waiting for review.",
+  ])("preserves a user's reply to bot text without fetching self media: %s", async (body) => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("self-reply media should not be fetched");
     });
@@ -289,7 +292,7 @@ describe("processDiscordMessage session routing", () => {
         referencedMessage: {
           id: "m-bot-previous",
           channelId: "c1",
-          content: "The same stale bot response keeps looping.",
+          content: body,
           timestamp: new Date().toISOString(),
           attachments: [
             {
@@ -317,8 +320,9 @@ describe("processDiscordMessage session routing", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
     expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
-    expect(dispatchCtx.ReplyToBody).toBeUndefined();
-    expect(JSON.stringify(dispatchCtx)).not.toContain("The same stale bot response keeps looping.");
+    expect(dispatchCtx.ReplyToBody).toBe(body);
+    expect(dispatchCtx.RawBody).toBe("<@bot> hit that again");
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
   it("stores DM lastRoute with user target for direct-session continuity", async () => {

@@ -10,7 +10,6 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import {
-  acquireSimpleCompletionModel,
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
 } from "./simple-completion-runtime.js";
@@ -25,7 +24,7 @@ afterEach(async () => {
 describe.each([undefined, "openai-completions"] as const)(
   "initial simple completion with provider API %s",
   (api) => {
-    it.each(["agent", "worker", "raw"] as const)(
+    it.each(["agent", "worker"] as const)(
       "normalizes %s input once without an ambient prepared runtime",
       async (mode) => {
         await withOpenClawTestState({ label: "selected-completion" }, async (state) => {
@@ -165,20 +164,12 @@ module.exports = {
                   },
                 });
               } else {
-                const prepared =
-                  mode === "agent"
-                    ? await acquireSimpleCompletionModelForAgent({
-                        cfg,
-                        agentId: "main",
-                        modelRef: `${provider}/${raw}`,
-                        allowBundledStaticCatalogFallback: true,
-                      })
-                    : await acquireSimpleCompletionModel({
-                        cfg,
-                        provider,
-                        modelId: raw,
-                        allowBundledStaticCatalogFallback: true,
-                      });
+                const prepared = await acquireSimpleCompletionModelForAgent({
+                  cfg,
+                  agentId: "main",
+                  modelRef: `${provider}/${raw}`,
+                  allowBundledStaticCatalogFallback: true,
+                });
                 if ("error" in prepared) {
                   throw new Error(prepared.error);
                 }

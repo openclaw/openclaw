@@ -2,6 +2,7 @@
 // outbound message execution context.
 import fs from "node:fs/promises";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -40,6 +41,7 @@ import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-deliv
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-content.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 type CreateMessageTool = typeof createMessageTool;
@@ -3669,6 +3671,56 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("eventName");
   });
 
+  it.each([
+    { action: "channel-info", hasTeamId: true },
+    { action: "channel-list", hasTeamId: true },
+    { action: "conversation-open", hasTeamId: true },
+    { action: "send", hasTeamId: false },
+    { action: "read", hasTeamId: false },
+  ] as const)(
+    "limits teamId to consuming actions when only $action is allowed",
+    ({ action, hasTeamId }) => {
+      const plugin = createChannelPlugin({
+        id: "test-channel",
+        label: "Test Channel",
+        docsPath: "/channels/test-channel",
+        blurb: "Team and workspace action schema fixture.",
+        actions: ["send", "read", "channel-info", "channel-list", "conversation-open"],
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "test-channel", source: "test", plugin }]),
+      );
+
+      for (const currentChannelProvider of ["test-channel", undefined]) {
+        const tool = createMessageTool({
+          config: {
+            agents: {
+              list: [{ id: "schema-agent", tools: { message: { actions: { allow: [action] } } } }],
+            },
+          },
+          agentId: "schema-agent",
+          currentChannelProvider,
+        });
+        const properties = getToolProperties(tool);
+        expect(getActionEnum(properties)).toEqual([action]);
+        if (!hasTeamId) {
+          expect(properties).not.toHaveProperty("teamId");
+          continue;
+        }
+        expectStringSchema(properties.teamId);
+        expect(Value.Check(tool.parameters, { action })).toBe(true);
+        for (const teamId of ["11111111-1111-1111-1111-111111111111", "T11111111"]) {
+          expect(Value.Check(tool.parameters, { action, teamId })).toBe(true);
+        }
+        if (currentChannelProvider && action === "conversation-open") {
+          for (const field of ["channelId", "guildId", "userId", "roleId"]) {
+            expect(properties).not.toHaveProperty(field);
+          }
+        }
+      }
+    },
+  );
+
   it("prunes fields for action groups that discovery does not advertise", () => {
     const plugin = createChannelPlugin({
       id: "discord",
@@ -4502,6 +4554,12 @@ describe("message tool reasoning tag sanitization", () => {
               xLabel: "<think>axis rationale</think>Day",
               yLabel: "<think>axis rationale</think>Milliseconds",
             },
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Traffic",
+              segments: [{ label: "<think>segment rationale</think>Primary", value: 1 }],
+            },
           ],
         },
       },
@@ -4535,9 +4593,85 @@ describe("message tool reasoning tag sanitization", () => {
           xLabel: "Day",
           yLabel: "Milliseconds",
         },
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Traffic",
+          segments: [{ label: "Primary", value: 1 }],
+        },
       ],
     });
   });
+
+  it.each([true, false])(
+    "sanitizes every presentation record array while retaining the first reason (option suppressed: %s)",
+    (suppressOption) => {
+      const internalContext =
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+      const inboundContext = [
+        markInboundContextLabel("Conversation info:"),
+        "```json",
+        '{"chat_id":"group:test","sender_id":"test-sender"}',
+        "```",
+      ].join("\n");
+      const metadata = { retained: true };
+      const option = { label: suppressOption ? internalContext : "  Choice  ", metadata };
+      const nonString = { label: 7 };
+      const invalidArray = ["<think>unchanged</think>"];
+      const presentation = {
+        blocks: [
+          {
+            options: [option, null, invalidArray, nonString],
+            categories: [inboundContext],
+            segments: [
+              { label: internalContext, value: 1 },
+              { label: "<think>segment rationale</think>Slice", value: 2 },
+            ],
+            series: [
+              { name: internalContext, values: [1] },
+              { name: "<think>series rationale</think>Trend", values: [2] },
+            ],
+          },
+        ],
+      };
+      const original = structuredClone(presentation);
+      const params = { presentation };
+
+      expect(sanitizeMessageToolVisiblePayload(params)).toBe(
+        suppressOption ? "internal_runtime_context_echo" : "inbound_metadata_echo",
+      );
+
+      const block = params.presentation.blocks[0];
+      expect(block).toEqual({
+        options: [
+          { label: suppressOption ? "" : "  Choice  ", metadata },
+          null,
+          invalidArray,
+          nonString,
+        ],
+        categories: [""],
+        segments: [
+          { label: "", value: 1 },
+          { label: "Slice", value: 2 },
+        ],
+        series: [
+          { name: "", values: [1] },
+          { name: "Trend", values: [2] },
+        ],
+      });
+      expect(params.presentation).not.toBe(presentation);
+      expect(block).not.toBe(presentation.blocks[0]);
+      for (const field of ["options", "segments", "series"] as const) {
+        expect(block?.[field]).not.toBe(presentation.blocks[0]?.[field]);
+      }
+      expect(block?.options[0]).not.toBe(option);
+      expect(block?.options[2]).toBe(invalidArray);
+      expect(block?.options[3]).not.toBe(nonString);
+      expect(block?.segments[0]).not.toBe(presentation.blocks[0]?.segments[0]);
+      expect(block?.series[0]).not.toBe(presentation.blocks[0]?.series[0]);
+      expect(presentation).toEqual(original);
+    },
+  );
 
   it("strips internal runtime context from visible presentation fields before sending (#53732)", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });

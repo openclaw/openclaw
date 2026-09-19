@@ -1,6 +1,7 @@
 /** Offline destination ownership and conservative adoption of historical import evidence. */
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveLegacyTranscriptPaths } from "../config/sessions/legacy-store-inspection.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
@@ -23,7 +24,6 @@ import {
 import {
   createTranscriptEventReader,
   readTranscriptFingerprint,
-  resolveLegacyTranscriptPaths,
 } from "./doctor-session-sqlite-readers.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -168,7 +168,7 @@ export function verifyHistoricalMigrationArtifact(params: {
             false,
             readTranscriptFingerprint(move.archivePath),
             move.sourcePath,
-          )((event) => stage.append(0, seq++, JSON.stringify(event), null));
+          )((event) => stage.append(0, seq++, JSON.stringify(event)));
           const repair = stage.repairLegacyTranscript(0);
           // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
           if (repair.repaired || !repair.recognized) {

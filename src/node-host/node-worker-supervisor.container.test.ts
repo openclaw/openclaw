@@ -18,8 +18,10 @@ import {
   requireNodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
 import {
-  fakeEngineSource,
-  stdioWorkerSource,
+  createNodeWorkerContainerFixture,
+  gatewayLabel,
+  hostLabel,
+  launchLabel,
 } from "./node-worker-supervisor.container.test-support.js";
 import { waitForNodeWorkerTerminal as waitForTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -27,7 +29,6 @@ import {
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
   testWorkerLaunchInput,
-  writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
@@ -36,127 +37,20 @@ const endpoint: WorkerConnectionEndpoint = {
   kind: "websocket",
   url: "wss://gateway.example/__openclaw__/worker",
 };
-const hostLabel = "openclaw.node-worker.host";
-const gatewayLabel = "openclaw.node-worker.gateway";
-const launchLabel = "openclaw.node-worker.launch";
 const DAEMON_TIMER_SCALE = 5;
 const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
-
-type FakeContainer = {
-  id: string;
-  labels: Record<string, string>;
-  env: Record<string, string>;
-  mounts: string[];
-  image: string;
-  entry: string;
-  workerArgs: string[];
-  status: "created" | "running" | "exited";
-  pid: number | null;
-};
-
-type EngineEvent = {
-  argv: string[];
-  container?: FakeContainer;
-  daemonId?: string;
-  journal?: { state: string; container_json: string | null };
-};
 
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
 
-function containerFixture(
-  options: {
-    image?: string;
-    env?: NodeJS.ProcessEnv;
-    capacity?: number;
-    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
-  } = {},
-) {
-  const root = tempDirs.make("node-worker-container-");
-  const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
-  const bundleEntry = path.join(bundleRoot, "gateway-1", "bundles", "a".repeat(64), "worker.mjs");
-  fs.writeFileSync(bundleEntry, stdioWorkerSource);
-  const engineRoot = path.join(root, "fake-engine");
-  const commandLog = path.join(engineRoot, "commands.jsonl");
-  const command = path.join(engineRoot, "docker");
-  const daemonId = "fake-original-daemon";
-  const engineTarget = createHash("sha256").update(`docker\0${daemonId}`).digest("hex");
-  fs.mkdirSync(engineRoot);
-  fs.writeFileSync(path.join(engineRoot, "daemon-id"), daemonId);
-  fs.writeFileSync(
-    command,
-    `#!${process.execPath}\nconst engineRoot = ${JSON.stringify(engineRoot)};\nconst stateRoot = ${JSON.stringify(stateDir)};\nconst commandLog = ${JSON.stringify(commandLog)};\nconst expectedEngineTarget = ${JSON.stringify(engineTarget)};\nconst fileLockModule = ${JSON.stringify(fileLockModule)};\n${fakeEngineSource}`,
-    { mode: 0o755 },
+function containerFixture(options: Parameters<typeof createNodeWorkerContainerFixture>[2] = {}) {
+  return createNodeWorkerContainerFixture(
+    tempDirs.make("node-worker-container-"),
+    fileLockModule,
+    options,
   );
-  const containerEngine = {
-    id: "docker" as const,
-    command,
-    target: engineTarget,
-    env: { PATH: process.env.PATH, DOCKER_HOST: "unix:///fake-node-worker-daemon.sock" },
-  };
-  const workerEnv = { ...env, ...options.env };
-  const supervisor = createNodeWorkerSupervisor({
-    bundleRoot,
-    env: workerEnv,
-    containerEngine,
-    ...(options.image ? { containerImage: options.image } : {}),
-    ...(options.capacity ? { capacity: options.capacity } : {}),
-    ...(options.onCapacityChanged ? { onCapacityChanged: options.onCapacityChanged } : {}),
-  });
-  const owner = createHash("sha256").update(bundleRoot).digest("hex").slice(0, 32);
-  return {
-    bundleEntry,
-    bundleRoot,
-    containerEngine,
-    engineRoot,
-    env: workerEnv,
-    owner,
-    stateDir,
-    supervisor,
-    workspaceDir,
-    events(): EngineEvent[] {
-      if (!fs.existsSync(commandLog)) {
-        return [];
-      }
-      return fs
-        .readFileSync(commandLog, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as EngineEvent);
-    },
-    seed(params: {
-      id: string;
-      launchId: string;
-      owner?: string;
-      status?: FakeContainer["status"];
-    }) {
-      const container: FakeContainer = {
-        id: params.id,
-        labels: {
-          [hostLabel]: params.owner ?? owner,
-          [gatewayLabel]: "gateway-1",
-          [launchLabel]: Buffer.from(params.launchId).toString("base64url"),
-        },
-        env: {},
-        mounts: [],
-        image: "node:24.19.0-slim",
-        entry: bundleEntry,
-        workerArgs: ["--internal-worker-session"],
-        status: params.status ?? "running",
-        pid: null,
-      };
-      fs.writeFileSync(
-        path.join(engineRoot, `${params.id}.container.json`),
-        JSON.stringify(container),
-      );
-      return container;
-    },
-    exists(id: string) {
-      return fs.existsSync(path.join(engineRoot, `${id}.container.json`));
-    },
-  };
 }
 
 function delayDaemonRevalidation(fixture: ReturnType<typeof containerFixture>, delayMs: number) {
@@ -219,6 +113,7 @@ function claimFixtureLaunch(
       planHash: identity.planHash,
       supervisor,
       worker,
+      cleanupMode: null,
       container: { engine: "docker", engineTarget: fixture.containerEngine.target, containerId },
     });
   }
@@ -540,12 +435,13 @@ describe("node worker supervisor container isolation", () => {
       if (phase === "before startup") {
         fs.writeFileSync(startMarker, "hold");
       }
-      const adapter = await createChildAdapter({
+      const { adapter, ready } = await createChildAdapter({
         argv: [fixture.containerEngine.command, "start", "--attach", "--interactive", container.id],
         env: fixture.containerEngine.env,
         exactEnv: true,
         stdinMode: "pipe-open",
       });
+      await ready;
       let exited = false;
       const completed = adapter.wait().finally(() => {
         exited = true;

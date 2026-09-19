@@ -8,18 +8,33 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 describe("runtime-postbuild-stamp script", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("writes dist/.runtime-postbuildstamp with the current git head", () => {
+  it.each([
+    { name: "clean", gitStatus: "", inputsClean: true },
+    {
+      name: "dirty metadata",
+      gitStatus: " M extensions/demo/openclaw.plugin.json\0",
+      inputsClean: false,
+    },
+    { name: "source-only change", gitStatus: " M src/index.ts\0", inputsClean: true },
+    { name: "unknown", gitStatus: null, inputsClean: null },
+  ])("records $name runtime inputs with the current git head", ({ gitStatus, inputsClean }) => {
     const rootDir = tempDirs.make("openclaw-runtime-postbuild-stamp-");
     const stampPath = writeRuntimePostBuildStamp({
       cwd: rootDir,
       now: () => 123,
-      spawnSync: () => ({ status: 0, stdout: "abc123\n" }),
+      spawnSync: (_command, args) =>
+        args[0] === "rev-parse"
+          ? { status: 0, stdout: "abc123\n" }
+          : gitStatus === null
+            ? { status: 1, stdout: "" }
+            : { status: 0, stdout: gitStatus },
     });
 
     expect(path.relative(rootDir, stampPath)).toBe(path.join("dist", RUNTIME_POSTBUILD_STAMP_FILE));
     expect(JSON.parse(fs.readFileSync(stampPath, "utf8"))).toEqual({
       syncedAt: 123,
       head: "abc123",
+      inputsClean,
     });
   });
 });

@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
@@ -22,7 +23,6 @@ import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
-  hasFlag,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
@@ -30,7 +30,6 @@ import {
 } from "./argv.js";
 import {
   isReservedNonPluginCommandRoot,
-  shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
@@ -97,7 +96,7 @@ const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
 
 const loadRootHelpLiveConfigModule = async () => await import("./root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./root-help-metadata.js");
-const loadLoggingModule = async () => await import("../logging.js");
+const loadLoggingModule = async () => await import("../logging/console.js");
 const loadCliRegistryLoaderModule = async () => await import("../plugins/cli-registry-loader.js");
 const loadManifestCommandAliasesRuntimeModule = async () =>
   await import("../plugins/manifest-command-aliases.runtime.js");
@@ -1124,7 +1123,7 @@ async function runCliWithPreparedOutputMode(
     options.runtimeRecoveryEnv,
   );
 
-  if (tryRunGatewayServiceUpdateCapabilityProbe(normalizedArgv)) {
+  if (await tryRunGatewayServiceUpdateCapabilityProbe(normalizedArgv)) {
     return;
   }
 
@@ -1144,19 +1143,13 @@ async function runCliWithPreparedOutputMode(
       }
     });
   }
-  if (
-    !isHelpOrVersionInvocation &&
-    normalizedInvocation.primary === "doctor" &&
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
-  ) {
+  let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
+  if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
     // Debug capture can migrate shared state before Commander reaches Doctor.
     // Resolve the update guard after selectors settle, before any bootstrap writer.
-    const [{ guardUpdateDoctorSchemaUpgrade }, { defaultRuntime }] = await Promise.all([
-      import("../commands/doctor-update-schema-guard.js"),
-      import("../runtime.js"),
-    ]);
-    await guardUpdateDoctorSchemaUpgrade({
-      runtime: defaultRuntime,
+    const { guardUpdateDoctorSchemaUpgrade } =
+      await import("../commands/doctor-update-schema-guard.js");
+    doctorDatabasePreflight = await guardUpdateDoctorSchemaUpgrade({
       json: options.builtInMachineOutput,
     });
   }
@@ -1208,9 +1201,9 @@ async function runCliWithPreparedOutputMode(
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
-    !isCurrentRuntimeSupported() ||
+    !(await isCurrentRuntimeSupported()) ||
     normalizedInvocation.primary === "update" ||
-    (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
+    normalizedInvocation.primary === "doctor";
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {
@@ -1593,7 +1586,9 @@ async function runCliWithPreparedOutputMode(
           import("../runtime.js"),
         ]),
       );
-      const program = await startupTrace.measure("build-program", () => buildProgram());
+      const program = await startupTrace.measure("build-program", () =>
+        buildProgram({ doctorDatabasePreflight }),
+      );
       await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
@@ -1634,7 +1629,7 @@ async function runCliWithPreparedOutputMode(
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.
       const { primary } = invocation;
-      if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
+      if (primary) {
         await startupTrace.measure("register-primary", async () => {
           const { getProgramContext } = await import("./program/program-context.js");
           const ctx = getProgramContext(program);

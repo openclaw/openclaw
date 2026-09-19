@@ -15,6 +15,7 @@ export type McpServerSummary = {
   transport: McpServerTransport | "invalid";
   target: string;
   auth: string | null;
+  signIn: "operator" | "requester" | "profile" | null;
   toolFilter: boolean;
   parallel: boolean;
   tls: "verify-off" | "mtls" | null;
@@ -136,6 +137,7 @@ export function summarizeMcpServers(
       // Command only: stdio args routinely carry tokens, and this projection
       // is visible to read-only operators.
       const command = typeof server.command === "string" ? server.command : "";
+      const oauth = asRecord(server.oauth);
       const transport = command
         ? ("stdio" as const)
         : url
@@ -151,6 +153,16 @@ export function summarizeMcpServers(
         transport,
         target: command || redactSensitiveUrlLikeString(url),
         auth: typeof server.auth === "string" ? server.auth : null,
+        signIn:
+          server.auth !== "oauth"
+            ? null
+            : oauth?.authProfileId
+              ? ("profile" as const)
+              : oauth?.identity === "per-requester"
+                ? ("requester" as const)
+                : transport !== "stdio" && transport !== "invalid" && parseMcpTarget(url, transport)
+                  ? ("operator" as const)
+                  : null,
         toolFilter: Boolean(server.toolFilter),
         parallel: server.supportsParallelToolCalls === true,
         tls:

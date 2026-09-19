@@ -2,9 +2,22 @@
 
 The Linux companion is a Tauri v2 desktop shell for local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
+On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
+
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
 
 Reading tabs share a private browser session, isolated from the dashboard's native commands and authentication scripts. Closing every reading tab, switching Gateways, or quitting the app ends that private session. Reloading the dashboard retains its tabs. Sign-in links and **Open in browser** continue to use your system browser.
+
+Startup, setup, connection recovery, Manage Gateways, and Quick Chat share the
+web UI's typography and light/dark palettes. They follow system appearance changes
+while open, preserving connection drafts, credential visibility, and Quick Chat
+replies. The connected dashboard retains its own web UI appearance setting.
+
+During remote setup or in Connection Settings, choose token or password under
+**Authentication**. **Show credential** reveals only what you entered; changing
+authentication types clears that draft and masks the new field. Press Enter or
+**Connect to Gateway** to connect. Leave credentials blank in Connection Settings
+to reuse saved credentials for the same endpoint.
 
 The tray's **Stop Gateway** and **Restart Gateway** actions request graceful shutdown. Running work can delay completion; **Start Gateway** brings a stopped local Gateway back online.
 
@@ -31,10 +44,13 @@ Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
 they cannot run the published AppImage. Extraction does not bypass this
 requirement.
 
+See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
+for package updates, desktop limitations, and native-app distinctions.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
-With the matching desktop app running, it uses the app’s selected Gateway and
+With the matching desktop app running, it uses the app’s Primary Gateway and
 keeps a single visible OpenClaw icon. See [Omarchy support](https://docs.openclaw.ai/platforms/omarchy)
 for installation, app handoff, shortcuts, and troubleshooting.
 
@@ -161,6 +177,28 @@ double-click maximize/restore, caption buttons, corner resizing, and closing to
 the tray. Screenshots and observed window geometry remain in the artifact
 directory. This X11 proof does not replace testing a Wayland compositor.
 
+### Native Gateway switching regression on Linux
+
+The same isolated driver covers saved connections, window reuse, restart
+selection, and failed-connection recovery. Install `gnome-keyring` alongside the
+native title bar test dependencies, then run:
+
+```bash
+xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
+  /usr/bin/python3 apps/linux/tests/first_run.py \
+  apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-switch \
+  --artifacts-dir /tmp/openclaw-gateway-switch-proof
+```
+
+The driver owns its temporary HOME and Secret Service. It verifies that ordinary
+window selection leaves the Primary configuration unchanged. The Linux App
+workflow runs this scenario and retains its screenshots and results.
+
+Use `--gateway-onboarding` in place of `--gateway-switch` to exercise local
+installation with a synthetic installer, leave Model Setup, and verify native
+window controls and Gateway actions under a non-root Gateway path. This scenario
+uses the same isolated fixtures and also runs in the Linux App workflow.
+
 ## First-run setup
 
 The welcome screen explains what OpenClaw can do and asks where your assistant
@@ -196,6 +234,44 @@ to the saved remote Gateway with freshly resolved credentials without rewriting
 configuration or installing or starting a local service. Opening the remote
 dashboard does not prove Gateway availability or successful authentication; check
 the dashboard for HTTP errors, authentication prompts, and Gateway readiness.
+
+### Switching Gateways
+
+Use **Gateways → Manage Gateways…** in the app or tray menu to save a direct URL
+or SSH connection. **Add Gateway** and **Edit** open a focused connection form;
+**Back to Gateways** returns to the saved list and discards unsaved changes.
+Choose token or password under **Authentication** and enter a credential only
+when needed. The credential starts masked; use **Show credential** to inspect
+what you entered. Switching authentication types clears the entered credential.
+For SSH connections, the optional TLS fingerprint is under **Advanced connection
+settings**.
+
+Saved credentials stay in this app's system credential store and are never
+filled into the editor. Leave the credential field blank to retain the saved
+credentials for the same endpoint.
+
+If the credential store is unavailable, the app keeps the dashboard open and
+shows one dismissible notice. Saved connections remain intact. Resolve the
+reported credential-store problem, then use **Manage Gateways… → Try again** to load
+them again.
+
+The dashboard's profile menu switches the current window to a saved Gateway.
+Command-click or Control-click opens another window. The native **Gateways** menu
+opens or focuses an existing Gateway window without reloading its current page;
+**Open … in New Window** creates an independent window. Successful explicit
+selection is remembered across app restarts. Removing a selected Gateway returns
+the main window to Primary and closes that Gateway's other windows.
+
+If a saved Gateway cannot load, its window returns to the local connection editor
+so you can correct the address or credentials. An edited endpoint becomes the
+remembered selection only after its dashboard loads successfully.
+
+Selecting a dashboard does not change the **Primary Gateway**, Quick Chat, or the
+desktop connection. **Set as Primary** is a separate, confirmed action for saved
+token-authenticated connections. Primary reconnects leave independently selected
+Gateway windows alone. **Connection Settings** continues to edit the Primary
+connection. Saved Tauri connections are separate from the native macOS app's
+saved connections and browser sign-in sessions.
 
 After connecting, Model Setup discovers AI access available to the selected
 Gateway and shows it as a choice. Discovery never imports or copies an account,
@@ -243,9 +319,44 @@ the previous published Linux updater manifest. Its original version, signature,
 and download URL stay intact. Successful Linux publication advances that
 manifest without letting an older build replace a newer available update.
 
+The shipped endpoint remains `releases/latest/download/latest.json`, and
+package-managed installs still link to the existing release page. The
+`linux-stable` publication channel does not change those client defaults.
+Changing them requires separate release-owner approval and signed
+installed-client migration proof.
+
+## Keep computer awake
+
+Enable **Keep computer awake** beside **Start at Login** in the native tray menu
+to prevent idle sleep while this companion is running. It starts off and remembers
+your choice across restarts using the companion's existing system credential
+store. The checkmark shows the saved preference. If a saved request cannot be
+restored, the menu says **Keep computer awake (inactive)** and reports an error;
+you can still uncheck it without retrying the unavailable power service. A new
+enable request is saved only after the native request succeeds.
+Turning it off or quitting releases the request. Closing the dashboard to the
+tray does not release it.
+
+Linux uses GNOME’s native session inhibitor when available, or another desktop’s
+xdg-desktop-portal idle inhibitor, such as KDE’s backend. A working session or
+portal backend that supports idle inhibition is required; a
+logind sleep-delay inhibitor alone is not a keep-awake implementation. Desktop
+idle inhibition may also keep the display from dimming and delay automatic
+locking. Windows and the macOS Tauri build inhibit system idle sleep without
+requesting that the display stay on. Manual locking, manual sleep, and lid-close
+behavior remain under the operating system's control. This option does not wake
+or unlock a computer and does not replace the Gateway's sleep preparation.
+
+If turning the option off cannot save the preference, idle sleep is still allowed
+for this run, but the error warns that the saved choice may enable it again after
+a restart. The checked menu item is marked **inactive**; restore access to the
+credential store and uncheck it again to save the off preference.
+
 ## Quick Chat widgets
 
 Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.
+
+Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
 
 ## Installer resource
 
@@ -343,6 +454,19 @@ and checksum set. Partial or mismatched existing assets require targeted
 publication recovery; the workflow does not rebuild or overwrite them. An
 optional desktop-test run also refuses to replace published Linux bytes, so
 recover missing desktop assets separately when Linux has already published.
+
+The publication helper records an immutable `OpenClaw-<version>-linux.json`
+beside the bundles, then advances the fixed `linux-stable` channel and mirrors
+it to the latest Gateway release. Reusing complete public bundles still runs
+unfinished channel publication; it does not rebuild or replace those bundles.
+The control release is prerelease/non-latest and requires explicit
+initialization by an authorized Linux publication, never by ordinary PR validation.
+
+Core finalization remains independent of Linux readiness. After finalization,
+a detached mirror-only request catches up the legacy endpoint. A dispatch is
+not a successful mirror: cancellation, queue overflow, timeout, or readback
+failure leaves a visible degraded result for reconciliation. See the
+[Linux publication contract](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication).
 
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps

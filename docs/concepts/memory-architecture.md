@@ -185,7 +185,12 @@ touching long-term memory.
 The consolidation output is accepted only if it passes structural
 validation, stays within the bootstrap file budget, and does not lose more
 than a bounded fraction of existing entries. A rejected rewrite falls back
-to the previous append-only behavior for that sweep.
+to append-only behavior for that sweep. Promotion uses the smallest configured
+per-file bootstrap limit among agents sharing the workspace, capped by the
+writer's own limit. If an append still cannot fit after older generated
+sections are removed, the writer preserves `MEMORY.md` unchanged and leaves
+the candidates eligible for a later sweep instead of committing an oversized
+file.
 
 **Write safety.** Replacing `MEMORY.md` uses optimistic concurrency: the
 content hash captured when consolidation input was built is re-checked

@@ -231,6 +231,58 @@ jobs:
           path: ${{ runner.temp }}/linux-updater-carry
           if-no-files-found: ignore
 
+  dispatch_linux_mirror:
+    name: Dispatch legacy Linux mirror after activation
+    needs: [publish, finalize]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && fromJSON(needs.publish.outputs.request).inputs.npm_dist_tag == 'latest' && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-alpha.') && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout exact Linux mirror dispatch tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Setup trusted Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+      - name: Dispatch detached Linux mirror
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REQUEST: ${{ needs.publish.outputs.request }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$RELEASE_REQUEST" > "$RUNNER_TEMP/release-request.json"
+          node scripts/openclaw-release-ready.mjs validate-request \
+            --request "$RUNNER_TEMP/release-request.json" --output "$RUNNER_TEMP/release-button"
+          RELEASE_TAG="$(jq -er '.inputs.tag' <<< "$RELEASE_REQUEST")"
+          TARGET_SHA="$(jq -er '.sourceSha' <<< "$RELEASE_REQUEST")"
+          PARENT_WORKFLOW_SHA="$(jq -er '.tooling.sha' <<< "$RELEASE_REQUEST")"
+          source scripts/lib/release-publish-children.sh
+          dispatch_linux_mirror \
+            "$(jq -er '.tooling.ref' <<< "$RELEASE_REQUEST")" \
+            "$(jq -er '.tooling.fullRef' <<< "$RELEASE_REQUEST")" "$PARENT_WORKFLOW_SHA" \
+            "$(jq -er '.releaseRunId' <<< "$RELEASE_REQUEST")" \
+            "$(jq -er '.releaseRunAttempt' <<< "$RELEASE_REQUEST")"
+      - name: Record failed Linux mirror dispatch
+        if: ${{ failure() }}
+        run: |
+          echo "::warning::Legacy Linux mirror dispatch failed; activation remains complete. Inspect dispatch evidence before recovery."
+          echo "- Legacy Linux bridge: degraded; dispatch acceptance is not mirror success." >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain Linux mirror dispatch evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-mirror-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-mirror-dispatch.json
+          if-no-files-found: warn
+
   publish_linux:
     name: Request Linux assets after activation
     needs: [publish, finalize]

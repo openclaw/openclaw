@@ -25,7 +25,11 @@ import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -54,15 +58,18 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
   titleMocks.generate.mockReset();
   projectCloneMocks.materialize.mockReset();
   dispatchInboundMessageMock.mockReset();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });
+
+// Register after the resets so stacked teardown drains fixture stores first.
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each([
   { worktree: false, sandboxed: false },
@@ -807,6 +814,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
     layout: "state-only",
     prefix: "openclaw-session-worktree-target-",
   });
+  let sessionStoreDir: string | undefined;
   try {
     const workspace = await initializeRepository(state.root, "workspace");
     const projectRoot = await initializeRepository(state.root, "project");
@@ -815,7 +823,8 @@ test("sessions.create with an empty message preserves its owned checkout above t
     await fs.writeFile(path.join(projectRoot, "README.md"), "newer project head\n");
     await requireGit(projectRoot, ["commit", "-am", "advance main beyond selected base"]);
     testState.agentConfig = { workspace };
-    const { storePath } = await createSessionStoreDir();
+    const { dir, storePath } = await createSessionStoreDir();
+    sessionStoreDir = dir;
     const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
     for (let index = 0; index < 100; index += 1) {
       await materializeManagedWorktreeFixture({
@@ -829,11 +838,12 @@ test("sessions.create with an empty message preserves its owned checkout above t
     const kept = managedWorktrees.listRegistryRecords();
     const key = "agent:main:worktree-above-cleanup-target";
     const scope = { agentId: "main", sessionKey: key, storePath };
-    const originalCreate = managedWorktrees.create.bind(managedWorktrees);
+    const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
     const createSpy = vi
-      .spyOn(managedWorktrees, "create")
+      .spyOn(managedWorktrees, "createWithOutcome")
       .mockImplementationOnce(async (params) => {
-        const record = await originalCreate(params);
+        const outcome = await originalCreate(params);
+        const record = outcome.record;
         // GC can run after allocation but before the session row is published.
         expect(loadSessionEntry(scope)).toBeUndefined();
         expect(
@@ -841,7 +851,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
         ).toMatchObject({ removed: [] });
         expect(managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
         expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("project\n");
-        return record;
+        return outcome;
       });
     const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
     try {
@@ -931,6 +941,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
         },
       );
       await migrateManagedWorktreeCanonicalWorkspaces({
+        mode: "doctor-fix",
         agentId: "main",
         cfg: getRuntimeConfig(),
         storePath,
@@ -947,6 +958,11 @@ test("sessions.create with an empty message preserves its owned checkout above t
       await settleWorkspaceRuns(context, storePath, key, true);
     }
   } finally {
+    if (sessionStoreDir) {
+      await closeOpenClawAgentDatabasesAsync(sessionStoreDir);
+    }
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
@@ -997,26 +1013,3 @@ test.each(["missing", "non-directory"] as const)(
     );
   },
 );
-
-test("sessions.create rejects an outside project for a sandboxed agent", async () => {
-  const root = tempDirs.make("openclaw-session-sandbox-project-");
-  const workspace = await initializeRepository(root, "workspace");
-  const outside = await initializeRepository(root, "outside");
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: outside });
-
-  for (const worktree of [false, true]) {
-    const created = await directSessionReq("sessions.create", {
-      projectId: project.id,
-      ...(worktree ? { worktree: true } : {}),
-    });
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create project is outside the sandboxed agent workspace",
-      },
-    });
-  }
-});

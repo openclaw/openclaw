@@ -356,6 +356,22 @@ describe("refreshQueuedFollowupSession", () => {
         expected: "low",
       },
       {
+        name: "agent model",
+        config: {
+          agents: {
+            entries: {
+              main: {
+                models: { "openai/gpt-5.6-sol": { params: { thinking: "low" } } },
+              },
+            },
+            defaults: {
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
         name: "model",
         config: {
           agents: {

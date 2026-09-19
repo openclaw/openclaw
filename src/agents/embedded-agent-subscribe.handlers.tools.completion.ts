@@ -5,9 +5,8 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import {
-  emitAgentActivityEvent,
   type AgentCommandOutputEventData,
-  type AgentItemEventData,
+  projectAgentToolActivity,
   type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
@@ -71,10 +70,9 @@ import {
   buildPatchItemId,
   buildPatchItemTitle,
   buildToolCallSummary,
-  buildToolItemId,
-  buildToolItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolActivityEvent,
   emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
@@ -111,19 +109,16 @@ export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
 ) {
-  const rawToolName = evt.toolName;
-  const toolName = normalizeToolPolicyName(rawToolName);
-  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
+  const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
   const runId = ctx.params.runId;
-  const isError = evt.isError;
   const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
-  const observerIsError = isError || isToolResultError(result);
+  const observerIsError = evt.isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
     isExecToolName(toolName) &&
@@ -163,6 +158,8 @@ export async function handleToolExecutionEnd(
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
   const startArgs = asOptionalObjectRecord(adjustedArgs) ?? initialArgs;
+  const explicitHideFromChannelProgress =
+    evt.hideFromChannelProgress === true || startData?.hideFromChannelProgress === true;
   const callSummary = buildToolCallSummary(
     toolName,
     startArgs,
@@ -430,6 +427,24 @@ export async function handleToolExecutionEnd(
     emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
+  const endedAt = Date.now();
+  const execDetails = readExecToolDetails(sanitizedResult);
+  const itemData = {
+    ...projectAgentToolActivity({
+      toolCallId,
+      name: toolName,
+      phase: "result",
+      args: startArgs,
+      meta,
+      result: sanitizedResult,
+      status: isToolError ? terminalErrorStatus : "completed",
+      hideFromChannelProgress: explicitHideFromChannelProgress,
+    }),
+    startedAt: startData?.startTime,
+    endedAt,
+    ...(errorMessage ? { error: errorMessage } : {}),
+  };
+  const hideFromChannelProgress = explicitHideFromChannelProgress;
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "tool",
@@ -446,26 +461,6 @@ export async function handleToolExecutionEnd(
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
-  const endedAt = Date.now();
-  const itemId = buildToolItemId(toolCallId);
-  const itemData: AgentItemEventData = {
-    itemId,
-    phase: "end",
-    kind: "tool",
-    title: buildToolItemTitle(toolName, meta),
-    status: isToolError ? terminalErrorStatus : "completed",
-    name: toolName,
-    meta,
-    commandBearing: callSummary.commandBearing,
-    toolCallId,
-    startedAt: startData?.startTime,
-    endedAt,
-    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    ...(callSummary.commandBearing && !isExecToolName(toolName)
-      ? { suppressChannelProgress: true }
-      : {}),
-    ...(errorMessage ? { error: errorMessage } : {}),
-  };
   emitTrackedItemEvent(ctx, itemData);
   emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
@@ -484,7 +479,6 @@ export async function handleToolExecutionEnd(
 
   if (isExecToolName(toolName)) {
     // Use sanitizedResult so `aggregated` is redacted before reaching command_output.
-    const execDetails = readExecToolDetails(sanitizedResult);
     const commandItemId = buildCommandItemId(toolCallId);
     if (
       execDetails?.status === "approval-pending" ||
@@ -512,56 +506,15 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentActivityEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+      emitToolActivityEvent(ctx, {
         stream: "approval",
         data: approvalData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
-        stream: "approval",
-        data: approvalData,
-      });
-      emitTrackedItemEvent(ctx, {
-        itemId: commandItemId,
-        phase: "end",
-        kind: "command",
-        title: buildCommandItemTitle(toolName, meta),
-        status: "blocked",
-        name: toolName,
-        meta,
-        toolCallId,
-        startedAt: startData?.startTime,
-        endedAt,
-        ...(execDetails.status === "approval-pending"
-          ? {
-              approvalId: execDetails.approvalId,
-              approvalSlug: execDetails.approvalSlug,
-              summary: "Awaiting approval before command can run.",
-            }
-          : {
-              summary: "Command is blocked because no interactive approval route is available.",
-            }),
       });
     } else {
       const output = extractLiveExecOutput(eventResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
         execDetails?.status === "failed" || isToolError ? terminalErrorStatus : "completed";
-      emitTrackedItemEvent(ctx, {
-        itemId: commandItemId,
-        phase: "end",
-        kind: "command",
-        title: buildCommandItemTitle(toolName, meta),
-        status: commandStatus,
-        name: toolName,
-        meta,
-        toolCallId,
-        startedAt: startData?.startTime,
-        endedAt,
-        ...(output ? { summary: output } : {}),
-        ...(errorMessage ? { error: errorMessage } : {}),
-      });
       const outputData: AgentCommandOutputEventData = {
         itemId: commandItemId,
         phase: "end",
@@ -582,13 +535,7 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentActivityEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "command_output",
-        data: outputData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
+      emitToolActivityEvent(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -609,13 +556,7 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentActivityEvent({
-            runId: ctx.params.runId,
-            ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-            stream: "approval",
-            data: approvalData,
-          });
-          emitAgentEventCallbackBestEffort(ctx, {
+          emitToolActivityEvent(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -628,22 +569,6 @@ export async function handleToolExecutionEnd(
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;
-    emitTrackedItemEvent(ctx, {
-      itemId: patchItemId,
-      phase: "end",
-      kind: "patch",
-      title: buildPatchItemTitle(meta),
-      status: isToolError ? "failed" : "completed",
-      name: toolName,
-      meta,
-      toolCallId,
-      startedAt: startData?.startTime,
-      endedAt,
-      ...(summaryText ? { summary: summaryText } : {}),
-      ...(isToolError && extractToolErrorMessage(sanitizedResult)
-        ? { error: extractToolErrorMessage(sanitizedResult) }
-        : {}),
-    });
     if (patchSummary) {
       const patchData: AgentPatchSummaryEventData = {
         itemId: patchItemId,
@@ -656,13 +581,7 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentActivityEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "patch",
-        data: patchData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
+      emitToolActivityEvent(ctx, {
         stream: "patch",
         data: patchData,
       });
@@ -677,7 +596,7 @@ export async function handleToolExecutionEnd(
     await emitToolResultOutput({
       ctx,
       toolName,
-      rawToolName,
+      rawToolName: evt.toolName,
       meta,
       isToolError,
       result,

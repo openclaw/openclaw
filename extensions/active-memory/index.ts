@@ -24,7 +24,6 @@ import {
   buildCircuitBreakerKey,
   forgetActiveRecallRun,
   getCachedResult,
-  getCircuitBreakerEntry,
   isCircuitBreakerOpen,
   resetActiveRecallStateForTests,
   setCachedResult,
@@ -344,9 +343,26 @@ export default definePluginEntry({
               ...sessionContext,
               mainKey: liveConfig.session?.mainKey ?? api.config.session?.mainKey,
             };
+            // Use the producer's request, never infer it from user-controlled envelope markers.
+            const currentUserMessage = event.currentUserMessage ?? event.prompt;
+            if (event.currentUserMessage !== undefined && !currentUserMessage.trim()) {
+              api.logger.debug?.("active-memory: recall skipped reason=no-current-text");
+              return undefined;
+            }
+            // Omission preserves legacy producers. Explicit text without an admission ID
+            // cannot identify a request, even when the correlation runId and text match.
+            const requestKey =
+              event.currentUserMessage === undefined
+                ? undefined
+                : event.currentUserMessageId
+                  ? JSON.stringify({
+                      message: currentUserMessage,
+                      messageId: event.currentUserMessageId,
+                    })
+                  : null;
             const recentTurns = extractRecentTurns(event.messages);
             const searchQuery = buildSearchQuery({
-              latestUserMessage: event.prompt,
+              latestUserMessage: currentUserMessage,
               recentTurns,
             });
             const memorySlot = normalizePluginsConfig(liveConfig.plugins).slots.memory;
@@ -388,10 +404,11 @@ export default definePluginEntry({
                   cfg: liveConfig,
                   agentId: effectiveAgentId,
                   query: searchQuery,
-                  message: event.prompt,
+                  message: currentUserMessage,
                   activeProjectKeys: ctx.activeProjectKeys,
                   signal: AbortSignal.timeout(triggerLookupTimeoutMs),
                   runId: ctx.runId,
+                  requestKey,
                   authorityFingerprint: toolAuthority.fingerprint,
                 }).catch((error: unknown) => {
                   api.logger.debug?.(
@@ -453,7 +470,7 @@ export default definePluginEntry({
             }
             const escalationDecision = resolveRecallEscalationDecision({
               mode: invocationConfig.mode,
-              message: event.prompt,
+              message: currentUserMessage,
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
@@ -481,7 +498,7 @@ export default definePluginEntry({
                 ? { ...invocationConfig, toolsAllow: [productRecallToolName] }
                 : { ...invocationConfig, toolsAllow: allowedRecallTools };
             const query = buildQuery({
-              latestUserMessage: event.prompt,
+              latestUserMessage: currentUserMessage,
               recentTurns,
               config: recallConfig,
             });
@@ -499,6 +516,7 @@ export default definePluginEntry({
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,
+              requestKey,
               searchQuery,
               currentModelProviderId: ctx.modelProviderId,
               currentModelId: ctx.modelId,
@@ -565,7 +583,6 @@ const testing = {
   setSetupGraceTimeoutMsForTests,
   setTimeoutPartialDataGraceMsForTests,
   setCachedResult,
-  getCircuitBreakerEntry,
 };
 
 export { testing };

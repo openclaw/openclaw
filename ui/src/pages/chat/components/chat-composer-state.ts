@@ -4,6 +4,7 @@ import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
+import { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
 import { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
@@ -17,6 +18,7 @@ function createChatComposerState(): ChatComposerState {
     composerComposing: false,
     editRevision: 0,
     mentionMenu: new HumanMentionMenu(),
+    emojiMenu: new ComposerEmojiMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
@@ -64,7 +66,9 @@ export function isCurrentSessionSubmittedProgress(
   return (
     item.sessionKey === sessionKey &&
     !item.pendingRunId &&
-    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (item.sendState === "submitting" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-model") &&
     (status == null || item.sendRunId !== status.runId)
   );
 }
@@ -149,6 +153,7 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.emojiMenu.close();
   state.mentionMenu.dispose();
   state.composerDraftScopeKey = null;
   state.dictation?.dispose();

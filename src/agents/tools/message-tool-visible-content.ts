@@ -106,6 +106,18 @@ function sanitizePresentationTextFieldsResult(
     return { value };
   }
   let suppressionReason: VisibleTextSuppressionReason | undefined;
+  const sanitizeRecordArray = (entries: unknown[], field: "label" | "name") =>
+    entries.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return entry;
+      }
+      // SAFETY: The guard establishes a non-null, non-array record before cloning.
+      const sanitized = { ...(entry as Record<string, unknown>) };
+      // Keep sanitizing after suppression; the first reason only labels the outcome.
+      const reason = sanitizeStringParam(sanitized, field, bootPrompt);
+      suppressionReason ??= reason;
+      return sanitized;
+    });
   const presentation = { ...(value as Record<string, unknown>) };
   if (typeof presentation.title === "string") {
     const sanitized = sanitizeUserVisibleToolTextResult(presentation.title, bootPrompt);
@@ -229,18 +241,7 @@ function sanitizePresentationTextFieldsResult(
         });
       }
       if (Array.isArray(sanitizedBlock.options)) {
-        sanitizedBlock.options = sanitizedBlock.options.map((option) => {
-          if (!option || typeof option !== "object" || Array.isArray(option)) {
-            return option;
-          }
-          const sanitizedOption = { ...(option as Record<string, unknown>) };
-          if (typeof sanitizedOption.label === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedOption.label, bootPrompt);
-            sanitizedOption.label = sanitized.text;
-            suppressionReason ??= sanitized.suppressionReason;
-          }
-          return sanitizedOption;
-        });
+        sanitizedBlock.options = sanitizeRecordArray(sanitizedBlock.options, "label");
       }
       if (Array.isArray(sanitizedBlock.categories)) {
         sanitizedBlock.categories = sanitizedBlock.categories.map((category) => {
@@ -253,32 +254,10 @@ function sanitizePresentationTextFieldsResult(
         });
       }
       if (Array.isArray(sanitizedBlock.segments)) {
-        sanitizedBlock.segments = sanitizedBlock.segments.map((segment) => {
-          if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
-            return segment;
-          }
-          const sanitizedSegment = { ...(segment as Record<string, unknown>) };
-          if (typeof sanitizedSegment.label === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSegment.label, bootPrompt);
-            sanitizedSegment.label = sanitized.text;
-            suppressionReason ??= sanitized.suppressionReason;
-          }
-          return sanitizedSegment;
-        });
+        sanitizedBlock.segments = sanitizeRecordArray(sanitizedBlock.segments, "label");
       }
       if (Array.isArray(sanitizedBlock.series)) {
-        sanitizedBlock.series = sanitizedBlock.series.map((series) => {
-          if (!series || typeof series !== "object" || Array.isArray(series)) {
-            return series;
-          }
-          const sanitizedSeries = { ...(series as Record<string, unknown>) };
-          if (typeof sanitizedSeries.name === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSeries.name, bootPrompt);
-            sanitizedSeries.name = sanitized.text;
-            suppressionReason ??= sanitized.suppressionReason;
-          }
-          return sanitizedSeries;
-        });
+        sanitizedBlock.series = sanitizeRecordArray(sanitizedBlock.series, "name");
       }
       return sanitizedBlock;
     });
@@ -324,7 +303,7 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
   }
   const mediaUrls = readStringArrayParam(params, "mediaUrls");
   const attachmentMedia = readStructuredAttachmentMediaParam(params.attachments);
-  return hasReplyPayloadContent({
+  const hasPayload = hasReplyPayloadContent({
     text,
     mediaUrl:
       readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]) ||
@@ -332,7 +311,10 @@ export function hasSanitizedSendPayloadContent(params: Record<string, unknown>):
     mediaUrls,
     presentation: params.presentation,
     interactive: params.interactive,
+    location: params.location,
   });
+  // Inline buffers are staged by the outbound media owner after sanitization.
+  return hasPayload || Boolean(readToolStringParam(params, "buffer"));
 }
 
 export function sanitizeMessageToolVisiblePayload(

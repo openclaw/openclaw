@@ -6,6 +6,8 @@
   "include": [
     "../../src/state/**/*.test.ts",
     "../../src/state/**/*.test.tsx",
+    "../../src/tasks/**/*.test.ts",
+    "../../src/tasks/**/*.test.tsx",
     "../../src/plugin-state/**/*.test.ts",
     "../../src/plugin-state/**/*.test.tsx",
     "../../src/logging/**/*.test.ts",
@@ -13,8 +15,6 @@
     "../../src/shared/**/*.test.ts",
     "../../src/shared/**/*.test.tsx",
     "../../src/infra/sqlite-*.test.ts",
-    "../../src/infra/update-managed-service-handoff-database.test.ts",
-    "../../src/infra/package-update-activation-journal.test.ts",
     "../../src/config/sessions/**/*.test.ts",
     "../../src/config/sessions/**/*.test.tsx"
   ]

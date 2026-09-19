@@ -24,8 +24,8 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import {
-  acquireSessionCostUsageRefreshLock,
   isSessionCostUsageRefreshRunning,
+  prepareSessionCostUsageRefreshLock,
 } from "../infra/session-cost-usage-cache.sqlite.js";
 import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.js";
 import { runExec } from "../process/exec.js";
@@ -1248,9 +1248,7 @@ describe("TUI PTY real backends", () => {
         );
         const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
         const selectedSession = { agentId, sessionKey, storePath: databasePath };
-        let refreshOwner:
-          | Awaited<ReturnType<typeof acquireSessionCostUsageRefreshLock>>
-          | undefined;
+        let refreshOwner: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
         // Repeated teardown must not reopen the removed root through release().
         cleanupState.run = createIdempotentCleanup(() =>
           runQaGatewayFixture(
@@ -1270,8 +1268,8 @@ describe("TUI PTY real backends", () => {
               // An empty existing row still makes the direct Session reader wait.
               expect(loadSessionEntry(selectedSession)).toBeUndefined();
               if (cacheState === "refreshing") {
-                refreshOwner = await acquireSessionCostUsageRefreshLock(agentId, databasePath);
-                expect(refreshOwner.acquired).toBe(true);
+                refreshOwner = prepareSessionCostUsageRefreshLock(agentId, databasePath);
+                expect(await refreshOwner.acquire()).toBe(true);
               }
               expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
                 cacheState === "refreshing",
@@ -1885,6 +1883,8 @@ export default {
         await fixture.run.waitForOutput(`opening auth flow for ${providerId}`);
         await fixture.run.waitForOutput("Enter T05 local auth API key");
         await fixture.run.write(`${sentinel}\r`, { delay: false });
+        await fixture.run.waitForOutput("Keep current restrictions");
+        await fixture.run.write("\r", { delay: false });
         await fixture.run.waitForOutput(`auth flow finished for ${providerId}`);
         expect(fixture.run.output().includes(sentinel)).toBe(false);
 

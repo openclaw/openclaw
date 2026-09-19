@@ -364,7 +364,7 @@ describe("schema preflight source artifacts", () => {
     const paths = [...fixture.paths, configPath];
     const before = sourceArtifacts(paths);
     await expect(checkTargetDatabaseSchemas(supportedVersions, fixture.env)).rejects.toMatchObject({
-      reason: "database-schema-preflight",
+      reason: "invalid-config",
     });
     expect(
       await checkTargetDatabaseSchemasForContexts(undefined, [{ env: fixture.env, config: {} }]),
@@ -574,6 +574,13 @@ describe("schema preflight source artifacts", () => {
         const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
         for (const inspect of [
           () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
+          () =>
+            preflightOpenClawDatabaseSchemas({
+              env: fixture.env,
+              supportedVersions,
+              verifyCurrentSchemaShape: true,
+              requireStartupMigrationReadiness: true,
+            }),
           () =>
             checkTargetDatabaseSchemasForContexts(supportedVersions, [
               { env: fixture.env, config: {} },

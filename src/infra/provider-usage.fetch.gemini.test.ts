@@ -25,27 +25,30 @@ describe("fetchGeminiUsage", () => {
   });
 
   it("selects the lowest remaining fraction per model family", async () => {
-    const mockFetch = createProviderUsageFetch(async (_url, init) => {
-      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
-      expect(headers.Authorization).toBe("Bearer token");
-
-      return makeResponse(200, {
-        buckets: [
-          { modelId: "gemini-pro", remainingFraction: 0.8 },
-          { modelId: "gemini-pro-preview", remainingFraction: 0.3 },
-          { modelId: "gemini-flash", remainingFraction: 0.7 },
-          { modelId: "gemini-flash-latest", remainingFraction: 0.9 },
-          { modelId: "gemini-unknown", remainingFraction: 0.5 },
-        ],
+    const buckets = [
+      { modelId: "gemini-pro", remainingFraction: 0.8 },
+      { modelId: "gemini-pro-preview", remainingFraction: 0.3 },
+      { modelId: "gemini-flash", remainingFraction: 0.7 },
+      { modelId: "gemini-flash-latest", remainingFraction: 0.9 },
+      { modelId: "gemini-pro", remainingFraction: 0.2 },
+      { modelId: "gemini-pro", remainingFraction: 0.9 },
+      { modelId: "GEMINI-PRO-FLASH", remainingFraction: 0.4 },
+      { modelId: "gemini-unknown", remainingFraction: 0.5 },
+    ];
+    for (const orderedBuckets of [buckets, buckets.toReversed()]) {
+      const mockFetch = createProviderUsageFetch(async (_url, init) => {
+        const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+        expect(headers.Authorization).toBe("Bearer token");
+        return makeResponse(200, { buckets: orderedBuckets });
       });
-    });
 
-    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+      const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
 
-    expect(result.windows).toHaveLength(2);
-    expect(result.windows[0]).toEqual({ label: "Pro", usedPercent: 70 });
-    expect(result.windows[1]?.label).toBe("Flash");
-    expect(result.windows[1]?.usedPercent).toBeCloseTo(30, 6);
+      expect(result.windows).toEqual([
+        { label: "Pro", usedPercent: 80 },
+        { label: "Flash", usedPercent: 60 },
+      ]);
+    }
   });
 
   it("returns no windows when the response has no recognized model families", async () => {

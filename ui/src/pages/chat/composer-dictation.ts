@@ -7,12 +7,9 @@ import {
   floatToG711Ulaw,
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
-} from "./realtime-talk-audio.ts";
-import {
-  describeRealtimeTalkInputError,
-  RealtimeTalkInputController,
-} from "./realtime-talk-input.ts";
-import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+} from "./talk/audio.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputController } from "./talk/input.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -23,7 +20,7 @@ const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
 
-// Transcription relay talk.event payload (src/gateway/talk-transcription-relay.ts):
+// Transcription relay talk.event payload (src/gateway/talk/transcription-relay.ts):
 // the transcriptionSessionId envelope is the relay's emission shape, shared with the
 // Android dictation client; the canonical TalkEvent rides alongside as `talkEvent`.
 type DictationEvent = {

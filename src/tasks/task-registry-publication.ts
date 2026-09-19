@@ -5,17 +5,20 @@ import {
   normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
-  addOwnerKeyIndex,
-  addParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
   bumpTaskRegistryRevision,
-  deleteOwnerKeyIndex,
-  deleteParentFlowIdIndex,
-  deleteRelatedSessionKeyIndex,
   emitTaskRegistryObserverEvent,
-  rebuildRunIdIndex,
   tasks,
 } from "./task-registry-state.js";
+import {
+  addOwnerKeyIndex,
+  deleteOwnerKeyIndex,
+  addParentFlowIdIndex,
+  deleteParentFlowIdIndex,
+  addRelatedSessionKeyIndex,
+  deleteRelatedSessionKeyIndex,
+  rebuildRunIdIndex,
+  recordTaskRegistryProjectionWrite,
+} from "./task-registry.process-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
 /** Publishes a record already committed by a cross-owner shared-state transaction. */
@@ -38,6 +41,7 @@ export function publishTaskRecordAfterAtomicStore(
     deleteRelatedSessionKeyIndex(next.taskId, current);
   }
   tasks.set(next.taskId, next);
+  recordTaskRegistryProjectionWrite("task", next.taskId);
   bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);

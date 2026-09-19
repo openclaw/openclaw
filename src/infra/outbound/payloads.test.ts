@@ -4,6 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
@@ -17,6 +21,20 @@ import {
   projectOutboundPayloadPlanForOutbound,
   summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
+
+it("createOutboundPayloadPlan preserves preceding-input metadata for delivery without serializing it", () => {
+  const payload = setReplyPayloadMetadata(
+    { text: "Earlier answer." },
+    { precedingInputAnswer: true },
+  );
+  const plan = createOutboundPayloadPlan([payload]);
+  const delivered = projectOutboundPayloadPlanForDelivery(plan);
+  expect(delivered).toHaveLength(1);
+  expect(delivered.map((reply) => getReplyPayloadMetadata(reply)?.precedingInputAnswer)).toEqual([
+    true,
+  ]);
+  expect(projectOutboundPayloadPlanForJson(plan)[0]).not.toHaveProperty("precedingInputAnswer");
+});
 
 function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
   const normalized = normalizeReplyPayloadsForDelivery(payloads);

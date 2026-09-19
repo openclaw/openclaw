@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   writeUpdatePostInstallDoctorResult: vi.fn(),
   service: vi.fn(),
   probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
+  inspectGatewayRestart:
+    vi.fn<(typeof import("../cli/daemon-cli/restart-health.js"))["inspectGatewayRestart"]>(),
+  waitForGatewayHealthyRestart:
+    vi.fn<(typeof import("../cli/daemon-cli/restart-health.js"))["waitForGatewayHealthyRestart"]>(),
   packageRoot: vi.fn<() => string | undefined>(),
   runtimeTmpDir: vi.fn<() => string>(),
   restartedHealthy: true,
@@ -28,6 +32,30 @@ const mocks = vi.hoisted(() => ({
 const runtimeDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   mocks.runtimeTmpDir.mockReturnValue(runtimeDirs.make("openclaw-doctor-runtime-"));
+  mocks.inspectGatewayRestart.mockReset().mockImplementation(async (params) => ({
+    runtime: await params.service.readRuntime(params.env ?? process.env),
+    portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
+    healthy: true,
+    staleGatewayPids: [],
+    gatewayVersion: params.expectedVersion ?? null,
+    gatewayBuildId: params.expectedBuildId ?? null,
+    gatewayBootId: "synthetic-current-boot",
+  }));
+  mocks.waitForGatewayHealthyRestart.mockReset().mockImplementation(async (params) => {
+    if (!params.service) {
+      throw new Error("Doctor readiness must use its managed Gateway service");
+    }
+    return {
+      runtime: await params.service.readRuntime(params.env ?? process.env),
+      portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
+      healthy: mocks.restartedHealthy,
+      staleGatewayPids: [],
+      gatewayVersion: params.expectedVersion ?? null,
+      gatewayBuildId: params.expectedBuildId ?? null,
+      gatewayBootId: "synthetic-restarted-boot",
+      waitOutcome: mocks.restartedHealthy ? "healthy" : "timeout",
+    };
+  });
 });
 
 // The synthetic manager's leases and locks belong to its private fixture root.
@@ -114,7 +142,8 @@ vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOrigina
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: async () => ({ healthy: mocks.restartedHealthy }),
+  inspectGatewayRestart: mocks.inspectGatewayRestart,
+  waitForGatewayHealthyRestart: mocks.waitForGatewayHealthyRestart,
   renderRestartDiagnostics: () => ["synthetic readiness failure"],
 }));
 
@@ -159,6 +188,37 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 export { mocks };
+
+export const doctorServiceInspectionCases = [
+  "inspection-failed",
+  "runtime-only",
+  "owned-unknown",
+  "foreign-running",
+  "foreign-unknown",
+  "foreign-stopped",
+  "foreign-stopped-loaded",
+  "foreign-stopped-loaded-disabled",
+  "foreign-stopped-loaded-unknown",
+  "foreign-respawning",
+  "unresolved-running",
+  "unresolved-unknown",
+  "unresolved-stopped",
+  "unresolved-stopped-loaded",
+  "unresolved-respawning",
+  "absent",
+  "absent-unknown",
+  "absent-busy-port",
+  "absent-unknown-port",
+  "windows-ready",
+  "windows-disabled",
+  "windows-queued",
+  "windows-running",
+  "windows-startup-stopped",
+  "windows-startup-unknown",
+].flatMap((kind) => [
+  { kind, updateParent: false },
+  { kind, updateParent: true },
+]);
 
 export function seedMaintenanceStartupFailure(openDatabase: () => OpenClawStateDatabase) {
   openDatabase().db.exec(

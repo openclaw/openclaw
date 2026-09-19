@@ -5,8 +5,8 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import type { WorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import {
   createWorkerInferenceManager,
@@ -19,17 +19,6 @@ function waitForFast<T>(
   options: { timeout?: number; interval?: number } = {},
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
-}
-
-function beginSessionDrain(
-  manager: ReturnType<typeof createWorkerInferenceManager>,
-  sessionId: string,
-): WorkerInferenceSessionDrain {
-  return (
-    manager as typeof manager & {
-      beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
-    }
-  ).beginSessionDrain(sessionId);
 }
 
 const REQUEST: WorkerInferenceStartParams = {
@@ -155,6 +144,34 @@ function makeManager(execute: WorkerInferenceExecutor, store = createMemoryStore
 }
 
 describe("worker inference manager", () => {
+  it("persists and replays a bounded executor failure without repeating inference", async () => {
+    const execute = vi.fn<WorkerInferenceExecutor>(async () => {
+      throw Object.assign(new Error("Upstream unavailable"), { status: 503, code: "server_error" });
+    });
+    let stored: WorkerInferenceTerminalOutcome | undefined;
+    const store = createMemoryStore();
+    store.begin = () => (stored ? { kind: "replay", outcome: stored } : { kind: "claimed" });
+    store.complete = (input) => (stored = input.outcome);
+    const instance = makeManager(execute, store);
+    const sink = createSink();
+    accept(instance, { sink: sink.sink });
+    await waitForFast(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    const outcome = terminalFrames(sink.frames)[0]?.payload.outcome;
+    if (outcome?.type !== "error") {
+      throw new Error("expected failed inference terminal");
+    }
+    expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+      httpCode: "503",
+      code: "server_error",
+      message: "Upstream unavailable",
+    });
+    const replay = createSink("replay");
+    expect(accept(instance, { sink: replay.sink }).result.status).toBe("replayed");
+    expect(terminalFrames(replay.frames)[0]?.payload.outcome).toEqual(outcome);
+    expect(execute).toHaveBeenCalledOnce();
+    await instance.stop();
+  });
+
   it("rejects oversized and concurrent turns", async () => {
     const store = createMemoryStore();
     const execute = vi.fn<WorkerInferenceExecutor>(async () => ERROR);
@@ -227,7 +244,7 @@ describe("worker inference manager", () => {
     accept(instance);
     await waitForFast(() => expect(execute).toHaveBeenCalledOnce());
 
-    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    const drain = instance.beginSessionDrain(REQUEST.sessionId);
     expect(drain.hasWork()).toBe(true);
     const replacementRequest = { ...REQUEST, runId: "replacement", turnId: "replacement" };
     const replacementIdentity = identityFor(replacementRequest);
@@ -262,7 +279,7 @@ describe("worker inference manager", () => {
     const instance = makeManager(async () => await pending.promise, store);
     accept(instance);
 
-    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    const drain = instance.beginSessionDrain(REQUEST.sessionId);
     pending.resolve(ERROR);
     await expect(drain.drained).rejects.toThrow("terminal persistence failed");
     drain.release();

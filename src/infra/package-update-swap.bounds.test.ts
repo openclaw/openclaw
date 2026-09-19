@@ -367,21 +367,29 @@ describe("package verification bounds", () => {
         const handle = await realOpen(path.join(packageRoot, "dist", "index.js"), "r");
         const close = vi.spyOn(handle, "close");
         const read = vi.spyOn(handle, "read");
+        // Expire only the injected stall; unrelated filesystem latency must not
+        // consume the separate launcher and recovery-observation budgets.
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
         const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
           if (String(args[0]) !== path.join(packageRoot, "dist", "index.js")) {
             return realOpen(...args);
           }
           if (operation === "open") {
+            now += 41;
             return late.promise;
           }
           const actual = await realOpen(...args);
-          vi.spyOn(actual, "read").mockImplementation(() => new Promise(() => {}));
+          vi.spyOn(actual, "read").mockImplementation(() => {
+            now += 41;
+            return new Promise(() => {});
+          });
           return actual;
         });
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
         const observations = captureReaderLogs();
-        const started = Date.now();
+        const started = performance.now();
         try {
           const result = await swapStagedPackageInstall({
             ...params,
@@ -393,7 +401,7 @@ describe("package verification bounds", () => {
           expect(result.step.advisory?.message).toContain(
             "baseline package fingerprint incomplete",
           );
-          expect(Date.now() - started).toBeLessThan(2000);
+          expect(performance.now() - started).toBeLessThan(2000);
           expect(beforeActivate).toHaveBeenCalledOnce();
           expect(onLiveMutation).toHaveBeenCalledOnce();
           expect(

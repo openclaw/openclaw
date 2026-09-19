@@ -237,6 +237,9 @@ async function startOwnedGatewayChild(
     cfg,
     baseUrl,
     wsUrl,
+    get evidenceIdentity() {
+      return lifetime.rpcClient?.evidenceIdentity ?? null;
+    },
     get pid() {
       return active.identity?.pid ?? active.child.pid ?? null;
     },

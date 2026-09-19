@@ -190,16 +190,22 @@ describe("applyMistralModelCompat", () => {
   });
 
   it.each([MISTRAL_SMALL_LATEST_ID, MISTRAL_SMALL_4_ID, MISTRAL_MEDIUM_3_5_ID])(
-    "exposes binary thinking profile levels for %s",
+    "exposes every documented thinking level for %s",
     async (modelId) => {
       const provider = await registerSingleProviderPlugin(mistralPlugin);
+      const profile = provider.resolveThinkingProfile?.({ provider: "mistral", modelId });
 
-      expect(
-        provider.resolveThinkingProfile?.({
-          provider: "mistral",
-          modelId,
-        }),
-      ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
+      expect(profile?.levels.map(({ id }) => id)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "adaptive",
+        "max",
+      ]);
+      expect(profile?.defaultLevel).toBe("off");
     },
   );
 });

@@ -241,7 +241,7 @@ describe("mixed inline directives", () => {
 
     expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
     expect(lifecycleEvents).toEqual([
-      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch", catalogChanged: true },
     ]);
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
@@ -283,6 +283,9 @@ describe("mixed inline directives", () => {
       } else {
         expect(persistenceMocks.persist).toHaveBeenCalledOnce();
         expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect(lifecycleEvents).toEqual([
+          { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+        ]);
       }
     },
   );
@@ -650,6 +653,7 @@ describe("mixed inline directives", () => {
       authProfileOverrideCompactionCount: 2,
     });
     const { result } = await applyMixedDirectives({
+      cfg: { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } },
       body: "/model default -s",
       senderIsOwner: true,
       sessionEntry,
@@ -684,6 +688,7 @@ describe("mixed inline directives", () => {
       authProfileOverrideCompactionCount: 2,
     });
     const { result } = await applyMixedDirectives({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
       body: "/model default -s",
       senderIsOwner: true,
       provider: "openai",

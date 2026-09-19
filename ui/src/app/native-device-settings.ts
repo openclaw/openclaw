@@ -32,6 +32,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
       appearance: z.enum(["system", "light", "dark"]).optional(),
       notificationsEnabled: z.boolean().optional(),
       showDockIcon: z.boolean().optional(),
+      nativeExperienceEnabled: z.boolean().optional(),
       // Advertised by hosts with Dock icon selection.
       iconStyle: z.object({ selectedId: z.string(), available: namedDevicesSchema }).optional(),
       iconAnimationsEnabled: z.boolean().optional(),
@@ -130,6 +131,7 @@ export type SettingKey =
   | "app.appearance"
   | "app.notificationsEnabled"
   | "app.showDockIcon"
+  | "app.nativeExperienceEnabled"
   | "app.iconStyle"
   | "app.iconAnimationsEnabled"
   | "app.launchAtLogin"

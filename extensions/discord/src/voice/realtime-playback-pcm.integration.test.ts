@@ -1,3 +1,4 @@
+import type { AudioResource } from "@discordjs/voice";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
@@ -45,6 +46,7 @@ it.each([10, 20, 100])(
 
 it("resumes continuous output after the provider clears unplayed PCM", async () => {
   const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
+  const heard = createDeferred<void>();
   try {
     fixture.callbacks.onAudio(pcmTone(500));
     fixture.callbacks.onMark?.("discarded", () => fixture.acknowledgeMark("discarded"));
@@ -52,14 +54,102 @@ it("resumes continuous output after the provider clears unplayed PCM", async () 
     expect(fixture.player.state.status).toBe(fixture.voiceSdk.AudioPlayerStatus.Idle);
 
     fixture.callbacks.onAudio(pcmTone(500));
-    fixture.callbacks.onMark?.("heard", () => fixture.acknowledgeMark("heard"));
+    fixture.callbacks.onMark?.("heard", () => {
+      fixture.acknowledgeMark("heard");
+      heard.resolve();
+    });
     expect(fixture.player.state.status).not.toBe(fixture.voiceSdk.AudioPlayerStatus.Idle);
-    await vi.waitFor(() => expect(fixture.acknowledgeMark.mock.calls).toEqual([["heard"]]));
+    await vi.waitFor(() => heard.promise, { timeout: 1_000 });
+    expect(fixture.acknowledgeMark.mock.calls).toEqual([["heard"]]);
     expect(fixture.onTerminalError).not.toHaveBeenCalled();
   } finally {
     fixture.close();
   }
 });
+
+it("plays continuous audio arriving during the player's starvation retirement", async () => {
+  const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
+  const resources = new Set<AudioResource>();
+  fixture.player.on("stateChange", (_previous, state) => {
+    if (state.status !== fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      resources.add(state.resource);
+    }
+  });
+  const stop = fixture.voiceSdk.AudioPlayer.prototype.stop.bind(fixture.player);
+  let resumed = false;
+  fixture.stop.mockImplementation((force) => {
+    const stopped = stop(force);
+    if (!force && !resumed) {
+      resumed = true;
+      // The SDK still plays five silence packets after its natural starvation stop.
+      fixture.callbacks.onAudio(pcmTone(100));
+    }
+    return stopped;
+  });
+  try {
+    fixture.callbacks.onAudio(pcmTone(120));
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Playing,
+      4_000,
+    );
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(false), {
+      // A successor resource may need its own two-second starvation retirement.
+      timeout: 6_000,
+    });
+    expect(resumed).toBe(true);
+    expect(fixture.onTerminalError).not.toHaveBeenCalled();
+    expect(
+      Array.from(resources).reduce((total, resource) => total + resource.playbackDuration, 0),
+    ).toBe(220);
+  } finally {
+    fixture.close();
+  }
+});
+
+it.each([
+  { pauseMs: 240, resumeAfterMs: 0 },
+  { pauseMs: 2_400, resumeAfterMs: 2_100 },
+])(
+  "preserves a $pauseMs ms continuous pause after preceding speech was consumed",
+  async ({ pauseMs, resumeAfterMs }) => {
+    const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
+    const playbackComplete = createDeferred<void>();
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+    const resources = new Set<AudioResource>();
+    fixture.player.on("stateChange", (_previous, state) => {
+      if (state.status !== fixture.voiceSdk.AudioPlayerStatus.Idle) {
+        resources.add(state.resource);
+      }
+    });
+    onTestFinished(() => {
+      clearTimeout(resumeTimer);
+      fixture.player.off("error", playbackComplete.reject);
+      fixture.close();
+    });
+    fixture.player.once("error", playbackComplete.reject);
+    fixture.onTerminalError.mockImplementation(playbackComplete.reject);
+    fixture.callbacks.onAudio(pcmTone(120));
+    fixture.callbacks.onMark?.("first", () => {
+      fixture.callbacks.onAudio(Buffer.alloc(pauseMs * 48));
+      const resume = () => {
+        fixture.callbacks.onAudio(pcmTone(120));
+        fixture.callbacks.onMark?.("last", playbackComplete.resolve);
+      };
+      if (resumeAfterMs > 0) {
+        // Resume while the quiet output is draining PCM accepted before its idle deadline.
+        resumeTimer = setTimeout(resume, resumeAfterMs);
+      } else {
+        resume();
+      }
+    });
+    await playbackComplete.promise;
+    expect(fixture.onTerminalError).not.toHaveBeenCalled();
+    expect(
+      Array.from(resources).reduce((total, resource) => total + resource.playbackDuration, 0),
+    ).toBe(pauseMs + 240);
+  },
+);
 
 it("leaves continuous interruption to the provider even when Discord barge-in is enabled", () => {
   const fixture = createRealtimePlaybackFixture(undefined, {

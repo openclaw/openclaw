@@ -26,7 +26,10 @@ import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import { onGatewaySuspendAdmissionChange } from "../process/gateway-work-admission.js";
+import {
+  onGatewaySuspendAdmissionChange,
+  runWithRetainedGatewayRootWork,
+} from "../process/gateway-work-admission.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
@@ -49,10 +52,15 @@ import { startGatewayTaskSubscriptions } from "./server-task-subscriptions.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  tryResolveSessionCompatibilityOwnerAgentId,
+  resolveSessionEventAgentScope,
+} from "./session-request-agent.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
@@ -63,18 +71,21 @@ function dispatchEventHandler<TEvent>(params: {
   context: Record<string, unknown>;
   onFailure?: () => void;
 }) {
-  return params
-    .loadHandler()
-    .then((handler) => handler(params.event))
-    .then(() => undefined)
-    .catch((error: unknown) => {
-      params.log.warn(params.failureMessage, { ...params.context, error });
-      params.onFailure?.();
-    });
+  return runWithRetainedGatewayRootWork(() =>
+    params
+      .loadHandler()
+      .then((handler) => handler(params.event))
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        params.log.warn(params.failureMessage, { ...params.context, error });
+        params.onFailure?.();
+      }),
+  );
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
+  signal: AbortSignal;
   log: SubsystemLogger;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: (
@@ -93,6 +104,8 @@ export function startGatewayEventSubscriptions(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
+  refreshConnectedUserProfiles: () => void;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -122,16 +135,39 @@ export function startGatewayEventSubscriptions(params: {
   );
   const sessionActivitySummaries = createSessionActivitySummaries({
     getConfig: getRuntimeConfig,
-    onChanged: (target) =>
-      params.broadcast(
-        "sessions.changed",
-        {
-          sessionKey: target.key,
-          agentId: target.agentId,
-          reason: "activity-summary",
-        },
-        { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
-      ),
+    onChanged: (target) => {
+      const publication = (async () => {
+        const projection = params.getSessionRowProjection?.();
+        const captured = projection?.capture({ key: target.key, agentId: target.agentId });
+        if (projection) {
+          do {
+            await projection.ensureMaterialized();
+          } while (projection.needsMaterialization);
+        }
+        if (projection && (!captured || !projection.isCurrent(captured))) {
+          return;
+        }
+        const row = projection?.snapshot({ key: target.key, agentId: target.agentId }).row;
+        params.broadcast(
+          "sessions.changed",
+          {
+            sessionKey: target.key,
+            agentId: target.agentId,
+            reason: "activity-summary",
+            ...buildGatewaySessionSnapshot({
+              sessionRow: row,
+              agentId: target.agentId,
+              includeSession: true,
+            }),
+          },
+          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
+        );
+      })().catch((error: unknown) =>
+        params.log.warn("Activity summary publication failed", { error }),
+      );
+      agentEventDispatches.add(publication);
+      void publication.then(() => agentEventDispatches.delete(publication));
+    },
   });
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
@@ -144,6 +180,22 @@ export function startGatewayEventSubscriptions(params: {
     getConfig: getRuntimeConfig,
     sessionObserver,
   });
+  let sessionBackgroundStop: Promise<void> | undefined;
+  // Auxiliary model calls can inherit request work; cancel before that work drains.
+  const stopSessionBackgroundWork = (): void => {
+    if (!sessionBackgroundStop) {
+      sessionCompanion.dispose();
+      sessionObserver.dispose();
+      sessionBackgroundStop = sessionActivitySummaries.dispose();
+      void sessionBackgroundStop.catch((error: unknown) => {
+        params.log.warn(`session background cleanup failed: ${String(error)}`);
+      });
+    }
+  };
+  params.signal.addEventListener("abort", stopSessionBackgroundWork, { once: true });
+  if (params.signal.aborted) {
+    stopSessionBackgroundWork();
+  }
   const unsubscribePrivateAuditEvents = auditEnabled
     ? onAgentAuditEvent(auditRecorder.record)
     : undefined;
@@ -156,6 +208,10 @@ export function startGatewayEventSubscriptions(params: {
       : undefined;
   const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
   const agentEventDispatches = new Set<Promise<void>>();
+  const eventRowOwners = new WeakMap<
+    AgentEventRuntimePayload,
+    { projection: SessionRowProjection; record: ReturnType<SessionRowProjection["capture"]> }
+  >();
   const trackedRunIds = (runId: string, clientRunId: string) =>
     runId === clientRunId ? [runId] : [runId, clientRunId];
   const clearTrackedActiveRun = (run: { runId: string; clientRunId: string }) => {
@@ -258,6 +314,39 @@ export function startGatewayEventSubscriptions(params: {
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
             sessionMessageSubscribers: params.sessionMessageSubscribers,
+            getSessionRowProjection: params.getSessionRowProjection,
+            loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
+              // Tool progress must not wait for optional row enrichment before reply capture.
+              if (
+                !options?.ownerEvent &&
+                params.getSessionRowProjection?.()?.needsMaterialization
+              ) {
+                return { row: null };
+              }
+              const owner = options?.ownerEvent
+                ? eventRowOwners.get(options.ownerEvent)
+                : undefined;
+              if (
+                options?.ownerEvent &&
+                (!owner?.record || !owner.projection.isCurrent(owner.record))
+              ) {
+                return { row: null };
+              }
+              const scope = resolveSessionEventAgentScope(
+                getRuntimeConfig(),
+                key,
+                options?.agentId,
+              );
+              const snapshot = scope?.[1]
+                ? (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
+                    row: null,
+                  })
+                : { row: null };
+              return options?.ownerEvent?.sessionId &&
+                snapshot.row?.sessionId !== options.ownerEvent.sessionId
+                ? { row: null }
+                : snapshot;
+            },
             persistGatewaySessionLifecycleEventForEvent: sessionLifecyclePersistence.persist,
             updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
               for (const candidateRunId of new Set([runId, clientRunId])) {
@@ -280,6 +369,8 @@ export function startGatewayEventSubscriptions(params: {
               resolveVisibleActiveSessionRunState({
                 context: params,
                 ...session,
+                projectedAgentRunIndex:
+                  params.getSessionRowProjection?.()?.state.rowContext.projectedAgentRuns,
                 defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(
                   getRuntimeConfig(),
                   session.requestedKey,
@@ -307,6 +398,7 @@ export function startGatewayEventSubscriptions(params: {
           sessionEventSubscribers: params.sessionEventSubscribers,
           sessionMessageSubscribers: params.sessionMessageSubscribers,
           chatAbortControllers: params.chatAbortControllers,
+          getSessionRowProjection: params.getSessionRowProjection,
         }),
     );
     return transcriptUpdateHandlerPromise;
@@ -322,12 +414,34 @@ export function startGatewayEventSubscriptions(params: {
           broadcastToConnIds: params.broadcastToConnIds,
           sessionEventSubscribers: params.sessionEventSubscribers,
           chatAbortControllers: params.chatAbortControllers,
+          getSessionRowProjection: params.getSessionRowProjection,
         }),
     );
     return lifecycleEventHandlerPromise;
   };
 
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+    if (evt.stream === "lifecycle") {
+      const projection = params.getSessionRowProjection?.();
+      if (projection) {
+        const link = params.chatRunState.registry.peek(evt.runId);
+        const run = getAgentRunContext(evt.runId);
+        const key = link?.sessionKey ?? evt.deliverySessionKey ?? evt.sessionKey ?? run?.sessionKey;
+        const scope = key
+          ? resolveSessionEventAgentScope(
+              getRuntimeConfig(),
+              key,
+              link?.agentId ?? evt.agentId ?? run?.agentId,
+            )
+          : undefined;
+        if (key && scope?.[1]) {
+          eventRowOwners.set(evt, {
+            projection,
+            record: projection.capture({ key, agentId: scope[1] }),
+          });
+        }
+      }
+    }
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
     sessionObserver.handleEvent(evt);
@@ -479,7 +593,10 @@ export function startGatewayEventSubscriptions(params: {
     const dispatchPreparation = terminalPreparation;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
       loadHandler: dispatchPreparation
-        ? () => dispatchPreparation.then(() => getAgentEventHandler())
+        ? async () => {
+            await dispatchPreparation;
+            return getAgentEventHandler();
+          }
         : getAgentEventHandler,
       event: evt,
       log: params.log,
@@ -492,9 +609,9 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
-    sessionCompanion.dispose();
-    sessionObserver.dispose();
-    await sessionActivitySummaries.dispose();
+    params.signal.removeEventListener("abort", stopSessionBackgroundWork);
+    stopSessionBackgroundWork();
+    await sessionBackgroundStop;
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
@@ -531,6 +648,7 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
+    params.refreshConnectedUserProfiles();
     params.broadcastToConnIds(
       "sessions.changed",
       { reason: "profile-identity" },

@@ -396,38 +396,13 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it.each([
-    {
-      name: "runtime agent fallback",
-      selector: {},
-      runtime: { agentId: "strict" },
-      restricted: true,
-    },
-    {
-      name: "undefined agent fallback",
-      selector: { agentId: undefined },
-      runtime: { agentId: "strict" },
-      restricted: true,
-    },
-    {
-      name: "explicit loose agent",
-      selector: { agentId: "loose" },
-      runtime: { agentId: "strict" },
-      restricted: false,
-    },
-    {
-      name: "explicit strict agent",
-      selector: { agentId: "strict" },
-      runtime: { agentId: "loose" },
-      restricted: true,
-    },
-    {
-      name: "loose runtime agent",
-      selector: {},
-      runtime: { agentId: "loose" },
-      restricted: false,
-    },
-    { name: "no agent identity", selector: {}, runtime: {}, restricted: false },
-  ])("resolves embedded prompt policy for $name", ({ name, selector, runtime, restricted }) => {
+    ["runtime agent fallback", {}, { agentId: "strict" }, true],
+    ["undefined agent fallback", { agentId: undefined }, { agentId: "strict" }, true],
+    ["explicit loose agent", { agentId: "loose" }, { agentId: "strict" }, false],
+    ["explicit strict agent", { agentId: "strict" }, { agentId: "loose" }, true],
+    ["loose runtime agent", {}, { agentId: "loose" }, false],
+    ["no agent identity", {}, {}, false],
+  ])("resolves embedded prompt policy for %s", (name, selector, runtime, restricted) => {
     const inputs = fixedEmbeddedPromptInputs();
     const prompt = buildEmbeddedSystemPrompt({
       ...inputs,
@@ -473,6 +448,12 @@ describe("buildEmbeddedSystemPrompt", () => {
       configInput: {
         config: {
           agents: { defaults: { models: { "fixture/configured": { alias: "configured-alias" } } } },
+        },
+        preparedModelRuntime: {
+          isCurrent: () => true,
+          configuredModelAliases: [
+            { alias: "configured-alias", provider: "fixture", model: "configured" },
+          ],
         },
       },
       directHint: false,

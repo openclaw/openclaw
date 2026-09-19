@@ -374,8 +374,9 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+// Controls already show inherited values; reserve default references for overrides.
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
 export function renderSettingsSegmented<T extends string>(
@@ -392,6 +393,7 @@ export function renderSettingsSegmented<T extends string>(
     }>;
     disabled?: boolean;
     ariaLabel?: string;
+    descriptionId?: string;
     className?: string;
     carapace?: boolean;
   } & (
@@ -448,9 +450,10 @@ export function renderSettingsSegmented<T extends string>(
     <wa-radio-group
       class="settings-segmented ${props.carapace ? "oc-segmented" : ""} ${props.className ?? ""}"
       size="s"
+      aria-describedby=${props.descriptionId ?? nothing}
       orientation="horizontal"
       .value=${live(props.value)}
-      ?disabled=${props.disabled ?? false}
+      ?disabled=${live(props.disabled ?? false)}
       @change=${(event: Event) => {
         const group = event.currentTarget as HTMLElement & { value?: string };
         const value = group.value;
@@ -478,7 +481,7 @@ export function renderSettingsSegmented<T extends string>(
             appearance="button"
             value=${option.value}
             .checked=${live(option.value === props.value)}
-            ?disabled=${option.disabled ?? false}
+            ?disabled=${live(option.disabled ?? false)}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
             @click=${(event: Event) => {

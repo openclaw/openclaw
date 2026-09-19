@@ -21,20 +21,38 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
-If the Gateway's request queue is full, the Control UI shows "The server is busy. Please try again in a moment." Wait briefly, then retry the action.
+If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
-While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Opening a lazy panel such as Home or System busyness shows a compact loading card naming the destination, with a Close button to cancel opening it. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
+While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
 
-Closed Terminal, Browser, Desktop, and Home/Ask OpenClaw panels initialize when you open them rather than during initial navigation. Panels saved as open still restore after a reload.
+Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
-Hidden retained chats defer command and model metadata refreshes until you return to them. Repeated background changes share the current metadata read and refresh once more after it finishes, instead of issuing overlapping requests.
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Ordinary session patches and command changes wait for a 2.5-second quiet period before refreshing commands and session facts. They reuse the model catalog unless the returned metadata indicates a changed model or account projection. Explicit model, account, and runtime selections refresh promptly. Configuration, catalog, and session lifecycle changes still invalidate the full metadata bundle. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
-Subagent activity rows lead with the child task's display title, using its configured
-`label` when present. Status and the latest activity appear separately, so parallel
-children remain easy to identify as they finish or fail. Tasks without a display
-title keep the generic **Subagent** label. Select a row to open its details.
+Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
+
+Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
+and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
+Their activity rows lead with the child task's display title, using its configured
+`label` when present, followed by the latest activity. The leading claw moves only
+while running; queued and cancelled tasks stay still, and completion briefly turns
+the claw green. Failed tasks have a warning badge and timed-out tasks a clock badge.
+Hover the row or focus it with the keyboard for a tooltip explaining the exact
+status. Reduced motion keeps the claw still. Tasks without a display title keep
+the generic **Subagent** label. Select a row to open its details.
+
+Dragging a session between sidebar groups updates its placement immediately. A successful
+save keeps that placement even if the subsequent list refresh fails; the UI reports
+the refresh error separately. If a connection failure leaves the save unconfirmed,
+refresh and check the session's group before retrying. Other clients' newer group
+changes still reconcile through session events.
+
+The sidebar keeps unread child failures visible on their ancestors. These warnings
+name the child session that failed, even when its parent has finished or continues
+working. Select the warning to open the child session and acknowledge its failure;
+a subagent chat opens without adding a sidebar row.
 
 Choose **New agent** in the sidebar or Agents home to open the custodian chat.
 It recommends a chief of staff, researcher, writer, reviewer, or a small team
@@ -124,10 +142,11 @@ you open a different agent's chat in team mode. Turning team mode off clears the
 remembered value after restoring it. You can still
 choose a narrower scope; navigating between pages does not reset that choice.
 Automations, Dashboards, Sessions, Tasks, and Usage support all-agent views, with
-agent identity shown on mixed-agent rows. Memory, Model providers, and Skill
-Workshop stay scoped to one agent. Open an agent's main chat from its group header
-to select that agent before visiting those pages; chat actions always belong to
-the conversation's agent.
+agent identity shown on mixed-agent rows. In Settings, choose an agent below the
+sidebar title to keep the same target across Agents, Models, Memory, and Skills.
+Global settings remain global. Skill Workshop uses the agent selected through
+chat; open an agent's main chat from its group header to select it. Chat actions
+always belong to the conversation's agent.
 
 Choose **All sessions** from an agent group’s options menu to open the Sessions
 page filtered to that agent. Open **Agents** in the sidebar to return to the roster
@@ -140,7 +159,9 @@ an emoji or generated face appears only when no image is configured or the image
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
 
 Activity and previews on the page and sidebar roster refresh on session events
-and Gateway reconnects. When both are visible, they share one activity window and
+and Gateway reconnects. Continuous events share a paced follow-up refresh: after
+an automatic read, the next waits three times its duration, bounded between one
+and 15 seconds. Reconnects and explicit refreshes bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
 stops when neither roster is visible. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.
@@ -153,6 +174,7 @@ is absent from the window, its agent's most recent session supplies the preview.
 
 - [Connect and pair](/web/control-ui/connect-and-pair) — pair a browser or phone, reach the UI over Tailscale, and fix a blank page.
 - [Sessions and sidebar](/web/control-ui/sessions-and-sidebar) — sidebar zones, session menus, and the New session page.
+- [Systems workspace](/web/control-ui/sessions-and-sidebar#systems-workspace) — contextual machine navigation and a desktop-first workspace.
 - [Chat](/web/control-ui/chat) — composer controls, the session rail, transcript rendering, and hosted embeds.
 - [Panels and docks](/web/control-ui/panels) — Ask OpenClaw, the Home dock, the operator terminal, and the browser panel.
 - [Settings](/web/control-ui/settings) — identity, appearance, plugins, updates, MCP, activity, and meetings.

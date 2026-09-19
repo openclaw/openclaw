@@ -55,6 +55,38 @@ describe("buildAuthChoiceOptions", () => {
     resolveProviderSetupFlowContributions.mockReset();
   });
 
+  it.each([
+    { assistantVisibleOnly: true, detected: false },
+    { assistantVisibleOnly: false, detected: false },
+    { assistantVisibleOnly: true, detected: true },
+    { assistantVisibleOnly: false, detected: true },
+  ])(
+    "offers detected-only providers only after detection ($assistantVisibleOnly, $detected)",
+    ({ assistantVisibleOnly, detected }) => {
+      resolveProviderSetupFlowContributions.mockReturnValue([
+        flowContribution("native", {
+          value: "native-local",
+          label: "Native local model",
+          assistantVisibility: "detected-only",
+          group: { id: "native", label: "Native" },
+        }),
+        flowContribution("other", {
+          value: "other-api-key",
+          label: "Other API key",
+          group: { id: "other", label: "Other" },
+        }),
+      ]);
+      const { groups } = buildAuthChoiceGroups({
+        includeSkip: false,
+        assistantVisibleOnly,
+        detectedProviderIds: new Set(detected ? ["NATIVE"] : ["other"]),
+      });
+      expect(groups.some((group) => group.value === "native")).toBe(detected);
+      expect(groups.some((group) => group.value === "other")).toBe(true);
+      expect(formatAuthChoiceChoicesForCli().split("|")).toContain("native-local");
+    },
+  );
+
   it("includes core and provider-specific auth choices", () => {
     resolveProviderSetupFlowContributions.mockReturnValue([
       flowContribution("chutes", {

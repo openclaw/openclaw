@@ -4,6 +4,7 @@ import type { EnvironmentsListResult } from "../../../../packages/gateway-protoc
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type {
   DraftCloudProfile,
   DraftEnvironment,
@@ -12,10 +13,13 @@ import type {
 } from "./discovery.ts";
 import {
   cloudMachinesForOs,
+  defaultCloudMachine,
   defaultCloudOs,
   readDraftCloudProfiles,
   readDraftEnvironments,
 } from "./discovery.ts";
+
+registerNewSessionSetupEnglish();
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
@@ -168,21 +172,21 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         placement="right-start"
         ?open-on-click=${accessibleBlocker || touchDetails}
       >
-        ${
-          touchDetails
-            ? html`<div class="new-session-page__environment-detail-trigger">
-                ${row}
-                <button
+        <div class="new-session-page__environment-detail-trigger">
+          ${row}
+          ${
+            touchDetails
+              ? html`<button
                   type="button"
                   class="new-session-page__touch-details"
                   aria-label=${t("newSession.environmentDetails", { name: params.label })}
                   ?disabled=${submitting}
                 >
                   ${icons.info}
-                </button>
-              </div>`
-            : row
-        }
+                </button>`
+              : nothing
+          }
+        </div>
         <div slot="content" class="new-session-page__environment-card">
           ${
             unavailableReason
@@ -262,7 +266,7 @@ export function renderCloudProfileMenuItems(params: {
     const machine =
       (selected && params.selectedMachine
         ? machines.find((option) => option.id === params.selectedMachine)
-        : undefined) ?? machines.find((option) => option.default);
+        : undefined) ?? defaultCloudMachine(profile, osId);
 
     const item = renderSessionMenuItem(
       {
@@ -374,26 +378,32 @@ function renderCloudConfiguration(params: {
     class="new-session-page__cloud-configuration"
     aria-label=${params.profile.id}
   >
-    <div class="new-session-page__environment-heading">${t("newSession.operatingSystem")}</div>
-    <div
-      class="new-session-page__cloud-choice-list"
-      role="group"
-      aria-label=${t("newSession.operatingSystem")}
-    >
-      ${
-        fixedOs
-          ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
-              >${fixedOs.label}</span
-            >`
-          : renderCloudOsMenuItems({
-              operatingSystems,
-              selectedId: params.selectedOs,
-              suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
-              submitting: params.submitting,
-              onSelect: params.onSelectOs,
-            })
-      }
-    </div>
+    ${
+      operatingSystems.length
+        ? html`<div class="new-session-page__environment-heading">
+              ${t("newSession.operatingSystem")}
+            </div>
+            <div
+              class="new-session-page__cloud-choice-list"
+              role="group"
+              aria-label=${t("newSession.operatingSystem")}
+            >
+              ${
+                fixedOs
+                  ? html`<span class="new-session-page__fixed-os" data-value=${`os:${fixedOs.id}`}
+                      >${fixedOs.label}</span
+                    >`
+                  : renderCloudOsMenuItems({
+                      operatingSystems,
+                      selectedId: params.selectedOs,
+                      suggestedId: params.suggested ? defaultCloudOs(params.profile) : undefined,
+                      submitting: params.submitting,
+                      onSelect: params.onSelectOs,
+                    })
+              }
+            </div>`
+        : nothing
+    }
     ${
       params.machines.length
         ? html`<div class="new-session-page__environment-heading">${t("newSession.machine")}</div>
@@ -409,7 +419,7 @@ function renderCloudConfiguration(params: {
                       machines: params.machines,
                       selectedId: params.selectedMachine,
                       suggestedId: params.suggested
-                        ? params.machines.find((machine) => machine.default)?.id
+                        ? defaultCloudMachine(params.profile, params.selectedOs)?.id
                         : undefined,
                       submitting: params.submitting,
                       onSelect: params.onSelectMachine,

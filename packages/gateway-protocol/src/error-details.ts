@@ -24,6 +24,7 @@ export type {
   ProjectCloneFailureCause,
   WizardNotFoundErrorDetails,
   SetupAdmissionBusyErrorDetails,
+  SessionWorkspaceRecoveryRequiredErrorDetails,
 } from "./gateway-error-details.js";
 export {
   CronJobNotFoundErrorDetailsSchema,
@@ -35,7 +36,10 @@ export {
   SkillProposalRevisionChangedErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
   SetupAdmissionBusyErrorDetailsSchema,
+  SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,
   missingScopeErrorShape,
 } from "./schema/error-codes.js";
+
+export { readSessionWorkspaceRecoveryRequiredError } from "./session-workspace-recovery-error-details.js";

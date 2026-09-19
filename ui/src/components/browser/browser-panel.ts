@@ -13,8 +13,9 @@ import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
-import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
+import { DockLayoutController } from "../dock-layout-controller.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
+import { dockPanelStyles } from "../dock-panel-styles.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   type PanelHostedTabsElement,

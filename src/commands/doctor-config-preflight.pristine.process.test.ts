@@ -1,22 +1,41 @@
 // Process regressions for pristine startup eligibility and deferred config observation.
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import {
+  createBuiltRuntime,
   createSourceRuntime,
   runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 describe("gateway startup-migration refusal", () => {
   it("skips state-only checkpoint work when config and state remain absent", async () => {
     const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
-    const runtimeRoot = createSourceRuntime(root);
+    const preparedPreflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight);
+    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
+    const runtimeRoot = compiled
+      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
+      : createSourceRuntime(root);
+    // Both observers share the prepared graph; package discovery still belongs to this fixture.
+    const runtimeUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+      resolveRuntimeWorkerUrl({
+        ...entry,
+        ...(compiled
+          ? { root: runtimeRoot }
+          : {
+              currentModuleUrl: pathToFileURL(
+                path.join(runtimeRoot, "src", "commands", "doctor-config-runtime.test-support.ts"),
+              ).href,
+            }),
+      }).href;
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const env: NodeJS.ProcessEnv = {
@@ -36,12 +55,8 @@ describe("gateway startup-migration refusal", () => {
     delete env.VITEST_POOL_ID;
     delete env.VITEST_WORKER_ID;
 
-    const preflightUrl = pathToFileURL(
-      path.join(runtimeRoot, "src", "commands", "doctor-config-preflight.ts"),
-    ).href;
-    const checkpointUrl = pathToFileURL(
-      path.join(runtimeRoot, "src", "infra", "startup-migration-checkpoint.ts"),
-    ).href;
+    const preflightUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.preflight);
+    const checkpointUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.checkpoint);
     const script = `
       const steps = [];
       const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});

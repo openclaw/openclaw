@@ -128,7 +128,7 @@ async function loadConfiguredManager(output: ReefCliOutput): Promise<{
   const keys = await loadOrCreateKeys(false);
   const runtime = getReefRuntime();
   const relayUrl = parseReefRelayUrl(config.relayUrl);
-  assertReefIdentityBinding(runtime, { handle: config.handle, relayUrl });
+  await assertReefIdentityBinding(runtime, { handle: config.handle, relayUrl });
   const transport = new ReefTransportClient(relayUrl, config.handle, keys);
   const pairing = createChannelPairingController({
     core: runtime,
@@ -202,7 +202,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // One plugin-state identity may bind to one handle and relay. This check
   // survives config deletion and prevents linking peers under reused keys.
   const runtime = getReefRuntime();
-  const identity = loadReefIdentityBinding(runtime);
+  const identity = await loadReefIdentityBinding(runtime);
   if (
     identity?.handle &&
     (identity.relayUrl !== relayUrl ||
@@ -239,7 +239,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // command output or automation logs. It is scoped to the relay and email it
   // was minted for, and explicit --session/--token always take precedence, so
   // stale state can never reach another account or origin.
-  const stored = loadReefSetupSession(runtime);
+  const stored = await loadReefSetupSession(runtime);
   const token = options.token?.trim();
   const storedSession =
     !options.session?.trim() && stored?.relayUrl === relayUrl && stored?.email === options.email
@@ -298,7 +298,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   ReefChannelConfigSchema.parse(provisional);
   // Reserve keys to this handle before consuming auth or mutating the relay.
   // Retries are idempotent; mismatched concurrent registrations fail closed.
-  const reservation = reserveReefIdentityBinding(runtime, { handle, relayUrl });
+  const reservation = await reserveReefIdentityBinding(runtime, { handle, relayUrl });
 
   let resolvedSession = session;
   if (!resolvedSession) {
@@ -306,20 +306,20 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
       resolvedSession = (await bootstrap.authComplete(token ?? "")).session;
     } catch (error) {
       if (isDefinitiveReefRegistrationFailure(error)) {
-        releaseReefIdentityReservation(runtime, reservation);
+        await releaseReefIdentityReservation(runtime, reservation);
       } else {
-        finalizeReefIdentityBinding(runtime, reservation);
+        await finalizeReefIdentityBinding(runtime, reservation);
       }
       throw error;
     }
     try {
-      saveReefSetupSession(runtime, {
+      await saveReefSetupSession(runtime, {
         session: resolvedSession,
         relayUrl,
         email: options.email,
       });
     } catch (error) {
-      releaseReefIdentityReservation(runtime, reservation);
+      await releaseReefIdentityReservation(runtime, reservation);
       throw error;
     }
   }
@@ -340,26 +340,26 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
         owned = true;
       } catch (verificationError) {
         if (isReefOwnershipRejection(verificationError)) {
-          releaseReefIdentityReservation(runtime, reservation);
+          await releaseReefIdentityReservation(runtime, reservation);
         } else {
           // A failed probe proves non-ownership only for the relay's explicit
           // unknown-handle result. Keep all other outcomes bound to these keys.
-          finalizeReefIdentityBinding(runtime, reservation);
+          await finalizeReefIdentityBinding(runtime, reservation);
         }
         throw verificationError;
       }
     }
     if (!owned) {
       if (isDefinitiveReefRegistrationFailure(error)) {
-        releaseReefIdentityReservation(runtime, reservation);
+        await releaseReefIdentityReservation(runtime, reservation);
       } else {
-        finalizeReefIdentityBinding(runtime, reservation);
+        await finalizeReefIdentityBinding(runtime, reservation);
       }
       throw error;
     }
     // Signed access proves these keys already own the handle. Persist that
     // invariant before the account-list request, which can fail ambiguously.
-    finalizeReefIdentityBinding(runtime, reservation);
+    await finalizeReefIdentityBinding(runtime, reservation);
     const { handles } = await transport.listOwnHandles(resolvedSession);
     const existingHandle = handles.find((entry) => entry.handle === handle);
     if (!existingHandle) {
@@ -373,7 +373,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     }
     effectivePolicy = existingHandle.request_policy;
   }
-  finalizeReefIdentityBinding(runtime, reservation);
+  await finalizeReefIdentityBinding(runtime, reservation);
 
   const candidate = ReefChannelConfigSchema.parse({
     ...provisional,
@@ -388,7 +388,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
       `Handle @${handle} is claimed, but writing the local config failed: ${error instanceof Error ? error.message : String(error)}. Fix the local issue and rerun the exact same command — the retry reuses the stored session and recognizes the existing claim.`,
     );
   }
-  clearReefSetupSession(runtime);
+  await clearReefSetupSession(runtime);
 
   const printed = fingerprint(keys.signing.publicKey, keys.encryption.publicKey);
   emit(output, { status: "registered", handle, relayUrl, fingerprint: printed }, [

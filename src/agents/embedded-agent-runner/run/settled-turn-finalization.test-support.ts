@@ -172,6 +172,7 @@ export function projectSettledProviderFailureAttempt(
     didSendViaMessagingTool: () => false,
     getAcceptedSessionSpawns: () => [],
     getAssistantTurnCount: () => 1,
+    hasSuccessfulModelResponse: () => false,
     getCompactionCount: () => 0,
     getHeartbeatToolResponse: () => undefined,
     getItemLifecycle: () => base.itemLifecycle,

@@ -117,8 +117,10 @@ const realGatewayFiles = [
   "chat-project-media.real-gateway",
   "chat-stop-finished-run.real-gateway",
   "chat-thinking-metadata.real-gateway",
+  "chat-tts-supplement.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
+  "command-palette-search.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
   "desktop-resize.real-gateway",
@@ -130,6 +132,7 @@ const realGatewayFiles = [
   "model-catalog-partial-refresh.real-gateway",
   "model-picker-search.real-gateway",
   "profile-page.real-gateway",
+  "provider-browser-login.real-gateway",
   "quota-reset-status.real-gateway",
   "session-progress-hovercard.real-gateway",
   "usage-sessions-owner-attribution",
@@ -172,7 +175,7 @@ function probeOwnership(
     skipRealGateway?: boolean;
     available?: boolean;
     initialize?: string[][];
-    failure?: "build" | "provide" | "admission";
+    failure?: "build" | "provide" | "admission" | "preflight";
   } = {},
 ): OwnershipProbe {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-ui-ownership-")));
@@ -186,6 +189,9 @@ function probeOwnership(
     import fs from "node:fs";
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
+    export const assertUiE2ePreflight = async () => {
+      if (${JSON.stringify(options.failure)} === "preflight") throw new Error("fixture preflight failed");
+    };
     export default function admission(project) {
       fs.appendFileSync(${JSON.stringify(admissionsFile)}, JSON.stringify(project.name) + "\\n");
       if (${JSON.stringify(options.failure)} === "admission") throw new Error("fixture admission failed");
@@ -208,6 +214,7 @@ function probeOwnership(
       return { ...config, resolve: { ...config.resolve, alias: [
         { find: /^.*\\/control-ui-e2e\\.ts$/, replacement: ${JSON.stringify(resourceFile)} },
         { find: /^.*\\/vitest\\.ui-e2e-prebuilt\\.global-setup\\.ts$/, replacement: ${JSON.stringify(resourceFile)} },
+        { find: /^.*vitest[.]ui-e2e-preflight[.]ts$/, replacement: ${JSON.stringify(resourceFile)} },
         ...(config.resolve?.alias ?? []),
       ] }, test: { ...config.test,
         ...(config.test?.projects ? { projects: config.test.projects.map(instrument) } : {}),
@@ -314,6 +321,13 @@ function probeOwnership(
 }
 
 describe("Control UI E2E resource ownership", () => {
+  it("refuses a selected project before acquiring fixtures when environment preflight fails", () => {
+    const result = probeOwnership({ filters: [bundledFile], failure: "preflight" });
+    expect(result.setupError).toBe("fixture preflight failed");
+    expect(result.leases).toEqual([]);
+    expect(result.steps).toEqual([{ builds: 0, closes: 0 }]);
+  });
+
   it.each([
     { filters: [standaloneFile], files: [standaloneFile], leases: 0 },
     ...["control-ui-retained-assets", "service-worker-update"].map((name) => {
@@ -334,7 +348,14 @@ describe("Control UI E2E resource ownership", () => {
       leases: 1,
     },
     { filters: [standaloneFile, bundledFile], files: [standaloneFile, bundledFile], leases: 1 },
-    { filters: ["ui/src/pages/tasks"], files: ["ui/src/pages/tasks/tasks.e2e.test.ts"], leases: 1 },
+    {
+      filters: ["ui/src/pages/tasks"],
+      files: [
+        "ui/src/pages/tasks/tasks-transcript.e2e.test.ts",
+        "ui/src/pages/tasks/tasks.e2e.test.ts",
+      ],
+      leases: 1,
+    },
     {
       include: [standaloneFile, bundledFile],
       files: [standaloneFile, bundledFile],
@@ -532,6 +553,20 @@ describe("Control UI E2E resource ownership", () => {
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
         {
+          file: "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -547,6 +582,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: mcpFile,
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
@@ -725,7 +767,8 @@ describe("Control UI E2E Vitest sharding", () => {
     ];
     expect(files.length).toBeGreaterThan(0);
     useTimings(committed);
-    const original = await partition(files);
+    const original = await partition(files, 12);
+    expect(original).toHaveLength(12);
     // Validate via the production loader before adding a stale but valid weight.
     const { readUiE2eFileTimings } = await import("../scripts/lib/ci-test-timings.mts");
     const timings = readUiE2eFileTimings();
@@ -739,7 +782,7 @@ describe("Control UI E2E Vitest sharding", () => {
         timings.perFileOverheadSeconds,
       ),
     );
-    expect(await partition(files.toReversed())).toEqual(original);
+    expect(await partition(files.toReversed(), 12)).toEqual(original);
     expect(original.flat().toSorted()).toEqual(files.map((file) => file.moduleId).toSorted());
     expect(new Set(original.flat()).size).toBe(files.length);
   });

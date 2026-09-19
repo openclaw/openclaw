@@ -434,10 +434,11 @@ describe("Gateway chat RPCs", () => {
     const provider = expectDefined(mock, "trace mock provider");
     const sessionKey = `agent:qa:gateway-inline-trace-${randomUUID()}`;
     const finals = new Map<string, string[]>();
-    let settledTurns = 0;
+    const settledRunIds = new Set<string>();
     const settledSchema = z.object({
       sessionKey: z.literal(sessionKey),
-      reason: z.literal("chat.run.settled"),
+      phase: z.literal("end"),
+      runId: z.string(),
     });
     const finalSchema = z.object({
       sessionKey: z.literal(sessionKey),
@@ -457,11 +458,11 @@ describe("Gateway chat RPCs", () => {
             replies.push(JSON.stringify(parsed.data.message));
             finals.set(parsed.data.runId, replies);
           }
-        } else if (
-          event.event === "sessions.changed" &&
-          settledSchema.safeParse(event.payload).success
-        ) {
-          settledTurns += 1;
+        } else if (event.event === "sessions.changed") {
+          const parsed = settledSchema.safeParse(event.payload);
+          if (parsed.success) {
+            settledRunIds.add(parsed.data.runId);
+          }
         }
       },
     });
@@ -507,9 +508,9 @@ describe("Gateway chat RPCs", () => {
         await expect
           .poll(() => finals.get(runId)?.some((text) => text.includes(reply)), { timeout: 10_000 })
           .toBe(true);
-        // This notification follows dispatch delivery and admission cleanup; no trailing
+        // The terminal session projection follows persistence and dispatch cleanup; no trailing
         // diagnostic payload can arrive after the negative trace assertions below.
-        await expect.poll(() => settledTurns, { timeout: 10_000 }).toBe(index + 1);
+        await expect.poll(() => settledRunIds.has(runId), { timeout: 10_000 }).toBe(true);
         const text = expectDefined(finals.get(runId), "settled chat finals").join("\n");
         expect(text).toContain(reply);
         expect.soft(text.includes("Model Input (User Role)"), `trace turn ${index}`).toBe(turn.raw);
@@ -530,7 +531,7 @@ describe("Gateway chat RPCs", () => {
           `[inline-trace-proof] ${JSON.stringify({
             turn: index,
             runId,
-            settled: settledTurns === index + 1,
+            settled: settledRunIds.has(runId),
             modelReplyDelivered: text.includes(reply),
             rawExpected: turn.raw,
             rawInput: text.includes("Model Input (User Role)"),

@@ -139,10 +139,6 @@ function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   return normalized ? normalized.startsWith("claude") : false;
 }
 
-export function isFoundryClaudeMythosPreview(value?: string | null): boolean {
-  return normalizeFoundryModelName(value) === "claude-mythos-preview";
-}
-
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {

@@ -5,6 +5,11 @@ import path from "node:path";
 import pMap from "p-map";
 import { waitForever } from "../src/cli/wait.ts";
 import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
+import {
+  DATABASE_WORKER_WATCH_OWNER_ENV_KEY,
+  DATABASE_WORKER_WATCH_TESTS_ENV_KEY,
+} from "../test/vitest/vitest.database-worker-core-paths.mjs";
+import { databaseWorkerExtensionTestFiles } from "../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
@@ -28,6 +33,7 @@ import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
 
+const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const PARALLEL_ENV_KEY = "OPENCLAW_EXTENSION_BATCH_PARALLEL";
 const ALLOW_NO_TESTS_FLAG = "--allow-no-tests";
@@ -165,7 +171,11 @@ function resolveGroupTargets(group: ExtensionTestPlanGroup, exactExcludePaths: S
     return group.roots;
   }
 
-  return testFiles.filter((file) => !exactExcludePaths.has(file));
+  return testFiles.filter(
+    (file) =>
+      !exactExcludePaths.has(file) &&
+      (group.config === DATABASE_WORKER_CONFIG || !databaseWorkerExtensionTestFiles.includes(file)),
+  );
 }
 
 function preparePlanGroup(
@@ -187,13 +197,62 @@ function preparePlanGroup(
         : createExtensionTestProcessTargetChunks(group.config, group.roots, vitestArgs);
   return {
     group,
-    invocations: targetChunks.map((chunk) => ({
+    invocations: targetChunks.map<VitestBatchRunParams & { env: NodeJS.ProcessEnv }>((chunk) => ({
       args: relativizeExtensionVitestArgs(vitestArgs),
       config: group.config,
       env: createGroupEnv({ baseEnv: env, group, groupIndex, useDedicatedCache }),
       targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
     })),
   };
+}
+
+function combineSinglePluginGroups(
+  preparedGroups: ReturnType<typeof preparePlanGroup>[],
+  vitestArgs: string[],
+  env: NodeJS.ProcessEnv,
+  homeMode: VitestBatchRunParams["homeMode"],
+): ReturnType<typeof preparePlanGroup>[] {
+  const worker = preparedGroups.find(({ group }) => group.config === DATABASE_WORKER_CONFIG);
+  const owner = preparedGroups.find(({ group }) => group.config !== DATABASE_WORKER_CONFIG);
+  if (
+    preparedGroups.length !== 2 ||
+    !worker ||
+    !owner ||
+    shouldSplitExtensionTestProcesses(DATABASE_WORKER_CONFIG, vitestArgs)
+  ) {
+    return preparedGroups;
+  }
+  const targets = [
+    ...new Set(
+      preparedGroups.flatMap(({ invocations }) =>
+        invocations.flatMap((invocation) => invocation.targets),
+      ),
+    ),
+  ];
+  const config = "test/vitest/vitest.database-worker-watch.config.ts";
+  return [
+    {
+      group: { ...owner.group, config },
+      invocations:
+        targets.length === 0
+          ? []
+          : [
+              {
+                config,
+                args: relativizeExtensionVitestArgs(vitestArgs),
+                targets: targets.filter(
+                  (target) => !targets.some((root) => target.startsWith(`${root}/`)),
+                ),
+                env: {
+                  ...env,
+                  [DATABASE_WORKER_WATCH_OWNER_ENV_KEY]: owner.group.config,
+                  [DATABASE_WORKER_WATCH_TESTS_ENV_KEY]: JSON.stringify(worker.group.roots),
+                },
+                homeMode,
+              },
+            ],
+    },
+  ];
 }
 
 async function runPlanGroup(
@@ -252,13 +311,13 @@ export async function runExtensionBatchPlan(
     console.log(`[test-extension-batch] Running up to ${parallelism} config groups in parallel`);
   }
 
-  const preparedGroups = orderedGroups.map((group, index) =>
+  const leafGroups = orderedGroups.map((group, index) =>
     preparePlanGroup(group, index, env, vitestArgs, exactExcludePaths, useDedicatedCache),
   );
-  const invocations = preparedGroups.flatMap((group) => group.invocations);
+  const leafInvocations = leafGroups.flatMap((group) => group.invocations);
   const cwd = path.resolve(import.meta.dirname, "..");
   const homeMode = combineTestHomeSelections(
-    invocations.map(({ config, args, targets, env: invocationEnv }) =>
+    leafInvocations.map(({ config, args, targets, env: invocationEnv }) =>
       resolveVitestHomeSelection(["--config", config, ...args, ...targets], {
         cwd,
         env: invocationEnv,
@@ -267,6 +326,11 @@ export async function runExtensionBatchPlan(
   );
   // Admit the whole selection before report or runtime preparation can import code.
   assertTestHomeSelection(env, homeMode);
+  const preparedGroups =
+    batchPlan.extensionCount === 1
+      ? combineSinglePluginGroups(leafGroups, vitestArgs, env, homeMode)
+      : leafGroups;
+  const invocations = preparedGroups.flatMap((group) => group.invocations);
   const reports = await createVitestReportOwner(
     invocations.map((invocation) => ({
       config: invocation.config,
@@ -313,10 +377,8 @@ export async function runExtensionBatchPlan(
     // No reader may start while a shared generation is being replaced. Select
     // from the exact emitted chunks, including existing exact-exclude expansion.
     const preparationCode = await prepareVitestRuntime(
-      preparedGroups.flatMap((group) =>
-        group.invocations.flatMap(({ config, args, targets }) =>
-          resolveVitestRuntimeCliSelections(config, [...args, ...targets], env),
-        ),
+      leafInvocations.flatMap(({ config, args, targets, env: invocationEnv }) =>
+        resolveVitestRuntimeCliSelections(config, [...args, ...targets], invocationEnv),
       ),
       env,
     );
@@ -329,7 +391,7 @@ export async function runExtensionBatchPlan(
       await pMap(
         preparedGroups,
         async (group) => {
-          if (exitCode !== 0 || termination.signal) {
+          if ((exitCode !== 0 && batchPlan.extensionCount > 1) || termination.signal) {
             return;
           }
           const running = runPlanGroup(

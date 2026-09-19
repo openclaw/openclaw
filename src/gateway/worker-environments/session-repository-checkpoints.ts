@@ -16,11 +16,13 @@ import {
 } from "../github-repository-publication-snapshot.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
+  captureWorkspaceSnapshot,
+  parseWorkspaceManifestPair,
+} from "./workspace-manifest-worker.js";
+import {
   MAX_RECONCILIATION_TOTAL_BYTES,
-  parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
-import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 import {
   requireWorkspaceResultGit,
   updateWorkspaceResultRefs,
@@ -234,8 +236,8 @@ async function stagePublication(params: {
       baseCommit: null,
       entries: [],
     });
-    const current = await readActualWorkspaceManifest({ root: stagingRoot, baseCommit: null });
-    const currentManifestRaw = serializeWorkerWorkspaceManifest(current.manifest);
+    const current = await captureWorkspaceSnapshot({ root: stagingRoot, baseCommit: null });
+    const currentManifestRaw = current.rawManifest;
     return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       root: params.root,
       stagingRoot,
@@ -300,11 +302,12 @@ export async function stageSessionRepositoryCheckpoint(
   const companionCandidate = preparedWorkerWorkspaceResultRef(
     workerWorkspaceResultRef(randomUUID()),
   );
-  const base = parseWorkerWorkspaceManifest(params.baseManifestRaw, params.baseManifestRef);
-  const current = parseWorkerWorkspaceManifest(
-    params.currentManifestRaw,
-    params.currentManifestRef,
-  );
+  const { base, current } = await parseWorkspaceManifestPair({
+    baseRaw: params.baseManifestRaw,
+    baseRef: params.baseManifestRef,
+    currentRaw: params.currentManifestRaw,
+    currentRef: params.currentManifestRef,
+  });
   const baseCommit = assertBase(workspace, {
     base,
     current,

@@ -7,21 +7,21 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
+  TranscriptArchiveReadPlan,
+  TranscriptArchiveReadResult,
   TranscriptArchiveWorkerPlan,
   TranscriptArchiveWorkerResult,
 } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
-import {
-  readSessionStateDeleteSnapshot,
-  sqliteSessionStateDeleteSnapshotsEqual,
-} from "./session-accessor.sqlite-delete-snapshot.js";
+import { sqliteSessionStateDeleteSnapshotsEqual } from "./session-accessor.sqlite-delete-snapshot.js";
+import { withSqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import {
   runSqliteMutationWorkerRequest,
   type SqliteMutationWorkerValidationOwner,
@@ -47,8 +47,8 @@ export function createSqliteTranscriptArchiveWorker(workerData: object): Worker 
   });
 }
 
-type TranscriptArchiveWorkerOperation<Result> =
-  | { expectedMessageType: "done" | "published"; workerData: object }
+type TranscriptArchiveWorkerOperation<Result> = { assertCurrent?: () => void } & (
+  | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
   | {
       expectedMessageType: "reclaimed";
       workerData: SessionColdWorkerData;
@@ -56,11 +56,21 @@ type TranscriptArchiveWorkerOperation<Result> =
       onCommitRequest: () => void;
       withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
       validationOwner?: SqliteMutationWorkerValidationOwner;
-    };
+    }
+);
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
-  params: TranscriptArchiveWorkerOperation<Result>,
+  input: TranscriptArchiveWorkerOperation<Result>,
 ): Promise<Result[]> {
+  const params =
+    input.expectedMessageType === "reclaimed"
+      ? {
+          ...input,
+          stateContext: captureOpenClawStateWorkerContext({
+            env: input.workerData.plan.databaseOptions.env,
+          }),
+        }
+      : input;
   let worker: Worker;
   try {
     worker = createSqliteTranscriptArchiveWorker(params.workerData);
@@ -76,17 +86,28 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
       params.diagnostics.workerThreadId = workerThreadId;
     }
     // Cold mutations retain their one-shot cleanup/exit lifetime, never a sweep connection.
-    const operation = runSqliteMutationWorkerRequest<Result>({
-      worker,
-      operationId: 0,
-      completion: "exit",
-      onCommitRequest: params.onCommitRequest,
-      withWriteAdmission: params.withWriteAdmission,
-      validationOwner: params.validationOwner,
-      onExit: (code) => {
-        exitCode = code;
-      },
-    }).then((result) => [result]);
+    const operation = withSqliteMutationWorkerCoordination(
+      params.stateContext,
+      { kind: "dedicated", channel: worker },
+      0,
+      (coordination) =>
+        runSqliteMutationWorkerRequest<Result>({
+          transport: { kind: "dedicated", channel: worker },
+          operationId: 0,
+          completion: "exit",
+          onCommitRequest: params.onCommitRequest,
+          withWriteAdmission: params.withWriteAdmission,
+          validationOwner: params.validationOwner,
+          onExit: (code) => {
+            exitCode = code;
+          },
+          dispatch: () =>
+            worker.postMessage(
+              { type: "mutate", coordination },
+              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
+            ),
+        }),
+    ).then((result) => [result]);
     const observe = (outcome: "resolved" | "rejected") => {
       const elapsedMs = Math.round(performance.now() - startedAt);
       if (elapsedMs >= 1_000) {
@@ -161,9 +182,10 @@ export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(
   params: TranscriptArchiveWorkerOperation<Result>,
 ): Promise<Result[]> {
-  return runExclusiveSqliteTranscriptArchiveWorker(() =>
-    spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
-  );
+  return runExclusiveSqliteTranscriptArchiveWorker(() => {
+    params.assertCurrent?.();
+    return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
+  });
 }
 
 function runSqliteTranscriptArchiveWorker(
@@ -210,21 +232,22 @@ export function runSqliteTranscriptArchivePublishWorker(
   });
 }
 
-function validateEmptyTranscriptArchivePlan(plan: TranscriptArchiveWorkerPlan): void {
-  const opened = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
-    { agentId: plan.agentId, path: plan.databasePath },
+export async function runSqliteTranscriptArchiveReadWorker(
+  plans: readonly TranscriptArchiveReadPlan[],
+): Promise<TranscriptArchiveReadResult[]> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "read-final", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
   );
-  if (!opened.found) {
-    throw new Error(
-      `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
-    );
+  if (!scoped) {
+    throw new Error("SQLite archive reads require their captured database scope");
   }
-  if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
-    throw new Error(
-      `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-    );
+  const result = await scoped;
+  if (result.type !== "final-read") {
+    throw new Error("SQLite archive Worker returned another operation's result");
   }
+  return result.results;
 }
 
 // Reads and encodes one consistent generation outside SQLite write transactions
@@ -234,21 +257,9 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const workerResults: TranscriptArchiveWorkerResult[] = [];
-  const workerPlans: TranscriptArchiveWorkerPlan[] = [];
-  for (const archivePlan of deduped.filter((plan) => plan.archiveTranscript)) {
-    if (archivePlan.snapshot.lastSeq === null) {
-      // Empty transcripts still need a fresh snapshot fence, but have no bytes
-      // to encode off-thread and should not pay Worker startup latency.
-      validateEmptyTranscriptArchivePlan(archivePlan);
-      workerResults.push({ archive: null, sessionId: archivePlan.sessionId });
-      continue;
-    }
-    workerPlans.push(archivePlan);
-  }
-  if (workerPlans.length > 0) {
-    workerResults.push(...(await runSqliteTranscriptArchiveWorker(workerPlans)));
-  }
+  const workerPlans = deduped.filter((plan) => plan.archiveTranscript);
+  const workerResults =
+    workerPlans.length > 0 ? await runSqliteTranscriptArchiveWorker(workerPlans) : [];
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {

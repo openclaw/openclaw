@@ -33,15 +33,29 @@ function emptyAttempt(assistant = emptyAssistant()) {
 }
 
 describe("incomplete-turn recovery policy", () => {
-  it.each(["required", "optional"] as const)(
-    "keeps async-owned work out of completed silence (reply=%s)",
-    (terminalReplyExpectation) => {
+  it.each(
+    (["required", "optional"] as const).flatMap((terminalReplyExpectation) =>
+      ["async tool", "active lifecycle item", "unfinished lifecycle item"].map((owner) => ({
+        terminalReplyExpectation,
+        owner,
+      })),
+    ),
+  )(
+    "keeps $owner out of completed silence (reply=$terminalReplyExpectation)",
+    ({ terminalReplyExpectation, owner }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: ["NO_REPLY"],
         lastAssistant: assistant,
         currentAttemptAssistant: assistant,
-        toolMetas: [{ toolName: "image_generate", asyncStarted: true, replaySafe: false }],
+        toolMetas: [
+          { toolName: "image_generate", asyncStarted: owner === "async tool", replaySafe: false },
+        ],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: owner === "async tool" ? 1 : 0,
+          activeCount: owner === "active lifecycle item" ? 1 : 0,
+        },
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       });
@@ -62,49 +76,94 @@ describe("incomplete-turn recovery policy", () => {
   );
 
   it.each([
-    {
-      name: "a completed reaction",
-      aborted: false,
-      timedOut: false,
-      yielded: false,
-      error: false,
-      silent: true,
-    },
-    {
-      name: "a failed reaction",
-      aborted: false,
-      timedOut: false,
-      yielded: false,
-      error: true,
-      silent: false,
-    },
-    {
-      name: "an aborted turn",
-      aborted: true,
-      timedOut: false,
-      yielded: false,
-      error: false,
-      silent: false,
-    },
-    {
-      name: "a timed-out turn",
-      aborted: false,
-      timedOut: true,
-      yielded: false,
-      error: false,
-      silent: false,
-    },
-    {
-      name: "pending work",
-      aborted: false,
-      timedOut: false,
-      yielded: true,
-      error: false,
-      silent: false,
-    },
-  ])(
-    "classifies explicit silence after $name without replaying tools",
-    ({ aborted, timedOut, yielded, error, silent }) => {
+    { name: "empty terminal stop", text: "", stopReason: "stop" },
+    { name: "visible terminal stop", text: "The final answer.", stopReason: "stop" },
+    { name: "failed terminal sentinel", text: "NO_REPLY", stopReason: "error" },
+    { name: "aborted terminal sentinel", text: "NO_REPLY", stopReason: "aborted" },
+  ] as const)("does not revive earlier silence after $name", ({ text, stopReason }) => {
+    const assistant = emptyAssistant({ content: [{ type: "text", text }], stopReason });
+    const attempt = emptyAttempt(assistant);
+    attempt.assistantTexts = ["NO_REPLY"];
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        onlyExplicitSilentReply: true,
+        terminalReplyExpectation: "required",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+    if (stopReason === "error") {
+      expect(
+        resolveIncompleteTurnPayloadText({
+          payloadCount: 0,
+          aborted: false,
+          externalAbort: false,
+          timedOut: false,
+          attempt,
+        }),
+      ).toContain("couldn't generate a response");
+    }
+  });
+
+  it.each(
+    [
+      {
+        name: "a completed reaction",
+        aborted: false,
+        timedOut: false,
+        yielded: false,
+        error: false,
+        silent: true,
+      },
+      {
+        name: "a failed reaction",
+        aborted: false,
+        timedOut: false,
+        yielded: false,
+        error: true,
+        silent: false,
+      },
+      {
+        name: "an aborted turn",
+        aborted: true,
+        timedOut: false,
+        yielded: false,
+        error: false,
+        silent: false,
+      },
+      {
+        name: "a timed-out turn",
+        aborted: false,
+        timedOut: true,
+        yielded: false,
+        error: false,
+        silent: false,
+      },
+      {
+        name: "pending work",
+        aborted: false,
+        timedOut: false,
+        yielded: true,
+        error: false,
+        silent: false,
+      },
+    ].flatMap(({ name, aborted, timedOut, yielded, error, silent }) =>
+      [true, false, undefined].map((allowEmptyAssistantReplyAsSilent) => ({
+        name,
+        aborted,
+        timedOut,
+        yielded,
+        error,
+        silent,
+        allowEmptyAssistantReplyAsSilent,
+      })),
+    ),
+  )(
+    "classifies explicit silence after $name (allow empty: $allowEmptyAssistantReplyAsSilent)",
+    ({ aborted, timedOut, yielded, error, silent, allowEmptyAssistantReplyAsSilent }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: ["NO_REPLY"],
@@ -120,7 +179,7 @@ describe("incomplete-turn recovery policy", () => {
       // conflate permission to stay silent with permission to replay that effect.
       expect(
         shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent: true,
+          allowEmptyAssistantReplyAsSilent,
           terminalReplyExpectation: "required",
           onlyExplicitSilentReply: true,
           payloadCount: 0,

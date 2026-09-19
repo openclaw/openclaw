@@ -2,11 +2,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuth } from "../../auth-presence.js";
+import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
-import { openMatrixCredentialsStore } from "./credentials-read.js";
+import { loadMatrixCredentialsAsync, openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   clearMatrixCredentials,
   credentialsMatchConfig,
@@ -37,8 +41,10 @@ describe("matrix credentials storage", () => {
     installMatrixTestRuntime({ stateDir });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -61,6 +67,9 @@ describe("matrix credentials storage", () => {
       accessToken: "secret-token",
       deviceId: "DEVICE123",
     });
+    await expect(loadMatrixCredentialsAsync({}, "ops")).resolves.toEqual(
+      loadMatrixCredentials({}, "ops"),
+    );
     expect(loadMatrixCredentials({}, "default")).toBeNull();
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "credentials", "matrix"))).toBe(false);
@@ -145,37 +154,62 @@ describe("matrix credentials storage", () => {
     });
   });
 
-  it("does not let delayed background writes undo credential revocation", async () => {
-    await saveMatrixCredentials(
-      {
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accessToken: "secret-token",
-      },
-      {},
-      "default",
-    );
-    clearMatrixCredentials({}, "default");
-
-    await expect(
-      saveBackfilledMatrixDeviceId(
+  it.each(["before", "during comparison"])(
+    "does not let delayed background writes undo credential revocation %s",
+    async (timing) => {
+      await saveMatrixCredentials(
         {
           homeserver: "https://matrix.example.org",
           userId: "@bot:example.org",
           accessToken: "secret-token",
-          deviceId: "STALE",
         },
         {},
         "default",
-      ),
-    ).resolves.toBe("skipped");
-    await touchMatrixCredentials({}, "default");
+      );
+      if (timing === "before") {
+        clearMatrixCredentials({}, "default");
+      } else {
+        const runtime = getMatrixRuntime();
+        const openStore = runtime.state.openKeyedStore.bind(runtime.state);
+        let revoked = false;
+        vi.spyOn(runtime.state, "openKeyedStore").mockImplementation(
+          <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const store = openStore<T>(options);
+            if (store.compareAndApply) {
+              const compare = store.compareAndApply.bind(store);
+              store.compareAndApply = async (...args) => {
+                if (!revoked) {
+                  revoked = true;
+                  clearMatrixCredentials({}, "default");
+                }
+                return await compare(...args);
+              };
+            }
+            return store;
+          },
+        );
+      }
 
-    expect(loadMatrixCredentials({}, "default")).toBeNull();
-    expect(openMatrixCredentialsStore({}).lookup("account:default")).toMatchObject({
-      kind: "revoked",
-    });
-  });
+      await expect(
+        saveBackfilledMatrixDeviceId(
+          {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "secret-token",
+            deviceId: "STALE",
+          },
+          {},
+          "default",
+        ),
+      ).resolves.toBe("skipped");
+      await touchMatrixCredentials({}, "default");
+
+      expect(loadMatrixCredentials({}, "default")).toBeNull();
+      expect(openMatrixCredentialsStore({}).lookup("account:default")).toMatchObject({
+        kind: "revoked",
+      });
+    },
+  );
 
   it("does not read or remove legacy credential files at runtime", () => {
     const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
@@ -229,6 +263,47 @@ describe("matrix credentials storage", () => {
     );
 
     expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
+  });
+
+  it("keeps persisted-auth presence scoped to valid live records and the supplied environment", () => {
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const store = createPluginStateSyncKeyedStore<unknown>("matrix", {
+      namespace: "credentials",
+      maxEntries: 256,
+      overflowPolicy: "reject-new",
+      env,
+    });
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    store.register("account:default", {
+      accountId: "default",
+      homeserver: "https://matrix.example.org",
+    });
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    store.register("account:default", {
+      kind: "revoked",
+      accountId: "default",
+      revokedAt: "2026-01-01",
+    });
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    store.register(
+      "account:default",
+      {
+        accountId: "default",
+        homeserver: "https://matrix.example.org",
+        userId: "@fixture:example.org",
+        accessToken: "synthetic-fixture-token",
+        createdAt: "2026-01-01",
+      },
+      { ttlMs: 1 },
+    );
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(true);
+    expect(
+      hasAnyMatrixAuth({ cfg: {}, env: { OPENCLAW_STATE_DIR: path.join(stateDir, "other") } }),
+    ).toBe(false);
+    clock.mockReturnValue(now + 2);
+    expect(hasAnyMatrixAuth({ cfg: {}, env })).toBe(false);
   });
 
   it("requires a token match when userId is absent", () => {

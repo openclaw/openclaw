@@ -21,14 +21,12 @@ export {
 } from "../../gateway/server-methods/chat.js";
 export {
   capChatHistoryAroundMessage,
-  readChatHistoryPage,
   resolveChatHistoryNextOffset,
-  shouldReplayOldestChatHistoryRecord,
-} from "../../gateway/server-methods/chat-history-pages.js";
+} from "../../gateway/server-methods/chat-history-page-kernel.js";
+export { readChatHistoryPage } from "../../gateway/server-methods/chat-history-pages.js";
 export { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
+export { listProjectedSessions } from "../../gateway/session-utils-list.js";
 export {
-  listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly as loadSessionEntry,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";

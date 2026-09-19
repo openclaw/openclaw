@@ -2,9 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -36,13 +38,17 @@ import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
 import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
-import { createCronServiceState, type CronAddResult, type CronEvent } from "./state.js";
+import type { CronAddResult, CronEvent } from "./state.js";
 import * as taskRuns from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
+
+function createCronServiceState(params: Parameters<typeof createCronRegressionState>[0]) {
+  return createCronRegressionState({ log: logger, ...params });
+}
 
 function requireDeclarativeAddResult(result: CronAddResult) {
   if (!("job" in result)) {
@@ -492,22 +498,22 @@ async function withStateDirForStorePath<T>(
   runWithStateDir: () => Promise<T>,
 ): Promise<T> {
   const stateRoot = path.dirname(path.dirname(storePath));
+  await closeOpenClawStateDatabaseAsync();
   resetTaskRegistryForTests();
-  try {
-    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, runWithStateDir);
-  } finally {
-    resetTaskRegistryForTests();
-  }
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+    try {
+      return await runWithStateDir();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      resetTaskRegistryForTests();
+    }
+  });
 }
 
 function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
   return createCronServiceState({
     storePath: params.storePath,
-    cronEnabled: true,
-    log: logger,
     nowMs: () => params.now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => {
       throw new Error("cron: job execution timed out");
     }),
@@ -523,11 +529,7 @@ function createOkIsolatedCronState(params: {
 }) {
   return createCronServiceState({
     storePath: params.storePath,
-    cronEnabled: true,
-    log: logger,
     nowMs: () => params.now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     ...(params.triggersEnabled ? { cronConfig: { triggers: { enabled: true } } } : {}),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
@@ -849,12 +851,8 @@ describe("cron service ops seam coverage", () => {
     insertCronJobRow(storePath, legacyJob);
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { webhook: "https://example.invalid/cron" } as never,
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -895,8 +893,6 @@ describe("cron service ops seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -964,8 +960,6 @@ describe("cron service ops seam coverage", () => {
     });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -1012,11 +1006,7 @@ describe("cron service ops seam coverage", () => {
     completedJob.state.nextRunAtMs = now + 60_000;
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
@@ -1108,11 +1098,7 @@ describe("cron service ops seam coverage", () => {
         const events: CronEvent[] = [];
         const state = createCronServiceState({
           storePath,
-          cronEnabled: true,
-          log: logger,
           nowMs: () => now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           onEvent: (event) => events.push(structuredClone(event)),
         });
@@ -1265,11 +1251,7 @@ describe("cron service ops seam coverage", () => {
       runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       const taskRunId = taskRuns.tryCreateCronTaskRunHandle({
@@ -1340,11 +1322,7 @@ describe("cron service ops seam coverage", () => {
       const events: CronEvent[] = [];
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         onEvent: (event) => events.push(structuredClone(event)),
       });
@@ -1410,11 +1388,7 @@ describe("cron service ops seam coverage", () => {
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       const taskRunId = taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt })?.runId;
@@ -1484,11 +1458,7 @@ describe("cron service ops seam coverage", () => {
         const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
         const state = createCronServiceState({
           storePath,
-          cronEnabled: true,
-          log: logger,
           nowMs: () => now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
         const taskRunId = taskRuns.tryCreateCronTaskRunHandle({
@@ -1552,12 +1522,8 @@ describe("cron service ops seam coverage", () => {
       const sendCronFailureAlert = vi.fn(async () => undefined);
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
         cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         sendCronFailureAlert,
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
@@ -1615,11 +1581,7 @@ describe("cron service ops seam coverage", () => {
     });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -1689,12 +1651,8 @@ describe("cron service ops seam coverage", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       runScriptJob: vi.fn(async () => ({
         status: "ok" as const,
@@ -1746,11 +1704,7 @@ describe("cron service ops seam coverage", () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
           error: "provider failed",
@@ -1789,11 +1743,7 @@ describe("cron service ops seam coverage", () => {
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
           error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
@@ -1976,11 +1926,7 @@ describe("cron service ops seam coverage", () => {
       let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(
           () =>
             new Promise<{ status: "ok"; summary: string }>((resolve) => {
@@ -2359,7 +2305,7 @@ describe("cron service ops persist rollback", () => {
     const previousRevision = cronStoreModule.getCronJobsStoreRevision(storePath);
     const originalTimer = state.timer;
     onEvent.mockClear();
-    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision");
     persist.mockClear();
 
     await expect(remove(state, "missing-job")).resolves.toEqual({ ok: true, removed: false });
@@ -2386,7 +2332,9 @@ describe("cron service ops persist rollback", () => {
     const now = Date.parse("2026-06-09T00:00:00.000Z");
     const state = createOkIsolatedCronState({ storePath, now });
 
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
+      new Error("disk full"),
+    );
 
     await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
 
@@ -2411,7 +2359,9 @@ describe("cron service ops persist rollback", () => {
       clearTimeout(state.timer);
     }
 
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
+      new Error("disk full"),
+    );
 
     await expect(update(state, job.id, { name: "renamed cleanup" })).rejects.toThrow("disk full");
 
@@ -2452,7 +2402,9 @@ describe("cron service ops persist rollback", () => {
       clearTimeout(state.timer);
     }
 
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
+      new Error("disk full"),
+    );
 
     await expect(remove(state, job.id)).rejects.toThrow("disk full");
 
@@ -2472,7 +2424,9 @@ describe("cron service ops persist rollback", () => {
     }
     job.state.startupCatchupAtMs = now + 5_000;
 
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
+      new Error("disk full"),
+    );
 
     await expect(remove(state, job.id)).rejects.toThrow("disk full");
 
@@ -2485,7 +2439,9 @@ describe("cron service ops persist rollback", () => {
     const now = Date.parse("2026-06-09T00:00:00.000Z");
     const state = createOkIsolatedCronState({ storePath, now });
 
-    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
+      new Error("disk full"),
+    );
     await expect(add(state, makeCreateInput("daily cleanup"))).rejects.toThrow("disk full");
 
     const job = await add(state, makeCreateInput("daily cleanup"));
@@ -2537,14 +2493,15 @@ describe("cron service ops persist rollback", () => {
         return computeNextRunAtMs(schedule, nowMs);
       });
 
-      const saveCronJobsStore = cronStoreModule.saveCronJobsStore;
-      vi.spyOn(cronStoreModule, "saveCronJobsStore")
+      const saveCronJobsStoreWithRevision = cronStoreModule.saveCronJobsStoreWithRevision;
+      vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision")
         .mockRejectedValueOnce(new Error("disk full"))
         .mockImplementationOnce(async (...args) => {
           expect(enqueueSystemEvent).not.toHaveBeenCalled();
           expect(requestHeartbeat).not.toHaveBeenCalled();
-          await saveCronJobsStore(...args);
+          const committed = await saveCronJobsStoreWithRevision(...args);
           order.push("persist");
+          return committed;
         });
       const trigger = () => add(state, makeCreateInput(`trigger ${triggerPath}`));
       await expect(trigger()).rejects.toThrow("disk full");

@@ -15,6 +15,7 @@ import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
@@ -75,7 +76,9 @@ type PersistedLifecycleSessionShape = Pick<
   | "lifecycleRunId"
 >;
 
-type GatewaySessionLifecycleSnapshot = Partial<Pick<SessionEntry, keyof LifecycleSessionShape>>;
+type GatewaySessionLifecycleSnapshot = Partial<
+  Omit<Pick<SessionEntry, keyof LifecycleSessionShape>, "status"> & { status: SessionRunStatus }
+>;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -163,7 +166,7 @@ function resolveRuntimeMs(params: {
 }
 
 export function deriveGatewaySessionLifecycleSnapshot(params: {
-  session?: GatewaySessionLifecycleSnapshot | null;
+  session?: Partial<Pick<SessionEntry, keyof LifecycleSessionShape>> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const phase = resolveLifecyclePhase(params.event);
@@ -218,7 +221,12 @@ function derivePersistedSessionLifecyclePatch(params: {
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
-    session: params.entry ?? undefined,
+    session: params.entry
+      ? {
+          ...params.entry,
+          status: params.entry.status === "interrupted" ? "failed" : params.entry.status,
+        }
+      : undefined,
     event: params.event,
   });
   const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
@@ -262,7 +270,11 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
     lifecycleRunId: _lifecycleRunId,
     ...patch
   } = derivePersistedSessionLifecyclePatch(params);
-  return patch;
+  const { status, ...fields } = patch;
+  // Suppressed events are no-ops; present undefined fields still intentionally clear state.
+  return Object.hasOwn(patch, "status")
+    ? { ...fields, status: status === "interrupted" ? "failed" : status }
+    : fields;
 }
 
 export function isRestartRecoveryLifecycleEvent(params: {
@@ -315,16 +327,6 @@ function acceptsCronRunContinuationLifecycleEvent(params: {
   }
   const runId = params.event.runId?.trim();
   return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
-}
-
-// sessions.list cache fence input. The terminal entry write (status/endedAt/
-// runtimeMs) commits asynchronously after the run-index fence already bumped
-// at lifecycle end; without its own fence a list computed in that window
-// caches the pre-terminal row indefinitely.
-let lifecyclePersistenceVersion = 0;
-
-export function readSessionLifecyclePersistenceVersion(): number {
-  return lifecyclePersistenceVersion;
 }
 
 export async function persistGatewaySessionLifecycleEvent(params: {
@@ -448,6 +450,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      onCommitted: () =>
+        sessionChanges.emit({
+          sessionKey: sessionEntry.canonicalKey,
+          agentId: sessionEntry.agentId,
+          storePath: sessionEntry.storePath,
+        }),
       ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     },
   );
@@ -455,7 +463,6 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     const message = `main-session restart recovery terminal: session=${sessionEntry.canonicalKey} run=${terminalRecovery.runId} status=${terminalRecovery.outcome.status} reason=${terminalRecovery.outcome.reason}`;
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
-  lifecyclePersistenceVersion += 1;
   if (persisted && failedRun) {
     const { runId, error } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and

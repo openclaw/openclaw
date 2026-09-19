@@ -251,6 +251,9 @@ describe("exec background task wiring", () => {
     );
 
     expect(result.details.status).toBe("running");
+    expect(taskTracking.createBackgroundExecTask).toHaveBeenCalledWith(
+      expect.objectContaining({ command }),
+    );
     if (result.details.status !== "running") {
       throw new Error("expected a running background process");
     }

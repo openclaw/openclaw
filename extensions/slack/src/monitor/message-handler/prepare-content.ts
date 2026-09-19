@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare content behavior.
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";

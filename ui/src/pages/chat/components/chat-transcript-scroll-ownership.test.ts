@@ -3,21 +3,109 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
 } from "../test-helpers/chat-scroll-input.ts";
+import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
   mountTestTranscript,
   resetTranscriptTestDom,
+  resizeObservers,
+  transcriptDomState,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
 describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
+    transcriptDomState.measuredRowHeight = 120;
+    const policy = makeChatHost({ chatHasAutoScrolled: true });
+    const transcript = new ChatTranscriptController(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      },
+      {
+        canFollowEnd: () => !policy.chatFollowLocked,
+        onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+      },
+    );
+    const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container } = await mountTestTranscript("measurement-reader", rows, transcript);
+    try {
+      const sizer = expectDefined(
+        container.querySelector<HTMLElement>(".chat-virtual-sizer"),
+        "transcript extent",
+      );
+      const total = Number.parseFloat(sizer.style.height);
+      let maxScrollTop = total + 84 - 600;
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, get: () => maxScrollTop + 600 },
+      });
+      container.scrollTo = (options?: ScrollToOptions | number) => {
+        if (typeof options === "object") {
+          container.scrollTop = Math.min(options.top ?? container.scrollTop, maxScrollTop);
+        }
+      };
+      policy.chatScrollElement = () => container;
+      policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
+      container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+      }
+      container.scrollTop = total + 84 - 600;
+      container.dispatchEvent(new Event("scroll"));
+      container.scrollTop -= 24;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatReadingHistory).toBe(true);
+      vi.useFakeTimers();
+      container.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(150);
+      const row = expectDefined(
+        container.querySelector<HTMLElement>('[data-index="6"]'),
+        "row above the viewport",
+      );
+      Object.defineProperty(row, "offsetHeight", { configurable: true, value: 160 });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(row, 800, 160);
+      }
+      expect(container.scrollTop).toBe(total + 84 - 600);
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatReadingHistory).toBe(true);
+      expect(policy.chatFollowLocked).toBe(true);
+      // A partial sizer commit lets TanStack retry the clamped adjustment as an absolute write.
+      maxScrollTop += 16;
+      transcript.hostUpdated();
+      expect(container.scrollTop).toBe(maxScrollTop);
+      // The dock can keep shrinking the scroll range before the native read-back arrives.
+      maxScrollTop -= 8;
+      container.scrollTop = maxScrollTop;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatReadingHistory).toBe(true);
+      expect(policy.chatFollowLocked).toBe(true);
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+      expect(policy.chatReadingHistory).toBe(false);
+      expect(policy.chatFollowLocked).toBe(false);
+      expect(transcript.isProgrammaticScroll).toBe(false);
+    } finally {
+      transcript.hostDisconnected();
+      vi.useRealTimers();
+    }
+  });
 
   it.each([
     ["wheel", null, nothing, false],

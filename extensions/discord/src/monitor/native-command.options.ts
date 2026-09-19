@@ -1,4 +1,3 @@
-// Discord plugin module implements native command.options behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import {
   getPreparedModelCatalogSnapshot,
@@ -80,25 +79,17 @@ export function buildDiscordCommandOptions(params: {
   }
   return args.map((arg) => {
     const required = arg.required ?? false;
-    if (arg.type === "number") {
+    if (arg.type === "number" || arg.type === "boolean") {
       return {
         name: arg.name,
         description: truncateDiscordCommandDescription({
           value: arg.description,
           label: `command:${commandLabel} arg:${arg.name}`,
         }),
-        type: ApplicationCommandOptionType.Number,
-        required,
-      };
-    }
-    if (arg.type === "boolean") {
-      return {
-        name: arg.name,
-        description: truncateDiscordCommandDescription({
-          value: arg.description,
-          label: `command:${commandLabel} arg:${arg.name}`,
-        }),
-        type: ApplicationCommandOptionType.Boolean,
+        type:
+          arg.type === "number"
+            ? ApplicationCommandOptionType.Number
+            : ApplicationCommandOptionType.Boolean,
         required,
       };
     }

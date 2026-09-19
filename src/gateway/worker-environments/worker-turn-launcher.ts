@@ -74,6 +74,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
+    resolveRuntimeOverride(identity) {
+      const placement = options.placements.get(identity.sessionId);
+      return placement &&
+        placement.state !== "local" &&
+        placement.executionMode === "worker-turn" &&
+        (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+        (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+        ? "openclaw"
+        : undefined;
+    },
     assertCompactionSuccessorAllowed({ currentTarget }) {
       const placement = options.placements.get(currentTarget.sessionId);
       // Remote-exec has a local turn claim but still owns remote workspace state.
@@ -153,7 +163,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
       const hasPendingWorkspaceResultToSettle = (sessionId: string, runId: string) =>
-        options.placements.listPendingWorkspaceResults().some(
+        options.placements.listPendingWorkspaceResults(sessionId).some(
           (pending) =>
             pending.sessionId === sessionId &&
             // A restarted run has no live claim, even when it reuses the retained run ID.
@@ -395,7 +405,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               !handedOff &&
               options.placements.validateTurnClaim(turnClaim) &&
               !options.placements
-                .listPendingWorkspaceResults()
+                .listPendingWorkspaceResults(placement.sessionId)
                 .some((pending) => pending.sessionId === placement.sessionId);
             if (canRecoverBuild) {
               // This claim never launched work. Release it so runtime refresh does not
@@ -449,7 +459,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
           }
           const pendingWorkspaceResult = options.placements
-            .listPendingWorkspaceResults()
+            .listPendingWorkspaceResults(turnClaim.sessionId)
             .find(
               (pending) =>
                 pending.sessionId === turnClaim.sessionId &&

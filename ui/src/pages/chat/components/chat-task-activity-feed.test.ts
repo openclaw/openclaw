@@ -204,6 +204,16 @@ describe("task activity feed", () => {
     const container = mount([
       {
         role: "assistant",
+        activity: [
+          {
+            itemId: "tool:exec-1",
+            toolCallId: "exec-1",
+            title: "Exec",
+            kind: "tool",
+            phase: "end",
+            status: "completed",
+          },
+        ],
         content: [
           toolCall("exec-1", "exec", {
             command: "pnpm tsgo --project tsconfig.gateway.json\npnpm lint:ui:styles --fix",
@@ -213,6 +223,24 @@ describe("task activity feed", () => {
       toolResult("exec-1"),
       {
         role: "assistant",
+        activity: [
+          {
+            itemId: "tool:exec-2",
+            toolCallId: "exec-2",
+            title: "Exec",
+            kind: "tool",
+            phase: "end",
+            status: "completed",
+          },
+          {
+            itemId: "tool:read-1",
+            toolCallId: "read-1",
+            title: "Read",
+            kind: "tool",
+            phase: "end",
+            status: "completed",
+          },
+        ],
         content: [
           toolCall("exec-2", "exec", { command: "pnpm lint:ui:styles" }),
           toolCall("read-1", "read", { path: "ui/src/styles/chat/sidebar.css" }),
@@ -237,9 +265,8 @@ describe("task activity feed", () => {
     expect(groups).toHaveLength(2);
     const group = groups[0]!;
     const summary = group.querySelector("summary")!;
-    expect(summary.textContent).toContain("pnpm tsgo --project tsconfig.gateway.json");
+    expect(summary.textContent).toContain("Exec ×2, Read");
     expect(summary.textContent).not.toContain("--fix");
-    expect(summary.textContent).toContain("Ran 2 commands, read a file");
     expect(group.open).toBe(false);
     summary.click();
     expect(group.open).toBe(true);
@@ -278,8 +305,7 @@ describe("task activity feed", () => {
       const container = mount(messages);
       const groups = container.querySelectorAll(".chat-task-feed__tool-group");
       expect(groups).toHaveLength(1);
-      expect(groups[0]?.querySelector("summary")?.textContent).toContain("pnpm check:ui");
-      expect(groups[0]?.querySelector("summary")?.textContent).toContain("Ran 2 commands");
+      expect(groups[0]?.querySelector("summary")?.textContent).toBe("Raw details");
       expect(
         [...groups[0]!.querySelectorAll(".chat-task-feed__tool-line")].map((line) =>
           line.textContent?.trim(),
@@ -357,7 +383,7 @@ describe("task activity feed", () => {
     expect(container.textContent).not.toContain("Result body must not appear");
     expect(container.querySelectorAll(".chat-task-feed__tool-group")).toHaveLength(1);
     expect(container.querySelector(".chat-task-feed__tool-group summary")?.textContent).toContain(
-      "ui/src/styles/chat/sidebar.css",
+      "Raw details",
     );
     expect(container.textContent).toContain("The stylesheet owns the layout.");
     expect(container.querySelectorAll(".chat-task-feed__entry")).toHaveLength(2);

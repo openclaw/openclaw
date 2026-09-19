@@ -431,10 +431,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     padding: 0 0 12px;
   }
 
-  .chat-msg {
-    max-width: 90%;
-  }
-
   .chat-bubble {
     padding: 8px 12px;
     border-radius: var(--radius-md);

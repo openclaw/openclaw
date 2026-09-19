@@ -1,9 +1,9 @@
 // Browser tests cover pw ai plugin behavior.
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
 
 const { connectOverCdpMock } = vi.hoisted(() => ({
   connectOverCdpMock: vi.fn<(transport: ConnectOverCDPTransport) => Promise<Browser>>(),

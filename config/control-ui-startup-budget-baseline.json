@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 355740,
-  "reason": "Current main measures 355740 B gzip after integrated UI changes; main CI fails the previous 355719 B enforcement limit. The spacing-only candidate measures 355769 B with identical raw startup JavaScript bytes, within the existing 64 B build-variance allowance of main. The 358400 B cap and existing 512 B growth and 64 B variance allowances remain unchanged.",
-  "updatedAt": "2026-09-13"
+  "startupJsGzipBytes": 363407,
+  "reason": "Maintainer-approved measured refresh for #152240: the reviewed tooltip repair measured 363407 B startup gzip with Vite 8.3.0/Pako 3.0.1 on Node 26.8.2; a subsequent canonical build measured 363421 B, within the existing 64 B variance allowance. Pristine main 95b8e0335450 measured 363276 B; repaired raw startup JavaScript is 825 B smaller. The 355 KiB committed-baseline cap and existing 512 B growth / 64 B variance allowances are unchanged.",
+  "updatedAt": "2026-09-19"
 }

@@ -5,10 +5,8 @@ import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
-  callBrowserRequest,
   parseBrowserPositiveIntegerOption,
-  printBrowserJsonResult,
-  runBrowserCliCommand as runBrowserObserve,
+  runBrowserCliRequest,
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
@@ -41,22 +39,15 @@ export function registerBrowserActionObserveCommands(
     )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserObserve(async () => {
-        const result = await callBrowserRequest<{ messages: unknown[] }>(parent, {
-          method: "GET",
-          path: "/console",
-          query: {
-            level: normalizeOptionalString(opts.level),
-            targetId: normalizeOptionalString(opts.targetId),
-            profile,
-          },
-        });
-        if (printBrowserJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.writeJson(result.messages);
+      await runBrowserCliRequest<{ messages: unknown[] }>({
+        parent: parentOpts(cmd),
+        method: "GET",
+        path: "/console",
+        query: {
+          level: normalizeOptionalString(opts.level),
+          targetId: normalizeOptionalString(opts.targetId),
+        },
+        print: (result) => defaultRuntime.writeJson(result.messages),
       });
     });
 
@@ -65,19 +56,11 @@ export function registerBrowserActionObserveCommands(
     .description("Save page as PDF")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserObserve(async () => {
-        const result = await callBrowserRequest<{ path: string }>(parent, {
-          method: "POST",
-          path: "/pdf",
-          query: profile ? { profile } : undefined,
-          body: { targetId: normalizeOptionalString(opts.targetId) },
-        });
-        if (printBrowserJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log(`PDF: ${shortenHomePath(result.path)}`);
+      await runBrowserCliRequest<{ path: string }>({
+        parent: parentOpts(cmd),
+        path: "/pdf",
+        body: { targetId: normalizeOptionalString(opts.targetId) },
+        successMessage: (result) => `PDF: ${shortenHomePath(result.path)}`,
       });
     });
 
@@ -95,37 +78,28 @@ export function registerBrowserActionObserveCommands(
       parseBrowserPositiveIntegerOption(v, "--max-chars"),
     )
     .action(async (url: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserObserve(async () => {
-        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-        const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : undefined;
-        const result = await callBrowserRequest<{
-          response: { body: string; truncated?: boolean };
-        }>(
-          parent,
-          {
-            method: "POST",
-            path: "/response/body",
-            query: profile ? { profile } : undefined,
-            body: {
-              url,
-              targetId: normalizeOptionalString(opts.targetId),
-              timeoutMs,
-              maxChars,
-            },
-          },
-          { timeoutMs: withBrowserActionTimeoutSlack(timeoutMs) },
-        );
-        if (printBrowserJsonResult(parent, result)) {
-          return;
-        }
-        defaultRuntime.log(result.response.body);
-        if (result.response.truncated === true) {
-          defaultRuntime.error(
-            "Warning: response body is a truncated prefix. Use --json to inspect response metadata.",
-          );
-        }
+      const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+      const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : undefined;
+      await runBrowserCliRequest<{
+        response: { body: string; truncated?: boolean };
+      }>({
+        parent: parentOpts(cmd),
+        path: "/response/body",
+        body: {
+          url,
+          targetId: normalizeOptionalString(opts.targetId),
+          timeoutMs,
+          maxChars,
+        },
+        timeoutMs: withBrowserActionTimeoutSlack(timeoutMs),
+        print: (result) => {
+          defaultRuntime.log(result.response.body);
+          if (result.response.truncated === true) {
+            defaultRuntime.error(
+              "Warning: response body is a truncated prefix. Use --json to inspect response metadata.",
+            );
+          }
+        },
       });
     });
 }

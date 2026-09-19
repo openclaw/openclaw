@@ -14,7 +14,7 @@ This is normal. This is OpenClaw.
 
 ## What you are looking at
 
-Each new composer opening gets its own cast: color, size, build, claw proportions, accessories, and personality stay stable while you type or change controls. Some are round, some are tall, some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.
+Each new composer opening gets its own cast: color, size, claw proportions, accessories, and personality stay stable while you type or change controls. Their bodies keep their natural proportions; some are small, some are large, and some have claws that are frankly too big for them. Some nap constantly. Some never sit still. One of them waves a lot.
 
 Hover over a visitor and it will tell you its name.
 

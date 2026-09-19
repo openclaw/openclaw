@@ -13,6 +13,9 @@ export function filterMutableSessionGroupRecords<T extends { name: string }>(par
   client: GatewayClient | null;
   records: readonly T[];
 }): T[] {
+  if (params.records.length === 0) {
+    return [];
+  }
   const allowed = new Set(params.records.map((record) => record.name));
   if (isGatewayAdmin(params.client)) {
     return [...params.records];

@@ -110,9 +110,23 @@ forwarding bridges.
 Plugin SDK declaration preparation and `scripts/run-tsgo.mjs` require child work
 to finish before reporting success. On POSIX, each verifies its own managed
 process group: leftover children are terminated and the command fails instead of
-allowing artifact stamps or downstream checks to proceed. Windows retains normal
-joined-launcher completion because strict group verification is unsupported there.
-This does not detect descendants that deliberately leave the managed groups.
+allowing artifact stamps or downstream checks to proceed. POSIX process groups do
+not detect descendants that deliberately leave the group.
+
+On Windows, managed commands and the Gateway test instance use a retained kernel
+Job. Platform code loads only when a Windows command is requested; planner imports
+stay independent of installed application packages. Loading finishes before spawn,
+so listener registration remains synchronous with child creation. Tooling resolves
+its worker URL with Node built-ins and reuses the native Job bindings from core.
+The launcher joins that Job before it can start the command. Cleanup waits
+for an empty Job, leader exit, and output closure; leader exit alone never proves
+descendant completion. Failed termination reports the observed surviving PIDs and
+retains resource claims while the Job remains unresolved. Normal leader exit also
+terminates remaining Job members. Finalization records its outcome before closing
+the Job handle, including on failure; closing the handle alone does not verify
+termination or release resource claims. Existing callers with
+their own IPC channel keep the direct-launch contract; failed taskkill without an
+owned Job stays indeterminate even if the leader and its pipes have closed.
 
 `run-vitest` (including project shards), plugin batches, `test-live`
 (including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
@@ -150,8 +164,8 @@ path for manual recovery. Nested namespaces, fixture lifetimes, and managed comm
 register ephemeral filesystem ownership before admitting work. Release requires
 positive completion evidence; caught cleanup failures, module resets, worker exit,
 or an intermediate runner crash cannot release a pending claim or its ancestors.
-Managed commands keep their existing close-based completion contract unless strict
-tree verification is requested; failed finalization never releases ownership.
+Managed commands keep their existing output-drain contract; Windows Job commands
+also join kernel Job completion. Failed finalization never releases ownership.
 Stop all remaining writers before manually removing the reported exact directory.
 Windows and non-detached launches allocate the same isolated native home, but retain
 their namespace and enclosing claims with a diagnostic after child exit and pipe
@@ -164,6 +178,10 @@ This is home isolation, not a filesystem sandbox: explicit absolute paths,
 `os.userInfo()` account lookup, children with stripped or replaced home variables,
 and intentionally real-home live execution remain outside its protection.
 
+Codex app-server fixtures await agent and shared-state SQLite drainage between
+cases. Their file teardown drains the shared disk-budget scan worker, preserving
+reuse during the file and releasing it before isolated fork shutdown.
+
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.
 - `test/helpers/openclaw-test-instance.ts`: process-level E2E tests needing a running Gateway, CLI env, log capture, and cleanup in one place.
@@ -175,6 +193,36 @@ Await its asynchronous `restoreEnv()`; stop and join required producers before
 restoring selectors or removing state. Runtime reproductions of state-selection
 leaks require enforced storage isolation, such as a VM or container without access
 to operator stores, not merely temporary `HOME` or state-directory overrides.
+
+## Public test diagnostics
+
+The shared Vitest reporter factory redacts credential-shaped fields in assertion
+messages, diffs, expected/received values, stacks, source excerpts, and annotations
+before forwarding them to the selected reporters. Keys remain visible and values
+become `<redacted len=N>`. This also applies to explicit `--reporter` selections,
+UI/browser configurations, and JSON/JUnit reports. Hosted logs are public, and
+runner-issued tokens may not be registered for GitHub masking.
+
+Unquoted environment records use one assignment per line: spaces and punctuation
+on the right-hand side belong to that value. Multiline strings split into quoted
+fragments by Node's inspector are redacted as one value.
+
+Redaction is unconditional and affects diagnostic output, not assertion behavior.
+Test console capture is outside this boundary; tests must still avoid logging
+credentials directly.
+
+Configured extension fork projects use the `openclaw-forks` diagnostic adapter
+around Vitest's native fork transport. If the existing stop deadline fails while
+the child remains alive, the adapter spends at most two additional seconds
+collecting a Node report before native termination and pipe cleanup. The timeout
+remains a test failure. The report distinguishes a missing stop acknowledgement
+from a stall after acknowledgement and includes native stacks, libuv handles, and
+worker-thread reports. Environment variables, command arguments, and socket
+endpoints are omitted. A blocked event loop can prevent signal reporting; that
+case explicitly reports that no complete report was captured.
+
+Successful shutdown remains quiet. An explicit `--pool=forks` selects Vitest's
+built-in pool and bypasses this adapter.
 
 ## JSON reports across native processes
 

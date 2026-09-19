@@ -32,6 +32,10 @@ import {
   registerHeadlessToolSearchCatalog,
 } from "./tool-search.js";
 
+// Restore the WeakRef retention probe when Bun's node:v8 exposure can provide a synchronous
+// worker-local gc without stalling the instrumented QuickJS resume path.
+const v8GcIt = process.versions.bun ? it.skip : it;
+
 function parkExpiringRun(method: "callValue" | "agentWait") {
   const rawConfig = {
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
@@ -179,7 +183,7 @@ describe("Code Mode worker lifecycle", () => {
     expect(result).toMatchObject({ status: "failed", error: "Error: prelude failure" });
   });
 
-  it("transfers snapshot heaps and releases consumed copies across resumes", async () => {
+  v8GcIt("transfers snapshot heaps and releases consumed copies across resumes", async () => {
     const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
     const dir = tempDirs.make("code-mode-snapshot-transfer-");
     const workerPath = path.join(dir, "snapshot-worker.ts");

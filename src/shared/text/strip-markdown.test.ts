@@ -23,6 +23,11 @@ describe("stripMarkdown HTML projection", () => {
       "Checking <progress> next.",
     ],
     ["Checking [<b>results</b>](https://example.com) next.", "Checking results next."],
+    ['**A**<b>B</b> `<keep>` [C](https://example.com "<title>")<i>D</i>', "AB <keep> CD"],
+    [
+      '**Before**<script>drop</script>[after](https://example.com "<title>")<b> tail</b>',
+      "Beforeafter tail",
+    ],
   ])("omits authored HTML while preserving visible text: %s", (input, expected) => {
     expect(stripMarkdown(input, { stripHtml: true, linkStyle: "label" })).toBe(expected);
   });

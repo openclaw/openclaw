@@ -10,9 +10,9 @@ import {
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 const { replyMock } = getSlackTestState();
 
-beforeEach(() => {
+beforeEach(async () => {
   resetInboundDedupe();
-  resetSlackTestState();
+  await resetSlackTestState();
 });
 
 describe("Slack inbound native mentions", () => {

@@ -127,7 +127,7 @@ creates the config, workspace, and session directories, then exits without
 running onboarding. It accepts `--workspace` and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
-it and asks you to run `openclaw doctor` before retrying.
+it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
 
 ## Examples
 

@@ -300,7 +300,7 @@ describe("sessions page agent-scope retirement", () => {
 
         oldDelete.resolve({
           deleted: [],
-          errors: ["retired delete error"],
+          errors: [{ target: { key }, error: new Error("retired delete error") }],
           preservedWorktrees: [],
         });
         await oldRequest;

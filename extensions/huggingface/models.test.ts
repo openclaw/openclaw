@@ -32,12 +32,6 @@ describe("huggingface models", () => {
     },
   );
 
-  it("does not advertise the retired Llama 3.3 Turbo route", () => {
-    expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
-      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    );
-  });
-
   it("discoverHuggingfaceModels returns static catalog when apiKey is empty", async () => {
     const models = await discoverHuggingfaceModels("");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);

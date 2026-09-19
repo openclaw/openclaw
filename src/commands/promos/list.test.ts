@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutputRuntimeEnv } from "../../runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
   fetchClawHubPromotions: vi.fn(),
+  markPromotionSlugsNotified: vi.fn(),
+}));
+
+vi.mock("../../infra/promotions-feed.js", () => ({
+  markPromotionSlugsNotified: mocks.markPromotionSlugsNotified,
 }));
 
 vi.mock("../../infra/clawhub-promotions.js", async () => {
@@ -58,6 +64,26 @@ beforeEach(() => {
 });
 
 describe("promosListCommand", () => {
+  it("waits for notice recording before publishing the list", async () => {
+    mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
+    const recording = createDeferredCore();
+    const started = createDeferredCore();
+    mocks.markPromotionSlugsNotified.mockImplementationOnce(() => {
+      started.resolve();
+      return recording.promise;
+    });
+    const { runtime } = makeRuntime();
+    const pending = promosListCommand({ json: true }, runtime);
+    await started.promise;
+    try {
+      expect(runtime.writeStdout).not.toHaveBeenCalled();
+    } finally {
+      recording.resolve();
+      await pending;
+    }
+    expect(runtime.writeStdout).toHaveBeenCalledOnce();
+  });
+
   it("prints promotions with models and the claim command", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
     const { runtime, lines } = makeRuntime();

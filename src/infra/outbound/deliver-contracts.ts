@@ -101,6 +101,7 @@ export type ChannelHandler = {
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
     gatewayClientScopes?: readonly string[];
+    assertDirectAdapterHandoff?: () => void;
   }) => Promise<void>;
   afterDeliverPayload?: (params: {
     target: ChannelOutboundTargetRef;

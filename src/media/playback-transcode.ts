@@ -6,6 +6,7 @@ import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants"
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { fileStore } from "../infra/file-store.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
@@ -17,7 +18,6 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
 import { resolveNativePlaybackCodecCompatibility } from "./playback-codec-policy.js";
-import { copyPlaybackInputBounded } from "./playback-input.js";
 import { getMediaDir, PLAYBACK_TRANSCODE_SUBDIR, writePlaybackTranscodeCache } from "./store.js";
 
 type PlaybackMediaKind = Extract<MediaKind, "audio" | "video">;
@@ -512,13 +512,11 @@ async function transcodePlaybackSource(params: {
         let inputPath: string;
         try {
           const inputIdentity = await staged.handle.stat({ bigint: true });
-          await copyPlaybackInputBounded(
-            opened.handle,
-            staged.handle,
-            params.source.size,
-            params.maxBytes,
-          );
+          const copiedBytes = await copyFileHandle(opened.handle, staged.handle, {
+            maxBytes: Math.min(params.source.size, params.maxBytes),
+          });
           if (
+            copiedBytes !== params.source.size ||
             !playbackSourceIdentityMatches(params.source, {
               realPath: opened.realPath,
               stat: await opened.handle.stat(),

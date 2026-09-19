@@ -12,6 +12,7 @@ import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
@@ -142,8 +143,9 @@ function resolvePluginOwnedToolConfigKeys(plugin: PluginManifestRecord): string[
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[plugin.id]?.config;
-  if (!isRecord(pluginConfig)) {
+  const entry = cfg.plugins?.entries?.[plugin.id];
+  const pluginConfig = entry?.config;
+  if (isNativeSessionCatalogOptOutOnly(plugin.id, entry) || !isRecord(pluginConfig)) {
     return false;
   }
   return resolvePluginOwnedToolConfigKeys(plugin).some((key) => pluginConfig[key] !== undefined);

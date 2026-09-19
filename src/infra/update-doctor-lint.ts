@@ -5,6 +5,7 @@ export type UpdateDoctorLintFinding = {
   checkId: string;
   message: string;
   source?: string;
+  errorCode?: string;
   fixHint?: string;
   severity?: string;
   path?: string;
@@ -17,6 +18,7 @@ function parseFinding(finding: unknown, warning = false): UpdateDoctorLintFindin
     typeof finding.checkId !== "string" ||
     typeof finding.message !== "string" ||
     (finding.source !== undefined && typeof finding.source !== "string") ||
+    (finding.errorCode !== undefined && typeof finding.errorCode !== "string") ||
     (finding.fixHint !== undefined && typeof finding.fixHint !== "string") ||
     (finding.severity !== undefined && typeof finding.severity !== "string") ||
     (finding.path !== undefined && typeof finding.path !== "string") ||
@@ -29,6 +31,7 @@ function parseFinding(finding: unknown, warning = false): UpdateDoctorLintFindin
     checkId: finding.checkId,
     message: finding.message,
     ...(finding.source !== undefined ? { source: finding.source } : {}),
+    ...(finding.errorCode !== undefined ? { errorCode: finding.errorCode } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
     ...(finding.severity !== undefined ? { severity: finding.severity } : {}),
     ...(finding.path !== undefined ? { path: finding.path } : {}),

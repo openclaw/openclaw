@@ -27,11 +27,13 @@ Native sqlite-vec queries run in a separate, read-only process so a slow query
 does not block the Gateway event loop. Cancelling a search terminates its query
 process; OpenClaw does not retry that native query on the Gateway thread.
 
-If semantic retrieval reaches the 15-second tool deadline after keyword matches
+If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a
 partial-result warning. Session transcript hits require fresh visibility checks
 and are excluded from timeout recovery. A partial response does not put the
-entire memory corpus into the timeout cooldown.
+entire memory corpus into the timeout cooldown. When the agent provides no final
+reply, the fallback warning states the timeout duration and whether partial
+results are available.
 
 ## When to use
 

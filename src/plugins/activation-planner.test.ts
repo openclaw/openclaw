@@ -487,6 +487,41 @@ describe("activation planner", () => {
     ]);
   });
 
+  it("keeps unique sorted ids and stable same-id explanation entries", () => {
+    const diagnostics = [{ level: "warn", message: "synthetic discovery warning" }];
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        { id: "z-owner", origin: "bundled", activation: { onProviders: [" OPENAI "] } },
+        {
+          id: "duplicate",
+          origin: "workspace",
+          providers: ["openai"],
+          setup: { providers: [{ id: "OPENAI" }] },
+        },
+        { id: "a-owner", origin: "bundled", providers: ["OPENAI"] },
+        { id: "duplicate", origin: "config", activation: { onProviders: ["openai"] } },
+      ],
+      diagnostics,
+    });
+    const trigger = { kind: "provider" as const, provider: " OpenAI " };
+    const plan = resolveManifestActivationPlan({ trigger });
+    const expectedIds = ["a-owner", "duplicate", "z-owner"];
+    expect(resolveManifestActivationPluginIds({ trigger })).toEqual(expectedIds);
+    expect(plan.pluginIds).toEqual(expectedIds);
+    expect(plan.entries).toEqual([
+      { pluginId: "a-owner", origin: "bundled", reasons: ["manifest-provider-owner"] },
+      {
+        pluginId: "duplicate",
+        origin: "workspace",
+        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
+      },
+      { pluginId: "duplicate", origin: "config", reasons: ["activation-provider-hint"] },
+      { pluginId: "z-owner", origin: "bundled", reasons: ["activation-provider-hint"] },
+    ]);
+    expect(plan.trigger).toBe(trigger);
+    expect(plan.diagnostics).toBe(diagnostics);
+  });
+
   it("treats explicit empty plugin scopes as scoped-empty", () => {
     expect(
       resolveManifestActivationPluginIds({

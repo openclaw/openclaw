@@ -141,7 +141,7 @@ describe("typed in-process agent authorization", () => {
       context.createAgentTurnFacade = createFacade;
       const result = { runId: "host-owned", status: "ok" };
       startTurn.mockImplementation(async ({ io }) => io.emitAcceptance([true, result, undefined]));
-      waitForTurn.mockResolvedValue(result);
+      waitForTurn.mockResolvedValue({ result });
 
       await expect(dispatchScopedMethod({ client, context, method, params })).resolves.toEqual(
         result,

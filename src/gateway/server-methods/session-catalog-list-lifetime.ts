@@ -12,13 +12,25 @@ export type CatalogListProgressSubscriber = (
   instances: SessionCatalogInstances,
 ) => void;
 
+type CatalogPublication = { catalog: SessionCatalog; instances: SessionCatalogInstances };
+type CatalogSubscriber = {
+  current?: {
+    publish: CatalogListProgressSubscriber;
+    isCurrent: () => boolean;
+    prepare?: () => Promise<void> | undefined;
+    signal?: AbortSignal;
+    trackWork: ReturnType<typeof captureAsyncWorkTracker>;
+  };
+  queued: Map<string, Map<string, CatalogPublication>>;
+  preparing: boolean;
+  remove: () => void;
+};
+
 /** The aggregate response can finish before the native host publications it owns. */
 export class SessionCatalogListLifetime {
   private readonly controller = new AbortController();
-  private readonly subscribers = new Map<
-    string,
-    { publish: CatalogListProgressSubscriber; remove: () => void; isCurrent: () => boolean }
-  >();
+  private readonly catalogIds: ReadonlySet<string>;
+  private readonly subscribers = new Map<string, CatalogSubscriber>();
   private readonly publishers = new Set<() => void>();
   private readonly removeAbortListeners: Array<() => void> = [];
   private isCurrent: (() => boolean) | undefined;
@@ -26,7 +38,12 @@ export class SessionCatalogListLifetime {
   private pending = 0;
   private releaseRoot: (() => void) | undefined;
 
-  constructor(isCurrent: () => boolean, signals: readonly AbortSignal[]) {
+  constructor(
+    isCurrent: () => boolean,
+    signals: readonly AbortSignal[],
+    catalogIds: readonly string[],
+  ) {
+    this.catalogIds = new Set(catalogIds);
     this.isCurrent = isCurrent;
     for (const signal of signals) {
       if (signal.aborted) {
@@ -51,35 +68,132 @@ export class SessionCatalogListLifetime {
     return false;
   }
 
+  readonly assertCurrent = (): void => {
+    this.active();
+    this.controller.signal.throwIfAborted();
+  };
+
   subscribe(
     key: string,
     publish: CatalogListProgressSubscriber,
     isCurrent: () => boolean,
     signal?: AbortSignal,
+    prepare?: () => Promise<void> | undefined,
   ): void {
     this.subscribers.get(key)?.remove();
     if (!this.active() || signal?.aborted || !isCurrent()) {
       return;
     }
-    const remove = () => {
-      signal?.removeEventListener("abort", remove);
-      this.subscribers.delete(key);
-      this.releaseUnusedPublishers();
+    const subscriber: CatalogSubscriber = {
+      current: { publish, isCurrent, prepare, signal, trackWork: captureAsyncWorkTracker() },
+      queued: new Map(),
+      preparing: false,
+      remove: () => {
+        subscriber.current?.signal?.removeEventListener("abort", subscriber.remove);
+        subscriber.current = undefined;
+        subscriber.queued.clear();
+        this.subscribers.delete(key);
+        this.releaseUnusedPublishers();
+      },
     };
-    this.subscribers.set(key, { publish, remove, isCurrent });
-    signal?.addEventListener("abort", remove, { once: true });
+    this.subscribers.set(key, subscriber);
+    signal?.addEventListener("abort", subscriber.remove, { once: true });
   }
 
   publish(catalog: SessionCatalog, instances: SessionCatalogInstances): void {
-    if (!this.active()) {
+    if (!this.active() || !this.catalogIds.has(catalog.id)) {
       return;
     }
-    for (const subscriber of this.subscribers.values()) {
-      if (subscriber.isCurrent()) {
-        subscriber.publish(catalog, instances);
-      } else {
+    for (const [key, subscriber] of this.subscribers) {
+      if (!this.currentSubscriber(key, subscriber)) {
         subscriber.remove();
+        continue;
       }
+      // Retain one frame per selected catalog/observed host, independent of update churn.
+      const hosts = subscriber.queued.get(catalog.id) ?? new Map<string, CatalogPublication>();
+      for (const host of catalog.hosts) {
+        hosts.set(host.hostId, { catalog: { ...catalog, hosts: [host] }, instances });
+      }
+      if (hosts.size) {
+        subscriber.queued.set(catalog.id, hosts);
+      }
+      if (!subscriber.preparing) {
+        this.deliverSubscriber(key, subscriber);
+      }
+    }
+  }
+
+  private currentSubscriber(key: string, subscriber: CatalogSubscriber): boolean {
+    return (
+      this.subscribers.get(key) === subscriber &&
+      this.active() &&
+      subscriber.current?.isCurrent() === true
+    );
+  }
+
+  private deliverSubscriber(key: string, subscriber: CatalogSubscriber): void {
+    while (!subscriber.preparing && this.currentSubscriber(key, subscriber)) {
+      const current = subscriber.current;
+      if (!current) {
+        return;
+      }
+      const preparation = current.prepare?.();
+      if (preparation) {
+        subscriber.preparing = true;
+        this.pending++;
+        void current.trackWork(() =>
+          this.deliverPreparedSubscriber(key, subscriber, preparation).catch(() => undefined),
+        );
+        return;
+      }
+      const publication = this.takeQueuedPublication(subscriber);
+      if (!publication) {
+        return;
+      }
+      current.publish(publication.catalog, publication.instances);
+    }
+  }
+
+  private takeQueuedPublication(subscriber: CatalogSubscriber): CatalogPublication | undefined {
+    for (const [catalogId, hosts] of subscriber.queued) {
+      const next = hosts.entries().next().value;
+      if (next) {
+        hosts.delete(next[0]);
+      }
+      if (!hosts.size) {
+        subscriber.queued.delete(catalogId);
+      }
+      if (next) {
+        return next[1];
+      }
+    }
+    return undefined;
+  }
+
+  private async deliverPreparedSubscriber(
+    key: string,
+    subscriber: CatalogSubscriber,
+    preparation: Promise<void>,
+  ): Promise<void> {
+    try {
+      await preparation;
+      while (this.currentSubscriber(key, subscriber)) {
+        const next = subscriber.current?.prepare?.();
+        if (next) {
+          await next;
+          continue;
+        }
+        const publication = this.takeQueuedPublication(subscriber);
+        if (!publication) {
+          return;
+        }
+        subscriber.current?.publish(publication.catalog, publication.instances);
+      }
+    } finally {
+      subscriber.queued.clear();
+      subscriber.preparing = false;
+      this.pending--;
+      this.finish();
     }
   }
 

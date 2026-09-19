@@ -67,13 +67,19 @@ function bindSession(
 export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalogProvider {
   const bindingFor = (nodeId: string) =>
     sessionShareNodeBinding(api.runtime.config.current(), nodeId);
-  const invoke = (nodeId: string, command: string, params: Record<string, unknown>) =>
+  const invoke = (
+    nodeId: string,
+    command: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) =>
     api.runtime.nodes.invoke({
       nodeId,
       command,
       params,
       timeoutMs: 30_000,
       scopes: ["operator.write"],
+      signal,
     });
 
   async function listNode(
@@ -96,15 +102,22 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       };
     }
     try {
+      query.signal?.throwIfAborted();
       const cursor = query.cursors?.[hostId];
       if (cursor !== undefined) {
         sessionCatalogPaging.decodeCursor(cursor);
       }
-      const raw = await invoke(node.nodeId, SESSION_SHARE_LIST_COMMAND, {
-        limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
-        ...(query.search ? { searchTerm: query.search } : {}),
-        ...(cursor !== undefined ? { cursor } : {}),
-      });
+      const raw = await invoke(
+        node.nodeId,
+        SESSION_SHARE_LIST_COMMAND,
+        {
+          limit: sessionCatalogPaging.boundedLimit(query.limitPerHost),
+          ...(query.search ? { searchTerm: query.search } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+        },
+        query.signal,
+      );
+      query.signal?.throwIfAborted();
       const page = parseSessionSharePage(raw);
       const binding = bindingFor(node.nodeId);
       const linker =
@@ -121,6 +134,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         ),
       };
     } catch {
+      query.signal?.throwIfAborted();
       return {
         ...common,
         sessions: [],
@@ -139,12 +153,15 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     supportsProcessHomeIsolation: true,
     audience: "session-viewers",
     async list(query) {
+      query.signal?.throwIfAborted();
       let nodes: CatalogNode[];
       try {
         nodes = (await (query.listNodes?.() ?? api.runtime.nodes.list())).nodes;
       } catch {
+        query.signal?.throwIfAborted();
         return [];
       }
+      query.signal?.throwIfAborted();
       const requested = query.hostIds ? new Set(query.hostIds) : undefined;
       const eligible = nodes
         .filter(
@@ -156,13 +173,21 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
             left.nodeId.localeCompare(right.nodeId),
         )
         .slice(0, 32);
-      return await Promise.all(
-        eligible.map(async (node) => {
-          const host = await listNode(node, query);
-          query.onHost?.(host);
-          return host;
-        }),
-      );
+      const pending = eligible.map(async (node) => {
+        const host = await listNode(node, query);
+        query.signal?.throwIfAborted();
+        query.onHost?.(host);
+        return host;
+      });
+      let hosts: SessionCatalogHost[];
+      try {
+        hosts = await Promise.all(pending);
+      } finally {
+        // Keep every started invocation owned through retirement or publication failure.
+        await Promise.allSettled(pending);
+      }
+      query.signal?.throwIfAborted();
+      return hosts;
     },
     async read(request) {
       if (!request.hostId.startsWith("node:") || !request.hostId.slice(5)) {

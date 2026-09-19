@@ -17,6 +17,8 @@ import {
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
 
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }
@@ -80,6 +82,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "worktreeSource",
   "repository",
   "incognito",
   "visibility",
@@ -103,6 +106,14 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
+    (record.worktreeSource !== undefined &&
+      (!Value.Check(SessionsCreateParamsSchema.properties.worktreeSource, record.worktreeSource) ||
+        record.worktree !== true ||
+        record.repository !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.catalogId !== undefined)) ||
     (record.repository === undefined
       ? record.worktree !== true
       : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||

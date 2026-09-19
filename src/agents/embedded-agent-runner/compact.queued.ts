@@ -498,11 +498,7 @@ async function compactResolvedContextEngine(
   const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
-  const {
-    runtimeAuthPreparation,
-    selectedPreparedHarness,
-    providerUsesProfileScopedModelMetadata,
-  } = await prepareCompactionHarnessAuth({
+  const preparedAuth = await prepareCompactionHarnessAuth({
     ...params,
     provider: ceProvider,
     metadataProvider: ceRuntimeProvider,
@@ -518,6 +514,14 @@ async function compactResolvedContextEngine(
     convergenceErrorPrefix: "Prepared queued compaction",
   });
   assertQueuedCompactionPreparationActive(params, host);
+  if (!preparedAuth.ok) {
+    return { ok: false, compacted: false, reason: formatErrorMessage(preparedAuth.error) };
+  }
+  const {
+    runtimeAuthPreparation,
+    selectedPreparedHarness,
+    providerUsesProfileScopedModelMetadata,
+  } = preparedAuth;
   const preparedHarnessRuntime = selectedPreparedHarness.id;
   const transcriptBytePreflightAuthority =
     host.transcriptBytePreflightHarness === preparedHarnessRuntime
@@ -546,7 +550,6 @@ async function compactResolvedContextEngine(
         preparedModelRuntime,
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
-        preferBundledStaticCatalogTransport: true,
         workspaceDir: resolvedWorkspaceDir,
         authProfileId,
         authProfileMode,

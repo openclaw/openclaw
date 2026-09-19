@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
@@ -129,8 +130,15 @@ it("shows the git target when no package version is available", async () => {
   const { settled } = startUpdate({
     updateAvailable: null,
     updateSchedule: {
-      target: { commitsBehind: 3, kind: "git" },
-    } as unknown as UpdateScheduleState,
+      channel: "dev",
+      autoEnabled: false,
+      target: {
+        commitsBehind: 3,
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "abc1234",
+      },
+    },
   });
   const { modal } = await getRenderedModalDialog(document.body);
 
@@ -423,6 +431,19 @@ it("keeps the failure visible until the operator explicitly opens its review act
   expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
     "Read the recorded cause",
   );
+  await stream.push({
+    run: null,
+    busy: false,
+    connected: true,
+    failure: "Read the recorded cause before retrying.",
+    readError: "Could not check for updates: timeout",
+  });
+  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+    "Read the recorded cause",
+  );
+  expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+    "Could not check for updates: timeout",
+  );
   expect(onReviewUpdate).not.toHaveBeenCalled();
   findButton("Review update").click();
   await settled;
@@ -460,9 +481,45 @@ it.each([
 });
 
 it.each([
+  { status: "succeeded", reason: null, recovery: false },
+  { status: "skipped", reason: "external-supervisor-update-required", recovery: false },
+  { status: "skipped", reason: "container-image-install", recovery: false },
+  { status: "skipped", reason: "already-current", recovery: false },
+  { status: "skipped", reason: "dirty", recovery: true },
+  { status: "failed", reason: "build-failed", recovery: true },
+] as const)(
+  "offers update recovery only for failed $status/$reason outcomes",
+  async ({ status, reason, recovery }) => {
+    const run = createUpdateRunFixture({ status, reason, phase: "finished", finishedAtMs: 4_000 });
+    const stream = createProgressStream({ run, busy: false, connected: true, failure: null });
+    const settled = confirmAndStartUpdateRuntime({
+      existingRun: run,
+      startGatewayUpdate: vi.fn(),
+      onCheckStatus: vi.fn(async () => true),
+      onReviewUpdate: vi.fn(),
+      watchUpdateProgress: stream.watchUpdateProgress,
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    const labels = new Set(
+      [...modal.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    );
+    expect(labels.has("Retry update")).toBe(recovery);
+    expect(labels.has("Review update")).toBe(recovery);
+    expect(labels.has("Check status")).toBe(recovery);
+    findButton("Close").click();
+    await settled;
+    expect(stream.stopped).toBe(true);
+  },
+);
+
+it.each([
   { status: "running", entry: "existing" },
   { status: "failed", entry: "existing" },
   { status: "succeeded", entry: "existing" },
+  { status: "skipped", entry: "existing" },
   { status: "running", entry: "started" },
 ] as const)(
   "keeps the $status report and exposes read recovery for a $entry run",
@@ -471,10 +528,16 @@ it.each([
       status,
       phase: status === "running" ? "verifying" : "finished",
       finishedAtMs: status === "running" ? null : 4_000,
-      reason: status === "failed" ? "build-failed" : null,
+      reason:
+        status === "failed"
+          ? "build-failed"
+          : status === "skipped"
+            ? "external-supervisor-update-required"
+            : null,
     });
     let admitted = entry === "existing";
     let rejectRunReads = false;
+    let statusResponse: Promise<void> = Promise.resolve();
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "update.run") {
         admitted = true;
@@ -486,6 +549,9 @@ it.each([
         }
         return { run };
       }
+      if (method === "update.status") {
+        await statusResponse;
+      }
       return method === "update.status" && admitted
         ? { [status === "running" ? "activeRun" : "lastRun"]: run }
         : {};
@@ -493,6 +559,7 @@ it.each([
     const harness = updateRunHarness(request);
     const overlays = createApplicationOverlays(harness.gateway);
     let operation: Promise<void> | undefined;
+    let statusOperation: Promise<boolean> | undefined;
     let settled: Promise<void> | undefined;
     try {
       await overlays.refreshUpdateStatus();
@@ -501,7 +568,7 @@ it.each([
         startGatewayUpdate: () => {
           operation = overlays.runUpdate();
         },
-        onCheckStatus: () => overlays.refreshUpdateStatus(),
+        onCheckStatus: () => (statusOperation = overlays.refreshUpdateStatus()),
         watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
         updateAvailable: UPDATE_AVAILABLE,
         updateSchedule: null,
@@ -524,17 +591,59 @@ it.each([
       expect(view.run).toEqual(run);
       const check = findButton("Check status");
       expect(check.disabled).toBe(false);
-      if (status === "running") {
+      if (status !== "failed") {
         expect(
           [...modal.querySelectorAll("button")].some(
             (button) => button.textContent?.trim() === "Retry update",
           ),
         ).toBe(false);
       }
+      const pendingStatus = createDeferred();
+      statusResponse = pendingStatus.promise;
+      const statusReadsBeforeCheck = request.mock.calls.filter(
+        ([method]) => method === "update.status",
+      ).length;
       check.click();
       await flushMicrotasks();
+      expect(findButton("Checking status…").disabled).toBe(true);
+      if (status === "failed") {
+        expect(findButton("Retry update").disabled).toBe(true);
+      }
+      check.click();
+      pendingStatus.resolve();
+      await statusOperation;
       expect(modal.textContent).not.toContain("Run status read failed");
+      expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
       expect(view.run).toEqual(run);
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusReadsBeforeCheck + 1,
+      );
+
+      statusResponse = Promise.reject(new Error("Status refresh unavailable"));
+      findButton("Check status").click();
+      await statusOperation;
+      expect(modal.textContent).toContain(
+        "Could not check for updates: Status refresh unavailable",
+      );
+      expect(modal.textContent).not.toContain("Status refreshed.");
+      expect(findButton("Check status").disabled).toBe(false);
+      expect(view.run).toEqual(run);
+      statusResponse = Promise.resolve();
+      findButton("Check status").click();
+      await statusOperation;
+      expect(modal.textContent).not.toContain("Could not check for updates");
+      expect(view.run).toEqual(run);
+      harness.update({ phase: "connecting", client: null });
+      await flushMicrotasks();
+      expect(findButton("Check status").disabled).toBe(true);
+      expect(modal.textContent).toContain("Reconnect to the Gateway");
+      if (status === "failed") {
+        expect(findButton("Retry update").disabled).toBe(true);
+      }
+      findButton("Check status").click();
+      expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
+        statusReadsBeforeCheck + 3,
+      );
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
         entry === "started" ? 1 : 0,
       );

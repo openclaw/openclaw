@@ -141,7 +141,7 @@ describe("models.list plugin metadata handoff", () => {
       expectedAvailable: true,
     },
     {
-      name: "fails closed when harness discovery supersedes the prepared generation",
+      name: "reports retryable unavailability when harness discovery supersedes the prepared generation",
       supersedeDuringDiscovery: true,
       expectedAvailable: false,
     },
@@ -255,16 +255,22 @@ describe("models.list plugin metadata handoff", () => {
             } as never,
           });
 
-          if (supersedeDuringDiscovery) {
-            await expect(request).rejects.toThrow("Model catalog changed");
-            expect(respond).not.toHaveBeenCalled();
-          } else {
-            await request;
-          }
+          await request;
           expect(loadPreparedCatalog).toHaveBeenCalledOnce();
           expect(loadActiveCatalog).not.toHaveBeenCalled();
-          if (!supersedeDuringDiscovery) {
-            expect(respond).toHaveBeenCalledWith(
+          if (supersedeDuringDiscovery) {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("Model catalog changed"),
+                retryable: true,
+                retryAfterMs: 0,
+              }),
+            );
+          } else {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
               true,
               expect.objectContaining({
                 models: [

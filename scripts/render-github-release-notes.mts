@@ -438,6 +438,7 @@ function usage() {
     --tag <tag> --repository <owner/repo> \\
     [--version <version>] [--verification-file <path>] [--output <path>] \\
     [--metadata-output <path>]
+  Verification uses the same target arguments with --verify-body <path>.
 `;
 }
 
@@ -452,6 +453,7 @@ function parseArgs(argv: string[]) {
     ["--verification-file", "verificationFile"],
     ["--output", "output"],
     ["--metadata-output", "metadataOutput"],
+    ["--verify-body", "verifyBody"],
   ] as const satisfies ReadonlyArray<readonly [string, string]>;
   type ValueOption = (typeof valueOptions)[number][1];
   const options: Partial<Record<ValueOption, string>> & { help?: true } = {};
@@ -488,6 +490,12 @@ function parseArgs(argv: string[]) {
     if (options.metadataOutput && !options.output) {
       fail("--metadata-output requires --output");
     }
+    if (
+      options.verifyBody &&
+      (options.output || options.metadataOutput || options.verificationFile)
+    ) {
+      fail("--verify-body cannot be combined with rendering output or verification-file options");
+    }
   }
   return options;
 }
@@ -511,6 +519,20 @@ function main() {
     : changelogPath
       ? readFileSync(changelogPath, "utf8")
       : fail("release notes source was not validated");
+  if (options.verifyBody) {
+    const result = verifyGithubReleaseNotes({
+      body: readFileSync(options.verifyBody, "utf8"),
+      changelog,
+      version,
+      tag,
+      repository,
+      contributionRecordPath: source?.recordPath ?? undefined,
+    });
+    if (!result.matches) {
+      fail("Release body does not match canonical release notes.");
+    }
+    return;
+  }
   const verification = options.verificationFile
     ? readFileSync(options.verificationFile, "utf8")
     : "";

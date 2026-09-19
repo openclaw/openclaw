@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
@@ -16,6 +17,7 @@ import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
   tryCreateGatewaySchemaFenceDelegate,
+  tryCreateStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
   withStateSchemaFence,
 } from "./state-database-coordinator.js";
@@ -66,7 +68,14 @@ describe("state database coordinator", () => {
       actorId: "shared-state-test",
     };
     // An actor can open before Gateway startup without opening a coordinator on main.
-    expect(tryCreateGatewaySchemaFenceDelegate(params)).toBeUndefined();
+    const realpath = vi.spyOn(fsSync.realpathSync, "native");
+    try {
+      expect(tryCreateGatewaySchemaFenceDelegate(params)).toBeUndefined();
+      expect(tryCreateStateLifecycleDelegate(params)).toBeUndefined();
+      expect(realpath).not.toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+    }
     expect(fsSync.existsSync(params.runtimeDirectory)).toBe(false);
     expect(
       withStateSchemaFence(params, () => tryCreateGatewaySchemaFenceDelegate(params)),
@@ -139,7 +148,10 @@ describe("state database coordinator", () => {
       const { result: coordinator, database } = captureCoordinatorDatabase(() =>
         acquireStateDatabaseCoordinator(params),
       );
+      let delegation: ReturnType<typeof tryCreateStateLifecycleDelegate>;
       try {
+        delegation = tryCreateStateLifecycleDelegate({ ...params, actorId: "state-worker" });
+        expect(delegation).toBeDefined();
         expect(coordinator.path).toBe(
           resolveStateDatabaseCoordinatorPath({
             ...params,
@@ -148,6 +160,7 @@ describe("state database coordinator", () => {
           }),
         );
       } finally {
+        delegation?.release();
         coordinator.release();
         expect(database.isOpen).toBe(false);
       }
@@ -170,6 +183,12 @@ describe("state database coordinator", () => {
         uid: typeof process.getuid === "function" ? process.getuid() : undefined,
         coordinatorPath: explicit ? path.join(root, "custom", "coordinator.sqlite") : undefined,
       };
+      const nativeMode = getFsSafeNativeConfig().mode;
+      // fs-safe's Bun realpath workaround bypasses node:fs spies until oven-sh/bun#42374.
+      // Select its portable path so this probe-count assertion observes the realpath owner.
+      if (process.versions.bun) {
+        configureFsSafeNative({ mode: "off" });
+      }
       const resolvePath = vi.spyOn(fsSync, "realpathSync");
       try {
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -191,6 +210,9 @@ describe("state database coordinator", () => {
         }
       } finally {
         resolvePath.mockRestore();
+        if (process.versions.bun) {
+          configureFsSafeNative({ mode: nativeMode });
+        }
       }
     },
   );

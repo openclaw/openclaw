@@ -1,4 +1,3 @@
-// Voice Call plugin module implements response model behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
 

@@ -47,6 +47,7 @@ type DesktopObserverTokenEntry = {
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   requester?: DesktopObserveRequester;
+  onAbandon?: () => Promise<void>;
 };
 
 const observerTokens = createOneTimeTicketStore<DesktopObserverTokenEntry>({ ttlMs: TOKEN_TTL_MS });
@@ -62,6 +63,7 @@ export function mintDesktopObserverToken(params: {
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   requester?: DesktopObserveRequester;
+  onAbandon?: () => Promise<void>;
   nowMs?: number;
 }): { token: string; expiresAtMs: number } {
   const { nowMs, ...payload } = params;
@@ -77,6 +79,38 @@ function consumeDesktopObserverToken(
   nowMs = Date.now(),
 ): DesktopObserverTokenEntry | undefined {
   return observerTokens.consume(token, nowMs);
+}
+
+export async function releaseDesktopObserverToken(
+  wsPath: string,
+  requester: DesktopObserveRequester | undefined,
+): Promise<boolean> {
+  const connId = requester?.connId;
+  if (!connId || !requester.isCurrent()) {
+    return false;
+  }
+  let resource: URL;
+  try {
+    resource = new URL(wsPath, "http://127.0.0.1");
+  } catch {
+    return false;
+  }
+  if (resource.pathname !== DESKTOP_OBSERVE_PATH) {
+    return false;
+  }
+  const entry = observerTokens.consume(
+    resource.searchParams.get("token") ?? "",
+    Date.now(),
+    (candidate) =>
+      candidate.requester?.connId === connId &&
+      candidate.requester.isCurrent() &&
+      requester.isCurrent(),
+  );
+  if (!entry) {
+    return false;
+  }
+  await entry.onAbandon?.();
+  return true;
 }
 
 function rawDataBuffer(data: RawData): Buffer {

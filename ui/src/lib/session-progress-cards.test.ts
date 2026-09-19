@@ -3,6 +3,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import {
+  createGatewayEvent,
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
   stubGatewayStoreTestGlobals,
@@ -432,16 +433,37 @@ describe("session progress card Gateway response boundary", () => {
     await store.load(target);
     expect(store.get(target)).toEqual(oldCard);
 
+    const staleRead = createDeferred<{ card: typeof oldCard }>();
+    current().request.mockReturnValueOnce(staleRead.promise);
+    current().opts.onEvent?.(
+      createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 2 }),
+    );
+    const oldRead = store.load(target);
+    current().opts.onEvent?.(
+      createGatewayEvent("progressCard.changed", { sessionKey: oldCard.sessionKey, revision: 3 }),
+    );
     gateway.connect();
     const replacement = current();
     replacement.request.mockResolvedValue({ card: nextCard });
     replacement.opts.onHello?.(hello("agent:main:main"));
     await vi.waitFor(() => expect(store.get(target)).toEqual(nextCard));
+    staleRead.resolve({ card: oldCard });
+    await expect(oldRead).resolves.toBeNull();
+    expect(store.get(target)).toEqual(nextCard);
     expect(replacement.request).toHaveBeenCalledTimes(1);
 
     const staleDismiss = createDeferred<{ card: null }>();
     replacement.request.mockReturnValueOnce(staleDismiss.promise);
     const dismissal = store.dismiss(target, store.get(target)!);
+    const interruptedRead = createDeferred<{ card: typeof nextCard }>();
+    replacement.request.mockReturnValueOnce(interruptedRead.promise);
+    replacement.opts.onEvent?.(
+      createGatewayEvent("progressCard.changed", { sessionKey: nextCard.sessionKey, revision: 2 }),
+    );
+    const reconnectRead = store.load(target);
+    replacement.opts.onEvent?.(
+      createGatewayEvent("progressCard.changed", { sessionKey: nextCard.sessionKey, revision: 3 }),
+    );
     replacement.opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
     expect(gateway.snapshot.phase).toBe("reconnecting");
     expect(gateway.snapshot.client).toBe(replacement);
@@ -450,10 +472,12 @@ describe("session progress card Gateway response boundary", () => {
     replacement.request.mockResolvedValue({ card: refreshedCard });
     replacement.opts.onHello?.(hello("agent:main:main"));
     await vi.waitFor(() => expect(store.get(target)).toEqual(refreshedCard));
+    interruptedRead.resolve({ card: nextCard });
+    await expect(reconnectRead).resolves.toBeNull();
     staleDismiss.resolve({ card: null });
     await expect(dismissal).resolves.toBe(false);
     expect(store.get(target)).toEqual(refreshedCard);
-    expect(replacement.request).toHaveBeenCalledTimes(3);
+    expect(replacement.request).toHaveBeenCalledTimes(4);
   });
 
   it.each([-MAX_DATE_TIMESTAMP_MS, MAX_DATE_TIMESTAMP_MS])(

@@ -144,7 +144,8 @@ export function createHarness(
     getWorkspaceReconciliationPlacement: (owner) =>
       placementStore.getWorkspaceReconciliationPlacement(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
-    listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
+    listPendingWorkspaceResults: (sessionId) =>
+      placementStore.listPendingWorkspaceResults(sessionId),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
     recordStagedWorkspaceResult: (claim, ref, repositoryWorkspaceId) =>

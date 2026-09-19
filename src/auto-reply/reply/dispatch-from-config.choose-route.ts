@@ -22,7 +22,7 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
-import { setBlockReplyDelivery } from "./block-reply-delivery.js";
+import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -202,7 +202,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   type BlockDelivery = { outcome: ReplyDispatchDeliveryOutcome; pending?: boolean };
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
   const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {
-    setBlockReplyDelivery(outcome);
+    setBlockReplyDelivery(outcome, payload);
     const key = createBlockReplyContentKey(payload);
     const outcomes = blockDeliveryOutcomes.get(key) ?? [];
     outcomes.push(outcome);
@@ -218,6 +218,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           pending: delivery.hasPendingDelivery?.(),
         })) ?? Promise.resolve({ outcome: "failed-deliver" }),
       );
+    } else {
+      recordBlockOutcome(payload, Promise.resolve({ outcome: "cancelled" }));
     }
     return delivery;
   };
@@ -226,6 +228,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     result: Awaited<ReturnType<typeof sendPayloadAsync>>,
   ): ReplyDispatchDeliveryOutcome | undefined => {
     if (!result) {
+      recordBlockOutcome(payload, Promise.resolve({ outcome: "cancelled" }));
       return undefined;
     }
     const outcome = resolveRoutedReplyDeliveryOutcome(result);
@@ -375,14 +378,24 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       normalizedPayload = buildCaptionedFinalTextFallback(ttsPayload);
     }
     throwIfFinalDeliveryAborted();
-    const block = await getBlockReplyOutcome(payload, abortSignal);
+    const sourceRecovery = getReplyPayloadMetadata(payload)?.blockReplySources;
+    let block: BlockDelivery | undefined;
+    if (sourceRecovery) {
+      const recovery = await runWithDispatchAbortSignal(abortSignal, () =>
+        recoverBlockReplySources(normalizedPayload, sourceRecovery),
+      );
+      normalizedPayload = recovery.payload;
+      block = recovery.delivery;
+    } else {
+      block = await getBlockReplyOutcome(payload, abortSignal);
+    }
     throwIfFinalDeliveryAborted();
     const blockDeliveryOutcome = block?.outcome;
     const pendingBlock = block?.pending && blockDeliveryOutcome !== "delivered";
     if (blockDeliveryOutcome && (pendingBlock || !shouldRetryReplyDispatch(blockDeliveryOutcome))) {
       if (
         blockDeliveryOutcome === "channel-transform" ||
-        (blockDeliveryOutcome === "failed-deliver" && !pendingBlock) ||
+        (blockDeliveryOutcome === "failed-deliver" && !pendingBlock && !sourceRecovery) ||
         createBlockReplyContentKey(normalizedPayload) === createBlockReplyContentKey(payload)
       ) {
         return { blockDeliveryOutcome, pendingBlock, queuedFinal: false, routedFinalCount: 0 };
@@ -397,6 +410,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         await suppressPendingFinalDelivery(payload, {
           preserveActivity: state.replyOperationRunState.heartbeat !== undefined,
         });
+      }
+      if (pendingBlock || sourceRecovery) {
         setReplyPayloadMetadata(normalizedPayload, { pendingFinalDeliveryCompletion: undefined });
         sourceReplyTranscriptMirror = sourceReplyTranscriptMirror
           ? transcriptMirrorForDeliveredPayload(sourceReplyTranscriptMirror, normalizedPayload)
@@ -447,6 +462,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         });
       }
       return {
+        blockDeliveryOutcome: sourceRecovery ? blockDeliveryOutcome : undefined,
         pendingBlock,
         queuedFinal: result.ok,
         routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
@@ -531,6 +547,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       );
     }
     return {
+      blockDeliveryOutcome: sourceRecovery ? blockDeliveryOutcome : undefined,
       pendingBlock,
       queuedFinal,
       routedFinalCount: 0,

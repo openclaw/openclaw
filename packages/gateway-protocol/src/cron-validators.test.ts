@@ -491,3 +491,30 @@ describe("cron protocol validators", () => {
     ]);
   });
 });
+
+describe("cron timeout protocol contract", () => {
+  it.each([
+    { kind: "agentTurn", message: "Synthetic reminder" },
+    { kind: "command", argv: ["printf", "synthetic-proof"] },
+    { kind: "script", script: "return { output: 'synthetic-proof' };" },
+  ])("accepts null only in $kind timeout updates", (payload) => {
+    const create = add({ sessionTarget: "isolated", payload });
+    for (const timeout of [{}, { timeoutSeconds: 15 }, { timeoutSeconds: null }]) {
+      const candidatePayload = { ...payload, ...timeout };
+      expect(validateCronUpdateParams(update({ payload: candidatePayload }))).toBe(true);
+      const stored = { ...create, payload: candidatePayload };
+      const numericOrAbsent = timeout.timeoutSeconds !== null;
+      expect(validateCronAddParams(stored)).toBe(numericOrAbsent);
+      expect(
+        Value.Check(CronJobSchema, {
+          ...stored,
+          id: "timeout-job",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          state: {},
+        }),
+      ).toBe(numericOrAbsent);
+    }
+  });
+});

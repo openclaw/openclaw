@@ -3,7 +3,7 @@ const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
 
 type SessionEventRefreshCoordinatorOptions = {
   active: boolean;
-  refresh: () => Promise<void>;
+  refresh: (isCurrent: () => boolean) => Promise<void>;
 };
 
 /** Canonical bounded event refresh policy shared by session-list owners. */
@@ -14,8 +14,10 @@ export function createSessionEventRefreshCoordinator({
   let active = initialActive;
   let timer: ReturnType<typeof setTimeout> | 0 = 0;
   let deadline = 0;
-  // Hidden/page-exit lifecycle holds one authoritative refresh bit. Resume
-  // redeems it once without starting network work during teardown.
+  let nextAllowed = 0;
+  let pending: object | null = null;
+  let revision = 0;
+  // Hidden pages and in-flight requests retain one trailing invalidation.
   let queued = false;
 
   const clearTimer = () => {
@@ -24,48 +26,67 @@ export function createSessionEventRefreshCoordinator({
     deadline = 0;
   };
 
+  const arm = (debounce = true) => {
+    if (!active || pending || !queued) {
+      return;
+    }
+    const now = Date.now();
+    deadline ||= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
+    clearTimeout(timer);
+    const delay = debounce ? Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, deadline - now) : 0;
+    timer = setTimeout(start, Math.max(delay, nextAllowed - now));
+  };
+
   const start = () => {
-    timer = 0;
-    deadline = 0;
-    if (!active) {
-      queued = true;
+    clearTimer();
+    if (!active || pending || !queued) {
       return;
     }
     queued = false;
-    void refresh().catch(() => {});
+    const request = {};
+    pending = request;
+    const started = Date.now();
+    const requestRevision = revision;
+    void refresh(() => pending === request && requestRevision === revision)
+      .catch(() => {})
+      .finally(() => {
+        if (pending !== request) {
+          return;
+        }
+        pending = null;
+        const completed = Date.now();
+        nextAllowed = completed + Math.min(15_000, Math.max(1_000, 3 * (completed - started)));
+        arm();
+      });
   };
 
   const absorb = () => {
+    revision += 1;
     clearTimer();
     queued = false;
+  };
+  const reset = () => {
+    absorb();
+    pending = null;
+    nextAllowed = 0;
   };
 
   return {
     schedule() {
-      if (!active) {
-        clearTimer();
-        queued = true;
-        return;
-      }
-      const now = Date.now();
-      deadline ||= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-      clearTimeout(timer);
-      const delay = Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, deadline - now);
-      timer = setTimeout(start, delay);
+      queued = true;
+      arm();
     },
     setActive(next: boolean, markDirty = false) {
       active = next;
       if (next) {
-        if (queued) {
-          start();
-        }
+        arm(false);
         return;
       }
       queued ||= markDirty || timer !== 0;
       clearTimer();
     },
     absorb,
-    reset: absorb,
-    dispose: absorb,
+    reset,
+    dispose: reset,
   };
 }

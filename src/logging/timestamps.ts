@@ -2,6 +2,10 @@
 const validTimeZoneCache = new Map<string, boolean>();
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 let hostTimeZone: string | undefined;
+// Calendar parts and offsets are stable within a second; milliseconds stay per call.
+let lastTimestampParts:
+  | { second: number; timeZone: string; parts: Record<string, string> }
+  | undefined;
 
 function isValidTimeZone(tz: string): boolean {
   const cached = validTimeZoneCache.get(tz);
@@ -43,6 +47,10 @@ export function formatDiagnosticFilenameTimestamp(date: Date): string {
 
 function getTimestampParts(date: Date, timeZone?: string) {
   const effectiveTimeZone = resolveEffectiveTimeZone(timeZone);
+  const second = Math.floor(date.getTime() / 1000);
+  if (lastTimestampParts?.second === second && lastTimestampParts.timeZone === effectiveTimeZone) {
+    return lastTimestampParts.parts;
+  }
   let fmt = timestampFormatterCache.get(effectiveTimeZone);
   if (!fmt) {
     // Log timestamps are formatted on hot paths; Intl construction is much
@@ -67,6 +75,7 @@ function getTimestampParts(date: Date, timeZone?: string) {
   for (const part of fmt.formatToParts(date)) {
     parts[part.type] = part.value;
   }
+  lastTimestampParts = { second, timeZone: effectiveTimeZone, parts };
   return parts;
 }
 
@@ -74,14 +83,15 @@ export function formatTimestamp(date: Date, options?: FormatTimestampOptions): s
   const style = options?.style ?? "medium";
   const parts = getTimestampParts(date, options?.timeZone);
   const offset = formatOffset(parts.timeZoneName ?? "GMT");
+  const milliseconds = String(date.getUTCMilliseconds()).padStart(3, "0");
 
   switch (style) {
     case "short":
       return `${parts.hour}:${parts.minute}:${parts.second}${offset}`;
     case "medium":
-      return `${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
+      return `${parts.hour}:${parts.minute}:${parts.second}.${milliseconds}${offset}`;
     case "long":
-      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
+      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${milliseconds}${offset}`;
   }
   throw new Error("Unsupported timestamp style");
 }

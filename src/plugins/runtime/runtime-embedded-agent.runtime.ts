@@ -79,7 +79,8 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
   params.abortSignal?.addEventListener("abort", close, { once: true });
   try {
     params.abortSignal?.throwIfAborted();
-    const result = await runEmbeddedAgentCore({ ...params, config, preparedRunAdmission });
+    const { githubPublicationAvailable: _, ...runParams } = params;
+    const result = await runEmbeddedAgentCore({ ...runParams, config, preparedRunAdmission });
     if (admittedRunContext && getAdmittedRunDelegatedAuthority(admittedRunContext)) {
       recordRuntimeActionDecision({
         token: admittedRunContext.executionIdentityToken,

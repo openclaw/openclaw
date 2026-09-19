@@ -174,6 +174,7 @@ describe("waitForControlUiDocument", () => {
     const certPath = path.join(root, "cert.pem");
     await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
     const read = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
     const fetch = vi.fn(async () => htmlHead());
 
     const result = await waitForControlUiDocument({
@@ -188,7 +189,7 @@ describe("waitForControlUiDocument", () => {
     });
 
     expect(result.ready).toBe(true);
-    expect(read.mock.calls.map(([file]) => file)).toEqual([certPath]);
+    expect([...read.mock.calls, ...open.mock.calls].map(([file]) => file)).toEqual([certPath]);
     expect(fetch).toHaveBeenCalledOnce();
     await expect(fs.readdir(root)).resolves.toEqual(["cert.pem"]);
   });

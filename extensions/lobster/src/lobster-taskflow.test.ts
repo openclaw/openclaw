@@ -195,6 +195,26 @@ describe("runManagedLobsterFlow", () => {
 });
 
 describe("resumeManagedLobsterFlow", () => {
+  it.each([
+    { status: "running" as const },
+    { status: "succeeded" as const },
+    { cancelRequestedAt: 10 },
+    { endedAt: 10 },
+    { waitJson: { kind: "external_event" } },
+    { waitJson: { kind: "lobster_approval" } },
+    { revision: 5 },
+  ])("does not execute an unavailable or changed checkpoint: %j", async (change) => {
+    const taskFlow = createFakeTaskFlow();
+    const saved = await taskFlow.get("flow-1");
+    vi.mocked(taskFlow.get).mockResolvedValue(saved && { ...saved, ...change });
+    const runner = createRunner({ ok: true, status: "ok", output: [], requiresApproval: null });
+    expectManagedFlowFailure(
+      await resumeManagedLobsterFlow(createResumeFlowParams(taskFlow, runner)),
+    );
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(taskFlow.resume).not.toHaveBeenCalled();
+  });
+
   it("resumes the flow and finishes it on success", async () => {
     const taskFlow = createFakeTaskFlow();
     const runner = createRunner({
@@ -296,6 +316,7 @@ describe("cancelled managed Lobster flows", () => {
         sessionKey: `agent:main:lobster-cancel-${action}`,
       });
       const taskFlow: BoundTaskFlow = {
+        get: async (id) => legacy.get(id),
         tryCreateManaged: async (params) => legacy.tryCreateManaged(params),
         resume: async (params) => legacy.resume(params),
         setWaiting: async (params) => legacy.setWaiting(params),
@@ -317,6 +338,7 @@ describe("cancelled managed Lobster flows", () => {
           controllerId: "tests/lobster",
           goal: "Resume Lobster workflow",
           status: "waiting",
+          waitJson: { kind: "lobster_approval", resumeToken: "resume-1" },
         });
         result = await resumeManagedLobsterFlow({
           ...createResumeFlowParams(taskFlow, runner),

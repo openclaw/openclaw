@@ -12,10 +12,8 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import {
@@ -32,9 +30,9 @@ type ContextEngineTurnOutboxPayload = Parameters<
   typeof enqueueContextEngineTurnCommit
 >[0]["payload"];
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
+afterEach(async () => {
   for (const tempDir of tempDirs.splice(0)) {
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
@@ -128,8 +126,17 @@ describe("context-engine turn outbox", () => {
     );
 
     valid = true;
-    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", warn });
+    const onCommitted = vi.fn(() => {
+      throw new Error("maintenance handoff failed");
+    });
+    await drainContextEngineTurnOutbox({ database, engine, engineId: "test", onCommitted, warn });
 
+    expect(onCommitted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ advancementKey: payload.boundary.admission.logicalTurnId }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[context-engine] committed turn notification failed: maintenance handoff failed",
+    );
     expect(
       database.db
         .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")

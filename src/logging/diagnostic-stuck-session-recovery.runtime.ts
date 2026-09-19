@@ -94,9 +94,10 @@ function isActiveRunProgressStale(params: {
   ) {
     return false;
   }
-  if (params.allowActiveAbort) {
+  if (params.allowActiveAbort && activity.activeToolDeadlineAtMs === undefined) {
     // Recovery may have queued before a fresh byte arrived. Revalidate the
-    // backend allowance here; active tools retain their separate recovery policy.
+    // backend allowance here. A tool deadline published during runtime loading
+    // must instead pass the current shared threshold below.
     return (
       activity.activeWorkKind === "tool_call" ||
       activity.activeBackendLivenessDeadlineAtMs === undefined ||

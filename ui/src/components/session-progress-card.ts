@@ -3,12 +3,16 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { html, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
-import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { scrollState } from "./scroll-state.ts";
+import {
+  composerDisclosure,
+  type ComposerProgressRunLifecycle,
+} from "./session-progress-disclosure-controller.ts";
 
 type SessionProgressCardPlacement = "board" | "composer";
 type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
@@ -92,76 +96,6 @@ class ProgressActivityTimeDirective extends AsyncDirective {
 }
 
 const progressActivityTime = directive(ProgressActivityTimeDirective);
-
-type ComposerProgressRunLifecycle = {
-  activeRunId?: string | null;
-  completedRunId?: string | null;
-  readingHistory?: boolean;
-};
-
-type ComposerDisclosureOwner = {
-  activeRunId: string | null;
-  handledCompletedRunId: string | null;
-  sessionKey: string;
-  automaticOpen: boolean;
-  manualOpen?: boolean;
-};
-
-const composerDisclosureOwners = new WeakMap<HTMLDetailsElement, ComposerDisclosureOwner>();
-
-function reconcileComposerDisclosure(
-  element: Element | undefined,
-  sessionKey: string,
-  initialOpen: boolean,
-  collapseByDefault: boolean,
-  lifecycle?: ComposerProgressRunLifecycle,
-): void {
-  if (!(element instanceof HTMLDetailsElement)) {
-    return;
-  }
-  const activeRunId = lifecycle?.activeRunId ?? null;
-  const completedRunId = lifecycle?.completedRunId ?? null;
-  let owner = composerDisclosureOwners.get(element);
-  if (!owner || owner.sessionKey !== sessionKey) {
-    owner = {
-      activeRunId,
-      handledCompletedRunId: completedRunId,
-      sessionKey,
-      automaticOpen: initialOpen,
-    };
-    composerDisclosureOwners.set(element, owner);
-  } else if (activeRunId && activeRunId !== owner.activeRunId) {
-    // A new run starts a fresh task choice. Revisions and completion belong
-    // to the same task and must not discard an explicit disclosure choice.
-    owner.activeRunId = activeRunId;
-    owner.handledCompletedRunId = null;
-    owner.manualOpen = undefined;
-    owner.automaticOpen = !collapseByDefault;
-  }
-  if (
-    completedRunId &&
-    completedRunId === owner.activeRunId &&
-    completedRunId !== owner.handledCompletedRunId
-  ) {
-    owner.handledCompletedRunId = completedRunId;
-    owner.automaticOpen = true;
-  }
-  element.open = owner.manualOpen ?? (owner.automaticOpen && !lifecycle?.readingHistory);
-}
-
-function handleComposerDisclosureClick(event: MouseEvent): void {
-  const summary = event.currentTarget;
-  const element = summary instanceof HTMLElement ? summary.parentElement : null;
-  if (!(element instanceof HTMLDetailsElement) || event.defaultPrevented) {
-    return;
-  }
-  const owner = composerDisclosureOwners.get(element);
-  if (owner) {
-    // Summary activation covers pointer and keyboard input. A toggle event also
-    // fires for automatic changes, so it cannot establish operator intent.
-    owner.manualOpen = !element.open;
-  }
-}
 
 function progressCounts(card: ProgressCard): { completed: number; total: number } | null {
   const steps = card.steps;
@@ -453,21 +387,14 @@ export function renderSessionProgressCard(
       class="session-progress-card session-progress-card--composer"
       data-progress-card-placement="composer"
       data-complete=${String(complete)}
-      ${ref((element) =>
-        reconcileComposerDisclosure(
-          element,
-          card.sessionKey,
-          !complete && !collapseComposerByDefault,
-          collapseComposerByDefault,
-          composerRunLifecycle,
-        ),
+      ${composerDisclosure(
+        composerRunLifecycle?.sessionIdentity ?? card.sessionKey,
+        !complete && !collapseComposerByDefault,
+        collapseComposerByDefault,
+        composerRunLifecycle,
       )}
     >
-      <summary
-        class="session-progress-card__summary"
-        aria-label=${summaryLabel}
-        @click=${handleComposerDisclosureClick}
-      >
+      <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
         <span
           class="session-progress-card__summary-indicator session-progress-card__current-marker${
             complete || effectiveSessionStatus === "done"
@@ -509,7 +436,12 @@ export function renderSessionProgressCard(
           >${icons.chevronDown}</span
         >
       </summary>
-      <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
+      <div
+        class="session-progress-card__body"
+        role="region"
+        aria-label=${composerCountLabel}
+        ${scrollState()}
+      >
         ${renderProgressCardMarkdown(card.markdown)}
         ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
       </div>

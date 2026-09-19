@@ -21,9 +21,9 @@ import {
   type CdpSendFn,
   fetchJson,
   isDirectCdpWebSocketEndpoint,
-  isLoopbackHost,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  normalizeCdpWsUrl,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
@@ -35,7 +35,7 @@ import {
 } from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export { appendCdpPath } from "./cdp.helpers.js";
+export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
 /** Read the current main-frame loader identity from a page-level CDP target. */
@@ -49,46 +49,6 @@ export async function getMainFrameDocumentIdentityViaCdp(opts: {
     async (send) => await readCdpMainFrameDocumentIdentity(send),
     { commandTimeoutMs: opts.timeoutMs ?? 5000, ...(opts.lookup ? { lookup: opts.lookup } : {}) },
   );
-}
-
-/** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
-export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
-  const ws = new URL(wsUrl);
-  const cdp = new URL(cdpUrl);
-  // Treat 0.0.0.0 and :: as wildcard bind addresses that need rewriting.
-  // Containerized browsers (e.g. browserless) report ws://0.0.0.0:<internal-port>
-  // in /json/version — these must be rewritten to the external cdpUrl host:port.
-  const isWildcardBind = ws.hostname === "0.0.0.0" || ws.hostname === "[::]";
-  if ((isLoopbackHost(ws.hostname) || isWildcardBind) && !isLoopbackHost(cdp.hostname)) {
-    ws.hostname = cdp.hostname;
-    const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
-    // `cdpPort` is always truthy: either the explicit cdp.port (truthy
-    // string), or the "443"/"80" default from the ternary. The guard is
-    // defensive against future parser edge cases.
-    /* c8 ignore next 3 */
-    if (cdpPort) {
-      ws.port = cdpPort;
-    }
-    ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
-  } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
-    ws.hostname = cdp.hostname;
-    if (!ws.port && cdp.port) {
-      ws.port = cdp.port;
-    }
-  }
-  if (cdp.protocol === "https:" && ws.protocol === "ws:") {
-    ws.protocol = "wss:";
-  }
-  if (!ws.username && !ws.password && (cdp.username || cdp.password)) {
-    ws.username = cdp.username;
-    ws.password = cdp.password;
-  }
-  for (const [key, value] of cdp.searchParams.entries()) {
-    if (!ws.searchParams.has(key)) {
-      ws.searchParams.append(key, value);
-    }
-  }
-  return ws.toString();
 }
 
 /** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */

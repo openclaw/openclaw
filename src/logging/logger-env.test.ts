@@ -1,13 +1,9 @@
 // Logger env tests cover log level and transport behavior from environment config.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getResolvedConsoleSettings,
-  getResolvedLoggerSettings,
-  resetLogger,
-  setLoggerOverride,
-} from "../logging.js";
 import { captureEnv } from "../test-utils/env.js";
+import { getResolvedConsoleSettings } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 
 const defaultMaxFileBytes = 100 * 1024 * 1024;

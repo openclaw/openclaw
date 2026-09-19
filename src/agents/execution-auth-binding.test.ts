@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sealSecretSentinel } from "../secrets/sentinel.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintAuthProfileOwnerShape,
@@ -166,6 +167,67 @@ describe("execution auth binding fingerprints", () => {
     expect(first).not.toBe(fingerprint("replacement-secret"));
     expect(first).toMatch(/^[a-f0-9]{64}$/u);
     expect(first).not.toContain(secret);
+  });
+
+  it("fingerprints the same resolved credential identically across resolution sources", () => {
+    // The successful-run capture may resolve a key from env while the owner
+    // revalidation resolves the identical key through a models.json marker or
+    // profile fallback. The owner gate must treat both as the same authority
+    // (openclaw/openclaw#138584) instead of failing closed on provenance.
+    const material = "shared-credential-material";
+    const fromEnv = fingerprintResolvedProviderAuth({
+      apiKey: material,
+      source: "env: OPENAI_API_KEY",
+      mode: "api-key",
+    });
+    const fromProfile = fingerprintResolvedProviderAuth({
+      apiKey: material,
+      profileId: "openai:bound",
+      source: "profile:openai:bound",
+      mode: "api-key",
+    });
+    const fromModelsJson = fingerprintResolvedProviderAuth({
+      apiKey: material,
+      source: "models.json",
+      mode: "api-key",
+    });
+
+    expect(fromEnv).toBeDefined();
+    expect(fromEnv).toBe(fromProfile);
+    expect(fromEnv).toBe(fromModelsJson);
+    expect(fromEnv).not.toBe(
+      fingerprintResolvedProviderAuth({
+        apiKey: material,
+        source: "env: OPENAI_API_KEY",
+        mode: "token" as never,
+      }),
+    );
+  });
+
+  it("hashes a sentinel-sealed key the same as its plaintext", () => {
+    const secret = "sentinel-unwrapped-credential";
+    const sealed = sealSecretSentinel(secret, { label: "model-auth:test" });
+    const fromPlaintext = fingerprintResolvedProviderAuth({
+      apiKey: secret,
+      source: "env: TEST",
+      mode: "api-key",
+    });
+    const fromSentinel = fingerprintResolvedProviderAuth({
+      apiKey: sealed,
+      source: "profile:test",
+      mode: "api-key",
+    });
+
+    expect(fromPlaintext).toBeDefined();
+    expect(fromPlaintext).toBe(fromSentinel);
+    // Tampered sentinels must not silently resolve to the wrong credential.
+    expect(
+      fingerprintResolvedProviderAuth({
+        apiKey: `${sealed.slice(0, -4)}AAAA.end`,
+        source: "env: TEST",
+        mode: "api-key",
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects auth modes without a concrete credential identity", () => {

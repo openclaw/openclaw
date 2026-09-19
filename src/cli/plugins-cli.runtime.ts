@@ -4,10 +4,8 @@ import type { PluginsRefreshResult } from "../../packages/gateway-protocol/src/s
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import {
-  collectConfiguredRuntimePluginIds,
-  resolveConfiguredRuntimePluginInstallCandidate,
-} from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
+import { resolveConfiguredRuntimePluginInstallCandidate } from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimePluginIds } from "../commands/doctor/shared/configured-runtime-plugin-owners.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
@@ -20,15 +18,14 @@ import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
-import { shortenHomeInString } from "../utils.js";
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
-  PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
   PluginRegistryOptions,
 } from "./plugins-cli.js";
@@ -48,7 +45,6 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
 }
 
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
-const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
@@ -258,9 +254,10 @@ async function runPluginPolicyCommand(
 }
 
 export async function runPluginsReloadCommand(
-  pluginId: string,
+  ids: string[],
   opts: { json?: boolean; acceptCapabilities?: boolean } = {},
 ): Promise<void> {
+  const pluginIds = [...new Set(ids)];
   const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
   const gateway = await resolvePluginLifecycleGateway();
   if (!gateway) {
@@ -273,7 +270,7 @@ export async function runPluginsReloadCommand(
   });
   const result = await gateway<{ runtime: { generation: number }; warnings?: string[] }>(
     "plugins.reload",
-    { plugins: [{ pluginId }] },
+    { plugins: pluginIds.map((pluginId) => ({ pluginId })) },
     consent.onCapabilityConsent,
   );
   if (opts.json) {
@@ -282,7 +279,9 @@ export async function runPluginsReloadCommand(
   for (const warning of result.warnings ?? []) {
     defaultRuntime.log(theme.warn(warning));
   }
-  defaultRuntime.log(`Reloaded plugin "${pluginId}" (generation ${result.runtime.generation}).`);
+  defaultRuntime.log(
+    `Reloaded ${pluginIds.length === 1 ? "plugin" : "plugins"} ${pluginIds.map((id) => `"${id}"`).join(", ")} (generation ${result.runtime.generation}).`,
+  );
 }
 
 export async function runPluginsInstallAction(
@@ -312,7 +311,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     differences: Awaited<ReturnType<typeof inspectPluginRegistry>>["differences"],
   ) => {
     const formatSource = (source: string | null) =>
-      source ? sanitizeTerminalText(shortenHomeInString(source)) : "missing";
+      source ? sanitizeTerminalText(shortenHomePath(source)) : "missing";
     return differences.map(
       (difference) =>
         `${sanitizeTerminalText(difference.pluginId)}: ${difference.changed.join("+")} changed; persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
@@ -446,12 +445,12 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
               id: entry.id,
               ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
               error: shortenHomeInString(entry.error ?? "failed to load"),
-              source: shortenHomeInString(entry.source),
+              source: shortenHomePath(entry.source),
             })),
             diagnostics: diags.map(({ message, source, ...diagnostic }) => ({
               ...diagnostic,
               message: shortenHomeInString(message),
-              ...(source ? { source: shortenHomeInString(source) } : {}),
+              ...(source ? { source: shortenHomePath(source) } : {}),
             })),
             sourceShadowing: shadowed.map((entry) => {
               const active = report.plugins.find((plugin) => plugin.id === entry.pluginId);
@@ -461,14 +460,14 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
                 ...(active
                   ? {
                       active: {
-                        source: shortenHomeInString(active.source),
+                        source: shortenHomePath(active.source),
                         origin: active.origin,
                         status: active.status,
                         ...(active.error ? { error: shortenHomeInString(active.error) } : {}),
                       },
                     }
                   : {}),
-                ...(entry.source ? { shadowedSource: shortenHomeInString(entry.source) } : {}),
+                ...(entry.source ? { shadowedSource: shortenHomePath(entry.source) } : {}),
                 repair: [
                   `openclaw plugins inspect ${entry.pluginId ?? "<plugin-id>"}`,
                   "edit or remove the config-selected plugin source",
@@ -523,13 +522,13 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
           lines.push(`- ${target}${diag.message}`);
           if (active) {
-            lines.push(`  active: ${shortenHomeInString(active.source)} (${active.origin})`);
+            lines.push(`  active: ${shortenHomePath(active.source)} (${active.origin})`);
             if (active.status === "error") {
               lines.push(`  active status: error${active.error ? `: ${active.error}` : ""}`);
             }
           }
           if (diag.source) {
-            lines.push(`  shadowed: ${shortenHomeInString(diag.source)}`);
+            lines.push(`  shadowed: ${shortenHomePath(diag.source)}`);
           }
           lines.push("  repair:");
           lines.push("    openclaw plugins inspect " + (diag.pluginId ?? "<plugin-id>"));
@@ -1018,43 +1017,4 @@ export async function runPluginMarketplaceRefreshCommand(
   }
 }
 
-/** List plugins from a configured marketplace manifest. */
-export async function runPluginMarketplaceListCommand(
-  source: string,
-  opts: PluginMarketplaceListOptions,
-): Promise<void> {
-  const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger, quietPluginJsonLogger } = await loadPluginsCommandHelpers();
-  const result = await listMarketplacePlugins({
-    marketplace: source,
-    logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
-  });
-  if (!result.ok) {
-    const message = result.error;
-    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-  }
-
-  if (opts.json) {
-    return defaultRuntime.writeJson({
-      source: result.sourceLabel,
-      name: result.manifest.name,
-      version: result.manifest.version,
-      plugins: result.manifest.plugins,
-    });
-  }
-
-  if (result.manifest.plugins.length === 0) {
-    defaultRuntime.log(`No plugins found in marketplace ${result.sourceLabel}.`);
-    return;
-  }
-
-  defaultRuntime.log(
-    `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
-  );
-  for (const plugin of result.manifest.plugins) {
-    const suffix = plugin.version ? theme.muted(` v${plugin.version}`) : "";
-    const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
-    defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

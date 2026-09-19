@@ -154,6 +154,39 @@ function expectShimLoader(result: Awaited<ReturnType<typeof runShimFixture>>, lo
 }
 
 describe("script direct-run entrypoints", () => {
+  it.skipIf(process.platform === "win32")(
+    "lets the Vitest implementation finish cleanup beyond the shim force-kill window",
+    async () => {
+      await withShimFixture("scripts/run-vitest.mjs", async (fixture) => {
+        const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+        const ownerPath = path.join(fixtureRoot, "owner.pid");
+        const settledPath = path.join(fixtureRoot, "cleanup-settled");
+        writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
+        writeFileSync(
+          implementationPath,
+          `import fs from "node:fs";
+const keepAlive = setInterval(() => {}, 1000);
+process.once("SIGTERM", () => {
+  setTimeout(() => {
+    fs.writeFileSync(${JSON.stringify(settledPath)}, "settled");
+    clearInterval(keepAlive);
+    process.exitCode = 143;
+  }, 5500);
+});
+fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
+`,
+        );
+        const completion = runNode([wrapperPath], process.env, fixtureRoot);
+        const owner = await waitForPidFile(ownerPath, 10_000);
+        process.kill(owner, "SIGTERM");
+        const result = await completion;
+        expect(result.status, formatShimResult(result)).toBe(143);
+        expect(readFileSync(settledPath, "utf8")).toBe("settled");
+        expect(isProcessAlive(owner)).toBe(false);
+      });
+    },
+  );
+
   it.each(["wrapper", "preload"])(
     "loads compiled ESM through require from the %s with import-only dependencies",
     async (entrypoint) => {
@@ -395,6 +428,93 @@ process.exitCode = child.status ?? 1;
     expect(result.status).toBe(entrypoint.status);
     expect(output).toContain(entrypoint.output);
   });
+
+  it.runIf(process.platform === "win32")(
+    "runs the checked-out Crabbox wrapper through its Windows Job child",
+    async () => {
+      await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
+        const fixtureVersion = "0.56.0";
+        const binDir = path.join(fixtureRoot, "fake bin");
+        const home = path.join(fixtureRoot, "home");
+        const state = path.join(fixtureRoot, "state");
+        const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
+        mkdirSync(binDir);
+        mkdirSync(state);
+        // A failed version probe must fail before managed installation can download anything.
+        writeFileSync(
+          path.join(state, "tools"),
+          "managed installation disabled for this fixture\n",
+        );
+        const responses = {
+          "--version": `crabbox ${fixtureVersion}`,
+          "run --help": "provider: ssh\n  -provider string\n",
+          "config show --json": JSON.stringify({ provider: "ssh" }),
+        };
+        writeFileSync(
+          path.join(binDir, "crabbox.cjs"),
+          String.raw`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, pid: process.pid }) + "\n");
+const response = ${JSON.stringify(responses)}[args.join(" ")];
+if (response === undefined) throw new Error("Unexpected fixture command: " + JSON.stringify(args));
+process.stdout.write(response + "\n");
+`,
+        );
+        writeFileSync(
+          path.join(binDir, "crabbox.cmd"),
+          [
+            "@echo off",
+            `"${process.execPath}" "%~dp0crabbox.cjs" %*`,
+            "exit /b %errorlevel%",
+            "",
+          ].join("\r\n"),
+        );
+        const env: NodeJS.ProcessEnv = {
+          SystemRoot: process.env.SystemRoot,
+          ComSpec: process.env.ComSpec,
+          PATH: [binDir, path.dirname(process.execPath), process.env.PATH ?? ""].join(
+            path.delimiter,
+          ),
+          HOME: home,
+          USERPROFILE: home,
+          APPDATA: path.join(home, "AppData", "Roaming"),
+          LOCALAPPDATA: path.join(home, "AppData", "Local"),
+          XDG_CONFIG_HOME: path.join(home, "config"),
+          XDG_STATE_HOME: path.join(home, "state"),
+          OPENCLAW_STATE_DIR: state,
+          TMPDIR: fixtureRoot,
+          TMP: fixtureRoot,
+          TEMP: fixtureRoot,
+          CRABBOX_PROVIDER: "ssh",
+          OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
+        };
+        // Keep the checked-out implementation and its Windows worker/native imports intact.
+        const result = await runNode(
+          [path.resolve("scripts/crabbox-wrapper.mjs"), "--version"],
+          env,
+          process.cwd(),
+        );
+        expect(result.error, formatShimResult(result)).toBeUndefined();
+        expect(result.status, formatShimResult(result)).toBe(0);
+        expect(result.stdout).toBe(`crabbox ${fixtureVersion}\n`);
+        const invocations = readFileSync(invocationLog, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { args: string[]; pid: number });
+        expect(invocations.map(({ args }) => args)).toEqual([
+          ["--version"],
+          ["run", "--help"],
+          ["config", "show", "--json"],
+          ["--version"],
+        ]);
+        for (const invocation of invocations) {
+          expect(isProcessAlive(invocation.pid)).toBe(false);
+        }
+        expect(readdirSync(state)).toEqual(["tools"]);
+      });
+    },
+  );
 
   it.each([
     { envKey: "PNPM_CONFIG_MODULES_DIR", mode: "absolute", wrapper: TSX_SHIM_WRAPPERS[0] },

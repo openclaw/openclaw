@@ -63,15 +63,6 @@ describe("Codex plugin activation", () => {
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -81,14 +72,7 @@ describe("Codex plugin activation", () => {
       reason: "already_active",
       installAttempted: true,
     });
-    expect(calls).toEqual([
-      "plugin/list",
-      "plugin/install",
-      "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
-    ]);
+    expect(calls).toEqual(["plugin/list", "plugin/install", "plugin/list"]);
   });
 
   it("installs a migration-authorized local curated plugin and refreshes runtime state", async () => {
@@ -120,16 +104,6 @@ describe("Codex plugin activation", () => {
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
-        if (method === "skills/list") {
-          expectBooleanParam(params, "forceReload", true);
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
         if (method === "app/installed") {
           expectBooleanParam(params, "forceRefresh", true);
           return { apps: [] } satisfies v2.AppsInstalledResponse;
@@ -147,9 +121,6 @@ describe("Codex plugin activation", () => {
       "plugin/list",
       "plugin/install",
       "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
       "app/installed",
     ]);
     expect(pluginListCalls).toBe(2);
@@ -159,7 +130,7 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
-  it("keeps curated catalog and skill refresh scoped to the active repository", async () => {
+  it("keeps curated catalog refresh scoped to the active repository", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
@@ -176,15 +147,6 @@ describe("Codex plugin activation", () => {
         }
         if (method === "plugin/install") {
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
         }
         throw new Error(`unexpected request ${method}`);
       },
@@ -203,14 +165,6 @@ describe("Codex plugin activation", () => {
       method: "plugin/list",
       params: { cwds: ["/repo/project"], forceRefetch: true },
     });
-    expect(requests).toContainEqual({
-      method: "skills/list",
-      params: { cwds: ["/repo/project"], forceReload: true },
-    });
-    expect(requests).toContainEqual({
-      method: "hooks/list",
-      params: { cwds: ["/repo/project"] },
-    });
   });
 
   it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
@@ -227,15 +181,6 @@ describe("Codex plugin activation", () => {
         }
         if (method === "plugin/install") {
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
         }
         if (method === "app/installed") {
           throw new Error("app/installed unavailable");
@@ -257,7 +202,7 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
-  it("reports post-install runtime refresh failures without hiding the install attempt", async () => {
+  it("keeps a successful install usable when unrelated native refreshes fail", async () => {
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
       request: async (method) => {
@@ -277,15 +222,11 @@ describe("Codex plugin activation", () => {
     });
 
     expectActivationResult(result, {
-      ok: false,
-      reason: "refresh_failed",
+      ok: true,
+      reason: "installed",
       installAttempted: true,
     });
-    expect(result.diagnostics).toEqual([
-      {
-        message: "Codex plugin runtime refresh failed after install: skills/list unavailable",
-      },
-    ]);
+    expect(result.diagnostics).toEqual([]);
   });
 
   it("installs a disabled remote curated plugin by its resolved remote id", async () => {
@@ -326,15 +267,6 @@ describe("Codex plugin activation", () => {
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
         throw new Error(`unexpected request ${method}`);
       },
     });
@@ -348,9 +280,6 @@ describe("Codex plugin activation", () => {
       "plugin/list",
       "plugin/install",
       "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
     ]);
   });
 

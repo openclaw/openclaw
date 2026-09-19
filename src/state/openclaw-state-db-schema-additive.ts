@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -20,10 +21,38 @@ import {
   repairLegacySubagentSuspensionReasons,
   repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
-import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import {
+  ensureColumn,
+  tableHasColumn,
+  tableHasColumns,
+} from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
+const taskExecutionOwnerSchemas = new WeakSet<DatabaseSync>();
+
+export function ensureTaskExecutionOwnerSchema(database: DatabaseSync): void {
+  if (taskExecutionOwnerSchemas.has(database)) {
+    return;
+  }
+  const ownerColumns = [
+    "execution_owner_host",
+    "execution_owner_pid",
+    "execution_owner_start_identity",
+  ];
+  if (!tableHasColumns(database, "task_runs", ownerColumns)) {
+    ensureColumn(database, "task_runs", "execution_owner_host TEXT");
+    ensureColumn(database, "task_runs", "execution_owner_pid INTEGER");
+    ensureColumn(database, "task_runs", "execution_owner_start_identity INTEGER");
+  }
+  const rememberSchema = () => taskExecutionOwnerSchemas.add(database);
+  if (database.isTransaction) {
+    // An outer transaction can still roll back its first-use DDL.
+    deferSqlitePostCommitPublication(database, rememberSchema);
+  } else {
+    rememberSchema();
+  }
+}
 
 export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
   if (repositoryWorkspacePendingSchemas.has(database)) {
@@ -253,13 +282,20 @@ export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: Databas
 function ensureColumns(
   db: DatabaseSync,
   definitions: readonly (readonly [string, string])[],
-): void {
-  for (const definition of definitions) {
-    ensureColumn(db, ...definition);
+): Array<{ tableName: string; columnName: string }> {
+  const added: Array<{ tableName: string; columnName: string }> = [];
+  for (const [tableName, definition] of definitions) {
+    const columnName = definition.trim().split(/\s+/, 1)[0];
+    if (columnName && ensureColumn(db, tableName, definition)) {
+      added.push({ tableName, columnName });
+    }
   }
+  return added;
 }
 
-export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+/** Runtime pairs new columns with their transforms; full historical repair stays explicit. */
+export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | "repair"): void {
+  const repairHistoricalRows = scope === "repair";
   ensureWorkerSessionToolStateSchema(db);
   for (const {
     columnName,
@@ -294,15 +330,35 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
       );
     `);
   }
-  db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
-  ensureColumns(db, columns.cronRunLogs);
-  backfillCronRunLogEntryJson(db);
-  ensureColumns(db, columns.acpReplay);
-  backfillAcpReplayEstimatedBytes(db);
-  ensureColumns(db, columns.cronJobs);
-  backfillCronJobsFromJobJson(db);
-  ensureColumns(db, columns.deliveryQueue);
-  backfillDeliveryQueueEntriesFromEntryJson(db);
+  if (addedDiagnosticEventSequence || repairHistoricalRows) {
+    db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
+  }
+  const addedCronLogColumns = ensureColumns(db, columns.cronRunLogs);
+  if (
+    repairHistoricalRows ||
+    addedCronLogColumns.some(({ tableName }) => tableName === "cron_run_logs")
+  ) {
+    backfillCronRunLogEntryJson(db);
+  }
+  if (ensureColumns(db, columns.acpReplay).length > 0 || repairHistoricalRows) {
+    backfillAcpReplayEstimatedBytes(db);
+  }
+  const addedCronJobColumns = ensureColumns(db, columns.cronJobs);
+  if (
+    repairHistoricalRows ||
+    addedCronJobColumns.some(({ columnName }) =>
+      ["name", "enabled", "agent_id", "payload_kind", "runtime_updated_at_ms"].includes(columnName),
+    )
+  ) {
+    backfillCronJobsFromJobJson(db);
+  }
+  const addedDeliveryColumns = ensureColumns(db, columns.deliveryQueue);
+  if (
+    repairHistoricalRows ||
+    addedDeliveryColumns.some(({ tableName }) => tableName === "delivery_queue_entries")
+  ) {
+    backfillDeliveryQueueEntriesFromEntryJson(db);
+  }
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
@@ -315,12 +371,18 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   if (addedTaskRequesterAgentId) {
     repairLegacyTaskAgentAttribution(db);
   }
-  repairLegacyTaskDeliveryStatuses(db);
+  if (repairHistoricalRows) {
+    repairLegacyTaskDeliveryStatuses(db);
+  }
   ensureColumns(db, columns.taskRunDetails);
-  repairLegacySubagentSuspensionReasons(db);
-  repairLegacySubagentExecutionPayloads(db);
-  repairLegacySubagentTaskBindings(db);
-  repairLegacySubagentRetainedResults(db);
+  if (repairHistoricalRows) {
+    repairLegacySubagentSuspensionReasons(db);
+    repairLegacySubagentExecutionPayloads(db);
+    repairLegacySubagentTaskBindings(db);
+    repairLegacySubagentRetainedResults(db);
+  }
   ensureColumns(db, columns.workerEnvironments);
-  ensureOperatorApprovalResolutionRefs(db);
+  if (repairHistoricalRows || !tableHasColumn(db, "operator_approvals", "resolution_ref")) {
+    ensureOperatorApprovalResolutionRefs(db);
+  }
 }

@@ -1,7 +1,7 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";

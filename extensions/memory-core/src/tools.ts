@@ -41,7 +41,6 @@ import {
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   decorateCitations,
   resolveMemoryCitationsMode,
@@ -503,14 +502,18 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 cfg,
               });
               if ((memory?.outcome === "ok" || memory?.outcome === "partial") && dreaming.enabled) {
-                void recordShortTermRecalls({
+                const recall = {
                   workspaceDir: memoryValue?.workspaceDir,
                   query,
                   results: recalled,
+                  nowMs: Date.now(),
                   timezone: dreaming.timezone,
-                }).catch(() => {
-                  // Gateway recall persistence stays off the reply latency path.
-                });
+                };
+                void import("./short-term-promotion-record.js")
+                  .then(({ recordShortTermRecalls }) => recordShortTermRecalls(recall))
+                  .catch(() => {
+                    // Gateway recall persistence stays off the reply latency path.
+                  });
               }
               const attempts = [
                 ...((requestedCorpus === "all" || memory?.outcome === "partial") && memory

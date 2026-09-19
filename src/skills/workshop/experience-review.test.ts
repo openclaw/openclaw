@@ -6,6 +6,18 @@ import {
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
 import {
+  createPluginCache,
+  getPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../../plugins/plugin-cache.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getPluginRegistryForContext,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import {
   createNestedToolActivity,
   projectNestedToolActivityForHooks,
 } from "../../sessions/nested-tool-activity.js";
@@ -103,7 +115,10 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  resetPluginRuntimeStateForTest();
+});
 
 describe("skill experience review scheduler", () => {
   it("runs detached review work outside the foreground prepared generation", async () => {
@@ -113,6 +128,10 @@ describe("skill experience review scheduler", () => {
       pluginMetadataSnapshot: {} as never,
     };
     const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+    const foregroundCache = createPluginCache();
+    const foregroundRegistry = createEmptyPluginRegistry();
+    const currentRegistry = createEmptyPluginRegistry();
+    const observedPluginScopes: unknown[] = [];
     let finishReview: (() => void) | undefined;
     const reviewFinished = new Promise<void>((resolve) => {
       finishReview = resolve;
@@ -123,6 +142,10 @@ describe("skill experience review scheduler", () => {
         return false;
       },
       runReview: async (candidate) => {
+        observedPluginScopes.push(
+          getPluginCache() === foregroundCache,
+          getPluginRegistryForContext(),
+        );
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
@@ -131,12 +154,19 @@ describe("skill experience review scheduler", () => {
       setTimer: (callback) => setTimeout(callback, 0),
     });
 
-    withPreparedModelRuntimePluginGenerationScope(generation, () => {
-      scheduler.schedule(completedRun());
-    });
+    withPluginCache(foregroundCache, () =>
+      withPluginRuntimeRegistryScope(foregroundRegistry, () =>
+        withPreparedModelRuntimePluginGenerationScope(generation, () => {
+          scheduler.schedule(completedRun());
+        }),
+      ),
+    );
+    await retirePluginCache(foregroundCache);
+    setActivePluginRegistry(currentRegistry);
     await reviewFinished;
 
     expect(observedGenerations).toEqual([undefined, undefined, undefined]);
+    expect(observedPluginScopes).toEqual([false, currentRegistry]);
     scheduler.clear();
   });
 

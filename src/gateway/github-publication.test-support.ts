@@ -45,6 +45,7 @@ vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
     ...actual,
     matchesPreparedGitHubPublicationIdentity: mocks.matchesIdentity,
     prepareGitHubPublicationIdentity: mocks.prepareIdentity,
+    prepareGitHubPublicationOptionsIdentity: mocks.prepareIdentity,
   };
 });
 
@@ -194,13 +195,14 @@ export let commandCalls: Array<{ argv: string[]; input?: string }>;
 export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   setRuntimeConfigSnapshot({
     agents: { list: [{ id: "main", default: true, workspace: path.join(root, "workspace") }] },
-    session: { store: path.join(root, "sessions.json") },
+    // Publication fixtures exercise lifecycle writes without unrelated maintenance workers.
+    session: { maintenance: { mode: "warn" } },
   });
   const { loadGatewaySessionEntryReadOnly } =
     await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
   const original = mocks.loadSession.getMockImplementation()!;
   await upsertSessionEntryCore(
-    { agentId: "main", sessionKey, storePath: path.join(root, "sessions.json") },
+    { agentId: "main", sessionKey },
     { ...original(sessionKey).entry, updatedAt: Date.now(), lifecycleRevision: randomUUID() },
   );
   mocks.loadSession.mockImplementation(
@@ -209,6 +211,7 @@ export async function persistPublicationTestSession(sessionKey = SESSION_KEY) {
   );
   const read = () => loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).entry!;
   return {
+    storePath: loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).storePath,
     read,
     async reset(placements: WorkerSessionPlacementStore) {
       const before = read();
@@ -328,7 +331,7 @@ export function installGitHubPublicationTestHarness(): void {
         worktree: { id: "worktree-1", branch: BRANCH, repoRoot: "/repo" },
       },
     }));
-    let remoteLookup = 0;
+    let remotePublished = false;
     mocks.runCommand
       .mockReset()
       .mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -400,9 +403,6 @@ export function installGitHubPublicationTestHarness(): void {
         if (command === "git rev-parse HEAD^") {
           return commandResult(`${OLD_HEAD}\n`);
         }
-        if (command === `git reflog show --format=%H --end-of-options refs/heads/${BRANCH}`) {
-          return commandResult(`${NEW_HEAD}\n${OLD_HEAD}\n`);
-        }
         if (command.startsWith("git commit-tree ")) {
           return commandResult(`${NEW_HEAD}\n`);
         }
@@ -414,8 +414,11 @@ export function installGitHubPublicationTestHarness(): void {
             "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
           )
         ) {
-          remoteLookup += 1;
-          return commandResult(remoteLookup === 1 ? "" : `${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
+          return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
+        }
+        if (argv.includes("push")) {
+          remotePublished = true;
+          return commandResult();
         }
         if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult("[]\n");
@@ -428,6 +431,19 @@ export function installGitHubPublicationTestHarness(): void {
         }
         return commandResult();
       });
+    // The publication transport is synthetic, but source-policy selection reads
+    // canonical session custody. Seed that same trusted, non-sandboxed owner
+    // instead of bypassing the new config-policy boundary in these tests.
+    setRuntimeConfigSnapshot({
+      agents: { list: [{ id: "main", default: true, workspace: "/repo/worktree" }] },
+    });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY },
+      { ...mocks.loadSession(SESSION_KEY).entry, updatedAt: Date.now() },
+    );
+    // Custody remains persisted for policy reads; release its writer lease so
+    // receipt-only tests can observe a genuinely cold shared database.
+    await closeOpenClawAgentDatabasesAsync();
   });
 
   afterEach(async () => {
@@ -444,7 +460,7 @@ export function installGitHubPublicationTestHarness(): void {
 
 /** Real local Git/index with synthetic remote effects; no credential helper reaches a subprocess. */
 export async function createRealPublicationWorkspace(
-  interruptAt: "push" | "observe" | "index" | "create",
+  interruptAt?: "push" | "observe" | "index" | "create",
 ) {
   const { runCommandBuffered } =
     await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");

@@ -279,6 +279,7 @@ export type SessionsBranchesSwitchResult =
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
+  category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
   pinnedAt?: number;
@@ -286,8 +287,10 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   lastActivityAt?: number;
   lastInteractionAt?: number;
   permissionMode?: GatewaySessionRow["permissionMode"];
+  modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];
   boardPresentation?: GatewaySessionRow["boardPresentation"];
   archivedAt?: number;
+  archivedBy?: GatewaySessionRow["archivedBy"];
   archiveReason?: SessionEntryArchiveReason;
   /** Present only while an explicit mark-unread marker owns the row. */
   markedUnreadAt?: number;

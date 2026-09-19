@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { Server } from "node:https";
+import { createServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -32,7 +32,7 @@ function createRenewal() {
   mocks.watchFile.mockImplementation((_path, _options, listener) => watcher.on("all", listener));
   mocks.unwatchFile.mockImplementation((_path, listener) => watcher.off("all", listener));
   const runtime = material();
-  const server = new Server(runtime.tlsOptions);
+  const server = createServer(runtime.tlsOptions);
   const publish = vi.spyOn(server, "setSecureContext");
   const onRenewed = vi.fn(async () => {});
   const owner = startGatewayTlsRenewal({

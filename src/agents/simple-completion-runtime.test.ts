@@ -125,6 +125,7 @@ beforeEach(() => {
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     activeProjectKeys: [],
     createStores: () => ({ authStorage, modelRegistry }),

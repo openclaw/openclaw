@@ -1,4 +1,3 @@
-// Discord plugin module implements message channel info behavior.
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,

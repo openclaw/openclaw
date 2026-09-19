@@ -13,8 +13,8 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
-  resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
+import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 
 const tempDirs = createTrackedTempDirs();
 

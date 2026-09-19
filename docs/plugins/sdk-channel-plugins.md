@@ -531,6 +531,181 @@ Write colocated tests in `src/channel.test.ts`:
     └── runtime.ts            # Runtime store (if needed)
 ```
 
+## Delegated context reads
+
+Bundled actions can prove equivalence between provider-native delivery aliases and
+the current conversation with
+`actions.messageActionTargetAliases[action].matchesCurrentConversationAsync`.
+The callback receives `{ args, accountId, toolContext }` and returns
+`Promise<boolean>`. The host awaits it only after checking the current provider,
+account, and any additional requested targets. External registrations cannot use
+this callback to bypass exact-current matching. A successful async match does not
+replace live caller or registration authority; the host rechecks those before
+dispatch.
+
+Async alias proof requires the selected bundled registration to be loaded.
+Liveness checks use its captured owner authority and the loaded registry; they
+never discover or load a bundled fallback after the registration is retired.
+Normal bundled runtime registration satisfies this requirement. The retained
+synchronous path keeps its existing compatibility behavior.
+
+The async callback takes precedence over `matchesCurrentConversation` when both
+are present. A false result or rejected promise never falls back to the legacy
+callback. The synchronous callback is deprecated for storage-backed matching but
+remains supported for older plugins and hosts, with no removal version scheduled.
+Keep its return type strictly `boolean`: older hosts treat a returned promise as
+truthy rather than awaiting it. Hosts predating the async companion ignore the new
+field and use only the synchronous callback. An async-only alias therefore cannot
+prove equivalence on those hosts; exact canonical target matching still works.
+
+Verified official installed plugins can delegate supported conversation, metadata, and attachment
+reads to provider-owned access checks. Channel-origin requests need server-owned
+current provider, account, and conversation context. An authenticated dashboard user
+turn can also use those provider-owned checks without native channel context, including
+Incognito sessions and fresh messages after reconnect. Ordinary transport loss does not
+cancel an already admitted turn. This permission belongs only to that turn; background
+work and scheduled jobs keep their separate authorization.
+Normal chat, session participation, and tool permissions, along with provider account,
+destination, action, and requester policies, remain in force.
+
+Account-created scheduled reads use the live job's recorded creator account and origin.
+An external creator origin restricts reads to that provider; a missing or unknown origin
+cannot authorize a read. Omitting `accountId` selects the recorded creator account,
+including after the provider's default account changes. Provider destination and action
+policies remain in force. See [Scheduled tool policy](/automation/cron-jobs/payloads#agent-turn-options)
+for reauthorization and execution rules.
+
+An adapter lists actions that support the lifetime fence in `actions.readAuthorityActions`.
+Its `actions.providerOwnedReadGates` declaration separately identifies the actions
+whose admission the provider owns. The host also classifies the action as eligible;
+a later host addition does not opt existing adapters into it.
+Only host-verified official registrations qualify. Discord supports `read`, `search`,
+`reactions`, `list-pins`, `thread-list`, `channel-info`, `permissions`, `member-info`,
+`role-info`, `emoji-list`, `channel-list`, `voice-status`, and `event-list`.
+Feishu supports `read`, `reactions`, `list-pins`, `member-info`, `channel-info`,
+`channel-list`, and configured `sticker-search`.
+Matrix supports `read`, `reactions`, `list-pins`, `emoji-list`, `member-info`, and
+`channel-info`.
+Mattermost supports `read`.
+Slack supports `read`, `reactions`, `list-pins`, `member-info`, `emoji-list`, and
+`download-file`.
+Older external adapters and unverified plugins retain the exact-current-conversation
+restriction. These declarations apply only to the listed read actions.
+
+Delegated Slack member info is limited to the current requester on the same account,
+and emoji discovery uses the trusted workspace. Neither metadata action requires
+a channel target.
+
+Microsoft Teams supports `read`, `search`, `reactions`, `list-pins`, `member-info`,
+`channel-info`, and `channel-list` under the [Teams access rules](/channels/msteams/access-control).
+
+Discord's `permissions` action inspects the bot's permissions for an allowed channel.
+Guild metadata reads require the requested guild to be allowed by the selected
+account's current configuration, with unrestricted or wildcard channel access.
+Only direct operators receive the filtered-results relaxation for `channel-list`;
+delegated agents still require guild-wide channel access.
+
+The transport contract is mandatory for opt-in adapters:
+
+- Capture `captureChannelReadAuthority()` from `openclaw/plugin-sdk/fetch-runtime`
+  when submitting each request, before handing it to a shared queue.
+- Retain that exact callback through waits and retries; invoke it immediately
+  before every provider request, including target lookup requests, after any
+  asynchronous DNS or dispatcher preparation.
+- An absent callback means this invocation has no additional read-authority
+  fence. A thrown error stops the request; do not retry with a new callback.
+
+The host binds the callback to the selected registration and its active lifecycle.
+Local message tools and Gateway agent requests retain the originating run and
+turn authority. Opted-in bundled reads use the same lifetime fence while keeping
+their existing provider-owned admission rules. A bundled artifact or an omitted
+scoped registration cannot supply that authority; delegated execution requires
+the active registered instance. The host rejects stale
+action results and errors after either caller or plugin authority is revoked.
+A completed action also closes its captured callbacks. The fence prevents
+subsequent requests; it cannot undo a request already sent to the provider. No
+configuration switch or plugin-supplied trust field can mint this authority.
+
+Slack attachment downloads retain the originating read authority through URL
+refresh, binary transfer, media-store publication, image processing, and final
+host completion. The existing media artifact is kept only when the read succeeds.
+If completion is rejected, cleanup removes only files created by that operation;
+preexisting files, replacements, and shared files are preserved. The source abort
+signal also reaches the binary transfer where the caller supplies one.
+
+## Scheduled channel administration
+
+`ChannelMessageActionAdapter` exposes the optional
+`writeAuthorityActions?: readonly ChannelMessageActionName[]` declaration through
+`openclaw/plugin-sdk/channel-contract`. It identifies write actions whose transport
+preserves the host's live request authority. Advertising an action through
+`describeMessageTool` or declaring read support does not establish that contract.
+
+The host separately selects eligible actions and requires an active bundled or
+loader-verified official registration. A bundled artifact fallback or a plugin's
+own trust claim cannot supply registration authority. Discord declares
+`writeAuthorityActions: ["channel-edit", "delete", "edit", "pin", "unpin"]`.
+Other action names do not gain scheduled access from this declaration.
+
+Scheduled `channel-edit`, including its existing channel and thread edit variants,
+accepts trusted operator job authority or the account job's authenticated native
+requester. The declaration cannot promote an
+account-mode job to operator authority or replace authenticated requester identity
+and current sender permission checks.
+
+For native account edits, the host supplies its validated `requesterAccountId`
+and `requesterSenderId` with `senderIsOwner: false`. There is no current inbound
+conversation to put in `toolContext`. The adapter uses these host-provided facts
+for its normal current requester-permission checks; model arguments and the
+presence of a handoff callback cannot supply a requester identity. The host keeps
+the saved native requester separate from an earlier complete-tool-surface read
+origin. Discovery can use both facts to present configured actions, but the native
+requester does not establish read access. Jobs without usable native facts receive
+reauthorization guidance before the provider is called.
+
+Scheduled `edit`, `delete`, `pin`, and `unpin` support both trusted operator jobs and
+account jobs. An account job must use its recorded creator account and a known
+creator origin; external origins also bind it to the recorded provider. Its delivery
+destination does not supply authority. These actions also require
+the adapter's existing `providerOwnedReadGates` declaration and retain its target
+checks. Account jobs use delegated target policy; trusted jobs use operator target
+policy. The job's current execution policy and `toolsAllow`, account restrictions,
+enabled actions, and provider permissions still apply.
+
+The host evaluates current tool policy when each new scheduled message invocation
+is admitted, including global, agent, profile, and selected model-provider policy.
+Configuration changes govern the next invocation; they do not retroactively
+change the configuration of an admitted operation. Revoking or narrowing the job
+itself, canceling its run, or ending caller or plugin authority still blocks later
+provider requests and retries within that operation.
+
+The host admits channel-name resolution before directory requests and retains
+the selected registration through the write. Its preparation read scope closes
+before the write starts, so a read completion check cannot discard an accepted
+mutation result.
+
+An opted-in adapter must honor the existing
+`ChannelMessageActionContext.assertDirectAdapterHandoff` callback:
+
+- Retain the exact host-provided callback through asynchronous preparation,
+  permission and target lookups, rate-limit queues, and retries.
+- Invoke it synchronously after awaited preparation and immediately before every
+  actual provider request, including lookup requests and each retry attempt.
+- If it throws, stop that request. Do not suppress the rejection, replace the
+  callback, or put the rejected operation into replayable recovery.
+- Let a submitted request settle and preserve its outcome, including a confirmed
+  mutation when authority expires while awaiting the response. Expired authority
+  blocks later requests; it must not cause an accepted mutation to be replayed.
+
+This optional field keeps older adapters source-compatible. An omitted or empty
+declaration leaves newly enabled scheduled actions denied. Existing bundled
+provider-owned interactive paths keep their admission rules. To support the new
+installed-plugin path,
+upgrade OpenClaw and the plugin, implement the request and retry checks above,
+declare only the covered actions, and load the updated registration. Existing
+direct-operator and interactive actions retain their admission rules. Upgrading
+the plugin does not grant additional authority to an existing job.
+
 ## Advanced topics
 
 <CardGroup cols={2}>

@@ -397,6 +397,8 @@ describe("report-test-temp-creations", () => {
     const expected = [{ file, line: 1, reason: "new mkdtemp temp directory creation", source }];
     expect(report("--staged")).toEqual(expected);
     git("commit", "-q", "-m", "generated data and test");
+    expect(report("--staged")).toEqual([]);
+    expect(report("--staged", "--base", "HEAD^")).toEqual(expected);
     expect(report("--base", "HEAD^", "--head", "HEAD")).toEqual(expected);
     expect(report("--base", "HEAD^", "--head", "HEAD", "--no-merge-base")).toEqual(expected);
   });

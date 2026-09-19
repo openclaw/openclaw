@@ -1,7 +1,8 @@
-import { getEventListeners } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter, getEventListeners } from "node:events";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { TerminalOutputController } from "./terminal/output-flow-control.js";
@@ -30,14 +31,8 @@ function clientFor(connId: string, socket: WebSocket): GatewayWsClient {
 function controlledPeer(connId: string) {
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: Array<{ seq: number; payload: unknown }> = [];
-  const socket: {
-    readyState: WebSocket["readyState"];
-    bufferedAmount: number;
-    close: ReturnType<typeof vi.fn>;
-    terminate: ReturnType<typeof vi.fn>;
-    send: ReturnType<typeof vi.fn<(wire: string, callback: (error?: Error) => void) => void>>;
-  } = {
-    readyState: WebSocket.OPEN,
+  const socket = Object.assign(new EventEmitter(), {
+    readyState: WebSocket.OPEN as WebSocket["readyState"],
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),
@@ -45,7 +40,7 @@ function controlledPeer(connId: string) {
       frames.push(JSON.parse(wire));
       callbacks.push(callback);
     }),
-  };
+  });
   return { client: clientFor(connId, socket as unknown as WebSocket), socket, callbacks, frames };
 }
 
@@ -55,6 +50,63 @@ const liveText = (group: AbortSignal) => ({
 });
 
 describe("broadcast transport retirement", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("terminates only the slow socket captured before replacement", () => {
+    vi.useFakeTimers();
+    const retired = controlledPeer("replacement");
+    const replacement = controlledPeer("replacement");
+    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([retired.client]),
+    });
+
+    broadcast("tick", {});
+    expect(retired.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
+    expect(retired.socket.terminate).not.toHaveBeenCalled();
+
+    retired.client.socket = replacement.client.socket;
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+
+    expect(retired.socket.terminate).toHaveBeenCalledOnce();
+    expect(replacement.socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("cancels the slow-consumer fallback after the socket closes", () => {
+    vi.useFakeTimers();
+    const retired = controlledPeer("closed");
+    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([retired.client]),
+    });
+
+    broadcast("tick", {});
+    retired.socket.emit("close", 1008, Buffer.from("slow consumer"));
+    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
+
+    expect(retired.socket.terminate).not.toHaveBeenCalled();
+  });
+
+  it("terminates immediately when a slow-consumer close cannot be queued", () => {
+    vi.useFakeTimers();
+    const retired = controlledPeer("close-failed");
+    retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    retired.socket.close.mockImplementationOnce(() => {
+      throw new Error("close unavailable");
+    });
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([retired.client]),
+    });
+
+    broadcast("tick", {});
+
+    expect(retired.socket.terminate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("keeps failed delivery terminal through late callbacks and permits a replacement socket", () => {
     const retired = controlledPeer("replacement");
     const replacement = controlledPeer("replacement");

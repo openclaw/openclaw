@@ -13,6 +13,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -37,6 +38,7 @@ import {
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -101,7 +103,8 @@ function updatePersistedInstallRecordsWithoutClearingCache(
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.doUnmock("./installed-plugin-index-store.js");
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -130,7 +133,6 @@ describe("plugin index install records store", () => {
       inspectPersistedInstalledPluginIndexInstallRecordsSync,
       readPersistedInstalledPluginIndexInstallRecords,
       loadInstalledPluginIndexInstallRecordsSync,
-      loadInstalledPluginIndexInstallRecords,
     ]) {
       readSpy.mockImplementationOnce(() => {
         throw error;
@@ -142,7 +144,12 @@ describe("plugin index install records store", () => {
         )
         .rejects.toBe(error);
     }
+    const asyncReadSpy = vi
+      .spyOn(metadataWorker, "readPluginMetadataStateRow")
+      .mockRejectedValueOnce(error);
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).rejects.toBe(error);
     expect(scanSpy).not.toHaveBeenCalled();
+    asyncReadSpy.mockRestore();
     readSpy.mockRestore();
     scanSpy.mockRestore();
 

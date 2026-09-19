@@ -320,21 +320,34 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("dispatches canonical anthropic refs whose configured runtime is claude-cli", async () => {
-    resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
-    expect(
-      await runGate({ provider: "anthropic", model: "claude-opus-4-8", agentId: "main" }),
-    ).toBeDefined();
-    expect(resolveCliRuntimeExecutionProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        agentId: "main",
-        modelId: "claude-opus-4-8",
-      }),
-    );
-    // The dispatch runs on the resolved execution provider, not the canonical ref.
-    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({ provider: "claude-cli" });
-  });
+  it.each([undefined, "raw", "resolved"] as const)(
+    "dispatches canonical refs through claude-cli with %s logical route resolution",
+    async (requestedRouteResolution) => {
+      resolveCliRuntimeExecutionProvider.mockReturnValue("claude-cli");
+      expect(
+        await runGate({
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          agentId: "main",
+          requestedRouteResolution,
+        }),
+      ).toBeDefined();
+      expect(resolveCliRuntimeExecutionProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "anthropic",
+          agentId: "main",
+          modelId: "claude-opus-4-8",
+        }),
+      );
+      const dispatched = runCliAgent.mock.calls[0]?.[0];
+      expect(dispatched).toMatchObject({ provider: "claude-cli" });
+      expect(dispatched.requesterModel).toEqual(
+        requestedRouteResolution === "resolved"
+          ? { provider: "anthropic", model: "claude-opus-4-8" }
+          : undefined,
+      );
+    },
+  );
 
   it("keeps the passthrough for canonical refs without a claude-cli runtime", async () => {
     resolveCliRuntimeExecutionProvider.mockReturnValue(undefined);

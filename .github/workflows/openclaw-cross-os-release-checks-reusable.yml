@@ -479,6 +479,12 @@ jobs:
           lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
           cache-mode: ${{ inputs.candidate_artifact_name == '' && 'restore' || 'off' }}
 
+      - name: Install workflow validation dependencies
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Resolve provider-owned companion requirements
         id: provider_requirements
         env:
@@ -570,13 +576,6 @@ jobs:
 
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
-
-      - name: Install workflow validation dependencies
-        if: inputs.candidate_artifact_name != '' || inputs.mode != 'fresh'
-        working-directory: workflow
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Build candidate artifact once
         if: inputs.candidate_artifact_name == ''

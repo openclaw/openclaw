@@ -95,6 +95,7 @@ describe("Slack conversation-open", () => {
       entry?.actions?.includes("conversation-open"),
     );
     expect(schema?.properties.userIds).toMatchObject({ type: "array", minItems: 1, maxItems: 8 });
+    expect(schema?.properties).not.toHaveProperty("teamId");
   });
 
   it.each(["C01234567", "G01234567"])(

@@ -52,7 +52,7 @@ suite.define(() => {
           .poll(() => textarea.evaluate((el) => getComputedStyle(el).maskImage))
           .toBe("none");
 
-        await textarea.press("ControlOrMeta+Home");
+        await textarea.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
         await expect
           .poll(() =>
             textarea.evaluate((el) => ({
@@ -65,7 +65,7 @@ suite.define(() => {
         await textarea.press("ArrowDown");
         await textarea.press("x");
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
-        await textarea.press("ControlOrMeta+End");
+        await textarea.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
         await textarea.press("Shift+Enter");
         await textarea.press("x");
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");

@@ -7,10 +7,13 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   signalMockManagedUpdateHandoffReady,
   type MockManagedUpdateHandoffLeaseFailure,
 } from "./update-managed-service-handoff.test-support.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
@@ -90,9 +93,16 @@ beforeEach(async () => {
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((targetPid) =>
     targetPid === process.pid ? parentStartIdentity : liveChildren.has(targetPid) ? 17 : null,
   );
-  vi.spyOn(processIdentity, "isPidAlive").mockImplementation(
-    (targetPid) => targetPid === process.pid || liveChildren.has(targetPid),
-  );
+  const kill = process.kill.bind(process);
+  vi.spyOn(process, "kill").mockImplementation((targetPid, signal) => {
+    if (signal !== 0 || targetPid === process.pid) {
+      return kill(targetPid, signal);
+    }
+    if (liveChildren.has(targetPid)) {
+      return true;
+    }
+    throw Object.assign(new Error("fixture process is absent"), { code: "ESRCH" });
+  });
   forceKillChildProcessTreeMock.mockReset();
   forceKillChildProcessTreeMock.mockImplementation((child: ReturnType<typeof createReadyChild>) => {
     child.stdout.destroy();
@@ -284,6 +294,43 @@ describe("managed service update handoff single-flight", () => {
     nextOwner.emit("exit", 0, null);
   });
 
+  it("transfers through Bun-style child pipes without stream-level unref", async () => {
+    const commands: string[] = [];
+    spawnMock.mockImplementationOnce((_command: string, args: string[]) => {
+      const child = createReadyChild(process.pid, args.at(-1) ?? "");
+      child.stdin.on("data", (chunk) => {
+        const command = chunk.toString();
+        commands.push(command);
+        if (command === "transfer\n") {
+          child.stdout.write("transferred\n");
+        }
+      });
+      return child;
+    });
+    const { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const root = `${MOCK_INSTALL_ROOT}-bun-pipes`;
+    const started = await startManagedServiceUpdateHandoff({
+      ...baseParams,
+      root,
+      handoffId: "bun-pipes",
+      meta: {},
+    });
+    if (started.status !== "started") {
+      throw new Error("expected a new handoff owner");
+    }
+    const child = spawnMock.mock.results[0]?.value as ReturnType<typeof createReadyChild>;
+    expect("unref" in child.stdin).toBe(false);
+    expect("unref" in child.stdout).toBe(false);
+
+    await expect(
+      transferManagedServiceUpdateHandoff({ kind: "managed-update-handoff", ...started }),
+    ).resolves.toBe(true);
+    expect(commands).toEqual(["transfer\n"]);
+    expect(child.unref).toHaveBeenCalledOnce();
+    child.emit("exit", 0, null);
+  });
+
   it.each([
     ["has exited before its ChildProcess notification", "dead"],
     ["reuses its PID for another process", "reused"],
@@ -295,7 +342,7 @@ describe("managed service update handoff single-flight", () => {
     spawnMock.mockImplementation(spawn);
     const processIdentity = await import("../shared/pid-alive.js");
     const root = await fs.realpath(tempRoots.make("openclaw-helper-process-identity-"));
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     try {
@@ -309,7 +356,7 @@ describe("managed service update handoff single-flight", () => {
         root,
         restartDrainTimeoutMs: 300_000,
         parentPid: parent.pid,
-        execPath: process.execPath,
+        execPath: testNodeExecPath,
         argv1: process.argv[1],
         env: { ...process.env, OPENCLAW_STATE_DIR: root },
         meta: {},
@@ -385,7 +432,7 @@ describe("managed service update handoff single-flight", () => {
       updaterPath,
       `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
     );
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const { cancelManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
@@ -399,7 +446,7 @@ describe("managed service update handoff single-flight", () => {
           root,
           restartDrainTimeoutMs: 300_000,
           parentPid: parent.pid,
-          execPath: process.execPath,
+          execPath: testNodeExecPath,
           argv1: updaterPath,
           env: { ...process.env, OPENCLAW_STATE_DIR: root },
           meta: {},
@@ -581,7 +628,7 @@ describe("managed service update handoff single-flight", () => {
       updaterPath,
       `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:"skipped",mode:"npm",reason:"already-current"}));`,
     );
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const { startManagedServiceUpdateHandoff, transferManagedServiceUpdateHandoff } =
@@ -592,7 +639,7 @@ describe("managed service update handoff single-flight", () => {
           root,
           restartDrainTimeoutMs: 300_000,
           parentPid: parent.pid,
-          execPath: process.execPath,
+          execPath: testNodeExecPath,
           argv1: updaterPath,
           env: { ...process.env, OPENCLAW_STATE_DIR: root },
           meta: {},
@@ -626,7 +673,7 @@ describe("managed service update handoff single-flight", () => {
     const { DatabaseSync } = await import("node:sqlite");
     spawnMock.mockImplementation(spawn);
     const root = await fs.realpath(tempRoots.make("openclaw-handoff-control-epipe-"));
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const {
@@ -638,7 +685,7 @@ describe("managed service update handoff single-flight", () => {
       root,
       restartDrainTimeoutMs: 300_000,
       parentPid: parent.pid,
-      execPath: process.execPath,
+      execPath: testNodeExecPath,
       argv1: process.argv[1],
       env: { ...process.env, OPENCLAW_STATE_DIR: root },
       meta: {},
@@ -774,7 +821,7 @@ describe("managed service update handoff single-flight", () => {
       updaterPath,
       `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran")`,
     );
-    const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+    const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
     const {
@@ -787,7 +834,7 @@ describe("managed service update handoff single-flight", () => {
         root,
         restartDrainTimeoutMs: 300_000,
         parentPid: parent.pid,
-        execPath: process.execPath,
+        execPath: testNodeExecPath,
         argv1: updaterPath,
         env: { ...process.env, OPENCLAW_STATE_DIR: root },
         meta: {},
