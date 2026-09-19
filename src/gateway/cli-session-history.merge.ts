@@ -15,20 +15,15 @@ import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  compareHistoryMessages,
+  dropCoveredCliAssistantAggregates,
+  takeAlignedLocalTurn,
+  type ComparableHistoryMessage,
+  type LocalTurnBucket,
+} from "./cli-session-history.merge-aggregates.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
-
-type ComparableHistoryMessage = {
-  message: unknown;
-  order: number;
-  externalIdentityKey?: string;
-  hasCliImageMentions: boolean;
-  cliImageTurnKey?: string;
-  role?: string;
-  text?: string;
-  driftNoteText?: string;
-  timestamp?: number;
-};
 
 type TimestampSummary = {
   missingTimestamps: ComparableHistoryMessage[];
@@ -75,12 +70,13 @@ function stripTrailingCliImageMentions(text: string): {
     : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
 }
 
-function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
-  if (role !== "user") {
-    return false;
-  }
+function isClaudeCliImportedMessage(message: unknown): boolean {
   const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
   return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+}
+
+function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
+  return role === "user" && isClaudeCliImportedMessage(message);
 }
 
 function extractComparableText(
@@ -551,13 +547,6 @@ function projectImportedIdentity(localMessage: unknown, importedMessage: unknown
   return changed ? { ...local, __openclaw: nextMeta } : localMessage;
 }
 
-function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistoryMessage): number {
-  if (a.timestamp !== undefined && b.timestamp !== undefined && a.timestamp !== b.timestamp) {
-    return a.timestamp - b.timestamp;
-  }
-  return a.order - b.order;
-}
-
 /** Merges imported CLI transcript messages into local history without duplicating overlaps. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
@@ -605,8 +594,27 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     addRoleTextCandidate(allMessageRoleTextIndex, entry);
   };
+  // Buckets of local user turns per prompt text, appended in order, each with a
+  // cursor so matching an import walks forward instead of rescanning the bucket.
+  const localTurnsByUserText = new Map<string, LocalTurnBucket>();
+  let localTurn: number | undefined;
   for (const entry of merged) {
     indexEntry(entry);
+    if (entry.role === "user") {
+      localTurn = entry.order;
+      if (entry.text) {
+        const bucket = localTurnsByUserText.get(entry.text);
+        if (bucket) {
+          bucket.turns.push({ order: entry.order, timestamp: entry.timestamp });
+        } else {
+          localTurnsByUserText.set(entry.text, {
+            turns: [{ order: entry.order, timestamp: entry.timestamp }],
+            cursor: 0,
+          });
+        }
+      }
+    }
+    entry.turn = localTurn;
     if (!hasLocalImageMediaFacts(entry)) {
       continue;
     }
@@ -631,48 +639,41 @@ export function mergeImportedChatHistoryMessages(params: {
   let changed = false;
   let expanded = false;
   let nextOrder = merged.length;
+  // A dropped imported user row joins the local turn it duplicates; a kept one
+  // starts a turn with no local aggregate to cover.
+  let importedTurn: number | undefined;
   for (const message of params.importedMessages) {
     const externalIdentityKey = resolveImportedExternalIdentityKey(message);
     const imported = prepareComparableMessage(message, nextOrder, externalIdentityKey);
+    let duplicate: ComparableHistoryMessage | undefined;
+    let duplicateKind: "exact" | "image" | "text" | undefined;
     if (externalIdentityKey) {
       const exactIdentityMatch = exactExternalIdentityIndex.get(externalIdentityKey);
       if (exactIdentityMatch) {
-        consumedLocalCandidates.add(exactIdentityMatch);
-        advanceRoleTextMinimumOrder(imported, exactIdentityMatch);
-        continue;
+        duplicate = exactIdentityMatch;
+        duplicateKind = "exact";
       }
     }
-    const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
-    const imageCandidates = turnKey ? localImageMediaCandidates.get(turnKey) : undefined;
-    let imageDuplicate: ComparableHistoryMessage | undefined;
-    if (imageCandidates) {
-      imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
-      while (imageDuplicate && consumedLocalCandidates.has(imageDuplicate)) {
-        imageCandidates.cursor += 1;
+    if (!duplicateKind) {
+      const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
+      const imageCandidates = turnKey ? localImageMediaCandidates.get(turnKey) : undefined;
+      let imageDuplicate: ComparableHistoryMessage | undefined;
+      if (imageCandidates) {
         imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
+        while (imageDuplicate && consumedLocalCandidates.has(imageDuplicate)) {
+          imageCandidates.cursor += 1;
+          imageDuplicate = imageCandidates.entries[imageCandidates.cursor];
+        }
+        if (imageDuplicate) {
+          imageCandidates.cursor += 1;
+        }
       }
       if (imageDuplicate) {
-        imageCandidates.cursor += 1;
+        duplicate = imageDuplicate;
+        duplicateKind = "image";
       }
     }
-    if (imageDuplicate) {
-      // Each local image turn suppresses one import while retaining the native
-      // identity on the media-bearing row that remains visible.
-      const projected = projectImportedIdentity(imageDuplicate.message, imported.message);
-      if (projected !== imageDuplicate.message) {
-        imageDuplicate.message = projected;
-        imageDuplicate.externalIdentityKey = resolveImportedExternalIdentityKey(projected);
-        if (imageDuplicate.externalIdentityKey) {
-          exactExternalIdentityIndex.set(imageDuplicate.externalIdentityKey, imageDuplicate);
-        }
-        changed = true;
-      }
-      consumedLocalCandidates.add(imageDuplicate);
-      advanceRoleTextMinimumOrder(imported, imageDuplicate);
-      continue;
-    }
-    let duplicate: ComparableHistoryMessage | undefined;
-    if (!imported.hasCliImageMentions) {
+    if (!duplicateKind && !imported.hasCliImageMentions) {
       const index = imported.externalIdentityKey
         ? identitylessRoleTextIndex
         : allMessageRoleTextIndex;
@@ -692,11 +693,26 @@ export function mergeImportedChatHistoryMessages(params: {
           minimumOrder,
         );
         if (duplicate) {
+          duplicateKind = "text";
           break;
         }
       }
     }
-    if (duplicate) {
+    if (imported.role === "user") {
+      const bucket =
+        duplicateKind && imported.text ? localTurnsByUserText.get(imported.text) : undefined;
+      importedTurn = bucket ? takeAlignedLocalTurn(bucket, imported.timestamp) : undefined;
+    } else if (imported.role === "assistant" && isClaudeCliImportedMessage(imported.message)) {
+      // Provenance is the importedFrom stamp; uuid-less records have no externalId.
+      imported.importedCliAssistantSegment = true;
+      imported.turn = importedTurn;
+    }
+    if (duplicateKind === "exact" && duplicate) {
+      consumedLocalCandidates.add(duplicate);
+      advanceRoleTextMinimumOrder(imported, duplicate);
+      continue;
+    }
+    if ((duplicateKind === "image" || duplicateKind === "text") && duplicate) {
       const projected = projectImportedIdentity(duplicate.message, imported.message);
       if (projected !== duplicate.message) {
         duplicate.message = projected;
@@ -723,6 +739,7 @@ export function mergeImportedChatHistoryMessages(params: {
   if (!expanded) {
     return merged.map((entry) => entry.message);
   }
-  merged.sort(compareHistoryMessages);
-  return merged.map((entry) => entry.message);
+  const uncovered = dropCoveredCliAssistantAggregates(merged);
+  uncovered.sort(compareHistoryMessages);
+  return uncovered.map((entry) => entry.message);
 }
