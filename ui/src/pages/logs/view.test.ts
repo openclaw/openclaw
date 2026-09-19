@@ -25,6 +25,7 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
     refreshDisabled: false,
+    refreshPending: false,
     status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
     entries: [
