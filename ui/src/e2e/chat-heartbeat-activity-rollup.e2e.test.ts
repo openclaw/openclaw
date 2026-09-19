@@ -86,7 +86,7 @@ suite.define(() => {
       await rollup.waitFor();
       await expect
         .poll(async () => rollup.locator(".chat-activity-group__label").textContent())
-        .toBe(`Heartbeat Respond ×${wakeCount}`);
+        .toBe(`${wakeCount} other operations`);
       // One pooled row owns all wakes; no per-wake rows remain in the transcript.
       expect(await rollup.count()).toBe(1);
       expect(await page.locator(".chat-tool-row").count()).toBe(0);

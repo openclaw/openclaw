@@ -507,12 +507,17 @@ suite.define(() => {
           hasText: "pnpm test routing",
         });
         await toolRow.waitFor();
-        const toolSummary = toolRow.locator("summary");
-        expect((await toolSummary.textContent())?.trim()).toBe("Exec");
+        const toolSummary = toolRow.locator(":scope > summary");
+        expect((await toolSummary.textContent())?.replace(/\s+/gu, " ").trim()).toBe(
+          "1 operation 1 command",
+        );
         const toolBody = toolRow.locator(".chat-task-feed__calls");
         expect(await toolBody.isVisible()).toBe(false);
         await toolSummary.click();
         await toolBody.waitFor();
+        expect(await toolBody.locator("pre").isVisible()).toBe(false);
+        await toolBody.locator(".chat-task-feed__tool-line > summary").click();
+        await toolBody.locator("pre").waitFor({ state: "visible" });
         expect(await toolBody.locator("code").textContent()).toBe(
           "pnpm test routing\npnpm tsgo:ui",
         );

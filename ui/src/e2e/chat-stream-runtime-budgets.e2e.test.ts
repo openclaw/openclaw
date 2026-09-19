@@ -708,10 +708,7 @@ suite.define(() => {
       // real grouped activity before counting its retained invocation rows.
       const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
       const activity = page.getByRole("button", {
-        name: Array.from(
-          { length: TOOL_STREAM_LIMIT_CONTRACT },
-          (_, index) => `Edit in src/file-${firstRetainedCall + index}.ts`,
-        ).join(", "),
+        name: `${TOOL_STREAM_LIMIT_CONTRACT} edits`,
         exact: true,
       });
       await activity.waitFor();

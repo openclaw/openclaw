@@ -921,34 +921,106 @@
   padding-inline-start: 8px;
 }
 
-.chat-task-feed__tool-group > summary {
+.chat-task-feed__tool-group > summary,
+.chat-task-feed__tool-line > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px;
   list-style: none;
   border-radius: var(--radius-sm);
 }
 
-.chat-task-feed__tool-group > summary::-webkit-details-marker {
+.chat-task-feed__tool-group > summary::-webkit-details-marker,
+.chat-task-feed__tool-line > summary::-webkit-details-marker {
   display: none;
 }
 
-.chat-task-feed__tool-group > summary:is(:hover, :focus-visible) {
+.chat-task-feed__tool-group > summary:is(:hover, :focus-visible),
+.chat-task-feed__tool-line > summary:is(:hover, :focus-visible) {
   background: var(--bg-elevated);
 }
 
-.chat-task-feed__tool-line {
+.chat-task-feed__overview {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chat-task-feed__overview-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.chat-task-feed__summary,
+.chat-task-feed__outcome {
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-task-feed__outcome {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chat-task-feed__outcome--failed {
+  color: var(--danger);
+}
+
+.chat-task-feed__outcome--blocked {
+  color: var(--warn);
+}
+
+.chat-task-feed__row-label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--mono);
 }
 
-.chat-task-feed__tool-line code {
-  font: inherit;
+.chat-task-feed__row-icon,
+.chat-task-feed__chevron {
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.chat-task-feed__row-icon svg,
+.chat-task-feed__chevron svg,
+.chat-task-feed__row-outcome svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-task-feed__row-outcome {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.chat-task-feed__error .chat-task-feed__row-outcome {
+  color: var(--danger);
+}
+
+.chat-task-feed__tool-group[open] > summary > .chat-task-feed__chevron,
+.chat-task-feed__tool-line[open] > summary > .chat-task-feed__chevron {
+  transform: rotate(90deg);
 }
 
 .chat-task-feed__tool-line--full {
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
+  max-height: 18rem;
+  margin: 0 8px 8px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-task-feed__tool-line--full code {
@@ -957,9 +1029,12 @@
 }
 
 .chat-task-feed__calls {
-  margin-top: 8px;
-  padding-inline-start: 8px;
-  border-inline-start: 1px solid var(--border);
+  max-height: min(52vh, 28rem);
+  margin-top: 4px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  scrollbar-gutter: stable;
 }
 
 .chat-task-feed__now {

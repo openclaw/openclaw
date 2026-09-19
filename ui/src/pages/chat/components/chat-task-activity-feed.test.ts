@@ -265,7 +265,8 @@ describe("task activity feed", () => {
     expect(groups).toHaveLength(2);
     const group = groups[0]!;
     const summary = group.querySelector("summary")!;
-    expect(summary.textContent).toContain("Exec ×2, Read");
+    expect(summary.textContent).toContain("3 operations");
+    expect(summary.textContent).toContain("3 other operations");
     expect(summary.textContent).not.toContain("--fix");
     expect(group.open).toBe(false);
     summary.click();
@@ -305,9 +306,9 @@ describe("task activity feed", () => {
       const container = mount(messages);
       const groups = container.querySelectorAll(".chat-task-feed__tool-group");
       expect(groups).toHaveLength(1);
-      expect(groups[0]?.querySelector("summary")?.textContent).toBe("Raw details");
+      expect(groups[0]?.querySelector("summary")?.textContent?.trim()).toBe("Raw details");
       expect(
-        [...groups[0]!.querySelectorAll(".chat-task-feed__tool-line")].map((line) =>
+        [...groups[0]!.querySelectorAll(".chat-task-feed__tool-line--full")].map((line) =>
           line.textContent?.trim(),
         ),
       ).toEqual(expect.arrayContaining(["pnpm check:ui", "pnpm lint:ui:styles"]));
@@ -403,6 +404,78 @@ describe("task activity feed", () => {
       entry.textContent?.includes("No timestamp"),
     );
     expect(unclocked?.querySelector(".chat-task-feed__time")).toBeNull();
+  });
+
+  it.each(["set -e", "export FOO=bar", "unset FOO"])(
+    "keeps setup-only command %s identifiable",
+    (command) => {
+      const container = mount([
+        { role: "assistant", content: [toolCall("setup", "exec", { command })] },
+      ]);
+      expect(container.querySelector(".chat-task-feed__row-label")?.textContent).toBe(command);
+    },
+  );
+
+  it("redacts a complete credential-shaped fixture before shortening the command label", () => {
+    const syntheticToken = `AKIA${"0".repeat(16)}`;
+    const command = `echo ${"a".repeat(140)} ${syntheticToken}`;
+    const container = mount([
+      { role: "assistant", content: [toolCall("redact", "exec", { command })] },
+    ]);
+    expect(container.querySelector(".chat-task-feed__row-label")?.textContent).not.toContain(
+      syntheticToken.slice(0, 10),
+    );
+    expect(container.querySelector("code")?.textContent).not.toContain(syntheticToken);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["read", { path: "src/example.ts", offset: 20, limit: 30 }],
+    ["edit", { path: "src/example.ts", oldText: "before", newText: "after" }],
+    ["write", { path: "src/example.ts", content: "complete file content" }],
+    ["codebase_search", { query: "example", path: "src/components" }],
+    [
+      "apply_patch",
+      {
+        input:
+          "*** Begin Patch\n*** Add File: one.ts\n+one\n*** Add File: two.ts\n+two\n*** End Patch",
+      },
+    ],
+  ])("preserves the complete structured input of %s", (name, args) => {
+    const container = mount([{ role: "assistant", content: [toolCall("input", name, args)] }]);
+    expect(JSON.parse(container.querySelector("code")!.textContent!)).toEqual(args);
+  });
+
+  it("preserves anonymous command disclosures when earlier rows arrive in the same group", () => {
+    const anonymous = (messageId: string, command: string) => ({
+      role: "assistant",
+      messageId,
+      content: [{ type: "toolCall", name: "exec", arguments: { command } }],
+    });
+    const first = {
+      role: "assistant",
+      messageId: "anchor-message",
+      content: [toolCall("anchor", "exec", { command: "echo anchor" })],
+    };
+    const one = anonymous("message-one", "echo one");
+    const two = anonymous("message-two", "echo two");
+    const container = mount([first, one, two]);
+    const original = container.querySelectorAll<HTMLDetailsElement>(".chat-task-feed__tool-line");
+    original[2]!.querySelector("summary")!.click();
+    expect(original[2]!.open).toBe(true);
+    render(
+      renderTaskActivityFeed([first, anonymous("inserted-message", "echo inserted"), one, two]),
+      container,
+    );
+    const current = container.querySelectorAll<HTMLDetailsElement>(".chat-task-feed__tool-line");
+    expect([...current].map((row) => row.querySelector("code")?.textContent)).toEqual([
+      "echo anchor",
+      "echo inserted",
+      "echo one",
+      "echo two",
+    ]);
+    expect(current[3]).toBe(original[2]);
+    expect(current[3]!.open).toBe(true);
+    expect(current[1]!.open).toBe(false);
   });
 
   it("names media without previews and omits private thinking blocks", () => {

@@ -106,8 +106,9 @@ suite.define(() => {
       await notice.click();
       const inspector = page.locator("[data-task-detail-panel]");
       await inspector.getByText("The install evidence is ready.").waitFor();
-      const toolSummary = inspector.locator(".chat-task-feed__tool-group summary");
-      expect(await toolSummary.textContent()).toBe("Validate samples (failed)");
+      const toolSummary = inspector.locator(".chat-task-feed__tool-group > summary");
+      expect(await toolSummary.textContent()).toContain("1 operation");
+      expect(await toolSummary.textContent()).toContain("1 failed");
       await toolSummary.click();
       expect(await inspector.locator(".chat-task-feed__calls").textContent()).toContain(
         "check-samples",
