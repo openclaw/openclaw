@@ -40,6 +40,10 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
+import {
+  classifyGatewayStaleInstall,
+  registerGatewayInstallationReplacementHandler,
+} from "./stale-install.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -528,19 +532,34 @@ describe("gateway pre-auth hardening", () => {
     }
   });
 
-  it("rejects core websocket upgrades during restart drain", async () => {
-    const harness = await createGatewaySuiteHarness();
-    markGatewayRestartDraining();
+  it.each([false, true])(
+    "explains core websocket refusal during restart drain (replacement=%s)",
+    async (replacement) => {
+      const harness = await createGatewaySuiteHarness();
+      const dispose = registerGatewayInstallationReplacementHandler(() => {});
+      if (replacement) {
+        classifyGatewayStaleInstall(
+          Object.assign(new Error("own chunk missing"), {
+            code: "ERR_MODULE_NOT_FOUND",
+            url: new URL("./missing-runtime.mjs", import.meta.url).href,
+          }),
+        );
+      }
+      markGatewayRestartDraining();
 
-    try {
-      await expect(requestUpgradeRejection(harness.port)).resolves.toEqual({
-        status: 503,
-        body: "Gateway websocket admission closed",
-      });
-    } finally {
-      await harness.close();
-    }
-  });
+      try {
+        await expect(requestUpgradeRejection(harness.port)).resolves.toEqual({
+          status: 503,
+          body: replacement
+            ? expect.stringContaining("Installation replaced: running")
+            : "Gateway websocket admission closed",
+        });
+      } finally {
+        dispose();
+        await harness.close();
+      }
+    },
+  );
 
   it("opens only the startup generation core preauth transport during restart drain", async () => {
     const clients = new Set<GatewayWsClient>();

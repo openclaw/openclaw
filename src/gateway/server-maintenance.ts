@@ -62,6 +62,7 @@ import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { checkGatewayInstallationReplacement } from "./stale-install.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
@@ -192,6 +193,9 @@ export function startGatewayMaintenanceTimers(params: {
   };
   // periodic keepalive
   const tickInterval = setInterval(() => {
+    void checkGatewayInstallationReplacement().catch((error: unknown) =>
+      params.logHealth.error(`installation check failed: ${formatError(error)}`),
+    );
     void hostThawRecovery.tick();
     const now = Date.now();
     if (!telemetryStopped && !params.isNixMode && now >= nextTelemetryCheckAtMs) {
