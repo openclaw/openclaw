@@ -240,18 +240,135 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     const manager = new AcpSessionManager(deps);
     try {
       await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
-      for (const discardPersistentState of [false, true]) {
-        await expect(
-          manager.closeSession({
-            ...target,
-            reason: "reset",
-            clearMeta: true,
-            discardPersistentState,
-            allowBackendUnavailable: true,
-          }),
-        ).rejects.toBe(repairError);
-        expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+      // Retained resets (clearMeta false or omitted) must still reject: the residue
+      // record is retained and the owner-repair verdict protects it from silent mutation.
+      for (const clearMeta of [false, undefined]) {
+        for (const discardPersistentState of [false, true]) {
+          await expect(
+            manager.closeSession({
+              ...target,
+              reason: "reset",
+              clearMeta,
+              discardPersistentState,
+              allowBackendUnavailable: true,
+            }),
+          ).rejects.toBe(repairError);
+          expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+        }
       }
+      // Non-discarding close must still reject even when clearMeta is true.
+      await expect(
+        manager.closeSession({
+          ...target,
+          reason: "reset",
+          clearMeta: true,
+          discardPersistentState: false,
+          allowBackendUnavailable: true,
+        }),
+      ).rejects.toBe(repairError);
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+      // Discarding close with clearMeta true proceeds: the residue record is being
+      // destroyed, so its provenance verdict cannot block teardown (issue #151859).
+      await manager.closeSession({
+        ...target,
+        reason: "reset",
+        clearMeta: true,
+        discardPersistentState: true,
+        allowBackendUnavailable: true,
+      });
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toBeUndefined();
+      expect(runtime.close).not.toHaveBeenCalled();
+    } finally {
+      await disposeAcpSessionManagerInstance(manager, "test-complete");
+    }
+  });
+});
+
+it("retains canonical metadata when an unmigrated backend locator blocks recovery reset on stable session id", async () => {
+  await withTestDir({ prefix: "acp-owner-repair-stable-" }, async (dir) => {
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { work: {} } },
+      session: { store: path.join(dir, "{agentId}", "sessions.json") },
+    };
+    const databasePath = path.join(dir, "state", "openclaw.sqlite");
+    const target = { cfg, sessionKey: "global", agentId: "work" };
+    const runtime = {
+      ownerAwareSessions: 1 as const,
+      ensureSession: vi.fn(async () => ({
+        sessionKey: "global",
+        backend: "synthetic",
+        runtimeSessionName: "legacy-global",
+        agentSessionId: "agent-session-1",
+      })),
+      async *runTurn() {
+        yield { type: "done" as const };
+      },
+      prepareFreshSession: vi.fn(async () => {}),
+      async cancel() {},
+      close: vi.fn(async () => {}),
+    } satisfies AcpRuntime;
+    const deps = {
+      ...DEFAULT_DEPS,
+      loadSessionEntry: (input: Parameters<typeof readAcpSessionEntry>[0]) =>
+        readAcpSessionEntry({ ...input, databasePath }),
+      upsertSessionMeta: (input: Parameters<typeof upsertAcpSessionMeta>[0]) =>
+        upsertAcpSessionMeta({ ...input, databasePath }),
+      requireRuntimeBackend: () => ({ id: "synthetic", runtime }),
+      getRuntimeBackend: () => ({ id: "synthetic", runtime }),
+    };
+    const initial = new AcpSessionManager(deps);
+    try {
+      await initial.initializeSession({ ...target, agent: "fixture", mode: "persistent" });
+    } finally {
+      await disposeAcpSessionManagerInstance(initial, "restart");
+    }
+    const before = readAcpSessionEntry({ ...target, databasePath })?.acp;
+    const repairError = new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      "Run offline Doctor repair",
+      { detailCode: "SESSION_OWNER_MIGRATION_REQUIRED" },
+    );
+    runtime.ensureSession.mockRejectedValue(repairError);
+    runtime.prepareFreshSession.mockRejectedValue(repairError);
+    runtime.close.mockClear();
+    const manager = new AcpSessionManager(deps);
+    try {
+      await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
+      for (const clearMeta of [false, undefined]) {
+        for (const discardPersistentState of [false, true]) {
+          await expect(
+            manager.closeSession({
+              ...target,
+              reason: "reset",
+              clearMeta,
+              discardPersistentState,
+              allowBackendUnavailable: true,
+            }),
+          ).rejects.toBe(repairError);
+          expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+        }
+      }
+      await expect(
+        manager.closeSession({
+          ...target,
+          reason: "reset",
+          clearMeta: true,
+          discardPersistentState: false,
+          allowBackendUnavailable: true,
+        }),
+      ).rejects.toBe(repairError);
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+
+      const result = await manager.closeSession({
+        ...target,
+        reason: "reset",
+        clearMeta: true,
+        discardPersistentState: true,
+        allowBackendUnavailable: true,
+      });
+      expect(result.metaCleared).toBe(true);
+      expect(result.runtimeNotice).toBe(repairError.message);
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toBeUndefined();
       expect(runtime.close).not.toHaveBeenCalled();
     } finally {
       await disposeAcpSessionManagerInstance(manager, "test-complete");

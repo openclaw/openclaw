@@ -3,6 +3,7 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
+import { logVerbose } from "../../globals.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
@@ -70,6 +71,13 @@ export async function runManagerCloseSession(params: {
       sessionKey,
       agentId,
       logPrefix: "acp close fast-reset",
+    }).catch((freshError: unknown) => {
+      if (!isAcpOwnerRepairRequired(freshError) || !input.clearMeta) {
+        throw freshError;
+      }
+      logVerbose(
+        `acp close fast-reset: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; proceeding with discard`,
+      );
     });
     if (!params.isCurrentActor()) {
       throw createSupersededActorError(sessionKey);
@@ -106,14 +114,20 @@ export async function runManagerCloseSession(params: {
       if (!params.isCurrentActor()) {
         throw acpError;
       }
+      const isOwnerRepair = isAcpOwnerRepairRequired(acpError);
+      const isDiscardingWithClearMeta =
+        Boolean(input.discardPersistentState) && Boolean(input.clearMeta);
+      const allowOwnerRepairRecovery =
+        isOwnerRepair && isDiscardingWithClearMeta && acpError.code === "ACP_SESSION_INIT_FAILED";
       if (
-        !isAcpOwnerRepairRequired(acpError) &&
         input.allowBackendUnavailable &&
-        (acpError.code === "ACP_BACKEND_MISSING" ||
-          acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
-          (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
-          (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
-          isRecoverableManagerAcpxExitError(acpError.message))
+        ((!isOwnerRepair &&
+          (acpError.code === "ACP_BACKEND_MISSING" ||
+            acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
+            (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
+            (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
+            isRecoverableManagerAcpxExitError(acpError.message))) ||
+          allowOwnerRepairRecovery)
       ) {
         if (input.discardPersistentState) {
           await tryPrepareFreshManagerRuntimeSession({
@@ -124,6 +138,13 @@ export async function runManagerCloseSession(params: {
             agentId,
             logPrefix: "acp close recovery",
             missingBackendError: acpError,
+          }).catch((freshError: unknown) => {
+            if (!isAcpOwnerRepairRequired(freshError) || !input.clearMeta) {
+              throw freshError;
+            }
+            logVerbose(
+              `acp close recovery: fresh-session preparation blocked by owner-repair verdict for ${sessionKey}; proceeding with discard`,
+            );
           });
           if (!params.isCurrentActor()) {
             throw acpError;
