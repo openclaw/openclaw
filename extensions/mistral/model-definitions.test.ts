@@ -88,6 +88,19 @@ describe("mistral model definitions", () => {
     expect(small4.maxTokens).toBe(16384);
     expect(small4.cost).toEqual(smallLatest.cost);
 
+    const glm = catalogModelById(models, "zai-glm-5-2");
+    expect(glm.name).toBe("Z.ai GLM 5.2");
+    expect(glm.input).toEqual(["text"]);
+    expect(glm.contextWindow).toBe(1048576);
+    expect(glm.maxTokens).toBe(131072);
+    expect(glm.cost).toEqual({
+      input: 1.4,
+      output: 4.4,
+      cacheRead: 0.14,
+      cacheWrite: 0,
+    });
+    expect(glm.reasoning).toBe(false);
+
     expect(models.map((model) => model.id)).not.toContain("magistral-small");
     expect(models.map((model) => model.id)).not.toContain("pixtral-large-latest");
   });

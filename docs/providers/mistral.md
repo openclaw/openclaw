@@ -69,15 +69,16 @@ media understanding (Voxtral batch transcription), realtime STT for Voice Call
 
 ## Built-in LLM catalog
 
-| Model ref                        | Input       | Context | Max output | Notes                                                 |
-| -------------------------------- | ----------- | ------- | ---------- | ----------------------------------------------------- |
-| `mistral/mistral-large-latest`   | text, image | 262,144 | 16,384     | Default model                                         |
-| `mistral/mistral-medium-3-5`     | text, image | 262,144 | 8,192      | Mistral Medium 3.5; adjustable reasoning              |
-| `mistral/mistral-small-latest`   | text, image | 262,144 | 16,384     | Mistral Small 4 latest; adjustable `reasoning_effort` |
-| `mistral/mistral-small-2603`     | text, image | 262,144 | 16,384     | Mistral Small 4 pinned; adjustable `reasoning_effort` |
-| `mistral/codestral-latest`       | text        | 128,000 | 4,096      | Coding                                                |
-| `mistral/mistral-medium-2508`    | text, image | 128,000 | 8,192      | Deprecated; hidden; use Mistral Medium 3.5            |
-| `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Deprecated; hidden; use Mistral Medium 3.5            |
+| Model ref                        | Input       | Context   | Max output | Notes                                                 |
+| -------------------------------- | ----------- | --------- | ---------- | ----------------------------------------------------- |
+| `mistral/mistral-large-latest`   | text, image | 262,144   | 16,384     | Default model                                         |
+| `mistral/mistral-medium-3-5`     | text, image | 262,144   | 8,192      | Mistral Medium 3.5; adjustable reasoning              |
+| `mistral/mistral-small-latest`   | text, image | 262,144   | 16,384     | Mistral Small 4 latest; adjustable `reasoning_effort` |
+| `mistral/mistral-small-2603`     | text, image | 262,144   | 16,384     | Mistral Small 4 pinned; adjustable `reasoning_effort` |
+| `mistral/zai-glm-5-2`            | text        | 1,048,576 | 131,072    | Z.ai GLM 5.2 (third-party hosted); long-context tasks |
+| `mistral/codestral-latest`       | text        | 128,000   | 4,096      | Coding                                                |
+| `mistral/mistral-medium-2508`    | text, image | 128,000   | 8,192      | Deprecated; hidden; use Mistral Medium 3.5            |
+| `mistral/devstral-medium-latest` | text        | 262,144   | 32,768     | Deprecated; hidden; use Mistral Medium 3.5            |
 
 Browse the plugin catalog row before changing config:
 
