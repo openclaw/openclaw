@@ -6,6 +6,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  callAgentToolGatewayRequest,
+  callInProcessGatewayTool,
+} from "../agents/tools/in-process-gateway.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -189,13 +193,19 @@ describe("typed in-process agent authorization", () => {
     },
   );
 
-  it.each(["operator", "system"] as const)(
-    "preserves %s attribution and never widens a synthetic tool caller's scopes",
-    async (actorKind) => {
+  it.each([
+    { actorKind: "operator", callerScope: "operator.read", requestedScope: "operator.read" },
+    { actorKind: "system", callerScope: "operator.read", requestedScope: "operator.read" },
+    { actorKind: "operator", callerScope: "operator.write", requestedScope: "operator.read" },
+    { actorKind: "system", callerScope: "operator.write", requestedScope: "operator.read" },
+    { actorKind: "operator", callerScope: "operator.write", requestedScope: "operator.talk" },
+  ] as const)(
+    "preserves $actorKind attribution and $callerScope implication for $requestedScope without widening authority",
+    async ({ actorKind, callerScope, requestedScope }) => {
       const operatorRoleActor = actorKind === "system" ? { kind: "system" as const } : undefined;
       const owner = createOperatorClient({
         profileId: "tool-owner",
-        scopes: ["operator.read"],
+        scopes: [callerScope],
       });
       let dispatched: GatewayRequestOptions["client"] = null;
       const context = createContext();
@@ -203,7 +213,7 @@ describe("typed in-process agent authorization", () => {
         createGatewayMethodRegistry([
           {
             name: "sessions.list",
-            scope: "operator.read",
+            scope: requestedScope,
             owner: { kind: "core", area: "sessions" },
             handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
               dispatched = client;
@@ -224,7 +234,7 @@ describe("typed in-process agent authorization", () => {
             {},
             {
               forceSyntheticClient: true,
-              syntheticScopes: ["operator.read", "operator.admin"],
+              syntheticScopes: [requestedScope, "operator.admin", "operator.approvals"],
               resolveGatewayContext: () => context,
             },
           ),
@@ -232,11 +242,58 @@ describe("typed in-process agent authorization", () => {
 
       expect(dispatched).toMatchObject({
         authenticatedUserProfile: { profileId: "tool-owner" },
-        connect: { scopes: ["operator.read"] },
+        connect: { scopes: [requestedScope] },
         internal: { syntheticClient: true, ...(operatorRoleActor ? { operatorRoleActor } : {}) },
       });
     },
   );
+
+  it("preserves read access after a tool-routed followup admits a write-only agent turn", async () => {
+    const owner = createOperatorClient({
+      profileId: "followup-owner",
+      scopes: ["operator.read", "operator.write"],
+    });
+    const readHandler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+      expect(client?.connect.scopes).toEqual(["operator.read"]);
+      expect(client?.authenticatedUserProfile?.profileId).toBe("followup-owner");
+      respond(true, { sessions: [] });
+    });
+    const context = createContext();
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.list",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: readHandler,
+        },
+      ]);
+    startTurn.mockImplementation(async ({ principal, io }) => {
+      expect(principal.connect.scopes).toEqual(["operator.write"]);
+      await expect(callInProcessGatewayTool("sessions.list", {})).resolves.toEqual({
+        sessions: [],
+      });
+      io.emitAcceptance([true, { runId: "followup-run", status: "accepted" }, undefined]);
+    });
+    await withPluginRuntimeGatewayRequestScope(
+      { client: owner, context, isWebchatConnect: () => false },
+      () =>
+        callAgentToolGatewayRequest({
+          method: "agent",
+          params: {
+            message: "Continue the delegated task",
+            idempotencyKey: "followup-run",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:main:parent",
+              sourceTool: "sessions_send",
+            },
+          },
+        }),
+    );
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(readHandler).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { method: "sessions.patch", cleanup: false, scopedActor: false },
@@ -584,7 +641,7 @@ describe("typed in-process agent authorization", () => {
         createGatewayMethodRegistry([
           {
             name: "sessions.list",
-            scope: "operator.write",
+            scope: "operator.read",
             owner: { kind: "core", area: "sessions" },
             handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
               autonomousClient = client;
@@ -600,7 +657,11 @@ describe("typed in-process agent authorization", () => {
         await dispatchGatewayMethodInProcess(
           "sessions.list",
           {},
-          { forceSyntheticClient: true, resolveGatewayContext: () => context },
+          {
+            forceSyntheticClient: true,
+            syntheticScopes: ["operator.read"],
+            resolveGatewayContext: () => context,
+          },
         );
         io.emitAcceptance([true, { runId: "autonomous-run", status: "accepted" }, undefined]);
       });
@@ -625,7 +686,7 @@ describe("typed in-process agent authorization", () => {
       );
 
       expect(autonomousClient).toMatchObject({
-        connect: { scopes: ["operator.write"] },
+        connect: { scopes: ["operator.read"] },
         internal: {
           operatorRoleActor: operatorRoleActor ?? { kind: "operator", profileId: "spawn-owner" },
         },
