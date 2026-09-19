@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseDateStringTimestampMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
@@ -301,18 +305,34 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       }
       const entry = value as Record<string, unknown>;
       const entryPath = typeof entry.path === "string" ? normalizeMemoryPath(entry.path) : "";
-      const startLine = Number(entry.startLine);
-      const endLine = Number(entry.endLine);
+      // Strict parsers reject non-canonical encodings that Number() silently accepts
+      // (hex/binary/exponent notation, booleans, arrays, Infinity) and enforce
+      // non-negativity, which Number.isInteger alone does not.
+      //
+      // A row written by an older permissive decoder can therefore carry a range
+      // field we must not trust. An unusable range must never be replaced by an
+      // invented line number, but discarding the row would lose real recall history.
+      // The entry's own map key still carries the range the writer meant (it was
+      // minted from the value that writer actually used), so recover it from there.
+      // Only a row with no usable range in either place has no identity to preserve.
+      const parsedStartLine = parseStrictNonNegativeInteger(entry.startLine);
+      const parsedEndLine = parseStrictNonNegativeInteger(entry.endLine);
+      const recoveredRange =
+        parsedStartLine === undefined || parsedEndLine === undefined
+          ? recoverEntryRangeFromKey(key, entryPath)
+          : undefined;
+      const startLine = parsedStartLine ?? recoveredRange?.startLine;
+      const endLine = parsedEndLine ?? recoveredRange?.endLine;
       const source = entry.source === "memory" ? "memory" : null;
-      if (!entryPath || !Number.isInteger(startLine) || !Number.isInteger(endLine) || !source) {
+      if (!entryPath || startLine === undefined || endLine === undefined || !source) {
         continue;
       }
 
-      const recallCount = Math.max(0, Math.floor(Number(entry.recallCount) || 0));
-      const dailyCount = Math.max(0, Math.floor(Number(entry.dailyCount) || 0));
-      const groundedCount = Math.max(0, Math.floor(Number(entry.groundedCount) || 0));
-      const totalScore = Math.max(0, Number(entry.totalScore) || 0);
-      const maxScore = clampScore(Number(entry.maxScore) || 0);
+      const recallCount = parseStrictNonNegativeInteger(entry.recallCount) ?? 0;
+      const dailyCount = parseStrictNonNegativeInteger(entry.dailyCount) ?? 0;
+      const groundedCount = parseStrictNonNegativeInteger(entry.groundedCount) ?? 0;
+      const totalScore = Math.max(0, parseStrictFiniteNumber(entry.totalScore) ?? 0);
+      const maxScore = clampScore(parseStrictFiniteNumber(entry.maxScore) ?? 0);
       const firstRecalledAt =
         typeof entry.firstRecalledAt === "string" ? entry.firstRecalledAt : nowIso;
       const lastRecalledAt =
@@ -591,4 +611,51 @@ export function parseEntryRangeFromKey(
     };
   }
   return { startLine: 1, endLine: 1 };
+}
+
+/**
+ * Recovers a positive line range from an entry's map key.
+ *
+ * {@link buildEntryKey} builds `${source}:${path}:${startLine}:${endLine}` and appends
+ * `:${claimHash}` for grounded entries. The trailing suffix means a range cannot be read
+ * by taking the last two colon-separated fields: an all-decimal claim hash would be
+ * mistaken for the end line, and a hex hash would fail to match at all and drop the row.
+ *
+ * The known path is therefore matched explicitly from the front, which also keeps a path
+ * containing colons (such as a drive letter) unambiguous.
+ *
+ * Returns `undefined` when the key carries no usable range, so callers can distinguish
+ * "recovered a faithful range" from "no identity available" instead of falling back to a
+ * placeholder range that would misidentify the entry.
+ */
+function recoverEntryRangeFromKey(
+  key: string,
+  entryPath: string,
+): { startLine: number; endLine: number } | undefined {
+  const prefix = `memory:${entryPath}:`;
+  if (!key.startsWith(prefix)) {
+    return undefined;
+  }
+  // Optional trailing `:${claimHash}`; the hash is opaque, so strip one suffix field
+  // only when what remains still ends in a start:end pair.
+  const remainder = key.slice(prefix.length);
+  const parts = remainder.split(":");
+  const candidate = parts.length > 2 ? parts.slice(0, 2) : parts;
+  if (candidate.length !== 2) {
+    return undefined;
+  }
+  const [rawStart, rawEnd] = candidate;
+  if (rawStart === undefined || rawEnd === undefined) {
+    return undefined;
+  }
+  // Use the same strict parser as the entry fields. A key is written by this codebase,
+  // but a hand-edited or externally-produced store can carry a non-canonical bound, and
+  // recovering it leniently would reintroduce exactly the coercion this decoding change
+  // removes (for example `0x10` -> 16) at a second entry point.
+  const startLine = parseStrictNonNegativeInteger(rawStart);
+  const endLine = parseStrictNonNegativeInteger(rawEnd);
+  if (startLine === undefined || endLine === undefined || startLine <= 0 || endLine <= 0) {
+    return undefined;
+  }
+  return { startLine, endLine };
 }
