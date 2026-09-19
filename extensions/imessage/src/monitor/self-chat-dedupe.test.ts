@@ -111,6 +111,22 @@ describe("echo cache — reply_to_guid reflections", () => {
       expectedKind: "drop",
     },
     {
+      // Real chat.db rows carry chat_id, so `replyTarget` resolves to `chat_id:<n>` and the
+      // send side persists `account:chat_id:<n>` — not the `imessage:<handle>` scope the
+      // other cases use. The strict reflected-reply probe has to cover that shape too.
+      label: "drops a reflected self-chat reply persisted under the provider chat-id target",
+      cachedScope: "default:chat_id:123",
+      message: selfChatMessage({
+        id: 207,
+        guid: "p:0/self-chat-chat-id-reflection",
+        chat_id: 123,
+        reply_to_guid: outboundGuid,
+        text: "Reflected reply",
+        is_from_me: false,
+      }),
+      expectedKind: "drop",
+    },
+    {
       label: "keeps a matching inline reply sent from a verified self-chat",
       cachedScope: SELF_CHAT_SCOPE,
       message: selfChatMessage({

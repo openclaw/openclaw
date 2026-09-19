@@ -30,11 +30,14 @@ import {
 } from "./conversation-id.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import {
+  createAnchorlessDirectPair,
   createChatDb,
   createChatDbMessage,
+  createInboundMessage,
   DEFAULT_SENDER,
   insertChatDbMessage,
   readChatDbMessagesAfter,
+  setAvailablePrivateApiMethods,
   withChatDb,
 } from "./monitor.last-route.test-support.js";
 import * as iMessageMediaStaging from "./monitor/media-staging.js";
@@ -52,7 +55,6 @@ import {
 import type { probeIMessagePrivateApi } from "./probe.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const ANCHOR_REPAIR_GUID = "11111111-1111-4111-8111-111111111111";
 const WATCH_SUBSCRIBE_PARAMS = { attachments: false, include_reactions: true } as const;
 const WATCH_SUBSCRIBE_OPTIONS = { timeoutMs: 10_000 } as const;
 const EMPTY_DISPATCH_RESULT = {
@@ -265,48 +267,6 @@ describe("iMessage monitor last-route updates", () => {
     vi.unstubAllEnvs();
   });
 
-  function setAvailablePrivateApiMethods(rpcMethods: string[]): void {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: true,
-      v2Ready: true,
-      selectors: {},
-      rpcMethods,
-    });
-  }
-
-  function createInboundMessage(
-    message: Pick<IMessagePayload, "id" | "guid" | "text"> &
-      Partial<
-        Pick<
-          IMessagePayload,
-          | "chat_id"
-          | "chat_guid"
-          | "chat_identifier"
-          | "sender"
-          | "is_from_me"
-          | "is_group"
-          | "created_at"
-          | "destination_caller_id"
-          | "reply_to_guid"
-        >
-      >,
-  ): IMessagePayload {
-    return {
-      id: message.id,
-      guid: message.guid,
-      chat_id: message.chat_id ?? 123,
-      chat_guid: message.chat_guid,
-      chat_identifier: message.chat_identifier,
-      sender: message.sender ?? DEFAULT_SENDER,
-      is_from_me: message.is_from_me ?? false,
-      text: message.text,
-      is_group: message.is_group ?? false,
-      created_at: message.created_at ?? new Date().toISOString(),
-      destination_caller_id: message.destination_caller_id,
-      reply_to_guid: message.reply_to_guid,
-    };
-  }
-
   it("preserves an inbound SMS route through early typing, exact-chat delivery, and last-route", async () => {
     const { label, configuredService, chatGuid, expectedService } = {
       label: "SMS chat with service unset",
@@ -426,37 +386,6 @@ describe("iMessage monitor last-route updates", () => {
       To: "chat_id:456",
     });
   });
-
-  function createAnchorlessDirectPair(id: number, text: string, isFromMe: boolean) {
-    return {
-      notification: {
-        id,
-        guid: ANCHOR_REPAIR_GUID,
-        chat_id: 0,
-        chat_guid: "",
-        chat_identifier: "",
-        sender: "+15550000001",
-        destination_caller_id: "+15550000001",
-        is_from_me: false,
-        is_group: false,
-        service: "iMessage",
-        text,
-        created_at: new Date().toISOString(),
-      },
-      history: {
-        id,
-        guid: ANCHOR_REPAIR_GUID,
-        chat_id: 42,
-        chat_guid: "iMessage;-;+15550000002",
-        chat_identifier: "+15550000002",
-        sender: "+15550000002",
-        destination_caller_id: "+15550000001",
-        is_from_me: isFromMe,
-        is_group: false,
-        service: "iMessage",
-      },
-    };
-  }
 
   function createIMessageWatchClient(params: WatchClientParams = {}) {
     let onNotification:
@@ -675,9 +604,14 @@ describe("iMessage monitor last-route updates", () => {
         }),
       ],
       afterNotify: async () => {
-        await vi.waitFor(() => {
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        });
+        // Each strict reflection costs a persisted-cache read, so the six-row batch that proves
+        // the loop budget survived can land well past the default wait window on slower hosts.
+        await vi.waitFor(
+          () => {
+            expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+          },
+          { timeout: 15_000 },
+        );
       },
       monitor: { runtime },
     });

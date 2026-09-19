@@ -52,6 +52,7 @@ import {
 import type { IMessageDmHistoryContext } from "./dm-history.js";
 import type { SentMessageCache } from "./echo-cache.js";
 import { resolveIMessageInboundMentionPolicy } from "./mention-policy.js";
+import { hasReflectedReplyEcho } from "./echo-scope.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -610,19 +611,20 @@ export async function resolveIMessageInboundDecision(params: {
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
     const echoCache = params.echoCache;
+    // Reuse the existing conversation scopes; direct replies may have been persisted
+    // with the exact provider chat-id target instead of the sender handle.
+    const directChatIdScope = formatIMessageChatTarget(chatId);
+    const replyEchoScope = directChatIdScope
+      ? [...echoScope, `${params.accountId}:${directChatIdScope}`]
+      : echoScope;
     const hasReplyToEcho =
       params.message.is_from_me === false && isSelfChat && replyToGuid && bodyText
-        ? (
-            await Promise.all(
-              echoScope.map((scope) =>
-                echoCache.has(
-                  scope,
-                  { text: bodyText, messageId: replyToGuid },
-                  { requireMessageIdTextMatch: true },
-                ),
-              ),
-            )
-          ).some(Boolean)
+        ? await hasReflectedReplyEcho({
+            echoCache,
+            scopes: replyEchoScope,
+            text: bodyText,
+            messageId: replyToGuid,
+          })
         : false;
     if (
       hasReplyToEcho ||
