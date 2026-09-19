@@ -14,6 +14,7 @@ import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { splitMediaOutput } from "../media/parse-output.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
@@ -26,6 +27,7 @@ type ComparableHistoryMessage = {
   cliImageTurnKey?: string;
   role?: string;
   text?: string;
+  mediaFreeText?: string;
   driftNoteText?: string;
   timestamp?: number;
 };
@@ -90,6 +92,7 @@ function extractComparableText(
   hasCliImageMentions: boolean;
   cliImageTurnKey?: string;
   text?: string;
+  mediaFreeText?: string;
   driftNoteText?: string;
 } {
   if (!message || typeof message !== "object") {
@@ -134,6 +137,14 @@ function extractComparableText(
     return visible.replace(/\s+/g, " ").trim();
   };
   const normalized = normalizeText(stripResult.text);
+  // claude-cli assistant turns are persisted twice: the imported JSONL record keeps the
+  // raw `MEDIA:<path>` line, the committed message has it stripped with the image attached.
+  // Expose the media-free view as a secondary key so both dedupe (else image turns render
+  // twice). The canonical parser keeps fenced examples and `MEDIA:screenshot` as text.
+  const mediaFreeText =
+    role === "assistant" && /(?:^|\n)\s*MEDIA:/i.test(stripResult.text)
+      ? normalizeText(splitMediaOutput(stripResult.text, { extractAudioDirectives: false }).text)
+      : undefined;
   const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
   const driftNoteText =
     withoutDriftNote !== rawText
@@ -147,6 +158,7 @@ function extractComparableText(
       ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
       : {}),
     ...(normalized ? { text: normalized } : {}),
+    ...(mediaFreeText && mediaFreeText !== normalized ? { mediaFreeText } : {}),
     ...(driftNoteText ? { driftNoteText } : {}),
   };
 }
@@ -170,6 +182,7 @@ function prepareComparableMessage(
     ...(comparableText.cliImageTurnKey ? { cliImageTurnKey: comparableText.cliImageTurnKey } : {}),
     role,
     text: comparableText.text,
+    mediaFreeText: comparableText.mediaFreeText,
     driftNoteText: comparableText.driftNoteText,
     timestamp: asFiniteNumber(record.timestamp),
   };
@@ -491,17 +504,23 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
     byText = new Map();
     index.set(entry.role, byText);
   }
-  let summary = byText.get(entry.text);
-  if (!summary) {
-    summary = {
-      missingTimestamps: [],
-      missingTimestampCursor: 0,
-      timestampedByOrder: [],
-      timestampedOrderCursor: 0,
-    };
-    byText.set(entry.text, summary);
+  // Index the media-free view too so a raw local `MEDIA:` record matches a stripped import.
+  for (const text of [entry.text, entry.mediaFreeText]) {
+    if (!text) {
+      continue;
+    }
+    let summary = byText.get(text);
+    if (!summary) {
+      summary = {
+        missingTimestamps: [],
+        missingTimestampCursor: 0,
+        timestampedByOrder: [],
+        timestampedOrderCursor: 0,
+      };
+      byText.set(text, summary);
+    }
+    addTimestampToSummary(summary, entry);
   }
-  addTimestampToSummary(summary, entry);
 }
 
 function findRoleTextCandidate(
@@ -584,7 +603,12 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     // A literal match must not consume order for an unrelated unprefixed turn.
     // Other matches also advance the note-free view, including edited identities.
-    const matchedText = matched.text === entry.text ? entry.text : entry.driftNoteText;
+    const matchedText =
+      matched.text === entry.text
+        ? entry.text
+        : matched.text === entry.mediaFreeText
+          ? entry.mediaFreeText
+          : entry.driftNoteText;
     for (const text of [entry.text, matchedText]) {
       if (!text) {
         continue;
@@ -679,8 +703,9 @@ export function mergeImportedChatHistoryMessages(params: {
       const byText = imported.role ? roleTextMinimumOrder.get(imported.role) : undefined;
       const importedMinimumOrder = imported.text ? (byText?.get(imported.text) ?? 0) : 0;
       // A user can quote the complete note. Prefer that literal local turn
-      // before comparing the text after an OpenClaw-generated note.
-      for (const text of [imported.text, imported.driftNoteText]) {
+      // before comparing the text after an OpenClaw-generated note, and only
+      // then fall back to the assistant text with `MEDIA:` directives removed.
+      for (const text of [imported.text, imported.driftNoteText, imported.mediaFreeText]) {
         if (!imported.role || !text) {
           continue;
         }

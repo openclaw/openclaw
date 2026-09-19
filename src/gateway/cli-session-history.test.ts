@@ -951,6 +951,94 @@ describe("cli session history", () => {
     expect(merged).toEqual([{ ...localMessage, __openclaw: importedMeta }]);
   });
 
+  it("dedupes an assistant turn whose imported text differs only by a MEDIA: directive", () => {
+    // The committed assistant record has the MEDIA: directive stripped and the image
+    // attached as an artifact; the imported claude-cli record keeps the raw directive.
+    // They must still be recognized as the same turn (otherwise image turns render twice).
+    const localMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Here's your image.\n\nWant a tweak?" },
+        { type: "image", artifactId: "artifact-1" },
+      ],
+      timestamp: 1_000,
+    };
+    const importedMeta = {
+      importedFrom: "claude-cli",
+      cliSessionId: "session-1",
+      externalId: "media-assistant",
+    };
+    const importedMessage = {
+      role: "assistant",
+      content: "Here's your image.\n\nMEDIA:/tmp/openclaw/out/pic.png\n\nWant a tweak?",
+      timestamp: 1_001,
+      __openclaw: importedMeta,
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([{ ...localMessage, __openclaw: importedMeta }]);
+  });
+
+  it("keeps assistant turns distinct when they differ by literal or fenced MEDIA: text", () => {
+    // `MEDIA:screenshot` and fenced examples are visible text for the canonical
+    // parser, so a reply that carries them is a different turn, not a duplicate.
+    const importedMeta = {
+      importedFrom: "claude-cli",
+      cliSessionId: "session-1",
+      externalId: "literal-media",
+    };
+    const cases = [
+      { local: "Done", imported: "Done\nMEDIA:screenshot" },
+      { local: "Use it like this:", imported: "Use it like this:\n```\nMEDIA:/tmp/pic.png\n```" },
+    ];
+    for (const { local, imported } of cases) {
+      const localMessage = { role: "assistant", content: local, timestamp: 1_000 };
+      const importedMessage = {
+        role: "assistant",
+        content: imported,
+        timestamp: 1_001,
+        __openclaw: importedMeta,
+      };
+
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [localMessage],
+        importedMessages: [importedMessage],
+      });
+
+      expect(merged).toEqual([localMessage, importedMessage]);
+    }
+  });
+
+  it("dedupes media-only assistant turns with identical text", () => {
+    const localMessage = {
+      role: "assistant",
+      content: "MEDIA:/tmp/openclaw/out/pic.png",
+      timestamp: 1_000,
+    };
+    const importedMeta = {
+      importedFrom: "claude-cli",
+      cliSessionId: "session-1",
+      externalId: "media-only",
+    };
+    const importedMessage = {
+      role: "assistant",
+      content: "MEDIA:/tmp/openclaw/out/pic.png",
+      timestamp: 1_001,
+      __openclaw: importedMeta,
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [importedMessage],
+    });
+
+    expect(merged).toEqual([{ ...localMessage, __openclaw: importedMeta }]);
+  });
+
   it("prefers a literal note match and preserves the distinct unprefixed turn", () => {
     const literal = `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nhello`;
     const localMessages = [
