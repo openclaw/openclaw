@@ -73,7 +73,14 @@ describe("buildEmbeddedSystemPrompt", () => {
       const message = createStubTool("message");
       message.parameters = Type.Object({
         message: Type.Optional(Type.String()),
-        ...(surface === "available" ? { clawhub: Type.Object({ query: Type.String() }) } : {}),
+        ...(surface === "available"
+          ? {
+              clawhub: Type.Object({
+                intent: Type.Literal("recommend"),
+                query: Type.String(),
+              }),
+            }
+          : {}),
       });
       const prompt = buildEmbeddedSystemPrompt({
         ...fixedEmbeddedPromptInputs(),
@@ -84,9 +91,9 @@ describe("buildEmbeddedSystemPrompt", () => {
       expect(prompt.includes("including when it is already installed")).toBe(
         surface === "available",
       );
-      expect(prompt.includes('message(action="send", clawhub={query:"capability"})')).toBe(
-        surface === "available",
-      );
+      expect(
+        prompt.includes('message(action="send", clawhub={intent:"recommend",query:"capability"})'),
+      ).toBe(surface === "available");
     },
   );
 

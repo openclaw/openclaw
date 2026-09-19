@@ -245,7 +245,7 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain('action="focus_tab" with its tabId');
       expect(instructions).toContain("do not open hosting URLs as browser pages");
       expect(instructions).toContain(
-        `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
+        `\`${prefix}message(action="send", clawhub={intent:"recommend",query:"capability"})\``,
       );
       expect(instructions).toContain("including when it is already installed");
       expect(instructions).toContain("desktop app does not establish");

@@ -14,6 +14,7 @@ import { createMessageTool } from "./message-tool-execution.js";
 const registry = vi.hoisted(() => ({
   plugins: vi.fn(),
   local: vi.fn(),
+  install: vi.fn(),
   skills: vi.fn(),
   skillStatus: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
   fetchClawHubPluginCatalog: registry.plugins,
 }));
 vi.mock("../../plugins/management-service.js", () => ({ listManagedPlugins: registry.local }));
+vi.mock("../../plugins/clawhub.js", () => ({ installPluginFromClawHub: registry.install }));
 vi.mock("../../infra/clawhub-skills.js", () => ({ searchClawHubSkills: registry.skills }));
 vi.mock("../../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: registry.skillStatus,
@@ -59,6 +61,7 @@ beforeEach(() => {
   registry.local
     .mockReset()
     .mockResolvedValue({ plugins: [], diagnostics: [], mutationAllowed: true });
+  registry.install.mockReset();
   registry.skills.mockReset().mockResolvedValue([]);
   registry.skillStatus.mockReset().mockReturnValue({ skills: [] });
 });
@@ -105,7 +108,10 @@ describe("ClawHub message recommendations", () => {
             sessionId,
             workspaceDir: state.workspaceDir,
           });
-          const args = { action: "send", clawhub: { query: "whatsapp" } };
+          const args = {
+            action: "send",
+            clawhub: { intent: "recommend", query: "whatsapp" },
+          };
           const result = await tool.execute("clawhub-proof-call", args);
           const reply = extractMessagingToolSourceReplyPayload(result);
           const cards = readClawHubRecommendations(reply?.channelData);
@@ -153,7 +159,7 @@ describe("ClawHub message recommendations", () => {
     ]);
     const result = await messageTool().execute("no-match", {
       action: "send",
-      clawhub: { query: "whatsapp" },
+      clawhub: { intent: "recommend", query: "whatsapp" },
     });
     const reply = extractMessagingToolSourceReplyPayload(result);
     expect(readClawHubRecommendations(reply?.channelData)).toEqual([]);
@@ -161,6 +167,131 @@ describe("ClawHub message recommendations", () => {
     expect(result.content).toEqual([
       { type: "text", text: expect.stringContaining("No official ClawHub plugin or skill match") },
     ]);
+  });
+
+  it("rejects the exact accidental status payloads before discovery or transcript persistence", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "clawhub-message-mixed-guard-" },
+      async (state) => {
+        const sessionKey = "agent:main:webchat:dm:clawhub-proof";
+        const sessionId = "clawhub-mixed-guard-session";
+        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+        const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        const config = {
+          agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        };
+        const tool = messageTool(config, {
+          agentId: "main",
+          sessionId,
+          workspaceDir: state.workspaceDir,
+        });
+
+        for (const query of [
+          "x",
+          "taskflow",
+          "merge pull request",
+          "__none__",
+          "taskflow assisted release status",
+        ]) {
+          await expect(
+            tool.execute(`mixed-${query}`, {
+              action: "send",
+              message: "Release status: merged; deployment remains gated.",
+              clawhub: { query },
+            }),
+          ).rejects.toThrow();
+        }
+
+        expect(registry.plugins).not.toHaveBeenCalled();
+        expect(registry.skills).not.toHaveBeenCalled();
+        expect(registry.local).not.toHaveBeenCalled();
+        const messages = (await loadTranscriptEvents(scope))
+          .map(readTranscriptEventMessage)
+          .filter((message) => message?.role === "assistant");
+        expect(messages).toEqual([]);
+      },
+    );
+  });
+
+  it("rejects ordinary send content even when the recommendation intent is explicit", async () => {
+    await expect(
+      messageTool().execute("explicit-mixed-branch", {
+        action: "send",
+        message: "Unrelated release status.",
+        clawhub: { intent: "recommend", query: "whatsapp" },
+      }),
+    ).rejects.toThrow(/ordinary send fields \(message\)/i);
+    expect(registry.plugins).not.toHaveBeenCalled();
+    expect(registry.skills).not.toHaveBeenCalled();
+    expect(registry.local).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes recommendation intro text before capability discovery", async () => {
+    const result = await messageTool().execute("suppressed-intro", {
+      action: "send",
+      clawhub: {
+        intent: "recommend",
+        query: "whatsapp",
+        intro:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md: private\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      },
+    });
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "internal_runtime_context_echo",
+    });
+    expect(registry.plugins).not.toHaveBeenCalled();
+    expect(registry.skills).not.toHaveBeenCalled();
+    expect(registry.local).not.toHaveBeenCalled();
+  });
+
+  it.each(["x", "__none__"])(
+    "rejects placeholder query %j before catalog discovery",
+    async (query) => {
+      await expect(
+        messageTool().execute(`placeholder-${query}`, {
+          action: "send",
+          clawhub: { intent: "recommend", query },
+        }),
+      ).rejects.toThrow(/specific capability name|too small/i);
+      expect(registry.plugins).not.toHaveBeenCalled();
+      expect(registry.skills).not.toHaveBeenCalled();
+      expect(registry.local).not.toHaveBeenCalled();
+    },
+  );
+
+  it("limits explicit recommendations to three official cards without installing", async () => {
+    const extraRemotePlugins: (typeof remotePlugin)[] = [];
+    for (const runtimeId of ["signal", "telegram", "matrix"]) {
+      extraRemotePlugins.push({
+        ...remotePlugin,
+        packageName: `@openclaw/${runtimeId}`,
+        displayName: runtimeId[0]?.toUpperCase() + runtimeId.slice(1),
+        runtimeId,
+      });
+    }
+    registry.plugins.mockResolvedValue({
+      items: [remotePlugin, ...extraRemotePlugins],
+    });
+
+    const result = await messageTool().execute("explicit-three-card-limit", {
+      action: "send",
+      clawhub: { intent: "recommend", query: "messaging channel" },
+    });
+    const cards = readClawHubRecommendations(
+      extractMessagingToolSourceReplyPayload(result)?.channelData,
+    );
+
+    expect(cards).toHaveLength(3);
+    expect(cards.every((card) => card.official)).toBe(true);
+    expect(registry.plugins).toHaveBeenCalledWith({
+      query: "messaging channel",
+      intent: "official",
+      limit: 3,
+    });
+    expect(registry.local).toHaveBeenCalledOnce();
+    expect(registry.install).not.toHaveBeenCalled();
   });
 
   it("matches an official skill to its exact linked publisher instead of its display name", async () => {
@@ -189,9 +320,16 @@ describe("ClawHub message recommendations", () => {
     const tool = messageTool({}, { workspaceDir: "/workspace" });
     const result = await tool.execute("skill-card", {
       action: "send",
-      message: "Here is your calendar capability.",
-      clawhub: { query: "calendar", kind: "skill" },
+      clawhub: {
+        intent: "recommend",
+        query: "calendar",
+        kind: "skill",
+        intro: "Here is your calendar capability.",
+      },
     });
+    expect(extractMessagingToolSourceReplyPayload(result)?.text).toBe(
+      "Here is your calendar capability.",
+    );
     expect(
       readClawHubRecommendations(extractMessagingToolSourceReplyPayload(result)?.channelData),
     ).toEqual([
@@ -212,7 +350,7 @@ describe("ClawHub message recommendations", () => {
     registry.plugins.mockRejectedValue(new Error("Registry offline"));
     const result = await messageTool().execute("catalog-offline", {
       action: "send",
-      clawhub: { query: "whatsapp" },
+      clawhub: { intent: "recommend", query: "whatsapp" },
     });
     const reply = extractMessagingToolSourceReplyPayload(result);
     expect(readClawHubRecommendations(reply?.channelData)).toEqual([]);
@@ -225,6 +363,15 @@ describe("ClawHub message recommendations", () => {
 
   it("does not expose catalog cards on external channel tool schemas", () => {
     expect(messageTool().parameters).toHaveProperty("properties.clawhub");
+    expect(messageTool().parameters).toHaveProperty(
+      "properties.clawhub.properties.intent.const",
+      "recommend",
+    );
+    expect(messageTool().parameters).toHaveProperty("properties.clawhub.properties.intro");
+    expect(messageTool().parameters).toHaveProperty(
+      "properties.clawhub.properties.query.minLength",
+      2,
+    );
     expect(messageTool({}, { currentChannelProvider: "telegram" }).parameters).not.toHaveProperty(
       "properties.clawhub",
     );
@@ -234,7 +381,12 @@ describe("ClawHub message recommendations", () => {
     await expect(
       messageTool().execute("forged-status", {
         action: "send",
-        clawhub: { query: "whatsapp", installed: true, official: true },
+        clawhub: {
+          intent: "recommend",
+          query: "whatsapp",
+          installed: true,
+          official: true,
+        },
       }),
     ).rejects.toThrow();
     expect(registry.plugins).not.toHaveBeenCalled();

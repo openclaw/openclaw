@@ -16,15 +16,81 @@ import { resolveClawHubBaseUrl, resolveClawHubImageUrl } from "../clawhub-client
 import { fetchClawHubPluginCatalog } from "../clawhub-plugin-catalog.js";
 import { searchClawHubSkills } from "../clawhub-skills.js";
 
+const placeholderQueryTokens = new Set(["none", "null", "nil", "na"]);
+
 const requestSchema = z
   .object({
-    query: z.string().trim().min(1).max(160),
+    intent: z.literal("recommend"),
+    query: z
+      .string()
+      .trim()
+      .min(2)
+      .max(160)
+      .refine(
+        (query) => {
+          const token = query.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+          return token.length >= 2 && !placeholderQueryTokens.has(token);
+        },
+        { message: "Use a specific capability name instead of a placeholder query." },
+      ),
     kind: z.enum(["plugin", "skill"]).optional(),
+    intro: z.string().trim().min(1).optional(),
   })
   .strict();
 
+type ClawHubRecommendationRequest = z.infer<typeof requestSchema>;
+
+const recommendationControlParamKeys = new Set([
+  "action",
+  "clawhub",
+  "dryRun",
+  "gatewayToken",
+  "gatewayUrl",
+  "idempotencyKey",
+  "timeoutMs",
+]);
+
+function hasActiveParamValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+}
+
+/**
+ * Validates the capability-recommendation branch before any catalog lookup or
+ * source-reply persistence. Ordinary send fields fail closed; intentional copy
+ * belongs in `clawhub.intro` so status text cannot silently activate cards.
+ */
+export function validateClawHubRecommendationSend(
+  params: Record<string, unknown>,
+): ClawHubRecommendationRequest {
+  const request = requestSchema.parse(params.clawhub);
+  const conflictingKeys = Object.entries(params)
+    .filter(
+      ([key, value]) => !recommendationControlParamKeys.has(key) && hasActiveParamValue(value),
+    )
+    .map(([key]) => key)
+    .toSorted();
+  if (conflictingKeys.length > 0) {
+    throw new Error(
+      `ClawHub recommendations cannot include ordinary send fields (${conflictingKeys.join(", ")}). Use clawhub.intro for optional introductory text.`,
+    );
+  }
+  return request;
+}
+
 export async function resolveClawHubRecommendations(params: {
-  request: unknown;
+  request: ClawHubRecommendationRequest;
   config: OpenClawConfig;
   agentId?: string;
   workspaceDir?: string;

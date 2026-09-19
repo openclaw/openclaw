@@ -52,7 +52,14 @@ describe("buildCliAgentSystemPrompt", () => {
     (available) => {
       const message = createStubTool("message");
       message.parameters = Type.Object(
-        available ? { clawhub: Type.Object({ query: Type.String() }) } : {},
+        available
+          ? {
+              clawhub: Type.Object({
+                intent: Type.Literal("recommend"),
+                query: Type.String(),
+              }),
+            }
+          : {},
       );
       const prompt = buildCliAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",

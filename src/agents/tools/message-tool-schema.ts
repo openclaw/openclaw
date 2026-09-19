@@ -207,13 +207,27 @@ function buildSendSchema(options: {
     props.clawhub = Type.Optional(
       Type.Object(
         {
-          query: Type.String({ minLength: 1, maxLength: 160 }),
+          intent: Type.Literal("recommend", {
+            description: "Explicitly selects the capability-recommendation branch.",
+          }),
+          query: Type.String({
+            minLength: 2,
+            maxLength: 160,
+            description: "Specific capability name; placeholder queries are rejected.",
+          }),
           kind: Type.Optional(stringEnum(["plugin", "skill"])),
+          intro: Type.Optional(
+            Type.String({
+              minLength: 1,
+              description:
+                "Optional user-facing introduction for the recommendation cards. Use this instead of the top-level message field.",
+            }),
+          ),
         },
         {
           additionalProperties: false,
           description:
-            "Search official ClawHub capabilities and show install or Installed cards in the current Control UI conversation. Omit kind to check plugins, then skills. This presents options; the user chooses installation.",
+            "Capability-recommendation branch. Do not combine it with ordinary message, media, attachment, presentation, or delivery fields. Search official ClawHub capabilities and show install or Installed cards in the current Control UI conversation. Omit kind to check plugins, then skills. This presents options; the user chooses installation.",
         },
       ),
     );
