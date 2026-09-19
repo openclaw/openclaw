@@ -317,7 +317,13 @@ export function renderChat(props: ChatProps) {
             type="button"
             ?inert=${!props.showNewMessages}
             aria-hidden=${!props.showNewMessages}
-            @click=${() => props.onScrollToBottom?.({ smooth: true })}
+            @click=${(event: MouseEvent) => {
+              const transcript = props.transcript.scrollElement;
+              if (transcript?.ownerDocument.activeElement === event.currentTarget) {
+                transcript.focus({ preventScroll: true });
+              }
+              props.onScrollToBottom?.({ smooth: true });
+            }}
             aria-label=${t("chat.actions.scrollToLatest")}
           >
             ${icons.arrowDown}
