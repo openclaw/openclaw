@@ -2380,8 +2380,17 @@ jobs:
 
           const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, "browser-native-host.json"), "utf8"));
           assert.equal(report.success, true);
-          assert.equal(report.numTotalTests, 1);
-          assert.equal(report.numPassedTests, 1);
+          const expectedNames = [
+            "does not inspect or migrate configuration before rejecting a malformed native request",
+            "rejects an unauthorized bootstrap caller before config, keys or database creation",
+            "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+            ...["status", "setup", "pair"].map((command) =>
+              `preserves invalid-config diagnostics for ordinary extension command ${JSON.stringify(command)}`),
+            ...["launcher", "cli"].map((entry) =>
+              `launches ${entry} with the exact custom installation context when Chrome has no selectors`),
+          ].map((name) => `native host registration ${name}`).sort();
+          assert.equal(report.numTotalTests, expectedNames.length);
+          assert.equal(report.numPassedTests, expectedNames.length);
           for (const key of ["numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"]) {
             assert.equal(report[key], 0, key);
           }
@@ -2389,11 +2398,11 @@ jobs:
           const file = report.testResults[0];
           assert.equal(file.name, path.resolve("extensions/browser/src/browser/extension-install.native-host.e2e.test.ts"));
           assert.equal(file.status, "passed");
-          assert.equal(file.assertionResults.length, 1);
-          const fullName = "native host registration launches with the exact custom installation context when Chrome has no selectors";
-          assert.equal(file.assertionResults[0].fullName, fullName);
-          assert.equal(file.assertionResults[0].status, "passed");
-          console.log(JSON.stringify({ proof: "browser-native-host", fullName, passed: 1, failed: 0, pending: 0 }));
+          assert.deepEqual(file.assertionResults.map((entry) => entry.fullName).sort(), expectedNames);
+          for (const entry of file.assertionResults) {
+            assert.equal(entry.status, "passed", entry.fullName);
+          }
+          console.log(JSON.stringify({ proof: "browser-native-host", fullNames: expectedNames, passed: expectedNames.length, failed: 0, pending: 0 }));
           BROWSER_PROOF_REPORT
 
       # Startup RSS is measured alone on every runner before independent dist

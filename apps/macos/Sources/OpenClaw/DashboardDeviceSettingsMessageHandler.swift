@@ -90,16 +90,27 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
                 replyHandler(nil, "The device settings document is no longer available.")
                 return
             }
-            if request == .installChromeExtension {
+            let setupAction: ChromeExtensionSetupAction? = switch request {
+            case let .chromeExtensionSetup(action): action
+            case .installChromeExtension: .install
+            default: nil
+            }
+            if let action = setupAction {
                 do {
-                    let result = try await ChromeExtensionSetup.install {
+                    let result = try await ChromeExtensionSetup.shared.run(action: action) {
                         owner.canUseDeviceSettings(sourceID: sourceID) && !Task.isCancelled
                     }
                     guard owner.canUseDeviceSettings(sourceID: sourceID), !Task.isCancelled else {
                         replyHandler(nil, "The device settings document is no longer available.")
                         return
                     }
-                    try replyHandler(JSONSerialization.jsonObject(with: JSONEncoder().encode(result)), nil)
+                    if request == .installChromeExtension {
+                        // Preserve the released contract-1 projection without restoring an installer/decoder.
+                        try replyHandler(
+                            JSONSerialization.jsonObject(with: JSONEncoder().encode(result.legacyInstallation)), nil)
+                    } else {
+                        try replyHandler(JSONSerialization.jsonObject(with: JSONEncoder().encode(result)), nil)
+                    }
                 } catch {
                     replyHandler(nil, error.localizedDescription)
                 }

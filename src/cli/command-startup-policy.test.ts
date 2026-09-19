@@ -378,6 +378,8 @@ describe("command-startup-policy", () => {
   it("reserves stdout for the browser native-host protocol", () => {
     const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
 
+    expect(policy.skipConfigGuard).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
     expect(policy.hideBanner).toBe(true);
     expect(policy.suppressDoctorStdout).toBe(true);
   });

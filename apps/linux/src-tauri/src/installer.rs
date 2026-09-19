@@ -1,5 +1,6 @@
 #[cfg(not(target_os = "windows"))]
 use crate::cli::openclaw_home;
+use crate::cli::OpenClawCli;
 use serde::Deserialize;
 #[cfg(not(target_os = "windows"))]
 use serde::Serialize;
@@ -68,19 +69,96 @@ fn configure_installer_environment(command: &mut Command) {
 
 #[cfg(not(target_os = "windows"))]
 pub fn install(app: &AppHandle, channel: InstallChannel) -> Result<(), String> {
+    let prefix = openclaw_home().map_err(|error| error.to_string())?;
+    install_at(app, channel, prefix, channel.version(), false)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn browser_runtime(
+    _app: &AppHandle,
+    _allow_install: bool,
+    _is_current: &dyn Fn() -> bool,
+) -> Result<OpenClawCli, String> {
+    Err("Browser runtime installation is unavailable in this Windows test build.".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn browser_runtime(
+    app: &AppHandle,
+    allow_install: bool,
+    is_current: &dyn Fn() -> bool,
+) -> Result<OpenClawCli, String> {
+    let version = app.package_info().version.to_string();
+    let release_build = crate::is_release_version(&version);
+    if let Ok(cli) = OpenClawCli::discover() {
+        if !release_build || cli.matches_version(&version) {
+            return Ok(cli);
+        }
+    }
+    if !release_build {
+        return Err("Development builds need a local OpenClaw CLI for Chrome setup.".into());
+    }
+    // A missing CLI wrapper does not prove a Gateway has stopped using its package.
+    // Keep browser-only downloads outside that install and pin them to this app release.
+    let prefix = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("Browser runtime location is unavailable: {error}"))?
+        .join("browser-runtime")
+        .join(&version);
+    for directory in [
+        prefix.parent().expect("versioned runtime parent"),
+        prefix.as_path(),
+    ] {
+        match std::fs::symlink_metadata(directory) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err("Browser runtime directory is unavailable or redirected.".into()),
+        }
+    }
+    if let Ok(cli) = OpenClawCli::browser_runtime(prefix.clone()) {
+        if cli.matches_version(&version) {
+            return Ok(cli);
+        }
+    }
+    // This reserved app-data artifact may be incomplete after an interrupted download.
+    // The canonical installer can repair it without touching the ordinary Gateway install.
+    if !allow_install {
+        return Err("Prepare the local browser runtime with the install action first.".into());
+    }
+    if !is_current() {
+        return Err("The native browser document changed.".into());
+    }
+    install_at(app, InstallChannel::Stable, prefix.clone(), &version, true)?;
+    let cli = OpenClawCli::browser_runtime(prefix).map_err(|error| error.to_string())?;
+    if !cli.matches_version(&version) {
+        return Err("The browser runtime does not match this app version.".into());
+    }
+    Ok(cli)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_at(
+    app: &AppHandle,
+    channel: InstallChannel,
+    prefix: std::path::PathBuf,
+    version: &str,
+    runtime_only: bool,
+) -> Result<(), String> {
     let script = app
         .path()
         .resolve("install-cli.sh", BaseDirectory::Resource)
         .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
-    let prefix = openclaw_home().map_err(|error| error.to_string())?;
-
     let mut command = Command::new("bash");
     configure_installer_environment(&mut command);
     command
         .arg(script)
         .args(["--json", "--no-onboard", "--prefix"])
         .arg(&prefix)
-        .args(["--version", channel.version()]);
+        .args(["--version", version]);
+    if runtime_only {
+        command.args(["--runtime-only", "--npm"]);
+    }
     if matches!(channel, InstallChannel::Dev) {
         command
             .args(["--install-method", "git", "--git-dir"])

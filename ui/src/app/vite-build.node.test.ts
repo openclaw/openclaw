@@ -60,6 +60,47 @@ describe("Control UI Vite build", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js");',
+    );
+    await fs.writeFile(path.join(root, "shared.js"), 'export const shared = "shared";');
+    await fs.writeFile(path.join(root, "lazy-only.js"), 'export const lazy = "lazy-only";');
+    await fs.writeFile(
+      path.join(root, "lazy.js"),
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+    );
+    const productionBuild = config.build!;
+    config.build = {
+      ...productionBuild,
+      rolldownOptions: {
+        ...productionBuild.rolldownOptions,
+        output: {
+          codeSplitting: {
+            groups: ["shared", "lazy-only"].map((name) => ({
+              name,
+              test: (id: string) => id === path.join(root, `${name}.js`),
+            })),
+          },
+        },
+      },
+    };
+    await build(config);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
+    const entry = await fs.readFile(path.join(outDir, "assets", entryName), "utf8");
+    const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
+    expect(table).toBeDefined();
+    const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
+    const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
+    expect(entry).toContain(sharedName);
+    expect(table).not.toContain(sharedName);
+    expect(table).toContain(lazyName);
+    expect(table).toMatch(/lazy-[^"/]+\.css/u);
+    expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain(sharedName);
+  });
+
   it("preserves an unresolved import diagnostic with a fresh output directory", async () => {
     captureLogs("info");
     await fs.writeFile(path.join(root, "main.js"), 'import "./missing-module.js";');

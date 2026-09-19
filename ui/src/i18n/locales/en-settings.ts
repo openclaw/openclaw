@@ -655,18 +655,38 @@ const enSettings = {
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
       chromeExtension: "Chrome extension",
-      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionSetup: "Set up Chrome on this device",
       chromeExtensionHint:
-        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
-      chromeExtensionPreparing: "Preparing Chrome…",
-      chromeExtensionPending:
-        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
-      chromeExtensionStoreRequired:
-        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
-      chromeExtensionInstalled:
-        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+        "Prepare the OpenClaw extension on this device, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Working on this device…",
+      chromeExtensionRefresh: "Refresh setup status",
+      chromeExtensionVerify: "Verify connection",
+      chromeExtensionTarget: "Host: {hostname} · Profile: {profile} · Relay port: {port}",
+      chromeExtensionTabsHint:
+        "A connected extension does not mean eligible tabs are available. Check tabs on this host and profile in the browser tools; an empty list is different from a disconnected extension.",
       chromeExtensionFailed:
-        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
+        "Setup could not finish. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
+      chromeExtensionPhases: {
+        inspection_required: "Setup required on this device.",
+        preparing: "Preparing Chrome on this device.",
+        needs_browser_action: "Chrome needs your attention on this device.",
+        waiting_for_connection: "Connection has not been verified on this device.",
+        ready: "Extension connected on this device.",
+        blocked: "Setup is blocked on this device.",
+      },
+      chromeExtensionNextActions: {
+        none: "",
+        install: "Choose Set up Chrome on this device to prepare the native host.",
+        open_chrome:
+          "Installation requested. Open or restart Chrome on this device and approve OpenClaw.",
+        approve_extension: "Approve OpenClaw in Chrome on this device, then verify the connection.",
+        install_from_store:
+          "Add OpenClaw from the Chrome Web Store on this device, then verify the connection.",
+        check_connection: "Choose Verify connection to check this host's Chrome relay.",
+        repair_native_host: "Check the local CLI installation, then run setup again.",
+        unsupported:
+          "Automatic setup is unavailable on this host. Follow the extension documentation.",
+      },
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",

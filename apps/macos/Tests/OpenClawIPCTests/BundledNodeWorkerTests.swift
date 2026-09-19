@@ -108,5 +108,29 @@ struct BundledNodeWorkerTests {
         await #expect(throws: MacNodeHostWorker.WorkerError.self) {
             try await CommandResolver.nodeHostWorkerLaunch(bundle: bundle, projectRoot: root, searchPaths: [])
         }
+        #expect(throws: MacNodeHostWorker.WorkerError.self) {
+            try BundledNodeWorker.browserSetupLaunch(bundle: bundle)
+        }
+    }
+
+    @Test func `browser setup uses relocated private runtime and the node profile without an external CLI`() throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("OpenClaw.app")
+        _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+        let relocated = root.appendingPathComponent("Moved.app")
+        try FileManager.default.moveItem(at: app, to: relocated)
+        let bundle = try #require(Bundle(url: relocated))
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "browser-fixture"])
+        let worker = try BundledNodeWorker.launch(bundle: bundle, profile: profile)
+        let setup = try BundledNodeWorker.browserSetupLaunch(bundle: bundle, profile: profile)
+        #expect(setup.command.prefix(2) == worker.command.prefix(2))
+        #expect(setup.command[0].hasPrefix(relocated.path + "/"))
+        #expect(Array(setup.command.dropFirst(2)) == [
+            "--profile", "browser-fixture", "browser", "extension", "setup", "--action", "install",
+            "--json", "--wait-ms", "1000",
+        ])
+        #expect(setup.currentDirectoryURL == worker.currentDirectoryURL)
+        #expect(setup.environment == worker.environment)
     }
 }

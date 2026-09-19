@@ -39,7 +39,13 @@ export async function withChatSubmitHandoff(
   },
   deliver: (item: ChatQueueItem) => Promise<QueuedChatSendResult>,
 ): Promise<QueuedChatSendResult> {
-  const yieldsToInput = options.yieldToInput && typeof MessageChannel !== "undefined";
+  // Join an already pending history read before another task can drain this
+  // admission as restored work and discard its foreground leaf binding.
+  const yieldsToInput =
+    options.yieldToInput &&
+    !host.chatLoading &&
+    !isInitialChatHistoryUnavailable(host) &&
+    typeof MessageChannel !== "undefined";
   const startsImmediately =
     yieldsToInput &&
     options.isCurrent() &&

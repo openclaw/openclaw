@@ -2,10 +2,14 @@ use serde::de::DeserializeOwned;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct OpenClawCli {
@@ -66,6 +70,24 @@ impl OpenClawCli {
             openclaw_home,
             available: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn browser_runtime(prefix: PathBuf) -> Result<Self, CliError> {
+        // The install prefix supplies executable/PATH only; the user’s config and state stay unchanged.
+        let cli = Self::new(prefix.join("bin/openclaw"), prefix);
+        cli.verify()?;
+        Ok(cli)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub(crate) fn matches_version(&self, version: &str) -> bool {
+        self.output(["--version"]).is_ok_and(|output| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let reported = stdout.trim();
+            let reported = reported.strip_prefix("OpenClaw ").unwrap_or(reported);
+            output.status.success() && reported.split_whitespace().next() == Some(version)
+        })
     }
 
     pub fn is_available(&self) -> bool {
@@ -131,6 +153,78 @@ impl OpenClawCli {
         })
     }
 
+    pub(crate) fn bounded_json<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, CliError> {
+        let mut command = self.command(args)?;
+        let mut output = ChromeSetupOutput::new().map_err(|error| {
+            CliError::Spawn(format!("Could not prepare Chrome setup output: {error}"))
+        })?;
+        let stdout = output
+            .file
+            .try_clone()
+            .map_err(|error| CliError::Spawn(format!("Could not capture Chrome setup: {error}")))?;
+        command
+            .env("OPENCLAW_NO_RESPAWN", "1")
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::null());
+        let mut child = command
+            .spawn()
+            .map_err(|error| CliError::Spawn(format!("Could not start Chrome setup: {error}")))?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let result = loop {
+            if output
+                .file
+                .metadata()
+                .map(|metadata| metadata.len() > 1024 * 1024)
+                .unwrap_or(true)
+            {
+                break Err(CliError::InvalidJson(
+                    "Chrome setup output exceeded its limit.".into(),
+                ));
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => {
+                    break Err(CliError::Spawn(format!(
+                        "Could not wait for Chrome setup: {error}"
+                    )))
+                }
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+                Ok(None) => {
+                    break Err(CliError::CommandFailed(
+                        "Chrome setup timed out; retry with openclaw browser extension install."
+                            .into(),
+                    ))
+                }
+            }
+        };
+        // Seekable output avoids an orphaned reader when a descendant retains stdout.
+        let _ = child.kill();
+        let _ = child.wait();
+        let status = result?;
+        if !status.success() {
+            return Err(CliError::CommandFailed(
+                "Chrome setup process failed.".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        output
+            .file
+            .rewind()
+            .and_then(|_| {
+                (&mut output.file)
+                    .take((1024 * 1024) + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .map_err(|error| CliError::Spawn(format!("Could not read Chrome setup: {error}")))?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(CliError::InvalidJson(
+                "Chrome setup output exceeded its limit.".into(),
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| CliError::InvalidJson("Chrome setup returned no valid result.".into()))
+    }
+
     fn command_path(&self) -> Result<OsString, CliError> {
         let mut paths = vec![
             self.openclaw_home.join("bin"),
@@ -141,6 +235,32 @@ impl OpenClawCli {
         }
         env::join_paths(paths)
             .map_err(|error| CliError::Environment(format!("Could not construct PATH: {error}")))
+    }
+}
+
+struct ChromeSetupOutput {
+    file: File,
+    path: PathBuf,
+}
+
+impl ChromeSetupOutput {
+    fn new() -> std::io::Result<Self> {
+        let path = env::temp_dir().join(format!("openclaw-chrome-{}.log", uuid::Uuid::new_v4()));
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(&path)?;
+        Ok(Self { file, path })
+    }
+}
+
+impl Drop for ChromeSetupOutput {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -190,6 +310,85 @@ mod tests {
             output_tail(b"waiting\n\nwaiting\nfailed\nwaiting"),
             Some("waiting\nfailed\nwaiting".into())
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chrome_setup_preserves_canonical_pending_and_blocked_results() {
+        use crate::chrome_setup::{run, Action};
+        use serde_json::json;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(
+            std::env::temp_dir().join(format!("openclaw-chrome-setup-{}", uuid::Uuid::new_v4())),
+        );
+        fs::create_dir_all(&fixture.0).unwrap();
+        let executable = fixture.0.join("openclaw");
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+root=$(dirname "$0")
+if test "$1" = "--version"; then printf 'OpenClaw 2026.9.4 (fixture)\n'; exit 0; fi
+test "$OPENCLAW_NO_RESPAWN" = "1" || exit 2
+printf '%s\n' "$*" >> "$root/calls"
+if test -f "$root/fail"; then
+  printf 'fixture-private-diagnostic\n' >&2
+  exit 1
+fi
+cat "$root/result.json"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let cli = OpenClawCli::new(executable, fixture.0.clone());
+        assert!(cli.matches_version("2026.9.4"));
+        assert!(!cli.matches_version("2026.9.3"));
+        for (action, name, phase) in [
+            (Action::Inspect, "inspect", "inspection_required"),
+            (Action::Install, "install", "needs_browser_action"),
+            (Action::Verify, "verify", "blocked"),
+        ] {
+            let expected = json!({
+                "action": name,
+                "target": {"kind": "local-host", "platform": "fixture", "hostname": "fixture",
+                    "profile": "work", "relayPort": 18792},
+                "phase": phase, "reason": "fixture",
+                "installation": {"nativeHostRegistered": false, "installRequested": false,
+                    "discoveredProfiles": [], "awaitingApproval": false,
+                    "automaticBootstrapSupported": false},
+                "connection": {"state": "not_checked"}, "nextAction": "install"
+            });
+            fs::write(fixture.0.join("result.json"), expected.to_string()).unwrap();
+            assert_eq!(run(&cli, action).unwrap(), expected);
+        }
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("calls")).unwrap(),
+            ["inspect", "install", "verify"]
+                .map(|action| format!(
+                    "browser extension setup --action {action} --json --wait-ms 1000\n"
+                ))
+                .concat()
+        );
+        fs::write(fixture.0.join("fail"), "").unwrap();
+        let error = run(&cli, Action::Install).unwrap_err();
+        assert!(error.contains("Chrome setup failed"));
+        assert!(!error.contains("fixture-private-diagnostic"));
+        fs::remove_file(fixture.0.join("fail")).unwrap();
+        fs::write(fixture.0.join("result.json"), "x".repeat(1024 * 1024 + 1)).unwrap();
+        assert!(run(&cli, Action::Inspect)
+            .unwrap_err()
+            .contains("invalid Chrome setup result"));
+        fs::write(fixture.0.join("result.json"), "invalid JSON").unwrap();
+        assert!(run(&cli, Action::Inspect)
+            .unwrap_err()
+            .contains("invalid Chrome setup result"));
     }
 
     #[test]

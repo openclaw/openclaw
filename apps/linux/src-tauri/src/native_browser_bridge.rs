@@ -183,6 +183,12 @@ fn initialization_script(document: &DashboardDocument) -> String {
   Object.defineProperty(window, "__OPENCLAW_NATIVE_BROWSER_HANDLERS__", {{ value: handlers, configurable: true }});
   Object.defineProperty(handlers, "openclawBrowser", {{ value: handler, configurable: true }});
   Object.defineProperty(handlers, "openclawLink", {{ value: handler, configurable: true }});
+  Object.defineProperty(handlers, "openclawChromeSetup", {{ value: {{ postMessage: async message => {{
+    await ready;
+    // Only the action crosses this adapter. The native owner rejects unknown
+    // actions; command, profile, host and URL selection remain CLI-owned.
+    return invoke("native_browser_request", {{ message: {{ type: "chrome-setup", action: message?.action }}, token }});
+  }} }}, configurable: true }});
   Object.defineProperty(window, "__OPENCLAW_NATIVE_BROWSER_TOKEN__", {{ value: token, configurable: true }});
 "#
         ),
@@ -355,7 +361,19 @@ pub async fn native_browser_request(
     let document = bridge
         .authorize(&webview, &token)
         .ok_or("The native browser is no longer available.")?;
-    let result = if message.get("type").and_then(Value::as_str) == Some("open-link") {
+    let result = if message.get("type").and_then(Value::as_str) == Some("chrome-setup") {
+        let request = crate::chrome_setup::parse_request(message)?;
+        let app = app.clone();
+        let generation = document.generation;
+        tauri::async_runtime::spawn_blocking(move || {
+            app.state::<crate::DesktopState>()
+                .inner
+                .chrome_setup
+                .run_for_document(app.clone(), request, generation)
+        })
+        .await
+        .map_err(|_| "Chrome setup could not complete. Try again.")?
+    } else if message.get("type").and_then(Value::as_str) == Some("open-link") {
         let url = message
             .get("url")
             .and_then(Value::as_str)
@@ -425,22 +443,43 @@ async function check(url, topFrame, allowed) {
   const calls = [];
   const window = {
     addEventListener(name, listener) { events.set(name, listener); },
-    __TAURI_INTERNALS__: { invoke(command, args) { calls.push([command, args]); return Promise.resolve({ok: true, tabId: 'fixture-tab'}); } },
+    __TAURI_INTERNALS__: { invoke(command, args) {
+      calls.push([command, args]);
+      if (args.message.type === 'chrome-setup') {
+        if (args.message.action === 'invalid') return Promise.reject('Invalid Chrome setup action.');
+        return Promise.resolve({action: args.message.action, phase: 'blocked', reason: 'fixture', target: {kind: 'local-host'}});
+      }
+      return Promise.resolve({ok: true, tabId: 'fixture-tab'});
+    } },
   };
   window.top = topFrame ? window : {};
   vm.runInNewContext(script, {window, location: new URL(url), Promise});
   const bridge = window.webkit?.messageHandlers?.openclawBrowser;
   assert.equal(Boolean(bridge), allowed);
+  assert.equal(Boolean(window.webkit?.messageHandlers?.openclawChromeSetup), allowed);
+  assert.equal(calls.length, 0, 'loading must not inspect or install');
   if (!allowed) return;
+  const setup = window.webkit.messageHandlers.openclawChromeSetup;
+  const inspect = setup.postMessage({action: 'inspect'});
   const reply = bridge.postMessage({type: 'open', tabId: 'fixture-tab', url: 'https://example.com', sessionKey: 'chat'});
   await Promise.resolve();
   assert.equal(calls.length, 0);
   events.get('openclaw:native-browser-ready')();
   assert.equal((await reply).tabId, 'fixture-tab');
+  assert.equal((await inspect).phase, 'blocked', 'canonical blocked is not a transport failure');
   assert.equal(calls[0][0], 'native_browser_request');
   assert.equal(calls[0][1].token, 'fixture-bridge-token');
+  assert.equal(calls[0][1].message.type, 'chrome-setup');
+  assert.equal(calls[0][1].message.action, 'inspect');
+  for (const action of ['install', 'verify']) {
+    const result = await setup.postMessage({action, command: 'untrusted', url: 'https://untrusted.example', profile: 'remote'});
+    assert.equal(result.action, action);
+    assert.equal(result.ok, undefined, 'returns canonical result without envelope');
+    assert.deepEqual(Object.keys(calls.at(-1)[1].message).sort(), ['action', 'type']);
+  }
+  await assert.rejects(setup.postMessage({action: 'invalid'}), error => error === 'Invalid Chrome setup action.');
   await window.webkit.messageHandlers.openclawLink.postMessage({type: 'open-link', url: 'https://example.com', target: 'external'});
-  assert.equal(calls[1][1].message.target, 'external');
+  assert.equal(calls.at(-1)[1].message.target, 'external');
 }
 async function checkNativeRegistryLifetime() {
   // WebKit's native registry getter weakly caches its JavaScript wrapper.
@@ -462,6 +501,7 @@ async function checkNativeRegistryLifetime() {
   await new Promise(setImmediate);
   assert.equal(typeof window.webkit.messageHandlers.openclawBrowser?.postMessage, 'function');
   assert.equal(typeof window.webkit.messageHandlers.openclawLink?.postMessage, 'function');
+  assert.equal(typeof window.webkit.messageHandlers.openclawChromeSetup?.postMessage, 'function');
 }
 (async () => {
   await check('https://gateway.example/openclaw/chat', true, true);

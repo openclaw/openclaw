@@ -9,6 +9,28 @@ const RELAY_KEY = relayTestKey(5);
 const ensureToken = async () => RELAY_KEY;
 
 describe("buildBrowserExtensionPairing", () => {
+  it("binds native bootstrap to the selected profile instead of the first extension relay", async () => {
+    const cfg = {
+      browser: {
+        profiles: {
+          first: { driver: "extension" as const, cdpPort: 19441 },
+          work: { driver: "extension" as const, cdpPort: 19442 },
+        },
+      },
+    };
+    const result = await buildBrowserExtensionPairing({
+      cfg,
+      profile: "work",
+      localTransport: "gateway",
+      ensureToken,
+    });
+    expect(result.relayPort).toBe(19442);
+    expect(new URL(result.pairingString).searchParams.get("profile")).toBe("work");
+    await expect(
+      buildBrowserExtensionPairing({ cfg, profile: "missing", ensureToken }),
+    ).rejects.toThrow("existing extension profile");
+  });
+
   it("pairs with the first writer's key when its file is already open but empty", async () => {
     await withTempDir("openclaw-pairing-", async (dir) => {
       const stateDir = fs.realpathSync(dir);

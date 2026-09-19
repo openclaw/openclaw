@@ -192,6 +192,22 @@ OpenClaw:
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
 
+## Local Chrome setup
+
+Use `/browser-setup` (or `/browser-setup inspect`) to inspect Chrome extension
+setup on the **TUI process host**, not the connected Gateway.
+`/browser-setup install` explicitly prepares automatic local setup;
+`/browser-setup verify` checks the local authenticated extension relay.
+No pairing code is requested for supported local native bootstrap. Chrome still
+requires its own extension installation and permission approval, and existing
+pairings and automatic-setup opt-outs are preserved.
+
+These commands are deterministic local CLI operations, not messages to the agent.
+Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
+cancels a pending setup command. After interruption, inspect again to reconcile
+any preparation that already completed. When the TUI runs through SSH, setup runs
+on the SSH host; the physical terminal viewer is not assumed to host Chrome.
+
 ## Local shell commands
 
 - Prefix a line with `!` to run a local shell command on the TUI host.

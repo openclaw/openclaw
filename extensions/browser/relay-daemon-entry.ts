@@ -4,7 +4,7 @@
  * Playwright, chrome-devtools-mcp) attach through the same relay port. Spawned
  * on demand by the native messaging host, or run manually.
  */
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readBrowserHostConfig } from "./src/browser/extension-host-config.js";
 import { runExtensionRelayDaemon } from "./src/browser/relay-daemon.js";
 
 const DEFAULT_RELAY_PORT = 18_799;
@@ -16,9 +16,9 @@ const DEFAULT_RELAY_PORT = 18_799;
  * raw config value (not the resolved `?? true` default) so an unset key stays
  * v2-only rather than inheriting the gateway's permissive default.
  */
-function resolveAllowLegacyAuth(): boolean {
+async function resolveAllowLegacyAuth(): Promise<boolean> {
   try {
-    return getRuntimeConfig().browser?.extensionRelay?.allowLegacyAuth === true;
+    return (await readBrowserHostConfig()).browser?.extensionRelay?.allowLegacyAuth === true;
   } catch {
     return false;
   }
@@ -40,7 +40,7 @@ function resolvePortArgument(argv: string[]): number {
 async function main(): Promise<void> {
   const run = await runExtensionRelayDaemon({
     port: resolvePortArgument(process.argv.slice(2)),
-    allowLegacyAuth: resolveAllowLegacyAuth(),
+    allowLegacyAuth: await resolveAllowLegacyAuth(),
   });
   const stop = (): void => run.stop();
   process.once("SIGINT", stop);

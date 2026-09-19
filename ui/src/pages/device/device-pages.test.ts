@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -9,6 +10,7 @@ import type {
 } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
@@ -38,6 +40,7 @@ function createCapability(
     openSystemSettings: vi.fn(),
     openPanel: vi.fn(),
     checkForUpdates: vi.fn(),
+    setupChromeExtension: vi.fn(),
     installChromeExtension: vi.fn(),
     refresh: vi.fn(),
     dispose: vi.fn(),
@@ -153,21 +156,88 @@ describe("native device settings pages", () => {
     expect(page.textContent).not.toContain("Unattended desktop hosting");
   });
 
-  it("requests setup only on click and reports Chrome approval separately from installation", async () => {
-    const { capability } = createCapability();
+  it("offers only the shipped install operation on a contract-1 host without new action advertisement", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    delete snapshot.browser.chromeSetupActions;
+    const { capability } = createCapability(snapshot);
     capability.installChromeExtension.mockResolvedValue({
       nativeHostRegistered: true,
       installRequested: true,
       discoveredProfiles: 0,
     });
     const page = await mount("openclaw-device-page", capability);
+    const buttons = row(page, "Set up Chrome on this device").querySelectorAll<HTMLButtonElement>(
+      "button",
+    );
+    expect(buttons).toHaveLength(1);
     expect(capability.installChromeExtension).not.toHaveBeenCalled();
-    row(page, "Set up Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
-    await vi.waitFor(() => expect(page.textContent).toContain("installation requested"));
-    expect(page.textContent).not.toContain("Native host registered and extension found");
-    capability.installChromeExtension.mockRejectedValueOnce(new Error("CLI missing"));
-    row(page, "Set up Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    buttons[0]!.click();
+    await vi.waitFor(() => expect(capability.installChromeExtension).toHaveBeenCalledTimes(1));
+    expect(capability.setupChromeExtension).not.toHaveBeenCalled();
+    expect(page.textContent).not.toContain("Extension connected on this device");
+  });
+
+  it("runs install, refresh and verify only on explicit clicks and separates approval from connection", async () => {
+    const { capability } = createCapability();
+    capability.setupChromeExtension.mockResolvedValue(
+      createChromeExtensionSetupResult({
+        action: "install",
+        phase: "needs_browser_action",
+        nextAction: "approve_extension",
+      }),
+    );
+    const page = await mount("openclaw-device-page", capability);
+    expect(capability.setupChromeExtension).not.toHaveBeenCalled();
+    const buttons = () =>
+      row(page, "Set up Chrome on this device").querySelectorAll<HTMLButtonElement>("button");
+    buttons()[0]!.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("Approve OpenClaw in Chrome"));
+    expect(capability.setupChromeExtension).toHaveBeenLastCalledWith("install");
+    expect(page.textContent).not.toContain("Extension connected on this device");
+    expect(page.textContent).toContain("Example Mac");
+    expect(page.textContent).toContain("18792");
+    capability.setupChromeExtension.mockResolvedValue(createChromeExtensionSetupResult());
+    buttons()[1]!.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("Setup required on this device"));
+    expect(capability.setupChromeExtension).toHaveBeenLastCalledWith("inspect");
+    capability.setupChromeExtension.mockResolvedValue(
+      createChromeExtensionSetupResult({
+        action: "verify",
+        phase: "ready",
+        connection: { state: "connected" },
+        nextAction: "none",
+      }),
+    );
+    buttons()[2]!.click();
+    await vi.waitFor(() =>
+      expect(page.textContent).toContain("Extension connected on this device"),
+    );
+    expect(capability.setupChromeExtension).toHaveBeenLastCalledWith("verify");
+    expect(page.textContent).toContain("does not mean eligible tabs are available");
+    capability.setupChromeExtension.mockRejectedValueOnce(new Error("CLI missing"));
+    buttons()[2]!.click();
     await vi.waitFor(() => expect(page.textContent).toContain("Setup could not finish"));
+    expect(page.textContent).not.toContain("Extension connected on this device");
+  });
+
+  it("does not publish a retired setup response after remounting the same page", async () => {
+    const { capability } = createCapability();
+    const pending = createDeferred<ReturnType<typeof createChromeExtensionSetupResult>>();
+    capability.setupChromeExtension.mockReturnValueOnce(pending.promise);
+    const page = await mount("openclaw-device-page", capability);
+    const provider = page.parentElement!;
+    row(page, "Set up Chrome on this device").querySelector<HTMLButtonElement>("button")!.click();
+    page.remove();
+    provider.append(page);
+    await page.updateComplete;
+    pending.resolve(createChromeExtensionSetupResult({ action: "install", phase: "ready" }));
+    await pending.promise;
+    await page.updateComplete;
+    expect(page.textContent).not.toContain("Extension connected on this device");
+    expect(
+      row(page, "Set up Chrome on this device").querySelector<HTMLButtonElement>("button")!
+        .disabled,
+    ).toBe(false);
   });
   it.each(["openclaw-device-page", "openclaw-device-permissions-page"] as const)(
     "shows an app-only state without a bridge and waits for the initial snapshot on %s",

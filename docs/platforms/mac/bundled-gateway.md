@@ -8,7 +8,8 @@ title: "Gateway on macOS"
 ---
 
 OpenClaw.app bundles a private Node runtime and matching OpenClaw package for
-its app-owned `node worker` helper. Rebuilding or replacing the app replaces
+its app-owned `node worker` helper and a fixed local Chrome-extension setup
+operation. Rebuilding or replacing the app replaces
 that helper too, including rebuilds with the same public version. The helper
 runs from the signed bundle, so moving the app or removing its build checkout
 does not change which worker it uses.
@@ -57,6 +58,14 @@ app-managed service removes its LaunchAgent record. If an independent endpoint
 is no longer available on reattachment, local setup becomes available again.
 An unreadable service ownership record blocks automatic installation instead
 of being treated as a missing service; check the LaunchAgent and retry.
+
+Chrome-extension preparation also runs automatically for the default app
+profile, including remote-only and attach-only Macs. It uses the validated
+private runtime, registers the native helper before requesting the Store
+extension, and leaves Chrome’s permission approval to you. Browser setup does not
+run Gateway-wide Doctor or migrate Gateway state. The Dashboard’s **Set up Chrome
+on this Mac** action retries the same serialized operation. See
+[Chrome extension](/tools/chrome-extension).
 
 ## Manual recovery
 

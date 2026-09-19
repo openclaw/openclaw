@@ -8,6 +8,7 @@ import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
+import "../../components/native-chrome-setup.ts";
 import { brandIcons } from "../about/brand-icons.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
 
@@ -268,6 +269,7 @@ function renderAppCard(card: AppCard, props: AppsProps) {
             : nothing}
           ${card.ctas.map((cta, index) => renderCta(cta, index + (macGatewayLaunchUrl ? 1 : 0), props))}
         </div>
+        ${card.id === "chrome-extension" ? html`<openclaw-native-chrome-setup></openclaw-native-chrome-setup>` : nothing}
       </div>
     </article>
   `;

@@ -51,6 +51,64 @@ afterEach(() => {
 });
 
 describe("native host registration", () => {
+  it("reconciles completed registration after cancellation without requesting Store install", async () => {
+    const value = await fixture("darwin");
+    const root = chromeProductRoots(value.deps).find((entry) => entry.product === "chrome");
+    if (!root) {
+      throw new Error("Chrome fixture root missing");
+    }
+    await fs.mkdir(root.userDataDir, { recursive: true, mode: 0o700 });
+    const cancellation = new AbortController();
+    await expect(
+      installChromeExtensionBootstrap({
+        bundledDir: value.bundledDir,
+        pluginRoot: value.pluginRoot,
+        deps: value.deps,
+        signal: cancellation.signal,
+        onProgress: () => cancellation.abort(),
+      }),
+    ).rejects.toThrow();
+    const observed = await browserExtensionStatus({
+      bundledDir: value.bundledDir,
+      deps: value.deps,
+    });
+    expect(observed.registrations.find((entry) => entry.product === "chrome")).toMatchObject({
+      state: "owned",
+    });
+    expect(observed.storeInstallRequests.some((entry) => entry.state === "requested")).toBe(false);
+  });
+
+  it("retains a selected bootstrap profile in an owned repairable launcher", async () => {
+    const value = await fixture();
+    const root = chromeProductRoots(value.deps)[0]!;
+    await fs.mkdir(root.userDataDir, { recursive: true, mode: 0o700 });
+    let now = 0;
+    const status = await installChromeExtensionBootstrap({
+      bundledDir: value.bundledDir,
+      pluginRoot: value.pluginRoot,
+      browserProfile: "work",
+      waitMs: 1000,
+      deps: {
+        ...value.deps,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+    });
+    const registration = status.registrations.find((entry) => entry.product === root.product);
+    expect(registration).toMatchObject({ state: "owned" });
+    const manifest = JSON.parse(await fs.readFile(registration!.manifestPath, "utf8"));
+    expect(await fs.readFile(manifest.path, "utf8")).toContain("'--browser-profile' 'work'");
+    const observed = await browserExtensionStatus({
+      bundledDir: value.bundledDir,
+      deps: value.deps,
+    });
+    expect(observed.registrations.find((entry) => entry.product === root.product)).toMatchObject({
+      state: "owned",
+    });
+  });
+
   it("guides first-time setup when no browser user-data directory exists", async () => {
     const value = await fixture();
     let now = 0;

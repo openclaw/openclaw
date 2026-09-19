@@ -46,6 +46,7 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
     },
     desktopAvailability: { state: "unlocked" },
     browser: {
+      chromeSetupActions: ["inspect", "install", "verify"],
       importAvailable: true,
       cookieSync: {
         available: true,

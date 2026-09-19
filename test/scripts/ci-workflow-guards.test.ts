@@ -15871,14 +15871,27 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(step["continue-on-error"]).not.toBe(true);
     const root = tempDirs.make("openclaw-browser-proof-report-");
     const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
-    const fullName =
-      "native host registration launches with the exact custom installation context when Chrome has no selectors";
-    const assertion = {
-      fullName: state === "wrong-name" ? "another test" : fullName,
-      status: ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
-    };
-    const assertions =
-      state === "absent" ? [] : state === "duplicate" ? [assertion, assertion] : [assertion];
+    const names = [
+      "does not inspect or migrate configuration before rejecting a malformed native request",
+      "rejects an unauthorized bootstrap caller before config, keys or database creation",
+      "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+      'preserves invalid-config diagnostics for ordinary extension command "status"',
+      'preserves invalid-config diagnostics for ordinary extension command "setup"',
+      'preserves invalid-config diagnostics for ordinary extension command "pair"',
+      "launches launcher with the exact custom installation context when Chrome has no selectors",
+      "launches cli with the exact custom installation context when Chrome has no selectors",
+    ];
+    const assertions = names.map((name, index) => ({
+      fullName:
+        state === "wrong-name" && index === 0 ? "another test" : `native host registration ${name}`,
+      status:
+        index === 0 && ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
+    }));
+    if (state === "absent") {
+      assertions.pop();
+    } else if (state === "duplicate") {
+      assertions[1] = assertions[0]!;
+    }
     const report = {
       success: state !== "failed" && state !== "suite-failed",
       numFailedTestSuites: state === "suite-failed" ? 1 : 0,

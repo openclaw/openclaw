@@ -3,6 +3,7 @@ import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.constants.js";
 import {
   type BrowserNativeBootstrapResponse,
   type BrowserNativeRelayEnsureStatus,
@@ -10,8 +11,7 @@ import {
   encodeBrowserNativeResponse,
   readBrowserNativeFrame,
 } from "./extension-native-protocol.js";
-
-export const BROWSER_NATIVE_HOST_NAME = "ai.openclaw.browser_bootstrap";
+export { BROWSER_NATIVE_HOST_NAME } from "./extension-native-host.constants.js";
 const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}\/$/;
 
 type NativeHostManifest = {
@@ -81,7 +81,11 @@ async function validateOwnedFile(filePath: string, executable: boolean): Promise
     }
   }
   const canonical = await fs.realpath(resolved);
-  if (canonical !== resolved) {
+  if (
+    process.platform === "win32"
+      ? canonical.toLowerCase() !== resolved.toLowerCase()
+      : canonical !== resolved
+  ) {
     throw new Error("non-canonical file path");
   }
   return canonical;
@@ -117,7 +121,10 @@ async function validateNativeManifest(params: {
     !keys.every((key) => Object.hasOwn(manifest, key)) ||
     manifest.name !== BROWSER_NATIVE_HOST_NAME ||
     manifest.type !== "stdio" ||
-    manifest.path !== launcherPath ||
+    (process.platform === "win32"
+      ? typeof manifest.path !== "string" ||
+        manifest.path.toLowerCase() !== launcherPath.toLowerCase()
+      : manifest.path !== launcherPath) ||
     !Array.isArray(manifest.allowed_origins) ||
     JSON.stringify(manifest.allowed_origins) !== JSON.stringify(expectedOrigins)
   ) {
@@ -136,7 +143,7 @@ export async function runBrowserNativeHost(params: {
   expectedOrigins: string[];
   input: AsyncIterable<Buffer>;
   write: (frame: Buffer) => void;
-  buildPairing: () => Promise<{ pairingString: string; topology: string }>;
+  buildPairing: (boundProfile?: string) => Promise<{ pairingString: string; topology: string }>;
   /** Ensure the standalone extension relay daemon is running (ensure_relay op). */
   ensureRelay: (port: number) => Promise<BrowserNativeRelayEnsureStatus>;
   stateDir?: string;
@@ -147,11 +154,21 @@ export async function runBrowserNativeHost(params: {
     const decoded = decodeBrowserNativeFrame(await readBrowserNativeFrame(params.input));
     if (!decoded.ok) {
       response = { v: 1, ok: false, code: decoded.code };
-    } else if ((params.platform ?? process.platform) === "win32") {
+    } else if ((params.platform ?? process.platform) === "win32" && process.platform !== "win32") {
       response = { v: 1, ok: false, code: "manual_required" };
     } else {
+      let boundProfile: string | undefined;
       try {
-        await validateNativeManifest(params);
+        if ((params.platform ?? process.platform) === "win32") {
+          const { validateWindowsNativeContext } = await import("./extension-windows-host.js");
+          boundProfile = await validateWindowsNativeContext(params);
+          // Windows was admitted against its fixed Known Folder generation, not the POSIX state root.
+          if (!params.expectedOrigins.includes(params.callerOrigin)) {
+            throw new Error("origin forbidden");
+          }
+        } else {
+          await validateNativeManifest(params);
+        }
       } catch (error) {
         response = {
           v: 1,
@@ -173,7 +190,7 @@ export async function runBrowserNativeHost(params: {
         }
       } else {
         try {
-          const pairing = await params.buildPairing();
+          const pairing = await params.buildPairing(boundProfile);
           response =
             pairing.topology === "direct-remote"
               ? { v: 1, ok: false, code: "manual_required" }

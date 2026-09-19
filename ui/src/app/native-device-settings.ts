@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  nativeChromeExtensionSetupActionSchema,
+  nativeChromeExtensionSetupResultSchema,
+  type NativeChromeExtensionSetupAction,
+  type NativeChromeExtensionSetupResult,
+} from "./native-chrome-setup.ts";
 
 const permissionIdSchema = z.enum([
   "notifications",
@@ -61,6 +67,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
   desktopAvailability: z.object({ state: z.enum(["locked", "unlocked", "unknown"]) }).optional(),
   browser: z
     .object({
+      chromeSetupActions: z.array(nativeChromeExtensionSetupActionSchema).optional(),
       importAvailable: z.boolean(), // local mode with Chrome-family cookies available
       cookieSync: z.object({
         available: z.boolean(), // remote mode with an external CLI
@@ -187,16 +194,15 @@ type NativeDeviceSettingsMessage =
   | { type: "open-system-settings"; id: PermissionId }
   | { type: "open"; panel: NativePanel }
   | { type: "check-for-updates" }
+  | { type: "chrome-extension-setup"; action: NativeChromeExtensionSetupAction }
   | { type: "install-chrome-extension" };
 
-const nativeChromeExtensionSetupResultSchema = z.object({
+const legacyChromeInstallResultSchema = z.object({
   nativeHostRegistered: z.boolean(),
   installRequested: z.boolean(),
   discoveredProfiles: z.number().int().nonnegative(),
 });
-export type NativeChromeExtensionSetupResult = z.infer<
-  typeof nativeChromeExtensionSetupResultSchema
->;
+export type LegacyChromeInstallResult = z.infer<typeof legacyChromeInstallResultSchema>;
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
@@ -206,7 +212,11 @@ export type NativeDeviceSettingsCapability = {
   openSystemSettings(id: PermissionId): void;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
-  installChromeExtension(): Promise<NativeChromeExtensionSetupResult>;
+  setupChromeExtension(
+    action: NativeChromeExtensionSetupAction,
+  ): Promise<NativeChromeExtensionSetupResult>;
+  /** Released native contract-1 installation projection; not a second installer. */
+  installChromeExtension?(): Promise<LegacyChromeInstallResult>;
   refresh(): void;
   dispose(): void;
 };
@@ -216,7 +226,7 @@ type NativeDeviceSettingsWindow = Window & {
   webkit?: {
     messageHandlers?: {
       openclawDeviceSettings?: {
-        postMessage(message: NativeDeviceSettingsMessage): Promise<unknown>;
+        postMessage: (message: NativeDeviceSettingsMessage) => Promise<unknown>;
       };
     };
   };
@@ -234,12 +244,17 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   if (typeof handler?.postMessage !== "function") {
     return null;
   }
-  const post = handler.postMessage.bind(handler);
+  const postMessage = handler.postMessage;
+  const post = postMessage.bind(handler);
   const initial = nativeDeviceSettingsSnapshotSchema.safeParse(
     nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"],
   );
   let snapshot = initial.success ? initial.data : null;
   let disposed = false;
+  const isCurrent = () =>
+    !disposed &&
+    nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings === handler &&
+    handler.postMessage === postMessage;
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
   const onChange = (event: Event) => {
     if (!(event instanceof CustomEvent)) {
@@ -295,13 +310,34 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
     openPanel: (panel) => void send({ type: "open", panel }),
     checkForUpdates: () => void send({ type: "check-for-updates" }),
+    async setupChromeExtension(action) {
+      if (!isCurrent()) {
+        throw new Error("Native device settings is unavailable");
+      }
+      if (!snapshot?.browser?.chromeSetupActions?.includes(action)) {
+        throw new Error("This native host does not advertise that Chrome setup action");
+      }
+      const validatedAction = nativeChromeExtensionSetupActionSchema.parse(action);
+      const reply = await post({ type: "chrome-extension-setup", action: validatedAction });
+      const result = nativeChromeExtensionSetupResultSchema.safeParse(reply);
+      if (
+        !isCurrent() ||
+        !snapshot?.browser?.chromeSetupActions?.includes(action) ||
+        !result.success ||
+        result.data.action !== action ||
+        result.data.target.platform !== "darwin"
+      ) {
+        throw new Error("Native Chrome setup returned an invalid result");
+      }
+      return result.data;
+    },
     async installChromeExtension() {
-      if (disposed) {
+      if (!isCurrent() || snapshot?.device.platform !== "macos") {
         throw new Error("Native device settings is unavailable");
       }
       const reply = await post({ type: "install-chrome-extension" });
-      const result = nativeChromeExtensionSetupResultSchema.safeParse(reply);
-      if (disposed || !result.success) {
+      const result = legacyChromeInstallResultSchema.safeParse(reply);
+      if (!isCurrent() || !result.success) {
         throw new Error("Native Chrome setup returned an invalid result");
       }
       return result.data;

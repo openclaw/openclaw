@@ -263,7 +263,7 @@ final class IOSDeviceSettingsBridge: NSObject, WKScriptMessageHandlerWithReply {
         switch request {
         case .status:
             self.refreshLocationAvailability()
-        case .checkForUpdates, .installChromeExtension:
+        case .checkForUpdates, .chromeExtensionSetup, .installChromeExtension:
             break
         case let .set(key, value):
             return try await self.set(key, value: value, sourceID: sourceID)

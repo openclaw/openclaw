@@ -1,7 +1,7 @@
 import type { BrowserConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveBrowserConfig } from "./config.js";
+import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
 
 /** Gateway route for extension pairing that must wake Browser control. */
@@ -15,8 +15,19 @@ type BrowserExtensionPairing = {
 
 type PairingConfig = OpenClawConfig & { browser?: BrowserConfig };
 
-function firstExtensionRelayPort(cfg: PairingConfig): number {
+function firstExtensionRelayPort(cfg: PairingConfig, profileName?: string): number {
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  if (profileName) {
+    const profile = resolveProfile(resolved, profileName);
+    if (!profile || profile.driver !== "extension") {
+      throw new Error("Native bootstrap requires an existing extension profile");
+    }
+    return (
+      profile.cdpPort ??
+      resolved.extensionRelayPorts[profileName] ??
+      resolved.extensionRelayDefaultPort
+    );
+  }
   for (const [name, profile] of Object.entries(resolved.profiles)) {
     if (profile.driver === "extension") {
       return (
@@ -61,9 +72,10 @@ export async function buildBrowserExtensionPairing(params: {
   cfg: PairingConfig;
   gatewayUrl?: string;
   localTransport?: "relay" | "gateway";
+  profile?: string;
   ensureToken?: typeof ensureExtensionRelayToken;
 }): Promise<BrowserExtensionPairing> {
-  const relayPort = firstExtensionRelayPort(params.cfg);
+  const relayPort = firstExtensionRelayPort(params.cfg, params.profile);
   const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
   const gateway = params.gatewayUrl?.trim();
   if (gateway) {
@@ -88,6 +100,9 @@ export async function buildBrowserExtensionPairing(params: {
     !configuredRemote && params.localTransport === "gateway"
       ? new URL(buildGatewayExtensionRelayUrl(gatewayHint))
       : new URL(`ws://127.0.0.1:${relayPort}/extension`);
+  if (params.profile && relayUrl.pathname === GATEWAY_EXTENSION_RELAY_PATH) {
+    relayUrl.searchParams.set("profile", params.profile);
+  }
   relayUrl.searchParams.set("gateway", gatewayHint);
   return {
     pairingString: `${relayUrl.toString()}#${token}`,
