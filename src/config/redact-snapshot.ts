@@ -46,28 +46,42 @@ function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
-  if (typeof value === "string") {
-    if (isConcreteSensitiveString(value)) {
-      values.push(value);
+  const visited = new WeakSet<object>();
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (typeof current === "string") {
+      if (isConcreteSensitiveString(current)) {
+        values.push(current);
+      }
+      continue;
     }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectSensitiveStrings(item, values);
+    if (Array.isArray(current)) {
+      if (visited.has(current)) {
+        continue;
+      }
+      visited.add(current);
+      for (let i = current.length - 1; i >= 0; i -= 1) {
+        stack.push(current[i]);
+      }
+      continue;
     }
-    return;
-  }
-  if (isObjectRecord(value)) {
-    const obj = value;
+    if (!isObjectRecord(current)) {
+      continue;
+    }
+    if (visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
     // SecretRef objects include structural fields like source/provider that are
     // not secret material and may appear widely in config text.
-    if (isSecretRefShape(obj)) {
-      collectSensitiveStrings(obj.id, values);
-      return;
+    if (isSecretRefShape(current)) {
+      stack.push(current.id);
+      continue;
     }
-    for (const item of Object.values(obj)) {
-      collectSensitiveStrings(item, values);
+    const items = Object.values(current);
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      stack.push(items[i]);
     }
   }
 }
@@ -148,46 +162,158 @@ function redactObject<T>(obj: T, context: RedactionContext, values: string[] = [
   return redactValue(obj, "", values, context) as T;
 }
 
+type RedactAssigner = (value: unknown) => void;
+
+type RedactFrame = {
+  obj: unknown;
+  prefix: string;
+  context: RedactionContext;
+  assign: RedactAssigner;
+  mode: "start" | "array" | "object";
+  ancestorKey?: object;
+  arrayPath?: string;
+  arrayFallback?: RedactionContext;
+  arraySchemaMatched?: boolean;
+  arrayHeuristicSensitive?: boolean;
+  arrayItems?: unknown[];
+  arrayOut?: unknown[];
+  arrayIndex?: number;
+  objectEntries?: Array<[string, unknown]>;
+  objectOut?: Record<string, unknown>;
+  objectIndex?: number;
+  objectFallback?: RedactionContext;
+};
+
 function redactValue(
   obj: unknown,
   prefix: string,
   values: string[],
   context: RedactionContext,
 ): unknown {
-  if (obj === null || obj === undefined) {
-    return obj;
-  }
+  let rootResult: unknown;
+  const ancestors = new WeakSet<object>();
+  const stack: RedactFrame[] = [
+    {
+      obj,
+      prefix,
+      context,
+      assign: (value) => {
+        rootResult = value;
+      },
+      mode: "start",
+    },
+  ];
 
-  if (Array.isArray(obj)) {
-    const path = `${prefix}[]`;
-    const schemaMatched = context.lookup?.has(path) === true;
-    const fallbackContext = schemaMatched ? context : withoutRedactionLookup(context);
-    const heuristicSensitive =
-      !isExplicitlyNonSensitivePath(context.hints, [path]) && isSensitivePath(path);
-    return obj.map((item) => {
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (!frame) {
+      stack.pop();
+      continue;
+    }
+    if (frame.mode === "start") {
+      const current = frame.obj;
+      if (current === null || current === undefined) {
+        frame.assign(current);
+        stack.pop();
+        continue;
+      }
+      if (Array.isArray(current)) {
+        if (ancestors.has(current)) {
+          frame.assign([]);
+          stack.pop();
+          continue;
+        }
+        ancestors.add(current);
+        const path = `${frame.prefix}[]`;
+        const schemaMatched = frame.context.lookup?.has(path) === true;
+        frame.mode = "array";
+        frame.ancestorKey = current;
+        frame.arrayPath = path;
+        frame.arraySchemaMatched = schemaMatched;
+        frame.arrayFallback = schemaMatched ? frame.context : withoutRedactionLookup(frame.context);
+        frame.arrayHeuristicSensitive =
+          !isExplicitlyNonSensitivePath(frame.context.hints, [path]) && isSensitivePath(path);
+        frame.arrayItems = current;
+        frame.arrayOut = Array.from({ length: current.length });
+        frame.arrayIndex = 0;
+        continue;
+      }
+      if (!isObjectRecord(current)) {
+        frame.assign(current);
+        stack.pop();
+        continue;
+      }
+      if (ancestors.has(current)) {
+        frame.assign({});
+        stack.pop();
+        continue;
+      }
+      ancestors.add(current);
+      frame.mode = "object";
+      frame.ancestorKey = current;
+      frame.objectOut = {};
+      frame.objectEntries = Object.entries(current);
+      frame.objectIndex = 0;
+      frame.objectFallback = withoutRedactionLookup(frame.context);
+      continue;
+    }
+
+    if (frame.mode === "array") {
+      const index = frame.arrayIndex ?? 0;
+      const items = frame.arrayItems ?? [];
+      const out = frame.arrayOut ?? [];
+      if (index >= items.length) {
+        if (frame.ancestorKey) {
+          ancestors.delete(frame.ancestorKey);
+        }
+        frame.assign(out);
+        stack.pop();
+        continue;
+      }
+      const item = items[index];
+      frame.arrayIndex = index + 1;
       if (
         typeof item === "string" &&
         isConcreteSensitiveString(item) &&
-        (schemaMatched || heuristicSensitive)
+        (frame.arraySchemaMatched || frame.arrayHeuristicSensitive)
       ) {
         values.push(item);
-        return REDACTED_SENTINEL;
+        out[index] = REDACTED_SENTINEL;
+        continue;
       }
-      return redactValue(item, path, values, fallbackContext);
-    });
-  }
+      stack.push({
+        obj: item,
+        prefix: frame.arrayPath ?? "",
+        context: frame.arrayFallback ?? frame.context,
+        assign: (value) => {
+          out[index] = value;
+        },
+        mode: "start",
+      });
+      continue;
+    }
 
-  if (!isObjectRecord(obj)) {
-    return obj;
-  }
-
-  const result: Record<string, unknown> = {};
-  const fallbackContext = withoutRedactionLookup(context);
-  for (const [key, value] of Object.entries(obj)) {
-    const path = prefix ? `${prefix}.${key}` : key;
-    const wildcardPath = prefix ? `${prefix}.*` : "*";
-    const candidate = context.lookup
-      ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
+    const entries = frame.objectEntries ?? [];
+    const objectIndex = frame.objectIndex ?? 0;
+    const result = frame.objectOut ?? {};
+    if (objectIndex >= entries.length) {
+      if (frame.ancestorKey) {
+        ancestors.delete(frame.ancestorKey);
+      }
+      frame.assign(result);
+      stack.pop();
+      continue;
+    }
+    const objectEntry = entries[objectIndex];
+    frame.objectIndex = objectIndex + 1;
+    if (!objectEntry) {
+      continue;
+    }
+    const [key, value] = objectEntry;
+    const path = frame.prefix ? `${frame.prefix}.${key}` : key;
+    const wildcardPath = frame.prefix ? `${frame.prefix}.*` : "*";
+    const candidate = frame.context.lookup
+      ? [path, wildcardPath].find((entry) => frame.context.lookup?.has(entry))
       : undefined;
     if (candidate) {
       result[key] = value;
@@ -198,7 +324,7 @@ function redactValue(
         result[key] = REDACTED_SENTINEL;
         values.push(value);
       } else if (typeof value === "object" && value !== null) {
-        if (context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
+        if (frame.context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
           const objectValue = asNonArrayRecord(value);
           if (isSecretRefShape(objectValue)) {
             result[key] = redactSecretRefId({
@@ -212,10 +338,18 @@ function redactValue(
             result[key] = REDACTED_SENTINEL;
           }
         } else {
-          result[key] = redactValue(value, candidate, values, context);
+          stack.push({
+            obj: value,
+            prefix: candidate,
+            context: frame.context,
+            assign: (redacted) => {
+              result[key] = redacted;
+            },
+            mode: "start",
+          });
         }
       } else if (
-        context.hints?.[candidate]?.sensitive === true &&
+        frame.context.hints?.[candidate]?.sensitive === true &&
         value !== undefined &&
         value !== null
       ) {
@@ -225,7 +359,7 @@ function redactValue(
     }
 
     const hintPaths = [path, wildcardPath];
-    const markedNonSensitive = isExplicitlyNonSensitivePath(context.hints, hintPaths);
+    const markedNonSensitive = isExplicitlyNonSensitivePath(frame.context.hints, hintPaths);
     if (
       typeof value === "string" &&
       !markedNonSensitive &&
@@ -235,7 +369,7 @@ function redactValue(
       result[key] = REDACTED_SENTINEL;
       values.push(value);
     } else if (
-      !context.lookup &&
+      !frame.context.lookup &&
       !markedNonSensitive &&
       isSensitivePath(path) &&
       isWholeObjectSensitivePath(path) &&
@@ -247,7 +381,7 @@ function redactValue(
       result[key] = REDACTED_SENTINEL;
     } else if (
       typeof value === "string" &&
-      (hasSensitiveUrlHintPath(context.hints, hintPaths) || isSensitiveUrlConfigPath(path))
+      (hasSensitiveUrlHintPath(frame.context.hints, hintPaths) || isSensitiveUrlConfigPath(path))
     ) {
       const scrubbed = redactSensitiveUrlLikeString(value);
       if (scrubbed !== value) {
@@ -257,12 +391,21 @@ function redactValue(
         result[key] = value;
       }
     } else if (typeof value === "object" && value !== null) {
-      result[key] = redactValue(value, path, values, fallbackContext);
+      stack.push({
+        obj: value,
+        prefix: path,
+        context: frame.objectFallback ?? frame.context,
+        assign: (redacted) => {
+          result[key] = redacted;
+        },
+        mode: "start",
+      });
     } else {
       result[key] = value;
     }
   }
-  return result;
+
+  return rootResult;
 }
 
 /**
