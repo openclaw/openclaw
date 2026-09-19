@@ -190,10 +190,6 @@ function getDiagnosticStabilityState(): DiagnosticStabilityState {
   return globalStore["__openclawDiagnosticStabilityState"];
 }
 
-function copyMemory(memory: DiagnosticMemoryUsage): DiagnosticMemoryUsage {
-  return { ...memory };
-}
-
 function copyReasonCode(reason: unknown): string | undefined {
   if (typeof reason !== "string" || !SAFE_REASON_CODE.test(reason)) {
     return undefined;
@@ -251,7 +247,8 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.rpc":
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
-      // High-volume measurements are exporter-only and excluded by the subscription.
+    case "model.runtime_choice":
+      // Exporter measurements and runtime guard facts stay outside the stability ring.
       break;
     case "model.usage":
       record.channel = event.channel;
@@ -548,7 +545,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.responseBytes = event.responseStreamBytes;
       record.timeToFirstByteMs = event.timeToFirstByteMs;
       record.failureKind = event.failureKind;
-      record.memory = event.memory ? copyMemory(event.memory) : undefined;
+      record.memory = event.memory ? { ...event.memory } : undefined;
       assignReasonCode(record, event.errorCategory);
       break;
     case "log.record":
@@ -564,12 +561,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason ?? event.policy?.reason);
       break;
     case "diagnostic.memory.sample":
-      record.memory = copyMemory(event.memory);
+      record.memory = { ...event.memory };
       break;
     case "diagnostic.memory.pressure":
       record.level = event.level;
       assignReasonCode(record, event.reason);
-      record.memory = copyMemory(event.memory);
+      record.memory = { ...event.memory };
       record.thresholdBytes = event.thresholdBytes;
       record.rssGrowthBytes = event.rssGrowthBytes;
       record.windowMs = event.windowMs;
@@ -871,6 +868,7 @@ export function startDiagnosticStabilityRecorder(): void {
         "log.record",
         "telemetry.exporter",
         "gateway.rpc",
+        "model.runtime_choice",
         "gateway.event_loop.sample",
         "diagnostic.gc",
       ],

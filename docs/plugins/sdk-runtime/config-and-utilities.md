@@ -255,3 +255,37 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+### Prepared runtime choice diagnostics
+
+The existing `diagnostic-runtime` subscription `onInternalDiagnosticEvent`
+includes the core-owned `model.runtime_choice` event (version `1`). Require
+`metadata.trusted === true`; `onDiagnosticEvent` intentionally excludes these
+trusted events. Dispatcher-internal provenance is a different marker and does
+not establish trust.
+
+The event reports a `prepare` or `validate` phase, `ready` or `unavailable`
+outcome, a closed reason, and explicit check states. Preparation distinguishes
+missing owner/auth store, off-catalog auth/mode/resolution refusal, and runtime
+ineligibility. Validation distinguishes stale ownership from unavailable native
+readiness. Checks not reached by that invocation remain `not-reached`; validate
+records carry the preparation checks and refresh the two validation checks.
+The event records existing decisions without adding auth queries or probes.
+
+Subscribe with `{ include: ["model.runtime_choice"] }` before the operation and
+await `waitForDiagnosticEventsDrained()` after it before unsubscribing. Delivery
+is asynchronous, including at synchronous commit guards, and does not prepare
+outbound trace propagation. Observer exceptions do not change the selection.
+Diagnostics remain best-effort: disablement, queue saturation, or a thrown
+operation can leave no complete decision. Missing events or unknown/missing
+phase, reason, or check fields must remain indeterminate, never acceptance.
+
+A validation event is **not a persistence receipt**. Callers can validate more
+than once, and a later placement, lock, or persistence check can still refuse.
+The event adds no operation identifier: collectors needing exact attribution
+must isolate and serialize the observed operation rather than guess from event
+order. Project only the named version/phase/outcome/reason/check fields through
+closed allowlists. Never spread the event or dispatcher metadata into a report:
+the dispatcher can attach trace context, sequence numbers, and timestamps.
+No provider, model, profile, agent, session, workspace, config, credential, or
+content identifier is included by the runtime-choice producer.

@@ -10,6 +10,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -26,11 +30,15 @@ import {
 
 const tempDirs: string[] = [];
 
-afterEach(async () => {
+async function cleanupSessionHistoryFixtures() {
   for (const dir of tempDirs.splice(0)) {
+    // Join this fixture root's SQLite resources before deleting their files.
+    await closeOpenClawAgentDatabasesAsync(dir);
     await fs.rm(dir, { recursive: true, force: true });
   }
-});
+}
+
+afterEach(cleanupSessionHistoryFixtures);
 
 async function writeSession(records: unknown[]): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
@@ -428,6 +436,23 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "assistant", content: "sqlite answer" },
     ]);
     await expect(fs.access(sessionTarget.storePath)).rejects.toThrow();
+  });
+
+  it("settles SQLite fixture owners before removing their directories", async () => {
+    const { sessionTarget } = await writeSqliteSession();
+    const dir = path.dirname(sessionTarget.storePath);
+    const database = openOpenClawAgentDatabase({
+      agentId: sessionTarget.agentId,
+      path: sessionTarget.storePath,
+    });
+    try {
+      await cleanupSessionHistoryFixtures();
+      expect(database.db.isOpen).toBe(false);
+      await expect(fs.access(dir)).rejects.toThrow();
+    } finally {
+      await closeOpenClawAgentDatabasesAsync(dir);
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("preserves native prompt evidence across model-context reads", async () => {

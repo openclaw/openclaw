@@ -12,6 +12,7 @@
     "../../dist",
     "../../**/dist/**",
     "../../src/agents/**",
+    "../../src/model-picker/**",
     "../../src/gateway/**",
     "../../src/infra/**",
     "../../src/process/**",

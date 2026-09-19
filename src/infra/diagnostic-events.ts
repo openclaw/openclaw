@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
+import type {
+  DiagnosticGatewayRpcEvent,
+  DiagnosticModelRuntimeChoiceEvent,
+} from "./diagnostic-control-plane-events.js";
 import {
   resetInternalDiagnosticEventListenerPresence,
   setInternalDiagnosticEventListenerCounts,
@@ -43,33 +47,6 @@ type DiagnosticBaseEvent = {
   seq: number;
   trace?: DiagnosticTraceContext;
 };
-
-/** Payload-free facts from authenticated Gateway WebSocket request owners. */
-type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & {
-  type: "gateway.rpc";
-  /** Canonical core method name, or a fixed other/unknown bucket. */
-  method: string;
-} & (
-    | { phase: "received" }
-    | {
-        phase: "response";
-        outcome: "ok" | "error" | "unavailable" | "suppressed";
-        durationMs: number;
-      }
-    | {
-        phase: "handler";
-        outcome: "returned" | "threw";
-        durationMs: number;
-        admissionMs: number;
-      }
-    | {
-        phase: "dispatch";
-        outcome: "returned" | "threw" | "rejected" | "cancelled";
-        durationMs: number;
-        queueWaitMs?: number;
-        response: "none" | "sent" | "unavailable" | "suppressed";
-      }
-  );
 
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   type: "model.usage";
@@ -897,7 +874,8 @@ export type DiagnosticEventPayload =
   | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticFailoverEvent
+  | DiagnosticModelRuntimeChoiceEvent;
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
 
@@ -1026,6 +1004,8 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "diagnostic.gc",
   "gateway.event_loop.sample",
   "gateway.rpc",
+  // Never run diagnostic observers between a runtime commit guard and its caller's write.
+  "model.runtime_choice",
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
@@ -1434,7 +1414,12 @@ function emitDiagnosticEventWithTrust(
       : {}),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
-  const prepareTracePropagation = trusted && shouldPrepareDiagnosticTracePropagation(enriched);
+  // Runtime-choice facts are observational, never outbound trace parents. Even an
+  // exporter prepare/filter callback must not reenter between the guard and write.
+  const prepareTracePropagation =
+    trusted &&
+    enriched.type !== "model.runtime_choice" &&
+    shouldPrepareDiagnosticTracePropagation(enriched);
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {

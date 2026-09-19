@@ -85,6 +85,9 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "model.runtime_choice":
+          // Native runtime-choice facts are not exported to OpenTelemetry.
+          break;
         case "diagnostic.gc":
           recordGcDuration(evt, metadata);
           return;
