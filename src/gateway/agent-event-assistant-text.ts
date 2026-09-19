@@ -133,6 +133,17 @@ export function mergeAssistantText(
       const appendedText = input.delta ?? "";
       return { text: previous.text + appendedText, scope, appendedText };
     }
+    // The scope records the prior item as a prefix offset into the shared live
+    // buffer. The display cap retires that buffer's head, so a stale scope can
+    // outlive the bytes it indexed; the retained buffer is the authority, and
+    // once it no longer carries the recorded prefix it IS this item's text.
+    // Repair before the offset read below, or the item delta lands outside the
+    // message and re-materializes the retired bytes into the visible tail.
+    if (scope === previous.scope && !previous.text.startsWith(scope.prefix)) {
+      scope.prefix = "";
+      scope.boundaryNewlines = 0;
+      scope.separatorLength = 0;
+    }
     // Inserted padding is not provider text. Keep it out of later item deltas
     // so a matching cumulative snapshot cannot retract a streamed newline.
     const itemText =
