@@ -3,8 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "../config/include-write-boundary.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig, visitConfigValueTree } from "../config/io.read-helpers.js";
+import { resolvePersistCandidateForWrite } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
@@ -423,14 +425,39 @@ export async function runConfigOperations(params: {
   nextConfig = normalizeConfigMutationModelRefs(nextConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   if (options.dryRun) {
-    nextConfig = prepareConfigWriteTopology({
+    const topology = prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
       nextConfig,
       options: { explicitSetPaths: normalizedExplicitSetPaths },
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
       env: process.env,
-    }).nextConfig;
+    });
+    nextConfig = topology.nextConfig;
+    // Preview must run the same persistence projection as the commit so a guarded
+    // roster removal is rejected before validation, matching the committing writer.
+    // loadValidConfigForWrite guarantees snapshot.valid, so the projection's
+    // roster-retention guard is always armed here (issue #133895).
+    const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+      configPath: snapshot.path,
+      provenance: snapshot.includeProvenance,
+    });
+    resolvePersistCandidateForWrite({
+      inputBasis: { kind: "runtime", config: snapshot.config },
+      runtimeConfig: snapshot.config,
+      sourceConfig: snapshot.resolved,
+      sourceConfigValid: snapshot.valid,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+      nextConfig,
+      rootAuthoredConfig: snapshot.parsed,
+      agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+      keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
+      unsetPaths,
+      explicitSetPaths: topology.explicitSetPaths,
+      explicitSetValueSource: topology.explicitSetValueSource,
+      persistCanonicalAgentRoster: topology.persistCanonicalAgentRoster,
+      preserveLegacyAgentRoster: topology.preserveLegacyAgentRoster,
+    });
   }
   const validation = await validateConfigMutation({
     config: nextConfig,

@@ -617,4 +617,23 @@ describe("config cli roster integration", () => {
       },
     );
   });
+
+  it("rejects emptying the roster in preview just like the commit (#133895)", async () => {
+    const raw = JSON.stringify({ agents: { entries: { main: { default: true } } } });
+    await withConfigFileHarness(
+      "openclaw-config-cli-roster-empty-",
+      raw,
+      async ({ configPath }) => {
+        const args = ["config", "set", "agents.entries", "{}", "--replace", "--strict-json"];
+        // The commit rejects dropping the last roster entry; preview must match.
+        for (const preview of [true, false]) {
+          await expect(
+            runRegisteredConfigCommand([...args, ...(preview ? ["--dry-run", "--json"] : [])]),
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        }
+        expect(registeredRuntimeLogs.join("\n")).not.toContain("Updated");
+      },
+    );
+  });
 });
