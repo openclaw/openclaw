@@ -81,8 +81,9 @@ export function promptSnapshot(
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
 ): Promise<MirroredUserMessage> {
-  const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
-  return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
+  const recorder = params.userTurnTranscriptRecorder;
+  const resolvedMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
+  return buildFromPrepared(params, resolvedMessage ?? recorder?.message);
 }
 
 export async function resolveFinalCodexMirrorMessages(params: {
