@@ -9,6 +9,7 @@ import {
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
+import { isJsonObject } from "./protocol.js";
 
 type CodexIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
@@ -50,6 +51,7 @@ export async function runCodexIsolatedCompletion(
   const authSelection = authHandoff.preparedAuth
     ? { preparedAuth: authHandoff.preparedAuth }
     : { profile: authHandoff.authProfileId };
+  const outputSchema = isJsonObject(params.outputSchema) ? params.outputSchema : undefined;
   const result = await runBoundedCodexAppServerTurn({
     config: params.config,
     model: {
@@ -68,13 +70,14 @@ export async function runCodexIsolatedCompletion(
     taskLabel: "isolated completion",
     developerInstructions: params.systemPrompt,
     input: [{ type: "text", text: params.prompt, text_elements: [] }],
+    ...(outputSchema ? { outputSchema } : {}),
     requiredModalities: ["text"],
     isolation: privateStdio ? "private-stdio" : "configured-transport",
     requireNoExternalCapabilities: true,
     allowEmptyText: params.outputTextPolicy === "strict-visible",
   });
   params.assertCurrent?.();
-  assertCodexPassiveTurnItems(result.items, params.prompt, "isolated completion", {
+  assertCodexPassiveTurnItems(result.items, result.submittedInput, "isolated completion", {
     allowManagedHookPrompts: result.managedHooksEnabled,
   });
   return {

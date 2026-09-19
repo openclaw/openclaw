@@ -93,7 +93,7 @@ export async function runCodexSettledTurnFinalization(
     provider: modelProvider,
     api: resolveCodexLocalRuntimeAttribution(attempt).api,
   };
-  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization", {
+  assertCodexPassiveTurnItems(bounded.items, bounded.submittedInput, "settled-turn finalization", {
     allowManagedHookPrompts: bounded.managedHooksEnabled,
   });
   const text = bounded.text.trim();
