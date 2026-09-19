@@ -400,8 +400,9 @@ private fun ChatOutboxAction(
 internal fun ChatBase64Image(
   base64: String,
   mimeType: String?,
+  source: Base64ImageSource = Base64ImageSource.Inline,
 ) {
-  val imageState = rememberBase64ImageState(base64)
+  val imageState = rememberBase64ImageState(base64, source)
   val image = imageState.image
 
   if (image != null) {
