@@ -217,6 +217,42 @@ async function requestThroughTunnel(params: {
   return { body, status };
 }
 
+async function curlThroughEnvironment(
+  env: Record<string, string>,
+): Promise<{ code: number; stderr: string; stdout: string }> {
+  return await new Promise((resolve) => {
+    execFile(
+      "curl",
+      [
+        "--silent",
+        "--show-error",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        `https://localhost:${originPort}/curl-env`,
+      ],
+      {
+        cwd: caDir,
+        env: {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          HOME: caDir,
+          ...env,
+        },
+        timeout: 10_000,
+      },
+      (error, stdout, stderr) => {
+        resolve({
+          code: typeof error?.code === "number" ? error.code : error ? 1 : 0,
+          stderr,
+          stdout,
+        });
+      },
+    );
+  });
+}
+
 async function forwardedRequest(
   auth?: string,
   protocol = "https",
@@ -514,8 +550,94 @@ describe("secret egress proxy", () => {
     },
   );
 
-  it("activates Node environment proxy support for registered Gateway processes", () => {
-    expect(proxyEnv.NODE_USE_ENV_PROXY).toBe("1");
+  it("routes every HTTP proxy alias through registered Gateway processes", () => {
+    expect(proxyEnv).toMatchObject({
+      HTTPS_PROXY: proxyEnv.HTTP_PROXY,
+      https_proxy: proxyEnv.HTTP_PROXY,
+      http_proxy: proxyEnv.HTTP_PROXY,
+      NODE_USE_ENV_PROXY: "1",
+    });
+  });
+
+  it("routes a real lowercase-only client through the authenticated loopback proxy", async () => {
+    const result = await curlThroughEnvironment({
+      https_proxy: proxyEnv.https_proxy ?? "",
+      CURL_CA_BUNDLE: proxyEnv.CURL_CA_BUNDLE ?? "",
+    });
+
+    expect(result).toEqual({ code: 0, stderr: "", stdout: "200" });
+    expect(originRequests.at(-1)?.url).toBe("/curl-env");
+    expect(auditEvents).toContainEqual(
+      expect.objectContaining({ kind: "forwarded", host: "localhost" }),
+    );
+  });
+
+  it("lets a real client prefer the registered lowercase alias", async () => {
+    const result = await curlThroughEnvironment({
+      HTTPS_PROXY: "http://127.0.0.1:1",
+      https_proxy: proxyEnv.https_proxy ?? "",
+      CURL_CA_BUNDLE: proxyEnv.CURL_CA_BUNDLE ?? "",
+    });
+
+    expect(result).toEqual({ code: 0, stderr: "", stdout: "200" });
+    expect(auditEvents).toContainEqual(
+      expect.objectContaining({ kind: "forwarded", host: "localhost" }),
+    );
+  });
+
+  it.each(["NO_PROXY", "no_proxy"] as const)(
+    "preserves real client bypass through $0",
+    async (bypassVariable) => {
+      const result = await curlThroughEnvironment({
+        https_proxy: proxyEnv.https_proxy ?? "",
+        CURL_CA_BUNDLE: proxyEnv.CURL_CA_BUNDLE ?? "",
+        [bypassVariable]: "localhost",
+      });
+
+      expect(result).toEqual({ code: 0, stderr: "", stdout: "200" });
+      expect(originRequests.at(-1)?.url).toBe("/curl-env");
+      expect(auditEvents).toEqual([]);
+    },
+  );
+
+  it("refuses a real lowercase client after process revocation", async () => {
+    const grant = proxy.registerProcess();
+    const env = {
+      https_proxy: grant.env.https_proxy ?? "",
+      CURL_CA_BUNDLE: proxyEnv.CURL_CA_BUNDLE ?? "",
+    };
+    grant.revoke();
+
+    const result = await curlThroughEnvironment(env);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).not.toBe("200");
+    expect(originRequests).toEqual([]);
+    expect(auditEvents.at(-1)).toMatchObject({ kind: "refused" });
+  });
+
+  it("denies a real lowercase client outside the traffic allowlist", async () => {
+    const restrictedProxy = await startSecretEgressProxyServer({
+      caDir,
+      allowedHosts: ["api.example.com"],
+      onAudit: (event) => auditEvents.push(event),
+    });
+    proxies.push(restrictedProxy);
+    const restrictedEnv = restrictedProxy.registerProcess().env;
+
+    const result = await curlThroughEnvironment({
+      https_proxy: restrictedEnv.https_proxy ?? "",
+      CURL_CA_BUNDLE: restrictedEnv.CURL_CA_BUNDLE ?? "",
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).not.toBe("200");
+    expect(originRequests).toEqual([]);
+    expect(auditEvents.at(-1)).toMatchObject({
+      kind: "refused",
+      host: "localhost",
+      reason: "host-not-allowed",
+    });
   });
 
   it("lets Git HTTPS discovery trust the registered proxy certificate", async () => {
