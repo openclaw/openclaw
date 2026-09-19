@@ -388,7 +388,7 @@ describe("prepareCliRunContext", () => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-fixture");
     try {
       const admittedRunContext = await admission.admit("embedded");
-      const writer = await prepareCliHistoryBoundary(
+      const { writer } = await prepareCliHistoryBoundary(
         {
           admittedRunContext,
           runId,

@@ -2060,17 +2060,19 @@ async function prepareCliRunContextWithinReadFence(
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const historyParams = await admitPreparedParams(params);
     params = historyParams;
-    const cliHistoryWriter = !isSideQuestion
+    const { writer: cliHistoryWriter, declined: historyDeclined } = !isSideQuestion
       ? await prepareCliHistoryBoundary(historyParams, { credential: authCredential })
-      : undefined;
+      : {};
     // Explicit caller-owned memory remains input; it cannot authorize borrowed durable history.
-    const historyAllowed = params.sessionManager !== undefined || cliHistoryWriter !== undefined;
-    // Native compatibility and transcript account ownership are independent gates.
-    const rawTranscriptReseedReason = !historyAllowed
-      ? "auth-unknown"
-      : reusableCliSessionId
-        ? "session-expired"
-        : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
+    // A non-fresh decline (borrowed native handle, account transition, or untrusted boundary)
+    // must refuse. A fresh session-less turn under stable auth reseeds like a missing
+    // transcript; a writer that IS established never sets `declined` at all.
+    const rawTranscriptReseedReason =
+      historyDeclined === "refused"
+        ? "auth-unknown"
+        : reusableCliSessionId
+          ? "session-expired"
+          : (invalidatedReason ?? (ignoreCliSessionCandidate ? undefined : "missing-transcript"));
     const sessionPromptContext =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined

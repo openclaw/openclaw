@@ -324,7 +324,7 @@ async function createCliHistoryFixture() {
     timeoutMs: 1_000,
   };
   const credential = { type: "token" as const, provider: "test-cli", token: "account-a" };
-  const writer = await prepareCliHistoryBoundary(params, { credential });
+  const { writer } = await prepareCliHistoryBoundary(params, { credential });
   expect(writer).toBeDefined();
   runWithCliHistoryWriter(writer, () => {
     SessionManager.open(scope).appendMessage({
@@ -364,7 +364,7 @@ async function createCliHistoryFixture() {
         runId: "next-cli-run",
         admittedRunContext: await next.admit("embedded"),
       };
-      const nextWriter = await prepareCliHistoryBoundary(nextParams, {
+      const { writer: nextWriter } = await prepareCliHistoryBoundary(nextParams, {
         credential: { ...credential, token },
       });
       return await loadCliSessionPromptContext({

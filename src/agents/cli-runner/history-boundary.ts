@@ -13,6 +13,7 @@ import {
   resolveSessionTranscriptDatabasePath,
   validateSessionTranscriptContextAdmission,
   waitForSessionTranscriptProjection,
+  type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { assertOwnedTranscriptWriteCommit } from "../../config/sessions/transcript-write-context.js";
@@ -28,6 +29,44 @@ import { createCliRunCurrentAssertion } from "./execution-target.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 /**
+ * Why history preparation declined to hand back a writer. `"fresh"` means a genuinely
+ * session-less start with no borrowed native handle and no prior transcript owned by a
+ * different credential — safe to reseed like a missing transcript. `"refused"` covers
+ * every non-fresh decline (a reused/forced native session, an account transition, or an
+ * untrusted boundary); reseeding then would leak borrowed history, so it stays refused.
+ */
+type CliHistoryBoundaryDecline = "fresh" | "refused";
+
+/**
+ * Discriminated result: `writer` present on success, otherwise `declined` says why so
+ * the caller can reseed a fresh start while still refusing an account boundary. The two
+ * were previously collapsed into one `undefined`, which reseeded borrowed history.
+ */
+export type CliHistoryBoundaryResult = {
+  writer?: CliHistoryWriter;
+  declined?: CliHistoryBoundaryDecline;
+};
+
+/**
+ * A transcript that a fresh start may safely reseed: no reconstructable conversation at
+ * all. Bookkeeping is not a conversation — retained reset rows, summaries, custom context,
+ * missing anchors and bounded cuts must never look empty, so a bounded scan that truncates
+ * is treated as non-empty. This is the ONLY thing that upgrades a no-writer state to
+ * reseedable, both when a boundary entry exists and when it is absent/mismatched.
+ */
+function isProvenEmptyTranscript(target: SessionTranscriptRuntimeTarget): boolean {
+  let truncated = false;
+  const branch = SessionManager.openBounded(target, {
+    maxBytes: 1024 * 1024,
+    maxEvents: 100,
+    onTruncated: () => {
+      truncated = true;
+    },
+  }).getBranch();
+  return !truncated && buildSessionContext(branch).messages.length === 0;
+}
+
+/**
  * History belongs to the local transcript, not the latest native handle. Cover only
  * a proven-empty start or the contiguous events of the previously admitted CLI run.
  * An account transition, old-runtime write, import or unknown legacy prefix stays
@@ -36,8 +75,20 @@ import type { PreparedCliRunContext } from "./types.js";
 export async function prepareCliHistoryBoundary(
   params: PreparedCliRunContext["params"],
   identity: { credential?: AuthProfileCredential },
-): Promise<CliHistoryWriter | undefined> {
+): Promise<CliHistoryBoundaryResult> {
   const source = params.sessionTarget;
+  // A source under a *different* session identity, or a borrowed/forced native handle, is
+  // not this run's own history: it must never reseed. Explicit caller memory (sessionManager)
+  // and a genuinely session-less turn (no transcript to leak) may reseed like a missing
+  // transcript. This decides every early "cannot establish a writer" exit below.
+  const borrowed =
+    (source !== undefined &&
+      (source.sessionId !== params.sessionId ||
+        (params.sessionKey !== undefined && params.sessionKey !== source.sessionKey))) ||
+    Boolean(params.cliSessionId) ||
+    params.cliSessionBinding?.forceReuse === true;
+  const declinedEarly: CliHistoryBoundaryDecline =
+    params.sessionManager || !borrowed ? "fresh" : "refused";
   if (
     params.sessionManager ||
     !source ||
@@ -45,7 +96,7 @@ export async function prepareCliHistoryBoundary(
     (params.sessionKey !== undefined && params.sessionKey !== source.sessionKey) ||
     !resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
   ) {
-    return undefined;
+    return { declined: declinedEarly };
   }
   const target = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
   const assertCurrent = createCliRunCurrentAssertion(params);
@@ -53,7 +104,19 @@ export async function prepareCliHistoryBoundary(
   assertCurrent();
   const snapshot: InternalSessionEntry | undefined = loadSessionEntryReadOnly(target);
   if (!snapshot || snapshot.sessionId !== target.sessionId) {
-    return undefined;
+    // We already passed the same-session checks, so a real transcript target exists — its
+    // boundary entry is merely absent or mismatched (pruned/reset while events remain, or a
+    // projection race). No writer can be established without that entry, but classification
+    // must NOT default to `declinedEarly`: reseeding here would replay durable history whose
+    // ownership was never verified. Master refused this outright; we relax it only for a
+    // proven-empty start (nothing to leak), exactly the bar the downstream `allowed` logic
+    // uses. A snapshotless transcript that still holds content stays refused.
+    const provenEmptyStart =
+      !borrowed &&
+      !params.cliSessionId &&
+      !params.cliSessionBinding &&
+      isProvenEmptyTranscript(target);
+    return { declined: provenEmptyStart ? "fresh" : "refused" };
   }
   const watermark = readSessionTranscriptWatermark(target);
   const admission = resolveSessionTranscriptReadFence(target);
@@ -89,6 +152,16 @@ export async function prepareCliHistoryBoundary(
         .digest("hex")
     : undefined;
   const writerRunId = params.expectedWriterRunId ?? params.runId;
+  // A session-less turn (no reused/forced native handle) whose transcript reconstructs to
+  // nothing: the only no-boundary shape safe to reseed, since there is no owned content to
+  // leak. Evaluated once and reused for both the `allowed` upgrade and the fresh/refused
+  // classification below. Computed lazily so a non-session-less turn never scans.
+  const sessionLessStart = !params.cliSessionId && !params.cliSessionBinding;
+  let provenEmptyStart: boolean | undefined;
+  const isProvenEmptyStart = () => {
+    provenEmptyStart ??= sessionLessStart && isProvenEmptyTranscript(target);
+    return provenEmptyStart;
+  };
   let allowed = Boolean(
     fingerprint &&
     currentUserIsLast &&
@@ -100,28 +173,25 @@ export async function prepareCliHistoryBoundary(
     (stored.maxSeq === priorMaxSeq ||
       (admission && stored.writerRunId === writerRunId && stored.maxSeq === watermark.maxSeq)),
   );
-  if (
-    !allowed &&
-    fingerprint &&
-    currentUserIsLast &&
-    !params.cliSessionId &&
-    !params.cliSessionBinding
-  ) {
-    let truncated = false;
-    const branch = SessionManager.openBounded(target, {
-      maxBytes: 1024 * 1024,
-      maxEvents: 100,
-      onTruncated: () => {
-        truncated = true;
-      },
-    }).getBranch();
-    // Bookkeeping is not a conversation. Retained reset rows, summaries, custom
-    // context, missing anchors and bounded cuts must never look like a fresh start.
-    allowed = !truncated && buildSessionContext(branch).messages.length === 0;
+  if (!allowed && fingerprint && currentUserIsLast && sessionLessStart) {
+    allowed = isProvenEmptyStart();
   }
   allowed &&= watermark.maxSeq === null || typeof watermark.generation === "string";
+  // Classify why a writer could not be established, so the caller reseeds a genuinely
+  // fresh start but refuses borrowed history. A prior boundary owned by the current
+  // fingerprint is the current account's own history (safe to reseed like a missing
+  // transcript); a boundary owned by a different fingerprint, or an untrusted
+  // "unknown"-state boundary, is an account transition that must stay refused. With no
+  // prior boundary at all, ownership cannot be proven from a fingerprint alone (there is
+  // no boundary to match it against), so only a session-less turn whose transcript is
+  // proven empty is fresh — uncovered content or a revoked/absent credential stays refused,
+  // exactly as master did. A borrowed native handle never authorizes unverified history.
+  const ownedByCurrent =
+    isKnownCliHistoryBoundary(stored) && stored.authFingerprint === fingerprint;
+  const isFreshStart = stored ? ownedByCurrent : isProvenEmptyStart();
+  const declined: CliHistoryBoundaryDecline = isFreshStart ? "fresh" : "refused";
   if (!allowed && !stored) {
-    return undefined;
+    return { declined };
   }
   const boundary: CliHistoryBoundary =
     allowed && fingerprint
@@ -166,7 +236,7 @@ export async function prepareCliHistoryBoundary(
     },
   );
   if (!committed || !allowed || boundary.state !== "known") {
-    return undefined;
+    return { declined };
   }
   const assertActive = resolveAdmittedRunActiveAssertion(params.admittedRunContext);
   const assertWriterCurrent = () => {
@@ -211,5 +281,5 @@ export async function prepareCliHistoryBoundary(
   bindAgentRunTerminalWriteContext(authority, {
     run: (write) => runWithCliHistoryWriter(writer, write),
   });
-  return writer;
+  return { writer };
 }

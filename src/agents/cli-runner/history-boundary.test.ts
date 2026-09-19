@@ -78,7 +78,7 @@ async function fixture(withHeader = true) {
         timeoutMs: 1000,
         ...overrides,
       };
-      const writer = await prepareCliHistoryBoundary(params, {
+      const { writer } = await prepareCliHistoryBoundary(params, {
         credential:
           credential ?? (epoch ? { type: "token", provider: "test-cli", token: epoch } : undefined),
       });
