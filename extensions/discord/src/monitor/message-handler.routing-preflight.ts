@@ -75,6 +75,7 @@ export async function resolveDiscordPreflightRoute(params: {
     boundSessionKey,
     effectiveRoute,
     boundAgentId: boundSessionKey ? effectiveRoute.agentId : undefined,
+    replyDispatchAgentId: runtimeRoute.replyDispatchAgentId,
     baseSessionKey: effectiveRoute.sessionKey,
   };
 }

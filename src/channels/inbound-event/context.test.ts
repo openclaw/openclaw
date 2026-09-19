@@ -145,6 +145,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       route: {
         agentId: "main",
+        replyDispatchAgentId: "channel-owner",
         dmScope: "main",
         accountId: "acct",
         routeSessionKey: "agent:main:test:group:room-1",
@@ -228,6 +229,7 @@ describe("buildChannelInboundEventContext", () => {
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
       AgentId: "main",
+      ReplyDispatchAgentId: "channel-owner",
       DmScope: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",

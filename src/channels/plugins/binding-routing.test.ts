@@ -104,6 +104,7 @@ describe("runtime conversation binding route", () => {
     }
     expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
     expect(result.boundAgentId).toBe("review");
+    expect(result.replyDispatchAgentId).toBe("main");
     expect(result.route).toEqual({
       agentId: "review",
       accountId: "default",
@@ -160,6 +161,7 @@ describe("runtime conversation binding route", () => {
 
     expect(result.route).toMatchObject({ sessionKey: targetSessionKey, agentId });
     expect(result.boundAgentId).toBe(agentId);
+    expect(result.replyDispatchAgentId).toBeUndefined();
   });
 
   it("rejects an opaque target when its plugin ownership metadata is missing", () => {

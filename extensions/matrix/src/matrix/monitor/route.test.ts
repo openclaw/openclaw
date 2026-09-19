@@ -192,6 +192,31 @@ describe("resolveMatrixInboundRoute", () => {
     },
   );
 
+  it("keeps the configured Matrix agent as reply owner for a runtime ACP binding", () => {
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (conversation) => ({
+        bindingId: "ops:!dm:example.org",
+        targetSessionKey: "agent:acp-agent:acp:session-1",
+        targetKind: "session",
+        conversation,
+        status: "active",
+        boundAt: Date.now(),
+      }),
+    });
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("sender-agent", senderPeer())],
+    } satisfies OpenClawConfig;
+
+    const result = resolveDmRoute(cfg);
+
+    expect(result.route.agentId).toBe("acp-agent");
+    expect(result.replyDispatchAgentId).toBe("sender-agent");
+  });
+
   it.each([
     {
       name: "isolated cron run",

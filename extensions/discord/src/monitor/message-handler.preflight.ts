@@ -449,6 +449,7 @@ export async function preflightDiscordMessage(
     boundSessionKey,
     effectiveRoute,
     boundAgentId,
+    replyDispatchAgentId,
     baseSessionKey,
   } = routeState;
   if (
@@ -977,6 +978,7 @@ export async function preflightDiscordMessage(
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,
     boundAgentId,
+    replyDispatchAgentId,
     guildInfo,
     guildSlug,
     threadChannel,

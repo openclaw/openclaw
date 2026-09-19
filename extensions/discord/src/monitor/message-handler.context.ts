@@ -98,6 +98,7 @@ export async function buildDiscordMessageProcessContext(params: {
     channelConfig,
     baseSessionKey,
     boundSessionKey,
+    replyDispatchAgentId,
     route,
     commandAuthorized,
     hasControlCommand,
@@ -420,6 +421,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     route: {
       agentId: route.agentId,
+      replyDispatchAgentId,
       dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,

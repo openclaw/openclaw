@@ -1053,7 +1053,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalled();
   });
 
-  it("retargets reply_dispatch to a bound generic ACP session before model fallback", async () => {
+  it("loads the source reply runtime after a channel route is rewritten to bound ACP", async () => {
     setNoAbort();
     const sourceSessionKey = "agent:main:discord:C123";
     const boundSessionKey = "agent:opencode:acp:bound-session";
@@ -1142,7 +1142,9 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "discord:C123",
       To: "discord:C123",
       AccountId: "default",
-      SessionKey: sourceSessionKey,
+      SessionKey: boundSessionKey,
+      AgentId: "opencode",
+      ReplyDispatchAgentId: "main",
       BodyForAgent: "continue",
     });
     const preparedLookup = vi.fn(async ({ agentId }: { agentId: string }) => {
@@ -1188,18 +1190,18 @@ describe("dispatchReplyFromConfig", () => {
       boundConversationBinding.conversation,
     );
     expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
-      agentId: "main",
-      storePath: sourceStorePath,
-      sessionKey: sourceSessionKey,
+      agentId: "opencode",
+      storePath: targetStorePath,
+      sessionKey: boundSessionKey,
       readConsistency: "latest",
     });
     expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "opencode", sessionKey: sourceSessionKey }),
+      expect.objectContaining({ agentId: "main", sessionKey: boundSessionKey }),
     );
     expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        storePath: targetStorePath,
-        sessionKey: sourceSessionKey,
+        storePath: sourceStorePath,
+        sessionKey: boundSessionKey,
       }),
     );
     const ensureSessionOptions = firstMockArg(runtime.ensureSession, "ensure session") as

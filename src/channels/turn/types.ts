@@ -93,6 +93,8 @@ export type ConversationFacts = {
 /** Session routing facts derived before dispatch. */
 export type RouteFacts = {
   agentId: string;
+  /** Configured owner of the Gateway-published reply runtime when execution is ACP-bound. */
+  replyDispatchAgentId?: string;
   dmScope?: DmScope;
   accountId?: string;
   routeSessionKey: string;

@@ -544,6 +544,7 @@ function buildChannelInboundEventContextValue(
     To: params.reply.to,
     SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
     AgentId: params.route.agentId,
+    ReplyDispatchAgentId: params.route.replyDispatchAgentId,
     DmScope: params.route.dmScope,
     AccountId: params.route.accountId ?? params.accountId,
     ParentSessionKey: params.route.parentSessionKey,

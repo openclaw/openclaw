@@ -16,6 +16,7 @@ import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import {
+  isAcpSessionKey,
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -46,6 +47,8 @@ export type RuntimeConversationBindingRouteResult = {
   route: ResolvedAgentRoute;
   boundSessionKey?: string;
   boundAgentId?: string;
+  /** Configured channel owner that published the reply runtime for a bound ACP turn. */
+  replyDispatchAgentId?: string;
   pluginId?: string;
 };
 
@@ -200,6 +203,9 @@ export function resolveRuntimeConversationBindingRoute(
     bindingRecord,
     boundSessionKey,
     boundAgentId,
+    // ACP owns execution/storage identity, while the configured channel agent keeps
+    // ownership of the Gateway-published reply runtime used to admit the turn.
+    replyDispatchAgentId: isAcpSessionKey(boundSessionKey) ? params.route.agentId : undefined,
     route: {
       ...params.route,
       sessionKey: boundSessionKey,
