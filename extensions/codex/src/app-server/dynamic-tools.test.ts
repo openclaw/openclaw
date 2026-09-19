@@ -1,7 +1,4 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -34,7 +31,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Codex tests cover dynamic tools plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -52,7 +48,6 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -2265,7 +2260,12 @@ describe("createCodexDynamicToolBridge", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
-    const execute = vi.fn(async () => textToolResult("Sent."));
+    const execute = vi.fn(async () =>
+      textToolResult("Sent.", {
+        messageId: "rewritten-message",
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+      }),
+    );
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message", execute })],
       signal: new AbortController().signal,
@@ -2349,7 +2349,10 @@ describe("createCodexDynamicToolBridge", () => {
           name: "message",
           execute: vi.fn(async () => {
             hasRepliedRef.value = true;
-            return textToolResult("Sent.");
+            return textToolResult("Sent.", {
+              messageId: "implicit-thread-message",
+              messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+            });
           }),
         }),
       ],
@@ -2429,6 +2432,8 @@ describe("createCodexDynamicToolBridge", () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
+        messageId: "provider-routed-message",
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
         toolSend: {
           to: "channel:resolved-id",
           threadId: "root-post-id",
@@ -2456,123 +2461,12 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("records message tool media attachment aliases as delivery evidence", async () => {
-    const toolResult = {
-      content: [{ type: "text", text: "Sent." }],
-      details: { messageId: "message-1" },
-    } satisfies AgentToolResult<unknown>;
-    const tool = createTool({
-      name: "message",
-      execute: vi.fn(async () => toolResult),
-    });
-    const bridge = createCodexDynamicToolBridge({
-      tools: [tool],
-      signal: new AbortController().signal,
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      text: "song attached",
-      media: "/tmp/generated-song.mp3",
-      attachments: [{ filePath: "/tmp/generated-cover.png" }],
-    });
-
-    expectInputText(result, "Sent.");
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([
-      "/tmp/generated-song.mp3",
-      "/tmp/generated-cover.png",
-    ]);
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      {
-        tool: "message",
-        provider: "message",
-        to: undefined,
-        threadId: undefined,
-        text: "song attached",
-        mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
-      },
-    ]);
-  });
-
-  it("transfers remote Slack file uploads over the Codex app-server connection", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "codex-remote-slack-upload-",
-    });
-    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "codex-remote-upload-"));
-    try {
-      const relativePath = "reports/slack-upload.txt";
-      const localPath = path.join(workspaceDir, relativePath);
-      const remoteContent = "authoritative remote Slack attachment\n";
-      await mkdir(path.dirname(localPath), { recursive: true });
-      await writeFile(localPath, remoteContent);
-
-      const toolResult = textToolResult("Uploaded.", { messageId: "message-1" });
-      const execute = vi.fn(async () => toolResult);
-      const remotePath = `/remote/codex-workspace/${relativePath}`;
-      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
-        dataBase64: Buffer.from(remoteContent).toString("base64"),
-      }));
-      const bridge = createCodexDynamicToolBridge({
-        tools: [createTool({ name: "message", execute })],
-        signal: new AbortController().signal,
-        hookContext: {
-          workspaceDir,
-          remoteWorkspaceRoot: "/remote/codex-workspace",
-          remoteWorkspaceRequestTimeoutMs: 90_000,
-        },
-      });
-      bridge.setRemoteWorkspaceFileReader?.(readRemoteWorkspaceFile);
-
-      const result = await handleMessageToolCall(bridge, {
-        action: "upload-file",
-        channel: "slack",
-        to: "channel:C123",
-        filePath: remotePath,
-      });
-
-      expectInputText(result, "Uploaded.");
-      const executedArgs = requireRecord(
-        callArg(execute, 0, 1, "Slack upload args"),
-        "upload args",
-      );
-      const stagedPath = executedArgs.filePath;
-      expectExecuteCall(execute, {
-        callId: "call-1",
-        args: {
-          action: "upload-file",
-          channel: "slack",
-          to: "channel:C123",
-          filePath: stagedPath,
-        },
-      });
-      expect(stagedPath).not.toBe(localPath);
-      expect(stagedPath).toEqual(
-        expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
-      );
-      expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
-        path: remotePath,
-        maxBytes: 64 * 1024 * 1024,
-        workspaceRoot: "/remote/codex-workspace",
-        signal: expect.any(AbortSignal),
-        timeoutMs: expect.any(Number),
-      });
-      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
-      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(90_000);
-      await expect(readFile(String(stagedPath), "utf8")).resolves.toBe(remoteContent);
-      await expect(readFile(localPath, "utf8")).resolves.toBe(remoteContent);
-    } finally {
-      await rm(workspaceDir, { recursive: true, force: true });
-      await openClawState.cleanup();
-    }
-  });
-
   it("records internal UI source replies separately from outbound messaging evidence", async () => {
     const toolResult = textToolResult("Sent to current chat.", {
       status: "ok",
       deliveryStatus: "sent",
       sourceReplySink: "internal-ui",
+      mediaUrl: "/tmp/reply.png",
       sourceReply: {
         text: "visible reply",
         mediaUrls: ["/tmp/reply.png"],
@@ -2739,14 +2633,8 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expectInputText(result, "Sent.");
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "imessage",
-        to: "chat-1",
-        text: "visible reply",
-      }),
-    ]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2756,6 +2644,7 @@ describe("createCodexDynamicToolBridge", () => {
       "message",
       textToolResult("Sent.", { ok: true, messageId: "imessage-853" }),
       {
+        sessionKey: "agent:main:imessage:dm:source",
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "imessage",
         currentChannelId: "imessage:+12069106512",
@@ -2804,6 +2693,7 @@ describe("createCodexDynamicToolBridge", () => {
       "message",
       textToolResult("Sent.", { ok: true, messageId: "sms-853" }),
       {
+        sessionKey: "agent:main:sms:dm:source",
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "sms",
         currentChannelId: "sms:+12069106512",
@@ -2834,19 +2724,20 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
-  it("keeps message-tool-only source replies terminal when the reply receipt matches the current message id", async () => {
+  it("uses the message owner's source confirmation for provider-native routes", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
-        ok: true,
-        messageId: "provider-message-1",
-        repliedTo: "provider-guid-857",
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
       }),
       {
         sourceReplyDeliveryMode: "message_tool_only",
-        currentChannelProvider: "imessage",
         currentChannelId: "imessage:any;-;+12069106512",
-        currentMessageId: "provider-guid-857",
       },
     );
 
@@ -2856,51 +2747,13 @@ describe("createCodexDynamicToolBridge", () => {
       target: "+12069106512",
       messageId: "857",
       message: "visible reply",
-      buttons: [],
-      final: true,
     });
 
-    expectInputText(result, "Sent.");
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "imessage",
-        to: "+12069106512",
-        text: "visible reply",
-      }),
-    ]);
     expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
-  });
-
-  it("keeps message-tool-only source replies terminal when a text receipt matches the current message id", async () => {
-    const receiptText = JSON.stringify({
-      ok: true,
-      messageId: "provider-message-1",
-      repliedTo: "provider-guid-861",
+    expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
+      sourceReplyFinal: true,
     });
-    const bridge = createBridgeWithToolResult("message", textToolResult(receiptText), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelProvider: "imessage",
-      currentChannelId: "imessage:any;-;+12069106512",
-      currentMessageId: "provider-guid-861",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "861",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expectInputText(result, receiptText);
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("does not let dry-run reply receipts terminate message-tool-only source replies", async () => {
@@ -2959,51 +2812,6 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
-  });
-
-  it("keeps message-tool-only source replies terminal for explicit native target segments", async () => {
-    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelProvider: "imessage",
-      currentChannelId: "imessage:any;-;+12069106512",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "863",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expectInputText(result, "Sent.");
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
-  });
-
-  it("keeps message-tool-only source replies terminal when the provider is only in the current channel id", async () => {
-    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelId: "imessage:any;-;+12069106512",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "865",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expectInputText(result, "Sent.");
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("keeps omitted finality terminal when the message tool returns termination", async () => {
@@ -3072,7 +2880,8 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expectInputText(result, "Sent.");
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });

@@ -145,6 +145,24 @@ describe("isDeliveredMessagingToolResult", () => {
       false,
     ],
     ["provider no-op marker", { ok: true, payload: { ok: true, changed: false } }, false],
+    [
+      "provider failure with an attempt id",
+      { ok: true, payload: { ok: false, error: "send failed", messageId: "attempt-id" } },
+      false,
+    ],
+    [
+      "provider failure after partial delivery",
+      {
+        ok: true,
+        payload: {
+          ok: false,
+          error: "second attachment failed",
+          messageId: "partial-receipt-1",
+          sentBeforeError: true,
+        },
+      },
+      true,
+    ],
     ["missing provider payload", { ok: true }, false],
     ["failed entry after partial delivery", { ok: false, sentBeforeError: true as const }, true],
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
@@ -260,6 +278,12 @@ describe("isDeliveredMessagingToolResult", () => {
               to: "chat-1",
               ok: true,
               payload: { ok: true, messageId: "gateway-message-1" },
+            },
+            {
+              channel: "googlechat",
+              to: "space-2",
+              ok: false,
+              payload: { ok: false, error: "send failed" },
             },
           ],
         },

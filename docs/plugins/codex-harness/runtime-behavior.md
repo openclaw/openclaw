@@ -103,6 +103,11 @@ does not present old screenshots as newly attached images. If context limits
 remove an image's original message, its image input is omitted too; the saved
 transcript and attachment remain unchanged.
 
+Sending another attachment does not suppress generated images from the final
+reply. OpenClaw omits a generated image only when it can match confirmed delivery
+of that image to the reply destination. A partial delivery with uncertain
+attachment outcomes can leave a duplicate image rather than lose an unsent one.
+
 ## Turn liveness and timeouts
 
 Codex owns provider-stream liveness and native turn completion. OpenClaw waits
@@ -118,7 +123,8 @@ budgets, Stop and replay behavior, and Doctor migration of retired idle settings
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
-Completed items reconcile the transcript with Codex's final content. Messages
+Completed items, including empty messages, reconcile the transcript with Codex's
+final content. Raw provider copies cannot restore text that Codex removed. Messages
 marked for asynchronous delivery remain separate from the final reply when
 Codex repeats them in the turn-completion summary.
 

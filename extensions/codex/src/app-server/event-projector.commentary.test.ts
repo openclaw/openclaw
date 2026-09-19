@@ -433,9 +433,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
         },
       }),
     );
-    // Raw response lane echoes the same note. Codex omits the message id on the
-    // wire (ResponseItem::Message.id is skip_serializing), so the projector
-    // synthesizes a `raw-assistant-*` id that never matches the thread item id.
+    // Raw message IDs are optional; pair an idless echo with its typed completion.
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
         item: {
@@ -535,48 +533,85 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     expect(preambles.map((event) => event.data.phase)).toEqual(["update", "end", "end"]);
   });
 
-  it("pairs a raw commentary echo after a rewritten typed completion", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onAgentEvent,
-    });
+  it.each([
+    {
+      label: "rewritten",
+      text: "Contributor-rewritten note",
+      rawText: "Original model note",
+      expectedNotes: ["Contributor-rewritten note"],
+    },
+    {
+      label: "empty",
+      text: "",
+      rawText: "<oai-mem-citation>source</oai-mem-citation>",
+      expectedNotes: [],
+    },
+  ])(
+    "pairs a raw commentary echo after a $label typed completion",
+    async ({ text, rawText, expectedNotes }) => {
+      const onAgentEvent = vi.fn();
+      const projector = await createProjector({
+        ...(await createParams()),
+        onAgentEvent,
+      });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "agentMessage", id: "msg-commentary", phase: "commentary", text: "" },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "msg-commentary",
-          phase: "commentary",
-          text: "Contributor-rewritten note",
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          role: "assistant",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "Original model note" }],
-        },
-      }),
-    );
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { type: "agentMessage", id: "msg-commentary", phase: "commentary", text: "" },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "agentMessage",
+            id: "msg-commentary",
+            phase: "commentary",
+            text,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "message",
+            role: "assistant",
+            phase: "commentary",
+            id: "msg-commentary",
+            content: [{ type: "output_text", text: rawText }],
+          },
+        }),
+      );
 
-    const preambles = onAgentEvent.mock.calls
-      .map((call) => call[0])
-      .filter((event) => event.stream === "item" && event.data.kind === "preamble");
+      const preambles = onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "item" && event.data.kind === "preamble");
 
-    expect(preambles.map((event) => event.data.progressText)).toEqual([
-      "Contributor-rewritten note",
-    ]);
-    expect(preambles.every((event) => event.data.itemId === "msg-commentary")).toBe(true);
-  });
+      expect(preambles.map((event) => event.data.progressText)).toEqual(expectedNotes);
+      expect(preambles.every((event) => event.data.itemId === "msg-commentary")).toBe(true);
+
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "message",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Later raw-only note" }],
+          },
+        }),
+      );
+      await projector.handleNotification(turnCompleted([]));
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual([]);
+      expect(
+        result.messagesSnapshot
+          .filter((message) => message.role === "assistant")
+          .map((message) => message.content),
+      ).toEqual(
+        [...expectedNotes, "Later raw-only note"].map((note) => [{ type: "text", text: note }]),
+      );
+    },
+  );
 
   it("clears a pending commentary echo when the raw envelope has no text", async () => {
     const onAgentEvent = vi.fn();

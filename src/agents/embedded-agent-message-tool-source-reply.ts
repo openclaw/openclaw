@@ -84,7 +84,10 @@ export function isDeliveredMessagingToolResult(params: {
   if (action === "broadcast" && results.some(pluginBroadcastHasDelivery)) {
     return true;
   }
-  if (params.isError || results.some(isToolResultError)) {
+  if (
+    params.isError ||
+    results.some((result) => isToolResultError(result) || pluginEnvelopeHas(result, "failure"))
+  ) {
     return false;
   }
   const normalizedToolName = normalizeToolPolicyName(params.toolName ?? "message");

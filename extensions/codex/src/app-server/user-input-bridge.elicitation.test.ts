@@ -27,6 +27,14 @@ function formParams(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function emptyFormParams(overrides: Record<string, unknown> = {}) {
+  return formParams({
+    requestedSchema: { type: "object", properties: {} },
+    message: "Confirm the requested action",
+    ...overrides,
+  });
+}
+
 function createBridge(options: {
   params?: EmbeddedRunAttemptParams;
   signal?: AbortSignal;
@@ -112,6 +120,100 @@ function requestedQuestions(calls: GatewayCallRecord[]) {
 }
 
 describe("Codex ordinary MCP elicitation adapter", () => {
+  it.each([
+    { mode: "form", choice: "Allow", action: "accept", meta: null },
+    { mode: "openai/form", choice: "Decline", action: "decline", meta: null },
+    {
+      mode: "form",
+      choice: "Decline",
+      action: "decline",
+      meta: {
+        codex_approval_kind: "tool_suggestion",
+        tool_type: "plugin",
+        suggest_type: "install",
+        tool_id: "example@fixture",
+        tool_name: "Example",
+      },
+    },
+  ])("waits for $choice before answering an empty $mode form ($meta)", async (testCase) => {
+    const params = createParams();
+    const gateway = createControlledGateway();
+    const bridge = createBridge({ params, gatewayCall: gateway.call });
+    const requestParams = emptyFormParams({ mode: testCase.mode, _meta: testCase.meta });
+    const response = bridge.handleElicitationRequest({
+      id: "empty",
+      params: requestParams,
+    });
+    const settled = vi.fn();
+    void response.then(settled);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          gateway.calls.filter((entry) => entry.method === "question.waitAnswer"),
+        ).toHaveLength(1),
+      );
+      expect(settled).not.toHaveBeenCalled();
+      const prompt = vi.mocked(params.onBlockReply!).mock.calls[0]?.[0];
+      expect(prompt?.text).toContain(requestParams.message);
+      const request = requestedQuestions(gateway.calls)[0]!;
+      expect(request.questions).toHaveLength(1);
+      const question = request.questions[0];
+      if (!isJsonObject(question) || typeof question.questionId !== "string") {
+        throw new Error("expected confirmation question id");
+      }
+      gateway.answer(request.id, { [question.questionId]: [testCase.choice] });
+      await expect(response).resolves.toEqual({
+        action: testCase.action,
+        content: testCase.action === "accept" ? {} : null,
+        _meta: null,
+      });
+    } finally {
+      await bridge.cancelPending();
+    }
+  });
+
+  it("cancels an empty form without letting its late answer resolve the next queued form", async () => {
+    const gateway = createControlledGateway();
+    const bridge = createBridge({ gatewayCall: gateway.call });
+    const controller = new AbortController();
+    const confirmation = bridge.handleElicitationRequest(
+      { id: "empty", params: emptyFormParams() },
+      controller.signal,
+    );
+    const successor = bridge.handleElicitationRequest({ id: "successor", params: formParams() });
+    try {
+      await vi.waitFor(() =>
+        expect(
+          gateway.calls.filter((entry) => entry.method === "question.waitAnswer"),
+        ).toHaveLength(1),
+      );
+      expect(requestedQuestions(gateway.calls)).toHaveLength(1);
+      const first = requestedQuestions(gateway.calls)[0]!;
+      const question = first.questions[0];
+      if (!isJsonObject(question) || typeof question.questionId !== "string") {
+        throw new Error("expected confirmation question id");
+      }
+      controller.abort();
+      gateway.answer(first.id, { [question.questionId]: ["Allow"] });
+      await expect(confirmation).resolves.toEqual({ action: "cancel", content: null, _meta: null });
+      await vi.waitFor(() =>
+        expect(
+          gateway.calls.filter((entry) => entry.method === "question.waitAnswer"),
+        ).toHaveLength(2),
+      );
+      const second = requestedQuestions(gateway.calls)[1]!;
+      expect(second.id).not.toBe(first.id);
+      gateway.answer(second.id, { name: ["Ada"] });
+      await expect(successor).resolves.toEqual({
+        action: "accept",
+        content: { name: "Ada" },
+        _meta: null,
+      });
+    } finally {
+      await bridge.cancelPending();
+    }
+  });
+
   it("enables imagePicker only for negotiated openai/form input", async () => {
     const schema = {
       type: "object",

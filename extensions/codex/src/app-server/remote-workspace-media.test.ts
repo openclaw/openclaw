@@ -228,43 +228,54 @@ describe("readBoundedCodexRemoteWorkspaceFile", () => {
 });
 
 describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
-  it("stages scalar, list, and structured attachments from authoritative remote bytes", async () => {
-    const reportPath = `${remoteWorkspaceRoot}/reports/slack-upload.txt`;
-    const imagePath = `${remoteWorkspaceRoot}/images/preview.png`;
-    const readRemoteFile = createRemoteFileReader({
-      [reportPath]: "authoritative remote report\n",
-      [imagePath]: "authoritative remote image\n",
-    });
+  it.each([
+    { remoteRoot: remoteWorkspaceRoot, reportAlias: "reports/./slack-upload.txt" },
+    { remoteRoot: "C:/Work/Repo", reportAlias: "c:\\work\\repo\\reports\\slack-upload.txt" },
+  ])(
+    "stages scalar, list, and structured attachments from $remoteRoot",
+    async ({ remoteRoot, reportAlias }) => {
+      const reportPath = `${remoteRoot}/reports/slack-upload.txt`;
+      const imagePath = `${remoteRoot}/images/preview.png`;
+      const readRemoteFile = createRemoteFileReader({
+        [reportPath]: "authoritative remote report\n",
+        [imagePath]: "authoritative remote image\n",
+      });
 
-    const result = await prepareCodexRemoteWorkspaceMessageMedia({
-      args: {
+      const result = await prepareCodexRemoteWorkspaceMessageMedia({
+        args: {
+          action: "upload-file",
+          filePath: reportAlias,
+          mediaUrls: ["reports/slack-upload.txt", "https://example.com/image.png"],
+          attachments: [{ filePath: imagePath, title: "Preview" }],
+        },
+        localWorkspaceRoot,
+        remoteWorkspaceRoot: remoteRoot,
+        readRemoteFile,
+      });
+      const stagedReportPath = result.args.filePath;
+      const stagedImagePath = (result.args.attachments as Array<{ filePath: string }>)[0]?.filePath;
+
+      expect(result.args).toEqual({
         action: "upload-file",
-        filePath: reportPath,
-        mediaUrls: [reportPath, "https://example.com/image.png"],
-        attachments: [{ filePath: imagePath, title: "Preview" }],
-      },
-      localWorkspaceRoot,
-      remoteWorkspaceRoot,
-      readRemoteFile,
-    });
-    const stagedReportPath = result.filePath;
-    const stagedImagePath = (result.attachments as Array<{ filePath: string }>)[0]?.filePath;
-
-    expect(result).toEqual({
-      action: "upload-file",
-      filePath: stagedReportPath,
-      mediaUrls: [stagedReportPath, "https://example.com/image.png"],
-      attachments: [{ filePath: stagedImagePath, title: "Preview" }],
-    });
-    expect(readRemoteFile).toHaveBeenCalledTimes(2);
-    expect(stagedReportPath).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
-    await expect(readFile(String(stagedReportPath), "utf8")).resolves.toBe(
-      "authoritative remote report\n",
-    );
-    await expect(readFile(String(stagedImagePath), "utf8")).resolves.toBe(
-      "authoritative remote image\n",
-    );
-  });
+        filePath: stagedReportPath,
+        mediaUrls: [stagedReportPath, "https://example.com/image.png"],
+        attachments: [{ filePath: stagedImagePath, title: "Preview" }],
+      });
+      expect(result.sourcePathsByStagedPath.size).toBe(2);
+      expect(new Set(result.sourcePathsByStagedPath.get(String(stagedReportPath)))).toEqual(
+        new Set([reportAlias, reportPath, "reports/slack-upload.txt"]),
+      );
+      expect(result.sourcePathsByStagedPath.get(String(stagedImagePath))).toEqual([imagePath]);
+      expect(readRemoteFile).toHaveBeenCalledTimes(2);
+      expect(stagedReportPath).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
+      await expect(readFile(String(stagedReportPath), "utf8")).resolves.toBe(
+        "authoritative remote report\n",
+      );
+      await expect(readFile(String(stagedImagePath), "utf8")).resolves.toBe(
+        "authoritative remote image\n",
+      );
+    },
+  );
 
   it("uses authoritative remote bytes even when a stale local file has the same timestamp", async () => {
     const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
@@ -277,7 +288,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       readRemoteFile: createRemoteFileReader({ [remotePath]: "authoritative remote content\n" }),
     });
 
-    await expect(readFile(String(result.filePath), "utf8")).resolves.toBe(
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "authoritative remote content\n",
     );
   });
@@ -292,7 +303,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       readRemoteFile: createRemoteFileReader({ [remotePath]: "new remote attachment\n" }),
     });
 
-    await expect(readFile(String(result.filePath), "utf8")).resolves.toBe(
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "new remote attachment\n",
     );
   });
@@ -304,12 +315,15 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
       attachments: [{ fileUrl: "media://inbound/image.png" }],
     };
 
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({ args, localWorkspaceRoot, remoteWorkspaceRoot }),
-    ).resolves.toBe(args);
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({ args, localWorkspaceRoot }),
-    ).resolves.toBe(args);
+    for (const remoteRoot of [remoteWorkspaceRoot, undefined]) {
+      const result = await prepareCodexRemoteWorkspaceMessageMedia({
+        args,
+        localWorkspaceRoot,
+        remoteWorkspaceRoot: remoteRoot,
+      });
+      expect(result.args).toBe(args);
+      expect(result.sourcePathsByStagedPath.size).toBe(0);
+    }
   });
 
   it("preserves securely validated Gateway-owned media in a remote run", async () => {
@@ -323,14 +337,14 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     const args = { action: "send", filePath: saved.path };
     const readRemoteFile = createRemoteFileReader({});
 
-    await expect(
-      prepareCodexRemoteWorkspaceMessageMedia({
-        args,
-        localWorkspaceRoot,
-        remoteWorkspaceRoot,
-        readRemoteFile,
-      }),
-    ).resolves.toBe(args);
+    const result = await prepareCodexRemoteWorkspaceMessageMedia({
+      args,
+      localWorkspaceRoot,
+      remoteWorkspaceRoot,
+      readRemoteFile,
+    });
+    expect(result.args).toBe(args);
+    expect(result.sourcePathsByStagedPath.size).toBe(0);
     expect(readRemoteFile).not.toHaveBeenCalled();
   });
 
@@ -484,7 +498,7 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     });
     remoteFiles[remotePath] = "changed remote content\n";
 
-    await expect(readFile(String(result.filePath), "utf8")).resolves.toBe(
+    await expect(readFile(String(result.args.filePath), "utf8")).resolves.toBe(
       "immutable transferred report\n",
     );
   });

@@ -549,17 +549,27 @@ function renderMessageBody(
   if (!hasMessageContent(message)) {
     return "";
   }
-  if (typeof message.content === "string") {
-    return truncateText(message.content.trim(), options.maxTextPartChars);
+  const toolResult = message.role === "toolResult";
+  const toolResultLabel =
+    toolResult && message.toolCallId ? `tool result: ${message.toolCallId}` : "tool result";
+  if (toolResult && options.toolPayloadMode === "elide") {
+    return `${toolResultLabel} [content omitted]`;
   }
-  if (!Array.isArray(message.content)) {
-    return "[non-text content omitted]";
-  }
-  return message.content
-    .map((part: unknown) => renderMessagePart(part, options))
-    .filter((value): value is string => value.length > 0)
-    .join("\n")
-    .trim();
+  const body =
+    typeof message.content === "string"
+      ? truncateText(message.content.trim(), options.maxTextPartChars)
+      : Array.isArray(message.content)
+        ? message.content
+            .map((part: unknown) => renderMessagePart(part, options, toolResult))
+            .filter((value): value is string => value.length > 0)
+            .join("\n")
+            .trim()
+        : "[non-text content omitted]";
+  return toolResult
+    ? redactToolPayloadText(
+        `${toolResultLabel}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`,
+      )
+    : body;
 }
 
 function renderMessagePart(
@@ -569,6 +579,7 @@ function renderMessagePart(
     toolPayloadMode: "elide" | "preserve";
     mediaPrepared?: boolean;
   },
+  toolResultBody: boolean,
 ): string {
   if (!part || typeof part !== "object") {
     return "";
@@ -598,7 +609,7 @@ function renderMessagePart(
       typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
     if (options.toolPayloadMode === "preserve") {
       return truncateText(
-        `${label}\n${stableJson(renderToolResultPayload(record))}`,
+        `${toolResultBody ? "" : `${label}\n`}${stableJson(renderToolResultPayload(record))}`,
         options.maxTextPartChars,
       );
     }

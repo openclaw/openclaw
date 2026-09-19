@@ -176,14 +176,21 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     const toolResultMessage = result.messagesSnapshot.find(
       (message) => requireRecord(message, "message").role === "toolResult",
     );
+    expect(toolResultMessage).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-streamed-echo",
+      toolName: "bash",
+      isError: false,
+    });
     const toolResultContent = requireArray(
       requireRecord(toolResultMessage, "tool result message").content,
       "tool result content",
     );
+    expect(toolResultContent).toEqual([{ type: "text", text: expect.any(String) }]);
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.content).toHaveLength(10_000);
-    expect(toolResultContentItem.content).toContain("original 12367 chars");
-    expect(toolResultContentItem.content).not.toContain("tail-should-not-appear");
+    expect(toolResultContentItem.text).toHaveLength(10_000);
+    expect(toolResultContentItem.text).toContain("original 12367 chars");
+    expect(toolResultContentItem.text).not.toContain("tail-should-not-appear");
   });
 
   it("bounds streamed output echo signatures per tool item", async () => {

@@ -207,7 +207,7 @@ async function tryHandleWithPluginAction(params: {
     return null;
   }
   const deliveryFact = projectPluginMessageDeliveryFact(handled);
-  if (deliveryFact?.status !== "suppressed") {
+  if (!deliveryFact || deliveryFact.status === "settled") {
     await params.onHandled?.({ partialDelivery: deliveryFact?.partialDelivery === true });
   }
   return {

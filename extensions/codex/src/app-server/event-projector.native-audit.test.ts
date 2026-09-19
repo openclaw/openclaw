@@ -1,3 +1,4 @@
+import { extractToolResultText } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -21,6 +22,7 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool audit projection", () => {
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {
+    const output = `${"x".repeat(8_500)}\ntool output tail`;
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
     const diagnosticEvents: DiagnosticEventPayload[] = [];
@@ -57,7 +59,7 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
             source: "agent",
             status: "completed",
             commandActions: [],
-            aggregatedOutput: "ok",
+            aggregatedOutput: output,
             exitCode: 0,
             durationMs: 42,
           },
@@ -148,7 +150,6 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       id: "cmd-1",
       name: "bash",
       arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
-      input: { command: "pnpm test extensions/codex", cwd: "/workspace" },
     });
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
     expect(toolResultMessage.role).toBe("toolResult");
@@ -156,13 +157,8 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     expect(toolResultMessage.toolName).toBe("bash");
     expect(toolResultMessage.isError).toBe(false);
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
-    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.type).toBe("toolResult");
-    expect(toolResultContentItem.id).toBe("cmd-1");
-    expect(toolResultContentItem.name).toBe("bash");
-    expect(toolResultContentItem.toolName).toBe("bash");
-    expect(toolResultContentItem.toolCallId).toBe("cmd-1");
-    expect(toolResultContentItem.content).toBe("ok");
+    expect(extractToolResultText(toolResultContent)).toBe(output);
+    expect(toolResultContent).toEqual([{ type: "text", text: output }]);
   });
 
   it("preserves structured file-change diffs in mirrored transcript calls", async () => {
@@ -215,7 +211,6 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     ];
     expect(toolCall.name).toBe("apply_patch");
     expect(toolCall.arguments).toEqual({ changes: expectedChanges });
-    expect(toolCall.input).toEqual({ changes: expectedChanges });
   });
 
   it.each([
@@ -436,7 +431,7 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       requireArray(toolResult.content, "native patch result")[0],
       "result",
     );
-    expect(output.content).toBe(testCase.output);
+    expect(output.text).toBe(testCase.output);
   });
 
   it("does not double-count a successful code-mode patch and its canonical FileChange", async () => {

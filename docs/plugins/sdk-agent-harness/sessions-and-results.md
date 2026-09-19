@@ -102,6 +102,27 @@ yourself.
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
 
+For messaging tools, read the original result's `details.messageDelivery` with
+`readEmbeddedMessageDeliveryFact` from `openclaw/plugin-sdk/agent-harness-runtime`.
+Only settled delivery counts as a sent message; successful dry runs and suppressed
+sends must not suppress a later reply. Preserve partial delivery evidence when a
+tool also reports an error. Channel tool results without a delivery fact use
+`isPluginNativeMessagingTool` and `isDeliveredMessagingToolResult`.
+`projectPluginMessageDeliveryFact` reads legacy result envelopes into the shared
+delivery shape, retaining partial-delivery status for attachment handling.
+For legacy message sends, an error takes precedence over a message ID unless
+the result confirms partial delivery.
+Use `isDeliveredMessagingToolSendToCurrentSource` for source-route comparisons and
+`extractMessagingToolSourceReplyPayload` to retain attachment metadata and the
+transcript owner's confirmation. Presentation middleware cannot establish new
+delivery facts.
+
+The same runtime entrypoint exports `sanitizeToolArgs` for diagnostic tool
+arguments and event payloads. It redacts nested fields without mutating the input
+and preserves own JSON keys, including `__proto__`; repeated references become
+`"[Circular]"`. Use `sanitizeToolResult` for result presentation, which also applies
+the shared result-size and image-storage rules.
+
 For successful `sessions_spawn` results, use `normalizeAcceptedSessionSpawnResult`
 from `openclaw/plugin-sdk/agent-harness-tool-runtime` and retain its
 `AcceptedSessionSpawn` in the attempt's `acceptedSessionSpawns`. Capture the

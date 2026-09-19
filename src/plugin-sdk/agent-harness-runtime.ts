@@ -246,10 +246,20 @@ export {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
+export {
+  isMessagingTool,
+  isMessagingToolSendAction,
+  isPluginNativeMessagingTool,
+} from "../agents/embedded-agent-messaging.js";
+export {
+  projectPluginMessageDeliveryFact,
+  readEmbeddedMessageDeliveryFact,
+} from "../agents/embedded-agent-message-delivery.js";
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
   extractToolResultMediaArtifact,
@@ -257,6 +267,7 @@ export {
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
+  sanitizeToolArgs,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
 export {

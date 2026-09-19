@@ -682,16 +682,14 @@ export class CodexToolTranscriptProjection {
     const attribution = resolveCodexLocalRuntimeAttribution(this.params);
     return {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: params.id, name: params.name, arguments: args, input: args },
-      ],
+      content: [{ type: "toolCall", id: params.id, name: params.name, arguments: args }],
       api: attribution.api ?? "openai-chatgpt-responses",
       provider: attribution.provider,
       model: this.params.modelId,
       usage: ZERO_USAGE,
       stopReason: "toolUse",
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as AgentMessage;
+    };
   }
 
   private createToolResultMessage(
@@ -703,25 +701,13 @@ export class CodexToolTranscriptProjection {
       toolCallId: params.id,
       toolName: params.name,
       isError: params.isError,
-      content: [
-        {
-          type: "toolResult",
-          id: params.id,
-          name: params.name,
-          toolName: params.name,
-          toolCallId: params.id,
-          toolUseId: params.id,
-          tool_use_id: params.id,
-          content: text,
-          text,
-        },
-      ],
+      content: [{ type: "text", text }],
       ...(params.details !== undefined ? { details: params.details } : {}),
       ...(params.resultContentSource
         ? { __openclaw: { resultContentSource: params.resultContentSource } }
         : {}),
       timestamp: this.nextTranscriptTimestamp(),
-    } as unknown as Extract<AgentMessage, { role: "toolResult" }>;
+    };
   }
 }
 

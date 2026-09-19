@@ -42,6 +42,28 @@ type ProjectedCodexHistoryMessage = {
   textBytes: number;
 };
 
+function projectCodexHistoryMessage(
+  message: Extract<AgentMessage, { role: "user" | "assistant" }>,
+  text: string,
+): ProjectedCodexHistoryMessage {
+  const phase =
+    message.role === "assistant" &&
+    "phase" in message &&
+    (message.phase === "commentary" || message.phase === "final_answer")
+      ? message.phase
+      : undefined;
+  return {
+    message,
+    responseItem: {
+      type: "message",
+      role: message.role,
+      content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text }],
+      ...(phase ? { phase } : {}),
+    },
+    textBytes: Buffer.byteLength(text, "utf8"),
+  };
+}
+
 function normalizeImportedHistoryText(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -190,22 +212,8 @@ function projectCodexThreadHistory(params: {
               } satisfies AssistantMessage,
               identity,
             )
-          : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
-      projected.push({
-        message,
-        responseItem: {
-          type: "message",
-          role,
-          content: [
-            {
-              type: role === "assistant" ? "output_text" : "input_text",
-              text,
-            },
-          ],
-          ...(role === "assistant" && phase ? { phase } : {}),
-        },
-        textBytes: Buffer.byteLength(text, "utf8"),
-      });
+          : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
+      projected.push(projectCodexHistoryMessage(message, text));
     }
   }
   return projected;
@@ -270,19 +278,19 @@ export function projectBoundedCodexVisibleSessionHistory(
   entries: readonly SessionTranscriptMessageEntry[],
 ): JsonValue[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
-  for (const entry of entries) {
-    if ((entry.role !== "user" && entry.role !== "assistant") || !("content" in entry.message)) {
+  for (const { message } of entries) {
+    if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) {
       continue;
     }
     if (
-      entry.role === "assistant" &&
-      (("stopReason" in entry.message &&
-        (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")) ||
-        "openclawAsyncDelivery" in entry.message)
+      message.role === "assistant" &&
+      (message.stopReason === "aborted" ||
+        message.stopReason === "error" ||
+        "openclawAsyncDelivery" in message)
     ) {
       continue;
     }
-    const content = entry.message.content;
+    const content = message.content;
     const text = normalizeImportedHistoryText(
       typeof content === "string"
         ? content
@@ -299,20 +307,7 @@ export function projectBoundedCodexVisibleSessionHistory(
     if (!text) {
       continue;
     }
-    projected.push({
-      message: entry.message,
-      responseItem: {
-        type: "message",
-        role: entry.role,
-        content: [
-          {
-            type: entry.role === "assistant" ? "output_text" : "input_text",
-            text,
-          },
-        ],
-      },
-      textBytes: Buffer.byteLength(text, "utf8"),
-    });
+    projected.push(projectCodexHistoryMessage(message, text));
   }
   return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
 }
