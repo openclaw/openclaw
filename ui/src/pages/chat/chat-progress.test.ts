@@ -142,6 +142,30 @@ describe("resolveWorkingProgress", () => {
       ),
     ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
   });
+
+  it("uses the attempt start over an in-flight submitted send's message time", () => {
+    // A retried placement keeps the original message timestamp on the queued
+    // initial turn, but the elapsed timer must start from the attempt time.
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        20_000,
+        [
+          {
+            id: "retried-initial",
+            text: "Retried placement",
+            createdAt: 10_000,
+            sendRunId: "message-stable",
+            sendAttempts: 1,
+            sendState: "sending",
+          },
+        ],
+        [],
+        [],
+      ),
+    ).toMatchObject({ runId: "message-stable", startedAt: 20_000 });
+  });
 });
 
 describe("resolveTurnRecap", () => {

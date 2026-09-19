@@ -272,3 +272,40 @@ describe("initial turn Retry after slow placement recovery", () => {
     },
   );
 });
+
+describe("initial turn Retry resets the elapsed timer", () => {
+  it("starts the retried attempt from the retry time, not the failed attempt start", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        // Placement stays pre-active so the retried entry remains observable.
+        return { session: { placement: undefined } };
+      }
+      if (method === "sessions.reclaim") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const { startup, input } = await restorePausedStartup(request);
+    try {
+      // Restoring from persisted recovery stamps the entry with the current time.
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        action: "retry",
+        startedAt: 10_000,
+      });
+
+      vi.setSystemTime(20_000);
+      startup.retry(input.recovery.sessionKey);
+      await flushStartupMicrotasks();
+
+      // The retried attempt resets its elapsed timer...
+      expect(startup.get(input.recovery.sessionKey)?.startedAt).toBe(20_000);
+      // ...while the queued message keeps its original creation time.
+      expect(startup.get(input.recovery.sessionKey)?.initialTurn?.createdAt).toBe(10_000);
+    } finally {
+      startup.dispose();
+    }
+  });
+});
