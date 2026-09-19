@@ -115,3 +115,6 @@ export const CLAUDE_CLI_SESSION_ID_FIELDS = [
   "conversation_id",
   "conversationId",
 ] as const;
+
+/** Claude Code registers bundled OpenClaw MCP tools under this name prefix. */
+export const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
