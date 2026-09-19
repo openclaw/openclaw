@@ -27,10 +27,8 @@ import {
   acquireStateDatabaseHandleExclusion,
 } from "../infra/state-database-coordinator.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  assertOpenClawStateDatabaseNotQuarantined,
-  type OpenClawQuarantineReadCleanupError,
-} from "./openclaw-quarantine-store.js";
+import { assertOpenClawDatabaseNotQuarantined } from "./openclaw-quarantine-admission.js";
+import type { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-store.js";
 import {
   createOpenClawStateDatabaseAsyncLifecycle,
   getOpenClawDatabaseMaintenanceScope,
@@ -416,7 +414,7 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
 ): void {
   assertOpenClawStateDatabaseOpenAllowed(pathname);
-  assertOpenClawStateDatabaseNotQuarantined(pathname, env, onNativeCleanupFailure);
+  assertOpenClawDatabaseNotQuarantined("state", pathname, env, onNativeCleanupFailure);
 }
 
 /** Explicit retirement can checkpoint WAL and must join the lifecycle writer gate. */

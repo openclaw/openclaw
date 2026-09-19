@@ -1076,6 +1076,7 @@ src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db.paths.ts
+src/state/openclaw-quarantine-admission.ts
 src/state/openclaw-quarantine-store.ts
 src/state/openclaw-state-db-additive-columns.ts
 src/state/openclaw-state-db-async-lifecycle.ts

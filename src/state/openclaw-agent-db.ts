@@ -100,11 +100,8 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  createOpenClawDatabaseVerificationError,
-  readOpenClawDatabaseQuarantine,
-} from "./openclaw-quarantine-store.js";
+import { assertOpenClawDatabaseNotQuarantined } from "./openclaw-quarantine-admission.js";
+import { clearOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -266,23 +263,13 @@ function* openOpenClawAgentDatabaseSteps(
   if (terminalFailure) {
     throw terminalFailure;
   }
-  let persistedFailure: Error | undefined;
   try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env: databaseOptions.env });
-    if (quarantine) {
-      persistedFailure = createOpenClawDatabaseVerificationError(
-        "agent",
-        pathname,
-        quarantine.reason,
-      );
+    assertOpenClawDatabaseNotQuarantined("agent", pathname, databaseOptions.env ?? process.env);
+  } catch (error) {
+    if (error instanceof Error) {
+      recordOpenClawAgentDatabaseOpenFailure(pathname, error);
     }
-  } catch {
-    // A broken quarantine store must not brick every agent open.
-    // The process latch and daily verifier still cover known damage.
-  }
-  if (persistedFailure) {
-    recordOpenClawAgentDatabaseOpenFailure(pathname, persistedFailure);
-    throw persistedFailure;
+    throw error;
   }
   if (cached) {
     // A closed handle can leave Kysely and WAL helpers cached; clear both before reopening.
