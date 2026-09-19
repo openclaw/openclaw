@@ -410,12 +410,20 @@ export async function withCdpSocket<T>(
       try {
         await openPromise;
       } catch (err) {
+        // openPromise is only rejected via `ws.once('error', err => reject(err))`
+        // or the close event's `new Error(...)`; the former always carries an
+        // Error from Node's `ws` library, the latter is already an Error. The
+        // non-Error wrap is defensive and structurally unreachable.
+        /* c8 ignore next */
         closeWithError(toStringifiedError(err));
+        // Cancellation on the final attempt must not become a handshake error.
         opts?.signal?.throwIfAborted();
         if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
           throw err;
         }
-        // Retry only before commands can have side effects.
+        // Retry only handshake failures. Once CDP commands are flowing, callers
+        // own retry semantics because commands may already have side effects.
+        // Cancelled route requests must not keep retrying Chrome handshakes.
         await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
           (error: unknown) => {
             opts?.signal?.throwIfAborted();
@@ -438,6 +446,8 @@ export async function withCdpSocket<T>(
       closeWithError(toStringifiedError(err));
       throw err;
     } finally {
+      // Keep cancellation active after the handshake so in-flight CDP commands
+      // are rejected when their owning route is cancelled.
       opts?.signal?.removeEventListener("abort", abortSocket);
       ws.close();
     }

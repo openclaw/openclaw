@@ -809,6 +809,39 @@ describe("cdp.helpers internal", () => {
         }),
       ).rejects.toThrow(/callback boom/);
     });
+
+    it("aborts an unanswered command issued after the handshake", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      const commandReceived = new Promise<void>((resolve) => {
+        server.wss.on("connection", (socket) => {
+          socket.on("message", (raw) => {
+            const msg = JSON.parse(rawDataToString(raw)) as { method?: string };
+            if (msg.method === "Test.hang") {
+              resolve();
+            }
+          });
+        });
+      });
+      const controller = new AbortController();
+      const pending = withCdpSocket(
+        server.url,
+        async (send) => {
+          const command = send("Test.hang");
+          await commandReceived;
+          controller.abort(new Error("cancelled"));
+          return await command;
+        },
+        {
+          commandTimeoutMs: 2_000,
+          handshakeRetries: 0,
+          signal: controller.signal,
+          abortScope: "operation",
+        },
+      );
+
+      await expect(pending).rejects.toThrow(/CDP socket closed|WebSocket was closed|cancelled/i);
+    });
   });
 
   describe("createCdpSender error/close event forwarding", () => {
