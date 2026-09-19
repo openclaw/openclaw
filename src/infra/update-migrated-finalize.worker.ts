@@ -40,6 +40,7 @@ import {
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
+import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
@@ -84,13 +85,19 @@ async function finalizeMigratedUpdate(): Promise<void> {
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
+  const omittedOperatorTimeout = isOmittedUpdateTimeout(input.params.opts.timeout, input);
+  if (omittedOperatorTimeout) {
+    input.params.opts.timeout = undefined;
+  }
   const activationTimeoutMs =
     input.params.opts.run?.activationTimeoutMs ??
-    (await resolveUpdateFinalizationTimeoutMs(input.params.updateStepTimeoutMs, {
-      env: input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env,
-      databases: input.params.schemaVersions,
-      pluginCount: Object.keys(input.params.preUpdatePluginInstallRecords).length,
-    }));
+    (omittedOperatorTimeout
+      ? undefined
+      : await resolveUpdateFinalizationTimeoutMs(input.params.updateStepTimeoutMs, {
+          env: input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env,
+          databases: input.params.schemaVersions,
+          pluginCount: Object.keys(input.params.preUpdatePluginInstallRecords).length,
+        }));
   let publishedRecord: UpdateRunRecord | undefined;
   const finalized = await withUpdateCommandTerminalResult(
     async (registerRun) => {
@@ -100,9 +107,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
           input.params.opts.run?.runId ?? "",
           input.params.result.root ?? input.params.root,
           async (fence) => finalizeInput(input, fence, registerRun),
-          {
-            activationTimeoutMs,
-          },
+          activationTimeoutMs === undefined ? undefined : { activationTimeoutMs },
         );
       }
       // The shipped v2026.9.3 producer overrides these selectors for worker

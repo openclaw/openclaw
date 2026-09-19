@@ -193,18 +193,22 @@ deferred-install activation checks.
 Post-core repair Doctor and `openclaw update finalize` run without a separate
 per-Doctor deadline unless the operator supplies `--timeout`. A fresh post-core
 process receives the operator choice separately from its internal step allowance.
-Older targets retain their existing allowance and deadline behavior. Existing
-install, build, plugin-operation and
-enclosing activation deadlines still apply. An explicit `--timeout <seconds>`
-limits each finalization phase and its child commands. Admission and config phases
-scale with shared SQLite state.
+Older targets retain their existing allowance and deadline behavior.
+
+When `--timeout` is omitted, current CLI and RPC finalization do not add an aggregate
+activation deadline. Explicit operator limits and inherited activation allowances
+still apply; older or unrecognized handoffs retain their existing finite-deadline
+behavior. Independent install, build, plugin-operation, readiness, and cleanup
+bounds still apply. An explicit `--timeout <seconds>` limits each finalization phase
+and its child commands. Admission and config phases scale with shared SQLite state.
+
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Serial plugin
-operations retain individual deadlines within the enclosing activation budget. That
-budget uses the measured database sizes, observed candidate startup, plugin count,
-and the caller's step allowance. Migrated finalization receives the same allowance;
-it does not choose a separate default. Expiry reports `update-activation-timeout`
-and retains ownership until writers settle; it does not authorize rollback or restart.
+operations retain individual deadlines. When an aggregate activation budget is
+present, it uses the measured database sizes, observed candidate startup, plugin
+count, and the caller's step allowance. Migrated finalization preserves explicit or
+inherited allowances. Aggregate expiry reports `update-activation-timeout` and
+retains ownership until writers settle; it does not authorize rollback or restart.
 Use `openclaw update status` and Doctor for recovery guidance.
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |

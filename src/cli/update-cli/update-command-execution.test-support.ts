@@ -18,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   hasSchemaRefusal: vi.fn(),
   maybeRestartService: vi.fn(),
   maybeStopService: vi.fn(),
-  prepareMutableUpdate: vi.fn<(env?: NodeJS.ProcessEnv) => Promise<void>>(),
+  prepareMutableUpdate:
+    vi.fn<(env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => Promise<void>>(),
   pluginPreflight: vi.fn(),
   pluginTargets: vi.fn(),
   pluginRecords: vi.fn(),

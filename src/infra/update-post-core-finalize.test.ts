@@ -111,6 +111,20 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(call.timeoutMs).toBeGreaterThanOrEqual(120_000);
   });
 
+  it("leaves forward finalization unbounded when the caller omits its work deadline", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    await expect(
+      runPostCoreFinalizeAfterGatewayUpdate({
+        result: gitOkResult(),
+        resolveEntrypoint: resolveEntrypointOk,
+        spawnFinalize,
+      }),
+    ).resolves.toEqual({ status: "ok", entrypoint: ENTRYPOINT });
+    const call = expectDefined(spawnFinalize.mock.calls[0], "finalizer was started")[0];
+    expect(call.argv).not.toContain("--timeout");
+    expect(call.timeoutMs).toBeUndefined();
+  });
+
   it("strips the gateway service identity from the finalizer child env", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({
@@ -235,8 +249,7 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_OUTPUT_PATH, JSON.stringify({
     expect(call.env.OPENCLAW_UPDATE_EFFECTIVE_CHANNEL).toBe("dev");
     expect(call.argv).not.toContain("--channel");
     expect(call.argv).not.toContain("--timeout");
-    // Doctor has no separate automatic deadline; the enclosing activation is bounded.
-    expect(call.timeoutMs).toBeGreaterThanOrEqual(20 * 60_000);
+    expect(call.timeoutMs).toBeUndefined();
   });
 
   it("passes and removes the pre-update config payload for channel restoration", async () => {

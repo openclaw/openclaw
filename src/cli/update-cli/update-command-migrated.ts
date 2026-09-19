@@ -14,6 +14,7 @@ import {
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -198,23 +199,28 @@ export async function continueMigratedUpdateInFreshProcess(
       const { windowsTaskAutoStartRecovery: _windows, ...serializableStop } = preManagedServiceStop;
       stopState = serializableStop;
     }
-    run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
-      params.updateStepTimeoutMs,
-      {
-        env: params.ownedManagedUpdateEnv ?? run.env,
-        databases: params.schemaVersions,
-        pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
-        nodeRunner: params.packageUpdateNodeRunner,
-      },
-    );
+    if (params.opts.timeout !== undefined) {
+      run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
+        params.updateStepTimeoutMs,
+        {
+          env: params.ownedManagedUpdateEnv ?? run.env,
+          databases: params.schemaVersions,
+          pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
+          nodeRunner: params.packageUpdateNodeRunner,
+        },
+      );
+    }
+    const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
     const { requesterAuthority, executorFence, ...runIdentity } = run;
     const input: MigratedUpdateFinalizationInput = {
+      ...handoff,
       params: {
         ...serializable,
         opts: {
           ...params.opts,
+          timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,
             ...(requesterAuthority
@@ -239,8 +245,8 @@ export async function continueMigratedUpdateInFreshProcess(
         env: workerEnv,
         input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
         beforeInput: bindChild,
-        // This continuation includes bounded plugin steps as well as service
-        // verification; the whole-process bound must exceed one step's budget.
+        // Only an operator deadline bounds forward finalization. Probes and
+        // cancellation settlement keep their separate finite allowances.
         timeoutMs: run.activationTimeoutMs,
         killProcessTree: true,
         requireProcessTreeExtinction: true,

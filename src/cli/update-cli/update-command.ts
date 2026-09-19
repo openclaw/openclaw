@@ -502,10 +502,13 @@ async function updateCommandInternal(
   const activateCurrentCore = async () => {
     run.executorFence = await executor.enter(root, {
       preflight: true,
-      activationTimeoutMs: (run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
-        updateStepTimeoutMs,
-        { env: run.env, pluginCount },
-      )),
+      activationTimeoutMs: (run.activationTimeoutMs ??=
+        timeoutMs === undefined
+          ? undefined
+          : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
+              env: run.env,
+              pluginCount,
+            })),
     });
   };
   if (packageAlreadyCurrent) {

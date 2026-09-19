@@ -38,6 +38,51 @@ const { executionParams, inspectOrStopService, mocks, schemaContext, successfulU
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
+  it.each(
+    (["package", "git"] as const).flatMap((kind) =>
+      [undefined, 30_000].map((timeoutMs) => ({ kind, timeoutMs })),
+    ),
+  )(
+    "preserves aggregate work intent at $kind activation ($timeoutMs)",
+    async ({ kind, timeoutMs }) => {
+      const budgets = await import("../../infra/update-finalization-budget.js");
+      const budget = vi
+        .spyOn(budgets, "resolveUpdateFinalizationTimeoutMs")
+        .mockResolvedValue(180_000);
+      mocks.runPackageUpdate.mockImplementation(async ({ beforeActivate }) => {
+        await beforeActivate();
+        return successfulUpdate;
+      });
+      mocks.runGitUpdate.mockImplementation(
+        async (
+          params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+        ) => {
+          if (!params.inspectGitTarget || !params.beforeGitMutation) {
+            throw new Error("Expected both real Git admission callbacks");
+          }
+          const target = { schemaVersions: { state: 15, agent: 19 } };
+          await params.inspectGitTarget(target);
+          await params.beforeGitMutation(target);
+          return { ...successfulUpdate, mode: "git" };
+        },
+      );
+
+      const execution = await executeMutableUpdate({
+        ...executionParams(kind),
+        timeoutMs,
+        updateStepTimeoutMs: timeoutMs ?? 30 * 60_000,
+      });
+
+      expect(execution?.result.status).toBe("ok");
+      expect(execution?.mutationStarted).toBe(true);
+      expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(kind === "package" ? 2 : 3);
+      expect(mocks.prepareMutableUpdate.mock.calls.at(-1)?.[1]).toBe(
+        timeoutMs === undefined ? undefined : 180_000,
+      );
+      expect(budget).toHaveBeenCalledTimes(timeoutMs === undefined ? 0 : 1);
+    },
+  );
+
   it.each(["package", "git"] as const)(
     "continues the %s update with the recorded readiness warning instead of inference repair",
     async (kind) => {
