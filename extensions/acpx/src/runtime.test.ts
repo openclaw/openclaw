@@ -1159,7 +1159,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     },
   );
 
-  it("does not retry when ACPX rejects an explicitly unsupported model id", async () => {
+  it("keeps rejecting an unsupported model id after reading the advertised catalog", async () => {
     const baseStore: TestSessionStore = makeEmptySessionStore();
     const { runtime, delegate } = makeRuntime(baseStore, {
       agentRegistry: {
@@ -1184,7 +1184,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         model: "unknown/model",
       }),
     ).rejects.toThrow("did not advertise that model");
-    expect(ensure).toHaveBeenCalledTimes(1);
+    // One model-less attempt reads the catalog; it cannot turn the rejection into success.
+    expect(ensure).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry an unrelated error with similar wording", async () => {
