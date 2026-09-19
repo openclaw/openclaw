@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SpeechProviderConfig, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type SpeechSynthesisTarget = SpeechSynthesisRequest["target"];
 
@@ -175,6 +175,21 @@ function expectArgsContainSequence(args: string[], sequence: string[]) {
 }
 
 describe("buildCliSpeechProvider", () => {
+  beforeAll(async () => {
+    // Prepare the real lazy process/worker runtime before timing its callers.
+    // A cold compiled-worker generation can take minutes; the timeout and
+    // cleanup cases below must still keep their original execution deadlines.
+    const fixture = createCliFixture();
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, { stdin: true, outputFormat: "wav" }),
+      });
+      expect(parseAudioPayload(result).stdin).toBe("hello world");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  }, 360_000);
+
   beforeEach(() => {
     runFfmpegMock.mockImplementation(async (args) => {
       const outputPath = args.at(-1);

@@ -83,6 +83,7 @@ function applyTemplate(str: string, ctx: Record<string, string | undefined>): st
 function parseCommand(cmdStr: string): { cmd: string; initialArgs: string[] } {
   const parts: string[] = [];
   let current = "";
+  let tokenStarted = false;
   let inQuote = false;
   let quoteChar = "";
 
@@ -94,18 +95,22 @@ function parseCommand(cmdStr: string): { cmd: string; initialArgs: string[] } {
         current += char;
       }
     } else if (char === '"' || char === "'") {
+      // Quotes can start an intentional empty argument, not just wrap text.
+      tokenStarted = true;
       inQuote = true;
       quoteChar = char;
     } else if (char === " " || char === "\t") {
-      if (current) {
+      if (tokenStarted) {
         parts.push(current);
         current = "";
+        tokenStarted = false;
       }
     } else {
+      tokenStarted = true;
       current += char;
     }
   }
-  if (current) {
+  if (tokenStarted) {
     parts.push(current);
   }
   return { cmd: parts[0] || "", initialArgs: parts.slice(1) };
