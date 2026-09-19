@@ -22,7 +22,7 @@ function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | un
   return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
-/** Merges caller network policy with the Discord-owned CDN allowlist. */
+/** Merges caller hostname lists with the Discord CDN allowlist. */
 export function resolveDiscordCdnPolicy(policy?: SsrFPolicy): SsrFPolicy {
   if (!policy) {
     return DISCORD_MEDIA_SSRF_POLICY;
@@ -35,13 +35,26 @@ export function resolveDiscordCdnPolicy(policy?: SsrFPolicy): SsrFPolicy {
     DISCORD_MEDIA_SSRF_POLICY.allowedHostnames,
     policy.allowedHostnames,
   );
+  const {
+    allowPrivateNetwork: _allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: _dangerouslyAllowPrivateNetwork,
+    allowIpv6UniqueLocalRange: callerAllowIpv6UniqueLocalRange,
+    hostnameAllowlist: _hostnameAllowlist,
+    allowedHostnames: _allowedHostnames,
+    allowRfc2544BenchmarkRange: _allowRfc2544BenchmarkRange,
+    ...callerRest
+  } = policy;
   return {
     ...DISCORD_MEDIA_SSRF_POLICY,
-    ...policy,
+    ...callerRest,
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
     allowRfc2544BenchmarkRange:
       Boolean(DISCORD_MEDIA_SSRF_POLICY.allowRfc2544BenchmarkRange) ||
       Boolean(policy.allowRfc2544BenchmarkRange),
+    // IPv6 fake-ip exception (fc00::/7) is the counterpart to RFC2544, not private LAN.
+    allowIpv6UniqueLocalRange:
+      Boolean(DISCORD_MEDIA_SSRF_POLICY.allowIpv6UniqueLocalRange) ||
+      Boolean(callerAllowIpv6UniqueLocalRange),
   };
 }
