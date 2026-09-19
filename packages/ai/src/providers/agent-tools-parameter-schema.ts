@@ -121,14 +121,65 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
     : Array.isArray(record.oneOf)
       ? record.oneOf
       : null;
-  if (variants) {
-    const values = variants.flatMap((variant) => {
-      const extracted = extractEnumValues(variant);
-      return extracted ?? [];
-    });
-    return values.length > 0 ? values : undefined;
+  if (!variants) {
+    return undefined;
   }
-  return undefined;
+  // Variant chains are external input and can nest deeper than the call stack, so expansion
+  // runs depth-first on an explicit stack (#141306). Leave markers bound cyclic object graphs
+  // the way the call stack bounded them before.
+  type Pending = { kind: "visit"; node: unknown } | { kind: "leave"; node: object };
+  const ancestors = new Set<object>();
+  const values: unknown[] = [];
+  const pending: Pending[] = [];
+  for (let index = variants.length - 1; index >= 0; index -= 1) {
+    pending.push({ kind: "visit", node: variants[index] });
+  }
+  let current: Pending | undefined;
+  while ((current = pending.pop()) !== undefined) {
+    if (current.kind === "leave") {
+      ancestors.delete(current.node);
+      continue;
+    }
+    const node = current.node;
+    // Arrays contribute nothing here (no enum/const/composition keys), so the record guard
+    // skipping them matches the recursion, which read the same missing keys as undefined.
+    if (!isSchemaRecord(node)) {
+      continue;
+    }
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
+    if (Array.isArray(node.enum)) {
+      // Append per entry: spreading the enum into push arguments reintroduces the engine's
+      // argument-count limit on wide enums, which the original flatMap did not hit.
+      for (const enumValue of node.enum) {
+        values.push(enumValue);
+      }
+      ancestors.delete(node);
+      continue;
+    }
+    if ("const" in node) {
+      values.push(node.const);
+      ancestors.delete(node);
+      continue;
+    }
+    const childVariants = Array.isArray(node.anyOf)
+      ? node.anyOf
+      : Array.isArray(node.oneOf)
+        ? node.oneOf
+        : null;
+    if (!childVariants) {
+      ancestors.delete(node);
+      continue;
+    }
+    pending.push({ kind: "leave", node });
+    for (let index = childVariants.length - 1; index >= 0; index -= 1) {
+      pending.push({ kind: "visit", node: childVariants[index] });
+    }
+  }
+  return values.length > 0 ? values : undefined;
+}
 }
 
 function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
