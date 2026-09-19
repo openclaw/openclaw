@@ -47,6 +47,8 @@ const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMirrorMessageByIdentity: vi.fn(),
 }));
 
+const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
 
@@ -256,6 +258,103 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
     },
   );
+
+  it("does not deliver a finalizer reply that quotes the recovery nudge", async () => {
+    const attempt = settledFailedAttempt();
+    backendMocks.runSettledFinalization
+      .mockImplementationOnce(async (params: EmbeddedRunAttemptParams) => ({
+        outcome: "answered",
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({
+            content: [
+              {
+                type: "text",
+                text:
+                  "I'll do sqlite, sizes, logs. Wait - the system says " +
+                  `'${params.prompt}' That's a strong instruction to PRODUCE THE FINAL ANSWER NOW.`,
+              },
+            ],
+          }),
+        },
+      }))
+      .mockResolvedValueOnce({
+        outcome: "answered",
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
+          }),
+        },
+      });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "The exec tool failed: post-processing error." }),
+    ]);
+    expect(result.prepared.payloadsWithToolMedia?.[0]?.text).not.toContain(
+      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
+  });
+
+  it("does not deliver recovery-nudge quotes when they persist after one retry", async () => {
+    const attempt = settledFailedAttempt();
+    backendMocks.runSettledFinalization.mockImplementation(
+      async (params: EmbeddedRunAttemptParams) => ({
+        outcome: "answered",
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({
+            content: [
+              {
+                type: "text",
+                text: `Continue from the current transcript: ${params.prompt}`,
+              },
+            ],
+          }),
+        },
+      }),
+    );
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("failed");
+    expect(result.attempt).toBe(attempt);
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("failed"), isError: true }),
+    ]);
+    expect(result.prepared.payloadsWithToolMedia?.[0]?.text).not.toContain(
+      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    );
+  });
+
+  it("still delivers a real user-facing finalizer answer", async () => {
+    const attempt = settledFailedAttempt();
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: {
+        assistant: buildEmbeddedRunnerAssistant({
+          content: [
+            {
+              type: "text",
+              text: "I continued from the tool results. The exec tool failed: post-processing error.",
+            },
+          ],
+        }),
+      },
+    });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({
+        text: "I continued from the tool results. The exec tool failed: post-processing error.",
+      }),
+    ]);
+  });
 
   it("replaces a settled failed-tool warning with failure-honest final output", async () => {
     const attempt = settledFailedAttempt();
