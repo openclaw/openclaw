@@ -24,6 +24,15 @@ describe("Codex app-server image payload sanitizer", () => {
     expect(invalidInlineImageText("codex user input")).toContain("invalid inline image data");
   });
 
+  it("sanitizes deeply nested history without exhausting the stack", () => {
+    let nested: unknown = "leaf";
+    for (let depth = 0; depth < 20_000; depth += 1) {
+      nested = { nested };
+    }
+
+    expect(() => sanitizeCodexHistoryImagePayloads(nested, "deep history")).not.toThrow();
+  });
+
   it("reuses unchanged history including canonical images and unknown nested values", () => {
     const history = Object.freeze([
       Object.freeze({

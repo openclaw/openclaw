@@ -58,36 +58,126 @@ function sanitizeImageContentRecord(
   return undefined;
 }
 
+type SanitizerSlot = {
+  parent: SanitizerContainerFrame;
+  key: string | number;
+};
+
+type SanitizerContainerFrame = {
+  kind: "container";
+  original: unknown[] | Record<string, unknown>;
+  keys: Array<string | number>;
+  index: number;
+  children: Map<string | number, unknown>;
+  slot?: SanitizerSlot;
+};
+
+type SanitizerFrame =
+  | { kind: "visit"; value: unknown; slot?: SanitizerSlot }
+  | SanitizerContainerFrame;
+
+function assignSanitizedResult(
+  slot: SanitizerSlot | undefined,
+  result: unknown,
+  setRoot: (value: unknown) => void,
+): void {
+  if (slot) {
+    slot.parent.children.set(slot.key, result);
+  } else {
+    setRoot(result);
+  }
+}
+
 /** Sanitizes images without copying unchanged history or mutating its owned snapshot. */
 export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T {
-  if (Array.isArray(value)) {
-    let next: unknown[] | undefined;
-    for (let index = 0; index < value.length; index++) {
-      const child = sanitizeCodexHistoryImagePayloads(value[index], label);
-      if (child !== value[index]) {
-        (next ??= value.slice())[index] = child;
-      }
+  let result: unknown;
+  const stack: SanitizerFrame[] = [{ kind: "visit", value }];
+
+  while (stack.length > 0) {
+    const frame = stack.at(-1);
+    if (!frame) {
+      break;
     }
-    return (next ?? value) as T;
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
+    if (frame.kind === "visit") {
+      stack.pop();
+      if (Array.isArray(frame.value)) {
+        stack.push({
+          kind: "container",
+          original: frame.value,
+          keys: Array.from({ length: frame.value.length }, (_, index) => index),
+          index: 0,
+          children: new Map(),
+          slot: frame.slot,
+        });
+        continue;
+      }
 
-  const imageRecord = sanitizeImageContentRecord(value, label);
-  if (imageRecord) {
-    return imageRecord as T;
-  }
+      if (!isRecord(frame.value)) {
+        assignSanitizedResult(frame.slot, frame.value, (next) => {
+          result = next;
+        });
+        continue;
+      }
 
-  let next: Record<string, unknown> | undefined;
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) {
+      const imageRecord = sanitizeImageContentRecord(frame.value, label);
+      if (imageRecord) {
+        assignSanitizedResult(frame.slot, imageRecord, (next) => {
+          result = next;
+        });
+        continue;
+      }
+
+      stack.push({
+        kind: "container",
+        original: frame.value,
+        keys: Object.keys(frame.value),
+        index: 0,
+        children: new Map(),
+        slot: frame.slot,
+      });
       continue;
     }
-    const child = sanitizeCodexHistoryImagePayloads(value[key], label);
-    if (child !== value[key]) {
-      (next ??= { ...value })[key] = child;
+
+    if (frame.index < frame.keys.length) {
+      const key = frame.keys[frame.index++];
+      if (key === undefined) {
+        continue;
+      }
+      if (Array.isArray(frame.original) && !Object.hasOwn(frame.original, key)) {
+        continue;
+      }
+      const child = Array.isArray(frame.original)
+        ? frame.original[key as number]
+        : frame.original[key as string];
+      stack.push({ kind: "visit", value: child, slot: { parent: frame, key } });
+      continue;
     }
+
+    stack.pop();
+    let next: unknown[] | Record<string, unknown> | undefined;
+    for (const key of frame.keys) {
+      if (!frame.children.has(key)) {
+        continue;
+      }
+      const child = frame.children.get(key);
+      const originalChild = Array.isArray(frame.original)
+        ? frame.original[key as number]
+        : frame.original[key as string];
+      if (child !== originalChild) {
+        const clone =
+          next ?? (Array.isArray(frame.original) ? frame.original.slice() : { ...frame.original });
+        next = clone;
+        if (Array.isArray(clone)) {
+          clone[key as number] = child;
+        } else {
+          clone[key as string] = child;
+        }
+      }
+    }
+    assignSanitizedResult(frame.slot, next ?? frame.original, (root) => {
+      result = root;
+    });
   }
-  return (next ?? value) as T;
+
+  return result as T;
 }
