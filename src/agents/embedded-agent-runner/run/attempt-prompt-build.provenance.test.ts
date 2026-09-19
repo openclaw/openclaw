@@ -107,6 +107,8 @@ async function assembleWithCapturedHookCtx(
   });
   const setLeasedSteering =
     vi.fn<Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["setLeasedSteering"]>();
+  const setLeasedExecSteering =
+    vi.fn<Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["setLeasedExecSteering"]>();
   const prompt = await prepareEmbeddedAttemptPromptAssembly({
     attempt,
     activeSession: session,
@@ -121,8 +123,9 @@ async function assembleWithCapturedHookCtx(
     applyPromptBuildToolsAllow: () => [],
     setActiveSessionSystemPrompt: vi.fn(),
     setLeasedSteering,
+    setLeasedExecSteering,
   });
-  return { captured, prompt, setLeasedSteering };
+  return { captured, prompt, setLeasedSteering, setLeasedExecSteering };
 }
 
 describe("prompt-build hook context input provenance", () => {

@@ -429,6 +429,7 @@ describe("attempt projection persistence through settlement", () => {
           modelPrompt: "continue",
           onFinalPromptText: () => {},
           onSteeringAcknowledged: () => {},
+          onExecSteeringAcknowledged: () => {},
           persistToolResultProjections: async () => {
             persistToolResultProjections(projectionState, (customType, data) =>
               manager.appendCustomEntry(customType, data),

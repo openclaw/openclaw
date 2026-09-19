@@ -5,6 +5,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { ackLeasedExecSteeringItems } from "../../exec-steering-queue.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
 import {
@@ -63,6 +64,11 @@ type SteeringLease = {
   runIds: readonly string[];
   isCurrent: () => boolean;
 };
+type ExecSteeringLease = {
+  leaseId: string;
+  itemIds: readonly string[];
+  isCurrent: () => boolean;
+};
 
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
@@ -82,9 +88,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   compactionRequestBudget?: CompactionRequestBudget;
   images: ImageContent[];
   leasedSteering?: SteeringLease;
+  leasedExecSteering?: ExecSteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
   onSteeringAcknowledged: () => void;
+  onExecSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
   promptActiveSession: PromptActiveSession;
@@ -101,10 +109,18 @@ export async function submitEmbeddedAttemptPrompt(input: {
 }): Promise<void> {
   const { activeSession, attempt } = input;
   let pendingSteering = input.leasedSteering;
+  let pendingExecSteering = input.leasedExecSteering;
   const assertSteeringCurrent = () => {
     if (pendingSteering && !pendingSteering.isCurrent()) {
       throw new Error(
         "The queued child results lost authority before requester prompt submission.",
+      );
+    }
+    if (pendingExecSteering && !pendingExecSteering.isCurrent()) {
+      // A concurrent heartbeat or terminal poll acknowledged this occurrence;
+      // reject the stale exec completion before it reaches a provider request.
+      throw new Error(
+        "The queued exec completion lost authority before requester prompt submission.",
       );
     }
   };
@@ -125,6 +141,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       // Pre-prompt compaction has not consumed the deferred answer.
       if (captureCurrentPromptForModel) {
         pendingSteering = undefined;
+        pendingExecSteering = undefined;
       }
       return stream;
     };
@@ -217,6 +234,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ackPendingAgentSteeringItems(input.leasedSteering);
       input.onSteeringAcknowledged();
     }
+    if (input.leasedExecSteering) {
+      ackLeasedExecSteeringItems(input.leasedExecSteering);
+      input.onExecSteeringAcknowledged();
+    }
   } finally {
     cleanupProviderPromptHistoryTransform();
     cleanupModelPromptTransform();
@@ -283,12 +304,14 @@ export async function handleEmbeddedAttemptPromptError(input: {
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => void;
   markYieldAborted: () => void;
   releaseLeasedSteering: (error?: unknown) => void;
+  releaseLeasedExecSteering: (error?: unknown) => void;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
 }): Promise<EmbeddedAttemptPromptErrorOutcome> {
   input.releaseLeasedSteering(input.error);
+  input.releaseLeasedExecSteering(input.error);
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.

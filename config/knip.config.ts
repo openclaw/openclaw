@@ -560,6 +560,9 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
+    // Exec-completion steering: focused unit tests lease, ack, release, and
+    // reset this queue seam, while production imports the singleton directly.
+    "src/agents/exec-steering-queue.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {

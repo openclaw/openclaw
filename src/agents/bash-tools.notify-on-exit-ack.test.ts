@@ -15,6 +15,10 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import {
+  hasPendingExecSteeringItems,
+  resetExecSteeringQueueForTest,
+} from "./exec-steering-queue.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -52,6 +56,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetExecSteeringQueueForTest();
   resetSystemEventsForTest();
   vi.clearAllMocks();
   vi.restoreAllMocks();
@@ -180,6 +185,26 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
     acknowledgeInternalToolResult(successorResult);
     expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
   });
+});
+
+it("retires the steered copy when an acknowledged poll consumes the same occurrence", async () => {
+  const process = await startNotifyRun();
+  await process.finish();
+
+  // The production notify path enqueues both representations of one completion.
+  expect(contexts()).toEqual([`exec:${process.run.session.id}`]);
+  expect(
+    hasPendingExecSteeringItems({ requesterSessionKey: QUEUE_KEY, ownerAgentId: "main" }),
+  ).toBe(true);
+
+  acknowledgeInternalToolResult(await poll(process.run.session.id));
+
+  // The acknowledged poll consumed the durable event, so the steering copy must
+  // be gone too: exactly one delivery across steering, heartbeat, and poll.
+  expect(contexts()).toEqual([]);
+  expect(
+    hasPendingExecSteeringItems({ requesterSessionKey: QUEUE_KEY, ownerAgentId: "main" }),
+  ).toBe(false);
 });
 
 it("keeps an unpolled completion deliverable after finished-session cleanup", async () => {

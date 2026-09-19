@@ -9,7 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSet } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -40,6 +40,65 @@ type SessionQueue = {
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
 
 const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-and-restart");
+
+/**
+ * One consumer's reaction to a durable system event settling.
+ *
+ * Receives the globally-unique ids ({@link SystemEvent.id}) removed from a
+ * session queue by any consumption path (steering ack, heartbeat settlement,
+ * terminal poll, reset). A registered observer routes every consumer through a
+ * single settlement point so consuming an occurrence on one path invalidates
+ * the copies held by the others. Keyed on the durable id, never the reusable
+ * `contextKey`, so a re-enqueued occurrence sharing a context cannot retire the
+ * wrong copy.
+ */
+type SystemEventConsumptionObserver = (params: {
+  sessionKey: string;
+  consumedEventIds: readonly string[];
+}) => void;
+
+const SYSTEM_EVENT_CONSUMPTION_OBSERVERS_KEY = Symbol.for(
+  "openclaw.systemEvents.consumptionObservers",
+);
+
+// A process-wide, lifecycle-owned set so duplicated runtime chunks share one
+// settlement fan-out and a restart (or a test reset) clears stale observers
+// instead of leaking them across files.
+const consumptionObservers = resolveGlobalSet<SystemEventConsumptionObserver>(
+  SYSTEM_EVENT_CONSUMPTION_OBSERVERS_KEY,
+  "close-and-restart",
+);
+
+/**
+ * Registers a settlement observer and returns a one-call unregister handle.
+ *
+ * Idempotent per callback identity: registering the same function twice keeps a
+ * single membership. Consumers register lazily (on first use) so the observer
+ * set is only populated in processes that actually settle exec completions.
+ */
+export function registerSystemEventConsumptionObserver(
+  observer: SystemEventConsumptionObserver,
+): () => void {
+  consumptionObservers.add(observer);
+  return () => {
+    consumptionObservers.delete(observer);
+  };
+}
+
+function notifySystemEventConsumption(sessionKey: string, consumed: readonly SystemEvent[]): void {
+  if (consumptionObservers.size === 0) {
+    return;
+  }
+  const consumedEventIds = consumed
+    .map((event) => event.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (consumedEventIds.length === 0) {
+    return;
+  }
+  for (const observer of consumptionObservers) {
+    observer({ sessionKey, consumedEventIds });
+  }
+}
 
 type SystemEventOptions = {
   sessionKey: string;
@@ -167,12 +226,41 @@ export function enqueueSystemEventWithReceipt(
   options: SystemEventOptions,
   receiptOptions?: ReceiptOptions,
 ): (() => boolean) | null {
+  return enqueueSystemEventReceipt(text, options, receiptOptions)?.remove ?? null;
+}
+
+/** One durable occurrence's globally-unique id plus its one-use removal handle. */
+export type SystemEventReceipt = {
+  /** Globally-unique id ({@link SystemEvent.id}) of the enqueued occurrence. */
+  eventId: string;
+  /** Removes exactly this occurrence by its id; returns true if it was still queued. */
+  remove: () => boolean;
+};
+
+/**
+ * Enqueues one occurrence and returns its durable id alongside a one-use
+ * removal handle keyed on that id.
+ *
+ * Exposing the id lets a second representation (the exec steering copy) bind to
+ * the same globally-unique identity instead of the reusable `contextKey`, so
+ * settling one representation retires exactly the other and never a re-enqueued
+ * occurrence that happens to share a context.
+ */
+export function enqueueSystemEventReceipt(
+  text: string,
+  options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
+): SystemEventReceipt | null {
   const event = enqueueOwnedSystemEventEntry(text, options, receiptOptions);
-  if (!event) {
+  if (!event || event.id === undefined) {
     return null;
   }
   const sessionKey = requireSessionKey(options.sessionKey);
-  return () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0;
+  const eventId = event.id;
+  return {
+    eventId,
+    remove: () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0,
+  };
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
@@ -185,11 +273,13 @@ function drainSystemEventsWith<T>(sessionKey: string, project: (event: SystemEve
   if (!entry || entry.queue.length === 0) {
     return [];
   }
+  const drained = entry.queue.slice();
   const out = entry.queue.map(project);
   // Reentrant consumers may hold this array; clear it in place before removing the queue.
   entry.queue.length = 0;
   entry.lastContextKey = null;
   queues.delete(key);
+  notifySystemEventConsumption(key, drained);
   return out;
 }
 
@@ -257,11 +347,38 @@ export function consumeSelectedSystemEventEntries(
     }
   }
   resetQueueState(key, entry);
+  // A single settlement fan-out: any consumer removing an occurrence lets the
+  // others invalidate their copies of the same durable id.
+  notifySystemEventConsumption(key, removed);
   return removed;
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventsWith(sessionKey, (event) => event.text);
+}
+
+/**
+ * Removes every pending event for one context key under a session queue.
+ *
+ * Used to retire a durable completion event once its shared steering copy has
+ * been delivered, so a later heartbeat cannot re-deliver the same occurrence.
+ * Returns the number of events removed.
+ */
+export function removeSystemEventsByContextKey(sessionKey: string, contextKey: string): number {
+  const entry = getSessionQueue(sessionKey);
+  if (!entry || entry.queue.length === 0) {
+    return 0;
+  }
+  const key = requireSessionKey(sessionKey);
+  const normalized = normalizeContextKey(contextKey);
+  if (normalized === null) {
+    return 0;
+  }
+  const matching = entry.queue.filter((event) => (event.contextKey ?? null) === normalized);
+  if (matching.length === 0) {
+    return 0;
+  }
+  return consumeSelectedSystemEventEntries(key, matching).length;
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
@@ -288,4 +405,9 @@ export function resolveSystemEventDeliveryContext(
 
 export function resetSystemEventsForTest() {
   queues.clear();
+  // Clear settlement observers too: the observer set is a module-global
+  // singleton, so a consumer registered in one test file would otherwise leak
+  // into the next and fire against its unrelated queues. Resetting here keeps
+  // the fan-out scoped to whichever test currently owns it.
+  consumptionObservers.clear();
 }

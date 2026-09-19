@@ -5,7 +5,7 @@ import type { ManagedRun } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
-const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
@@ -14,9 +14,20 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
-}));
+// Spy only on enqueueSystemEventReceipt; keep every other export real. The
+// exec-steering queue singleton is a process-wide globalThis object that
+// persists across test files in a worker, and its observer/context-key removal
+// bind to whatever system-events module it first imported. Replacing the whole
+// module with stubs would leak no-op bindings into a later suite that uses the
+// real queue; importActual keeps those real so no cross-file contamination
+// occurs regardless of file execution order.
+vi.mock("../infra/system-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/system-events.js")>();
+  return {
+    ...actual,
+    enqueueSystemEventReceipt: enqueueSystemEventReceiptMock,
+  };
+});
 
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
@@ -37,8 +48,8 @@ beforeAll(async () => {
 beforeEach(() => {
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
-  enqueueSystemEventWithReceiptMock.mockReset();
-  enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
+  enqueueSystemEventReceiptMock.mockReset();
+  enqueueSystemEventReceiptMock.mockReturnValue({ eventId: "evt-test", remove: vi.fn(() => true) });
   supervisorMock.spawn.mockReset();
 });
 
@@ -87,7 +98,7 @@ function runtimeManagedRun(input: SpawnInput): ManagedRun {
 }
 
 function requireSystemEventCall(): [string, Record<string, unknown>] {
-  const call = enqueueSystemEventWithReceiptMock.mock.calls[0];
+  const call = enqueueSystemEventReceiptMock.mock.calls[0];
   if (!call) {
     throw new Error("expected system event call");
   }
@@ -160,7 +171,7 @@ describe("exec notifyOnExit suppression", () => {
     const outcome = await runBackgroundedExit({ reason: "manual-cancel" });
 
     expect(outcome.status).toBe("failed");
-    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventReceiptMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 

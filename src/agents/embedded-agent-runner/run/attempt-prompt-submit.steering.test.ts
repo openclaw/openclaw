@@ -132,6 +132,7 @@ function submissionInput(
     transcriptPrompt: prompt,
     onFinalPromptText: vi.fn(),
     onSteeringAcknowledged: vi.fn(),
+    onExecSteeringAcknowledged: vi.fn(),
     persistToolResultProjections: vi.fn(async () => {}),
     runtimeOnly: false,
     sessionPromptState,
@@ -236,6 +237,7 @@ it("rejects a changed completion source before first delivery and releases its l
   const input = submissionInput(leasedSteering);
   child.execution.outcome = { status: "error", error: "Completion invalidated." };
   expect(leasedSteering.isCurrent()).toBe(false);
+  const releaseLeasedExecSteering = vi.fn();
   const releaseLeasedSteering = vi.fn((error?: unknown) => {
     releasePendingAgentSteeringItems({ ...leasedSteering, error: String(error) });
   });
@@ -252,6 +254,7 @@ it("rejects a changed completion source before first delivery and releases its l
       handleMidTurnPrecheckRequest: vi.fn(),
       markYieldAborted: vi.fn(),
       releaseLeasedSteering,
+      releaseLeasedExecSteering,
       withOwnedTranscriptWrite: async (operation) => operation(),
       yieldAbortSettled: null,
       yieldDetected: false,

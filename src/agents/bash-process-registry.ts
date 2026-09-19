@@ -14,6 +14,7 @@ import type {
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
+import { invalidateExecSteeringByOccurrence } from "./exec-steering-queue.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -339,6 +340,7 @@ export function recordNotifyOnExitRemoval(
 ): void {
   if (session.terminalPollObserved) {
     remove();
+    invalidateExecSteeringByOccurrence(`exec:${session.id}`);
     return;
   }
   session.notifyOnExitRemoval = remove;
@@ -346,10 +348,17 @@ export function recordNotifyOnExitRemoval(
 
 /** Acknowledges one completion event without touching unrelated queue entries. */
 export function acknowledgeNotifyOnExit(record: {
+  id?: string;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
   terminalPollObserved?: boolean;
 }): void {
   record.terminalPollObserved = true;
+  // A terminal poll or heartbeat consumes this completion's durable event, so
+  // retire the steering copy that shares its occurrence. Delivered exactly once
+  // across steering, heartbeat, and poll.
+  if (record.id) {
+    invalidateExecSteeringByOccurrence(`exec:${record.id}`);
+  }
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
