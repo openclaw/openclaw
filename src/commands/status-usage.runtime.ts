@@ -8,6 +8,8 @@ import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
+import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
+import { getModelsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -58,6 +60,19 @@ function shouldUseConfiguredCodexSyntheticUsage(params: {
   return resolveUsageCredentialType(authLabel) !== "api_key";
 }
 
+/** Materialize model-provider SecretRefs so usage auth matches runtime credentials. */
+async function resolveUsageConfigWithProviderSecrets(
+  config: OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const { resolvedConfig } = await resolveCommandConfigWithSecrets({
+    config,
+    commandName: "status --usage",
+    targetIds: getModelsCommandSecretTargetIds(),
+    mode: "read_only_status",
+  });
+  return resolvedConfig;
+}
+
 export type StatusUsageSummaryOptions = {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -85,14 +100,16 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     });
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
+  // Status scans omit model provider targets; prepare them here for --usage only.
+  const config = await resolveUsageConfigWithProviderSecrets(params.config);
   const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
-    config: params.config,
+    config,
     agentDir,
   });
   if (
     !shouldUseConfiguredCodexSyntheticUsage({
-      config: params.config,
+      config,
       agentDir,
       agentId: resolvedAgentId,
     })
@@ -103,7 +120,7 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     timeoutMs: params.timeoutMs,
     providers: ["openai"],
     auth: [buildCodexSyntheticUsageAuth()],
-    config: params.config,
+    config,
     agentDir,
   });
   return mergeUsageSummaries(usage, codexUsage);

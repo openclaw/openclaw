@@ -564,6 +564,46 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
+  it("uses prepared models.providers apiKey plaintext for OpenRouter usage auth", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const params = rawParams as {
+        context: ProviderResolveUsageAuthContext;
+      };
+      const apiKey = params.context.resolveApiKeyFromConfigAndStore({
+        envDirect: [params.context.env.OPENROUTER_API_KEY],
+      });
+      return apiKey ? { token: apiKey } : null;
+    });
+
+    await withTempHome(async (homeDir) => {
+      await expect(
+        resolveProviderAuthsForTest({
+          providers: ["openrouter"],
+          config: {
+            models: {
+              providers: {
+                openrouter: {
+                  baseUrl: "https://openrouter.ai/api/v1",
+                  api: "openai-completions",
+                  apiKey: "or-prepared-secretref-token",
+                  models: [],
+                },
+              },
+            },
+          },
+          env: { HOME: homeDir },
+        }),
+      ).resolves.toEqual([
+        {
+          provider: "openrouter",
+          token: "or-prepared-secretref-token",
+        },
+      ]);
+    });
+
+    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["openrouter"]);
+  });
+
   it("does not fall back to standard Anthropic API keys for usage auth", async () => {
     resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({ handled: true });
     await withTempHome(async (homeDir) => {
