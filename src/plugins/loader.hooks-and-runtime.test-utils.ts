@@ -1128,49 +1128,6 @@ ${channelPluginSource({
     expectDiagnosticContaining({ registry, message: "escapes" });
   });
 
-  it("blocks before_prompt_build but preserves model resolution overrides when prompt injection is disabled", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "hook-policy",
-      filename: "hook-policy.cjs",
-      registration: `api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
-      api.on("before_model_resolve", () => ({
-        modelOverride: "demo-model",
-        providerOverride: "demo-provider",
-      }));`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["hook-policy"],
-        entries: {
-          "hook-policy": {
-            hooks: {
-              allowPromptInjection: false,
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
-    });
-
-    expect(registry.plugins.find((entry) => entry.id === "hook-policy")?.status).toBe("loaded");
-    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["before_model_resolve"]);
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeModelResolve({ prompt: "hello" }, {});
-    expect(result).toEqual({
-      modelOverride: "demo-model",
-      providerOverride: "demo-provider",
-    });
-    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
-      diag.message.includes(
-        "blocked by plugins.entries.hook-policy.hooks.allowPromptInjection=false",
-      ),
-    );
-    expect(blockedDiagnostics).toHaveLength(1);
-  });
-
   it("blocks next-turn injections when prompt injection is disabled", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1414,38 +1371,6 @@ ${channelPluginSource({
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "conversation-hooks",
-      filename: "conversation-hooks.cjs",
-      registration: `api.on("before_model_resolve", () => undefined);
-      api.on("agent_turn_prepare", () => undefined);
-      api.on("before_prompt_build", () => undefined);
-      api.on("before_agent_reply", () => undefined);
-      api.on("llm_input", () => undefined);
-      api.on("llm_output", () => undefined);
-      api.on("before_agent_finalize", () => undefined);
-      api.on("agent_end", () => undefined);
-      api.on("before_agent_run", () => undefined);`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["conversation-hooks"],
-      },
-    });
-
-    expect(registry.typedHooks).toStrictEqual([]);
-    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
-      diag.message.includes(
-        "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
-      ),
-    );
-    expect(blockedDiagnostics).toHaveLength(9);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {

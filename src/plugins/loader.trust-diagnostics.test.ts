@@ -6,7 +6,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, loadPluginRegistryHandle } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
@@ -153,4 +153,40 @@ describe("recorded plugin trust diagnostics", () => {
       });
     },
   );
+});
+
+describe("blocked hook reload diagnostics", () => {
+  it("retains blocked hook diagnostics when only another plugin is replaced", () => {
+    useNoBundledPlugins();
+    const blocked = writePlugin({
+      id: "retained-blocked-hook",
+      body: 'module.exports = { register(api) { api.on("before_prompt_build", () => undefined); } };',
+    });
+    const healthy = writePlugin({
+      id: "unrelated-replacement",
+      body: "module.exports = { register() {} };",
+    });
+    const options = {
+      config: {
+        plugins: {
+          allow: [blocked.id, healthy.id],
+          load: { paths: [blocked.file, healthy.file] },
+          slots: { memory: "none" },
+        },
+      },
+      cache: false,
+    };
+    const previous = loadPluginRegistryHandle(options);
+    expect(previous.blockedHooks).toHaveLength(1);
+    const refreshed = loadPluginRegistryHandle({
+      ...options,
+      previousRegistry: previous,
+      replacePluginIds: [healthy.id],
+    });
+    expect(refreshed.plugins.find((entry) => entry.id === blocked.id)).toBe(
+      previous.plugins.find((entry) => entry.id === blocked.id),
+    );
+    expect(refreshed.blockedHooks).toStrictEqual(previous.blockedHooks);
+    expect(refreshed.typedHooks).toStrictEqual([]);
+  });
 });
