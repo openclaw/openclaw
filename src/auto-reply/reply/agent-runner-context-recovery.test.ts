@@ -28,7 +28,47 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
-  it("keeps the preserved-session copy with the built-in recovery hint", () => {
+  it("warns about deletion before recommending mechanical compaction", () => {
+    const text = buildContextOverflowRecoveryText({
+      duringCompaction: true,
+      preserveSessionMapping: true,
+      cfg: {},
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("kept this conversation mapped to the current session");
+    expect(text).not.toContain("reset our conversation");
+    expect(text).not.toContain("use /compact");
+    expect(text).not.toContain("use /new");
+    expect(text).not.toContain("fresh session");
+    expect(text).not.toContain("cannot help here");
+    expect(text).toContain("permanently deletes older history and keeps no backup");
+    expect(text).toContain("openclaw backup create");
+    expect(text).toContain(
+      "openclaw sessions compact 'agent:main:main' --agent 'main' --max-lines 200",
+    );
+    expect(text.indexOf("permanently deletes")).toBeLessThan(
+      text.indexOf("openclaw sessions compact"),
+    );
+  });
+
+  it("quotes Matrix thread keys so dollar segments survive shell expansion", () => {
+    const key = "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org";
+    const text = buildContextOverflowRecoveryText({
+      preserveSessionMapping: true,
+      sessionKey: key,
+      agentId: "main",
+      cfg: {},
+    });
+
+    expect(text).toContain(`openclaw sessions compact '${key}' --agent 'main' --max-lines 200`);
+    expect(text).not.toContain(`"${key}"`);
+  });
+
+  it("falls back to a placeholder compact command when the session key is unknown", () => {
     const text = buildContextOverflowRecoveryText({
       preserveSessionMapping: true,
       cfg: {},
@@ -36,9 +76,16 @@ describe("buildContextOverflowRecoveryText", () => {
       primaryModel: "qwen3.6-plus",
     });
 
-    expect(text).toContain("kept this conversation mapped to the current session");
-    expect(text).toContain("fresh session or using a model with a larger context window");
-    expect(text).not.toContain("reset our conversation");
+    expect(text).not.toContain("use /compact");
+    expect(text).not.toContain("use /new");
+    expect(text).not.toContain("fresh session");
+    expect(text).not.toContain("cannot help here");
+    expect(text).toContain("permanently deletes older history and keeps no backup");
+    expect(text).toContain("openclaw backup create");
+    expect(text).toContain("openclaw sessions compact '<session-key>' --max-lines 200");
+    expect(text.indexOf("permanently deletes")).toBeLessThan(
+      text.indexOf("openclaw sessions compact"),
+    );
   });
 
   it("does not use stale heartbeat hints for a different explicit runtime model", () => {

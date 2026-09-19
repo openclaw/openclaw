@@ -56,7 +56,15 @@ describe("executeAgentTurn: context failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("fresh session or using a model");
+      expect(result.payload.text).not.toContain("use /compact");
+      expect(result.payload.text).not.toContain("use /new");
+      expect(result.payload.text).not.toContain("cannot help here");
+      expect(result.payload.text).toContain(
+        "permanently deletes older history and keeps no backup",
+      );
+      expect(result.payload.text).toContain(
+        "openclaw sessions compact 'agent:main:main' --agent 'main' --max-lines 200",
+      );
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
@@ -102,7 +110,15 @@ describe("executeAgentTurn: context failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("fresh session or using a model");
+      expect(result.payload.text).not.toContain("use /compact");
+      expect(result.payload.text).not.toContain("use /new");
+      expect(result.payload.text).not.toContain("cannot help here");
+      expect(result.payload.text).toContain(
+        "permanently deletes older history and keeps no backup",
+      );
+      expect(result.payload.text).toContain(
+        "openclaw sessions compact 'agent:main:main' --agent 'main' --max-lines 200",
+      );
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
@@ -177,7 +193,9 @@ describe("executeAgentTurn: context failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("fresh session or using a model");
+      expect(result.payload.text).toContain("openclaw sessions compact");
+      expect(result.payload.text).not.toContain("use /compact");
+      expect(result.payload.text).not.toContain("use /new");
     }
   });
 });
