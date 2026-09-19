@@ -122,7 +122,7 @@ struct SettingsHubScreen: View {
         case .diagnostics: .diagnostics
         case .licenses: .licenses
         case .about: .about
-        case .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
+        case .quickChatShortcut, .microphoneTest, .browserImport, .macTabImport, .debug: nil
         }
     }
 }

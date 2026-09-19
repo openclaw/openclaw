@@ -217,6 +217,8 @@ extension DashboardWindowController {
         case .microphoneTest:
             DeviceSettingsPanels.shared.showMicrophoneTest(
                 parentWindow: self.window, state: AppStateStore.shared, onClose: publish)
+        case .macTabImport:
+            await self.importChromeLoginsIntoMacTabs()
         case .browserImport:
             let outcome = await BrowserProfileImportModel.shared.refresh(force: true)
             guard !Task.isCancelled, self.isWindowOpen else { return }

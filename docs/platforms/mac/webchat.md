@@ -123,6 +123,55 @@ token/password profiles retain their existing browser store and preferences.
 Signing in with your browser starts a personal store without copying credentials
 from the shared browser store. Mac tabs in a browser-authenticated dashboard
 use a separate temporary browser session, shared by that window's Mac tabs.
+
+### Import Chrome logins into Mac tabs
+
+In **Dashboard → Settings → This Mac → Browser**, choose **Import Chrome logins
+into Mac tabs…**, select a Chrome profile, and confirm the native consent sheet.
+This is distinct from **Browser logins**, which imports into the agent's managed
+Chromium profile, and from **Cookie sync**, which sends selected cookies to a
+remote computer.
+
+Mac-tab import reads Chrome's local cookie database and asks macOS for access to
+**Chrome Safe Storage** when decryption is necessary. Cookie values never pass
+through the Gateway, the model, a command's output, or a plaintext export file.
+Passwords, passkeys, local storage, and browser extensions are not imported.
+It works with local and remote Gateways, without an external OpenClaw CLI.
+Only standard Chrome profiles are supported by this action; Safari, Firefox,
+Brave, Edge, and Chromium are not currently supported.
+
+Existing tabs and new tabs use the same destination store. Reload an existing
+tab when ready; import does not reload pages or discard forms automatically.
+Persistent cookies retain their expiration dates. Session cookies remain
+session-only. A browser-authenticated Gateway window retains its separate
+temporary Mac-tab store: closing that window discards its imported logins.
+Other windows retain their existing store-sharing behavior. The consent sheet
+identifies whether the destination persists.
+
+The result reports imported, skipped, and failed counts. Expired cookies,
+cookies covering the current Gateway host, partitioned cookies, and unsupported
+encryption formats are not imported. Domain/host scope, path, Secure, HttpOnly,
+and SameSite restrictions are preserved; Chrome's unspecified SameSite policy
+is imported as Lax. Some websites bind sessions to additional browser state or
+require fresh authentication, so a successful cookie import is not a guarantee
+that every site will stay signed in. Chrome's source profile is not changed.
+
+### Passkeys are not cookies
+
+Importing cookies does not import or unlock passkeys. Arbitrary-site WebAuthn in
+the integrated browser must use WebKit and Apple's sanctioned browser integration,
+not a JavaScript credential bridge or invented associated domains for other sites.
+The current app signing configuration does not provide that integration.
+
+Apple's [macOS browser passkey entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.web-browser.public-key-credential)
+is a managed capability. The Apple Developer organization's Account Holder must
+request approval; the app must meet Apple's browser eligibility requirements and
+ship with the approved provisioning/signing setup. Adding the entitlement key to
+an unsigned or unapproved build is not a supported fix. Passkey sign-in remains a
+separate, blocked implementation and signed-macOS verification requirement.
+
+### Gateway window lifecycle
+
 Removing a profile closes its native chat and dashboard windows and shuts down
 its secondary connection.
 Updating a saved profile's credentials refreshes its open dashboard windows.

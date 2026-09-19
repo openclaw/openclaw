@@ -676,6 +676,10 @@ const enSettings = {
         "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
       chromeExtensionFailed:
         "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
+      macTabImport: "Mac tab logins",
+      macTabImportHint:
+        "Import Chrome cookies into this window’s integrated browser tabs. Cookies stay on this Mac, including with a remote Gateway. No passwords or passkeys are imported.",
+      importMacTabLogins: "Import Chrome logins into Mac tabs…",
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",

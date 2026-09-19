@@ -232,6 +232,20 @@ describe("native device settings pages", () => {
     }
   });
 
+  it("imports Chrome logins into Mac tabs independently of the Gateway browser", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    snapshot.browser.importAvailable = false;
+    snapshot.browser.cookieSync.available = true;
+    Object.assign(snapshot.browser, { macTabImportAvailable: true });
+    const { capability } = createCapability(snapshot);
+    const page = await mount("openclaw-device-page", capability);
+    const importRow = row(page, "Mac tab logins");
+    expect(importRow.textContent).toContain("stay on this Mac");
+    importRow.querySelector<HTMLButtonElement>("button")!.click();
+    expect(capability.openPanel).toHaveBeenCalledWith("mac-tab-import");
+    expect(capability.openPanel).not.toHaveBeenCalledWith("browser-import");
+  });
+
   it("renders new native snapshots and removes controls whose native capabilities became unavailable", async () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);

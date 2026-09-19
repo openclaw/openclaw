@@ -335,6 +335,58 @@ final class DashboardNativeBrowserHost {
 }
 
 extension DashboardNativeBrowserHost {
+    var usesPersistentCookieStore: Bool { self.websiteDataStore.isPersistent }
+
+    /// Write into the store already used by existing tabs and by createTab, not
+    /// the unrelated agent Chrome profile. Keep values on this Mac.
+    func importChromeCookies(
+        _ batch: MacTabChromeCookies.Batch,
+        protectedHost: String?,
+        isCurrent: @MainActor () -> Bool) async throws -> MacTabChromeCookies.ImportResult
+    {
+        var skipped = batch.skipped
+        var selected: [HTTPCookie] = []
+        for source in batch.cookies {
+            guard isCurrent(), !Task.isCancelled else { throw CancellationError() }
+            guard let cookie = source.httpCookie(protectedHost: protectedHost, now: Date()) else {
+                skipped += 1
+                continue
+            }
+            await self.websiteDataStore.httpCookieStore.setCookie(cookie)
+            selected.append(cookie)
+        }
+        guard isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        let stored = await self.websiteDataStore.httpCookieStore.allCookies()
+        guard isCurrent(), !Task.isCancelled else { throw CancellationError() }
+        struct Identity: Hashable {
+            let name: String
+            let domain: String
+            let path: String
+
+            init(_ cookie: HTTPCookie) {
+                self.name = cookie.name
+                self.domain = cookie.domain
+                self.path = cookie.path
+            }
+        }
+        let byIdentity = Dictionary(stored.map { (Identity($0), $0) }, uniquingKeysWith: { _, latest in latest })
+        let imported = selected.filter { expected in
+            guard let actual = byIdentity[Identity(expected)] else { return false }
+            let expiryMatches: Bool
+            if let expectedExpiry = expected.expiresDate, let actualExpiry = actual.expiresDate {
+                expiryMatches = abs(expectedExpiry.timeIntervalSince(actualExpiry)) < 1
+            } else {
+                expiryMatches = expected.expiresDate == nil && actual.expiresDate == nil
+            }
+            return actual.value == expected.value && actual.isSecure == expected.isSecure &&
+                actual.isHTTPOnly == expected.isHTTPOnly && actual.isSessionOnly == expected.isSessionOnly &&
+                actual.sameSitePolicy == expected.sameSitePolicy && expiryMatches
+        }.count
+        return MacTabChromeCookies.ImportResult(
+            total: batch.total, imported: imported, skipped: skipped,
+            failed: batch.failed + selected.count - imported, persistent: self.websiteDataStore.isPersistent)
+    }
+
     func download(tabId: String, isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
         let webView = try self.requireWebView(tabId)
         guard self.downloads[tabId] == nil else { throw DashboardBrowserError.downloadInProgress }

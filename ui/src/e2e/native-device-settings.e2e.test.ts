@@ -74,6 +74,51 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("keeps Mac tab import separate from managed-browser import and remote cookie sync", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("mac-tab-cookie-import");
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", locale: "en-US" },
+      async ({ page }) => {
+        const snapshot = createNativeDeviceSettingsSnapshot();
+        await installDeviceSettingsBridge(page, snapshot);
+        await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/device`);
+        const browserSection = page.locator(".settings-section").filter({
+          has: page.getByRole("heading", { name: "Browser", exact: true }),
+        });
+        await browserSection
+          .getByRole("button", { name: "Import browser logins…", exact: true })
+          .waitFor();
+        await browserSection.screenshot({
+          path: path.join(artifactDir, "01-before.png"),
+          animations: "disabled",
+        });
+        snapshot.browser.macTabImportAvailable = true;
+        await page.evaluate((next) => {
+          Object.assign(window, { __OPENCLAW_NATIVE_DEVICE_SETTINGS__: next });
+          window.dispatchEvent(
+            new CustomEvent("openclaw:native-device-settings-changed", { detail: next }),
+          );
+        }, snapshot);
+        const action = browserSection.getByRole("button", {
+          name: "Import Chrome logins into Mac tabs…",
+          exact: true,
+        });
+        await action.waitFor();
+        await browserSection.screenshot({
+          path: path.join(artifactDir, "02-after.png"),
+          animations: "disabled",
+        });
+        await action.click();
+        await expect
+          .poll(() =>
+            page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages),
+          )
+          .toContainEqual({ type: "open", panel: "mac-tab-import" });
+      },
+    );
+  });
+
   for (const colorScheme of ["light", "dark"] as const) {
     it(`edits this iPhone in embedded settings in ${colorScheme}`, async () => {
       const artifactDir = createControlUiE2eArtifactDir("ios-device-settings");

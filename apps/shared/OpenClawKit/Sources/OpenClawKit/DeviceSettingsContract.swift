@@ -93,6 +93,7 @@ public enum DeviceSettingsPanel: String, CaseIterable, Sendable {
     case quickChatShortcut = "quick-chat-shortcut"
     case microphoneTest = "microphone-test"
     case browserImport = "browser-import"
+    case macTabImport = "mac-tab-import"
     case connection, gateways, debug, diagnostics, licenses, about, watch
 }
 
@@ -356,13 +357,16 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
 
     public struct Browser: Encodable, Sendable {
         public let importAvailable: Bool
+        public let macTabImportAvailable: Bool?
         public let cookieSync: CookieSync
 
         public init(
             importAvailable: Bool,
+            macTabImportAvailable: Bool? = nil,
             cookieSync: CookieSync)
         {
             self.importAvailable = importAvailable
+            self.macTabImportAvailable = macTabImportAvailable
             self.cookieSync = cookieSync
         }
     }

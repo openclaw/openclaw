@@ -228,10 +228,25 @@ class DevicePage extends OpenClawLightDomElement {
         }),
       )}
       ${
-        browser.importAvailable || !sync.available
+        browser.macTabImportAvailable || browser.importAvailable || !sync.available
           ? renderSettingsSection(
               { title: t("configPage.deviceSettings.browser") },
               html`
+                ${
+                  browser.macTabImportAvailable
+                    ? renderSettingsRow({
+                        title: t("configPage.deviceSettings.macTabImport"),
+                        description: t("configPage.deviceSettings.macTabImportHint"),
+                        control: html`<button
+                          type="button"
+                          class="btn"
+                          @click=${() => capability?.openPanel("mac-tab-import")}
+                        >
+                          ${t("configPage.deviceSettings.importMacTabLogins")}
+                        </button>`,
+                      })
+                    : nothing
+                }
                 ${
                   browser.importAvailable
                     ? renderSettingsRow({

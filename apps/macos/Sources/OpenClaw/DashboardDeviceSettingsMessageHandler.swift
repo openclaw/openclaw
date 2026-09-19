@@ -151,6 +151,35 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
         return !Task.isCancelled && response == .alertSecondButtonReturn
     }
 
+    func chooseMacTabChromeProfile(
+        _ profiles: [MacTabChromeCookies.Profile], persistent: Bool) async -> MacTabChromeCookies.Profile?
+    {
+        guard !Task.isCancelled, self.consentAlert == nil, let window = self.owner?.window,
+              self.owner?.isWindowOpen == true, window.attachedSheet == nil, !profiles.isEmpty else { return nil }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "Import Chrome logins into Mac tabs?")
+        let lifetime = persistent
+            ? String(localized: "Persistent cookies remain in this app's browser store until they expire.")
+            : String(localized: "This window uses a private browser store. Imported logins disappear when it closes.")
+        alert.informativeText = String(localized: """
+        Cookies can grant access to signed-in accounts and replace existing Mac tab logins. \
+        They stay on this Mac, even with a remote Gateway. No passwords or passkeys are imported. \
+        Agent browser profiles and cookie sync are unchanged. macOS may ask for Chrome Safe Storage access.
+        """) + "\n\n" + lifetime
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 320, height: 28))
+        picker.addItems(withTitles: profiles.map { "Chrome — " + $0.id })
+        alert.accessoryView = picker
+        alert.addButton(withTitle: String(localized: "Cancel")).keyEquivalent = "\r"
+        alert.addButton(withTitle: String(localized: "Import into Mac tabs")).keyEquivalent = ""
+        self.consentAlert = alert
+        defer { self.consentAlert = nil }
+        let response = await alert.beginSheetModal(for: window)
+        guard !Task.isCancelled, response == .alertSecondButtonReturn,
+              profiles.indices.contains(picker.indexOfSelectedItem) else { return nil }
+        return profiles[picker.indexOfSelectedItem]
+    }
+
     func refresh(refreshAvailability: Bool = false) {
         guard !self.observers.isEmpty else { return }
         self.refreshTask?.cancel()
