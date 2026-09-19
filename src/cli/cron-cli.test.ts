@@ -149,6 +149,7 @@ type CronAddParams = {
   };
   deleteAfterRun?: boolean;
   agentId?: string;
+  sessionKey?: string;
   sessionTarget?: string;
 };
 
@@ -1521,13 +1522,58 @@ describe("cron cli", () => {
     expect(output.params?.payload?.message).toBe("hello");
   });
 
-  it("warns when --agent is blank on cron add with --message", async () => {
+  it.each([
+    { flag: "--agent", value: "", payload: ["--message", "hello"] },
+    { flag: "--agent", value: "   ", payload: ["--message", "hello"] },
+    { flag: "--session-key", value: "", payload: ["--message", "hello"] },
+    { flag: "--session-key", value: "   ", payload: ["--message", "hello"] },
+    { flag: "--command-cwd", value: "", payload: ["--command", "pwd"] },
+    { flag: "--command-cwd", value: "   ", payload: ["--command", "pwd"] },
+  ])(
+    "rejects blank $flag $value on cron add before Gateway access",
+    async ({ flag, value, payload }) => {
+      await expectCronCommandExit([
+        "cron",
+        "add",
+        ...namedCronAddArgs("Blank flag", ...payload, flag, value),
+      ]);
+
+      expectRuntimeErrorContaining(`${flag} must not be blank`);
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
+  it("trims padded --agent, --session-key, and --command-cwd on cron add", async () => {
     const params = await runCronAddAndGetParams(
-      namedCronAddArgs("Blank agent", "--message", "hello", "--agent", "   "),
+      namedCronAddArgs(
+        "Padded flags",
+        "--command",
+        "pwd",
+        "--agent",
+        " Ops ",
+        "--session-key",
+        " agent:ops:main ",
+        "--command-cwd",
+        " /srv/app ",
+      ),
     );
 
+    expect(params).toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      payload: { kind: "command", cwd: "/srv/app" },
+    });
+  });
+
+  it("creates the job when --agent, --session-key, and --command-cwd are omitted on cron add", async () => {
+    const params = await runCronAddAndGetParams(
+      namedCronAddArgs("Omitted flags", "--command", "pwd"),
+    );
+
+    expect(params?.payload).toMatchObject({ kind: "command", argv: ["sh", "-lc", "pwd"] });
     expect(params?.agentId).toBeUndefined();
-    expectRuntimeErrorContaining("No --agent specified");
+    expect(params?.sessionKey).toBeUndefined();
+    expect(params?.payload?.cwd).toBeUndefined();
   });
 
   it("does not warn when --system-event is used (no agent needed)", async () => {
