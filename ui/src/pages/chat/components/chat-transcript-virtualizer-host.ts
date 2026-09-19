@@ -26,7 +26,6 @@ import {
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   initialTranscriptRect,
-  maxTranscriptScrollOffset,
   measureConnectedTranscriptRows,
   measureTranscriptRow,
   reconcileInitialTranscriptOffset,
@@ -43,6 +42,7 @@ import { renderChatTranscriptLayout, type TranscriptRow } from "./chat-transcrip
 import {
   createTranscriptOffsetState,
   isTranscriptMaintenanceScroll,
+  isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
 } from "./chat-transcript-offset-observer.ts";
@@ -128,6 +128,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       return;
     }
     this.endAnchor.clear();
+    this.prependAnchor.clear();
     this.offsetState.pendingInteractionAnchor = anchor;
     queueMicrotask(
       () => this.offsetState.pendingInteractionAnchor === anchor && this.host.requestUpdate(),
@@ -525,7 +526,14 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
         if (capturePrepend) {
           this.prependAnchor.capture(
             this.scrollElement,
-            Boolean(this.offsetState.pendingScrollOffset || this.offsetState.scrollCommand),
+            Boolean(
+              this.offsetState.pendingScrollOffset ||
+              this.offsetState.scrollCommand ||
+              this.offsetState.pendingInteractionAnchor,
+            ),
+            // A peer append can add attribution above a bubble inside an
+            // existing run row. Row-height compensation alone cannot hold it.
+            rowModelChanged && !this.canAutoFollow(),
           );
         }
         this.headerHeight = header?.height ?? 0;
@@ -577,16 +585,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   get isProgrammaticScroll(): boolean {
-    const element = this.scrollElement;
-    // Lit's scroll listener can precede TanStack's offset observer. Read the
-    // committed viewport so the final event publishes the settled end policy.
-    const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
-    return (
-      this.isMaintenanceScroll ||
-      this.offsetState.pendingScrollOffset !== null ||
-      (this.offsetState.scrollCommand !== null &&
-        distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
-    );
+    return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
   private canAutoFollow(): boolean {

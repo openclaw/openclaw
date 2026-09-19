@@ -1,5 +1,6 @@
 import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { ChatTranscriptInteractionAnchor } from "./chat-transcript-interaction-anchor.ts";
 import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -46,6 +47,20 @@ export function isTranscriptMaintenanceScroll(
     state.maintenanceScrollOffset !== null &&
     Math.min(state.maintenanceScrollOffset, maxTranscriptScrollOffset(element) ?? 0) ===
       element.scrollTop
+  );
+}
+
+export function isTranscriptProgrammaticScroll(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement | null,
+): boolean {
+  // Lit’s listener can precede the offset observer. Read the committed viewport
+  // so the final event publishes settled follow policy.
+  const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
+  return (
+    isTranscriptMaintenanceScroll(state, element) ||
+    state.pendingScrollOffset !== null ||
+    (state.scrollCommand !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
 }
 
@@ -119,7 +134,6 @@ export function observeTranscriptOffset(
       (owner.state.touching || owner.state.touchScrolling)
     ) {
       owner.state.touchScrolling = true;
-      owner.prependAnchor.moveWithReader(offset - nativeOffset);
     }
     const delta = offset - nativeOffset;
     nativeOffset = offset;
@@ -132,6 +146,11 @@ export function observeTranscriptOffset(
       owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
     }
     const programmatic = owner.isProgrammaticScroll();
+    // Input can precede a projection capture while its native movement arrives
+    // afterward. Carry that movement for wheel/keys as well as touch.
+    if (scrolling && delta !== 0 && !programmatic) {
+      owner.prependAnchor.moveWithReader(delta);
+    }
     publish({
       type: "offset",
       delta,
