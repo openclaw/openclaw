@@ -312,6 +312,19 @@ describe("normalizeCronJobCreate", () => {
     const schedule = mainSchedule({ kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 });
     expect(schedule.staggerMs).toBe(0);
   });
+  it.each(["1e3", "42.8", "0x10", "abc", "", null, {}, 8_640_000_000_000_001])(
+    "rejects invalid explicit cron stagger %j before create or patch defaults",
+    (staggerMs) => {
+      const schedule = { kind: "cron", expr: "0 * * * *", staggerMs };
+      expect(() => createMain({ schedule })).toThrow(/staggerMs/);
+      expect(() => normalizePatch({ schedule })).toThrow(/staggerMs/);
+    },
+  );
+  it("still strips an invalid stagger from a non-cron schedule", () => {
+    const schedule = { kind: "every", everyMs: 60_000, staggerMs: "abc" };
+    expect(createMain({ schedule }).schedule).toEqual(EVERY_SCHEDULE);
+    expect(normalizePatch({ schedule }).schedule).toEqual(EVERY_SCHEDULE);
+  });
   it("defaults deleteAfterRun for one-shot schedules", () => {
     const normalized = createMain({ schedule: { kind: "at", at: "2026-01-12T18:00:00Z" } });
     expect(normalized.deleteAfterRun).toBe(true);
