@@ -142,6 +142,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts",
   "extensions/matrix/src/matrix/client/storage.test.ts",
   "extensions/matrix/src/matrix/credentials.test.ts",
+  "extensions/matrix/src/direct-encryption.test.ts",
   "extensions/matrix/src/matrix/sdk.test.ts",
   "extensions/matrix/src/matrix/monitor/startup-verification.test.ts",
   "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts",
