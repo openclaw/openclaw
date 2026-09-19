@@ -13,6 +13,102 @@ type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelt
 type AnchorWindow = typeof window & { prependFrames: AnchorFrames };
 
 suite.define(() => {
+  it("recalls older prompts after returning to the draft", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("chat-input-recall-round");
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
+    });
+    try {
+      const page = await context.newPage();
+      const prompts: Record<number, string> = {
+        1: "Earlier prompt",
+        3: "Recent prompt",
+        81: "Latest prompt",
+      };
+      const message = (seq: number) => ({
+        __openclaw: { id: `recall-${seq}`, seq },
+        role: prompts[seq] ? "user" : "assistant",
+        content: [
+          {
+            type: "text",
+            text: prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
+          },
+        ],
+        timestamp: 1_800_000_000_000 + seq,
+      });
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:main",
+        sessions: [{ key: "agent:main:main", sessionId: "recall-session" }],
+        methodResponses: {
+          "chat.startup": {
+            messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
+            hasMore: true,
+            nextOffset: 80,
+            totalMessages: 82,
+            sessionId: "recall-session",
+          },
+          "chat.history": {
+            messages: [message(1), message(2)],
+            hasMore: false,
+            totalMessages: 82,
+            sessionId: "recall-session",
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const thread = pane.locator(".chat-thread");
+      const textarea = pane.locator(".agent-chat__composer-combobox textarea");
+      await thread.getByText(/^History entry 82\./).waitFor();
+      await waitForChatScrollIdle(page);
+      expect(await gateway.getRequests("chat.history")).toHaveLength(0);
+      await textarea.press("ArrowUp");
+      await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
+      await textarea.press("ArrowDown");
+      await expect.poll(() => textarea.inputValue()).toBe("");
+      await page.screenshot({ path: path.join(artifactDir, "01-returned-to-draft.png") });
+
+      await gateway.deferNext("chat.history");
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await waitForRequests(gateway, "chat.history", 1);
+      await gateway.resolveDeferred("chat.history");
+      await waitForChatScrollIdle(page);
+      await thread.hover();
+      await page.mouse.wheel(0, -1_000_000);
+      await thread.getByText("Earlier prompt", { exact: true }).waitFor();
+      const requests = await gateway.getRequests("chat.history");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.params).toMatchObject({ offset: 80 });
+      await page.screenshot({ path: path.join(artifactDir, "02-earlier-history-loaded.png") });
+      await textarea.press("ArrowUp");
+      await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
+      await textarea.press("ArrowUp");
+      await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
+      await textarea.press("ArrowUp");
+      try {
+        await expect.poll(() => textarea.inputValue()).toBe("Earlier prompt");
+      } finally {
+        await page.screenshot({ path: path.join(artifactDir, "03-recall-after-prepend.png") });
+        console.log(
+          JSON.stringify({ artifactDir, recalled: await textarea.inputValue(), requests }),
+        );
+      }
+      await textarea.press("ArrowDown");
+      await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
+      await textarea.press("ArrowDown");
+      await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
+      await textarea.press("ArrowDown");
+      await expect.poll(() => textarea.inputValue()).toBe("");
+      await page.screenshot({ path: path.join(artifactDir, "04-restored-draft.png") });
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each([
     { sharedGroup: false, manual: false, onlyGroup: false, more: false },
     { sharedGroup: true, manual: false, onlyGroup: false, more: false },

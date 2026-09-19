@@ -150,10 +150,7 @@ function hasStaleActiveHistorySelection(state: ChatInputHistoryState): boolean {
 }
 
 function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] {
-  if (
-    Array.isArray(state.chatInputHistoryItems) &&
-    state.chatInputHistorySessionKey === state.sessionKey
-  ) {
+  if (Array.isArray(state.chatInputHistoryItems) && state.chatInputHistoryIndex !== -1) {
     return state.chatInputHistoryItems;
   }
   // Snapshot once per navigation round so incoming chat events don't shift arrow-key traversal order.
