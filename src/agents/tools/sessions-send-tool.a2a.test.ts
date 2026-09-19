@@ -329,6 +329,34 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     },
   );
 
+  it.each(["inline", "delayed"] as const)(
+    "does not bounce a delivered %s source reply between distinct sessions",
+    async (mode) => {
+      agentWaitMock.mockResolvedValueOnce({
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "Already delivered source reply" },
+        terminalReceipt: deliveredReceipt("run-delivered-cross-session-source"),
+      });
+
+      await runSessionsSendA2AFlow({
+        targetAgentId: "main",
+        targetSessionKey: "agent:main:webchat:direct:target",
+        displayKey: "agent:main:webchat:direct:target",
+        message: "Test message",
+        announceTimeoutMs: 10_000,
+        maxPingPongTurns: 5,
+        requesterSessionKey: "agent:main:webchat:direct:requester",
+        requesterChannel: "webchat",
+        ...(mode === "inline"
+          ? { roundOneReply: "Already delivered source reply", sourceReplyDelivered: true as const }
+          : { waitRunId: "run-delivered-cross-session-source" }),
+      });
+
+      expect(runAgentStep).not.toHaveBeenCalled();
+      expect(gatewayCalls).toEqual([]);
+    },
+  );
+
   it("does not run the announce decider for same-session sends without an announce target", async () => {
     await runSessionsSendA2AFlow({
       targetAgentId: "main",

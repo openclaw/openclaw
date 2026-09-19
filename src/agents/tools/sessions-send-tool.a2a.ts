@@ -172,6 +172,13 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
+    // A confirmed source reply already reached the requester through the target's
+    // message tool. Re-entering either peer would duplicate that reply and can
+    // bounce the requester's response back into the target session.
+    if (sourceReplyDelivered) {
+      return;
+    }
+
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
     // announce can re-run the same prompt and duplicate source-reply side effects.
@@ -181,9 +188,6 @@ export async function runSessionsSendA2AFlow(params: {
       rightKey: params.targetSessionKey,
       rightAgentId: params.targetAgentId,
     });
-    if (sameSessionSourceReply && sourceReplyDelivered) {
-      return;
-    }
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
