@@ -8,6 +8,15 @@ const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
 const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+
+// The stored snippet and the live range must pass through the same
+// normalization before comparison. Notes routinely gain HTML comments after a
+// candidate is recorded; leaving those comments in only the live copy breaks
+// exact containment and degrades the match to a fragment anchor.
+function normalizeRecallSnippet(raw: string): string {
+  return normalizeSnippet(raw.replace(HTML_COMMENT_RE, " "));
+}
 
 function normalizeRangeSnippet(lines: string[], startLine: number, endLine: number): string {
   const startIndex = Math.max(0, startLine - 1);
@@ -15,7 +24,7 @@ function normalizeRangeSnippet(lines: string[], startLine: number, endLine: numb
   if (startIndex >= endIndex) {
     return "";
   }
-  return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
+  return normalizeRecallSnippet(lines.slice(startIndex, endIndex).join(" "));
 }
 
 function normalizeListMarkerFreeRangeSnippet(
@@ -35,7 +44,7 @@ function normalizeListMarkerFreeRangeSnippet(
   });
   const joiner =
     strippedLines.length > 1 && strippedLines.every((line) => line.hadListMarker) ? "; " : " ";
-  return normalizeSnippet(strippedLines.map((line) => line.text).join(joiner));
+  return normalizeRecallSnippet(strippedLines.map((line) => line.text).join(joiner));
 }
 
 function normalizeDailyHeadingForPromotion(line: string): string | null {
@@ -148,12 +157,29 @@ function compareCandidateWindow(
 function relocateCandidateRange(
   lines: string[],
   candidate: PromotionCandidate,
+  managedFencePrefix: Int32Array,
 ): { startLine: number; endLine: number; snippet: string } | null {
-  const targetSnippet = normalizeSnippet(candidate.snippet);
+  const targetSnippet = normalizeRecallSnippet(candidate.snippet);
   const preferredSpan = Math.max(1, candidate.endLine - candidate.startLine + 1);
   if (targetSnippet.length === 0) {
+    // normalizeRecallSnippet strips HTML comments, so a stored anchor that was
+    // entirely a comment (recording accepts it) normalizes away to nothing.
+    // Its recorded coordinates then point at whatever text now occupies those
+    // lines; trusting them would promote unrelated content. An anchor that was
+    // empty at recording time is the only shape that may use positional
+    // fallback, because it never claimed to match live text.
+    if (normalizeSnippet(candidate.snippet).length > 0) {
+      return null;
+    }
     const fallbackSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
     if (!fallbackSnippet) {
+      return null;
+    }
+    // Recorded coordinates are also managed-range trust: a comment-only anchor
+    // whose lines now sit inside a dreaming fence would promote scratchwork.
+    if (
+      lineRangeOverlapsDreamingFence(managedFencePrefix, candidate.startLine, candidate.endLine)
+    ) {
       return null;
     }
     return {
@@ -164,7 +190,10 @@ function relocateCandidateRange(
   }
 
   const exactSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
-  if (exactSnippet === targetSnippet) {
+  if (
+    exactSnippet === targetSnippet &&
+    !lineRangeOverlapsDreamingFence(managedFencePrefix, candidate.startLine, candidate.endLine)
+  ) {
     return {
       startLine: candidate.startLine,
       endLine: candidate.endLine,
@@ -181,6 +210,14 @@ function relocateCandidateRange(
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
       const endLine = startIndex + span;
+      // Managed windows are ineligible for selection. Comment stripping can
+      // turn a marker-bearing window into an exact match that outranks the
+      // eligible text beside the fence, and the apply-time fence guard would
+      // then discard that winner, silently dropping a candidate whose text is
+      // still available just outside the fence.
+      if (lineRangeOverlapsDreamingFence(managedFencePrefix, startLine, endLine)) {
+        continue;
+      }
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
       const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
@@ -253,7 +290,10 @@ function relocateCandidateRange(
     }
   }
 
-  if (!bestMatch) {
+  if (!bestMatch || bestMatch.quality === 1) {
+    // Quality 1 means the window is only a fragment of the recorded snippet.
+    // Anchoring on it would silently promote the wrong lines of the right
+    // file, so the candidate is reported as lost instead.
     return null;
   }
   return {
@@ -266,20 +306,18 @@ function relocateCandidateRange(
 const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
 const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
 
-function lineRangeOverlapsDreamingFence(
-  lines: string[],
-  startLine: number,
-  endLine: number,
-): boolean {
-  if (lines.length === 0) {
-    return false;
-  }
-  const safeStart = Math.max(1, Math.min(startLine, lines.length));
-  const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
+// One forward pass folds managed dreaming membership into prefix sums: a line
+// counts when it carries a dreaming marker or sits inside an open dreaming
+// fence. Relocation compares every candidate window against the note, so
+// eligibility checks must be O(1) per window; rescanning from the top for each
+// window turns a moved or unresolved passage in a large fence-free note into
+// quadratic synchronous work.
+function buildDreamingFenceManagedPrefix(lines: string[]): Int32Array {
+  const managedPrefix = new Int32Array(lines.length + 1);
   let insideFence = false;
-  for (let i = 0; i < safeEnd; i += 1) {
-    const line = lines[i] ?? "";
-    const oneIndexed = i + 1;
+  let managedSoFar = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
     const isStart = DREAMING_FENCE_START_RE.test(line);
     const isEnd = DREAMING_FENCE_END_RE.test(line);
     if (isStart || isEnd) {
@@ -287,18 +325,29 @@ function lineRangeOverlapsDreamingFence(
       // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
       // build its snippet from raw lines that contain that marker text and
       // leak it into MEMORY.md alongside any adjacent fenced content captured
-      // by the same window. (#80613)
-      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
-        return true;
-      }
+      // by the same window.
       insideFence = isStart;
-      continue;
+      managedSoFar += 1;
+    } else if (insideFence) {
+      managedSoFar += 1;
     }
-    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
-      return true;
-    }
+    managedPrefix[index + 1] = managedSoFar;
   }
-  return false;
+  return managedPrefix;
+}
+
+function lineRangeOverlapsDreamingFence(
+  managedPrefix: Int32Array,
+  startLine: number,
+  endLine: number,
+): boolean {
+  const lineCount = managedPrefix.length - 1;
+  if (lineCount === 0) {
+    return false;
+  }
+  const safeStart = Math.max(1, Math.min(startLine, lineCount));
+  const safeEnd = Math.max(safeStart, Math.min(endLine, lineCount));
+  return (managedPrefix[safeEnd] ?? 0) - (managedPrefix[safeStart - 1] ?? 0) > 0;
 }
 
 export async function rehydratePromotionCandidate(
@@ -318,7 +367,8 @@ export async function rehydratePromotionCandidate(
     }
 
     const lines = rawSource.split(/\r?\n/);
-    const relocated = relocateCandidateRange(lines, candidate);
+    const managedFencePrefix = buildDreamingFenceManagedPrefix(lines);
+    const relocated = relocateCandidateRange(lines, candidate, managedFencePrefix);
     if (!relocated) {
       continue;
     }
@@ -326,7 +376,9 @@ export async function rehydratePromotionCandidate(
     // content. If rehydration lands inside an openclaw:dreaming fence (for example
     // because file edits shifted lines between ranking and apply), refuse the
     // candidate so dream artifacts cannot be promoted into MEMORY.md.
-    if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
+    if (
+      lineRangeOverlapsDreamingFence(managedFencePrefix, relocated.startLine, relocated.endLine)
+    ) {
       continue;
     }
     return {
