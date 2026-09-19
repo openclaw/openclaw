@@ -1,6 +1,5 @@
 // Comfy plugin module implements workflow runtime behavior.
 import { randomInt } from "node:crypto";
-import fs from "node:fs/promises";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -40,6 +39,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readComfyWorkflowFile } from "./workflow-file.js";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -58,6 +58,7 @@ type ComfyCapability = "image" | "music" | "video";
 type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
 type ComfyWorkflow = Record<string, unknown>;
 type ComfyProviderConfig = Record<string, unknown>;
+type ComfyConfigSource = { config: ComfyProviderConfig };
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
@@ -123,13 +124,27 @@ function readConfigInteger(config: ComfyProviderConfig, key: string): number | u
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function getComfyConfig(cfg?: OpenClawConfig): { config: ComfyProviderConfig; path: string } {
+function resolveComfyWorkflowFileMaxBytes(config: ComfyProviderConfig): number | undefined {
+  const configured = config.workflowFileMaxBytes;
+  return typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : undefined;
+}
+
+function getComfyConfigSource(cfg?: OpenClawConfig): ComfyConfigSource & { path: string } {
   const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
   if (isRecord(pluginConfig)) {
     return { config: pluginConfig, path: "plugins.entries.comfy.config" };
   }
   const legacyConfig = cfg?.models?.providers?.comfy;
-  return { config: isRecord(legacyConfig) ? legacyConfig : {}, path: "models.providers.comfy" };
+  return {
+    config: isRecord(legacyConfig) ? legacyConfig : {},
+    path: "models.providers.comfy",
+  };
+}
+
+function getComfyConfig(cfg?: OpenClawConfig): ComfyConfigSource & { path: string } {
+  return getComfyConfigSource(cfg);
 }
 
 function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {
@@ -234,7 +249,8 @@ async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWork
   }
 
   const resolvedPath = resolveUserPath(source.workflowPath);
-  const raw = await fs.readFile(resolvedPath, "utf8");
+  const maxBytes = resolveComfyWorkflowFileMaxBytes(config);
+  const raw = await readComfyWorkflowFile(resolvedPath, maxBytes);
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
     throw new Error(`Comfy workflow at ${resolvedPath} must be a JSON object`);
