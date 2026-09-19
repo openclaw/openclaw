@@ -6,6 +6,14 @@ import crypto from "node:crypto";
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
+  buildCodexAppToolEligibilityOverrides,
+  buildDisabledAppsConfigPatch,
+  buildEnabledAppConfig,
+  disableUnlistedCodexApps,
+  requiresCodexAppToolEligibility,
+  readCodexAppToolsByApp,
+} from "./app-tool-policy.js";
+import {
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
   type ResolvedCodexPluginPolicy,
@@ -113,7 +121,7 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 13;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 14;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -437,6 +445,32 @@ export async function buildCodexPluginThreadConfig(
     };
   }
 
+  const restrictedApps = Object.entries(policyApps).filter(([, app]) =>
+    requiresCodexAppToolEligibility(app),
+  );
+  if (restrictedApps.length > 0) {
+    const toolsByApp = await readCodexAppToolsByApp(params).catch(() => undefined);
+    const nativeConfig = (await getAdmissionConfig()).config;
+    for (const [id, appPolicy] of restrictedApps) {
+      const tools = toolsByApp?.get(id);
+      if (!tools?.size) {
+        delete policyApps[id];
+        provisionalAppIds.delete(id);
+        apps[id] = { enabled: false };
+        diagnostics.push({
+          code: "app_not_ready",
+          message: `Could not verify current Codex app tool restrictions for ${id}; the app was not exposed.`,
+        });
+        continue;
+      }
+      apps[id] = {
+        ...(isJsonObject(apps[id]) ? apps[id] : {}),
+        ...buildCodexAppToolEligibilityOverrides(nativeConfig, id, tools, appPolicy),
+        enabled: true,
+      };
+    }
+  }
+
   const configPatch =
     Object.keys(policyApps).length === 0
       ? buildDisabledAppsConfigPatch()
@@ -519,52 +553,6 @@ function emptyPluginThreadConfig(params: {
   };
 }
 
-export function buildDisabledAppsConfigPatch(): JsonObject & { apps: JsonObject } {
-  return {
-    "features.apps": false,
-    apps: {
-      _default: {
-        enabled: false,
-        destructive_enabled: false,
-        open_world_enabled: false,
-      },
-    },
-  };
-}
-
-export function disableUnlistedCodexApps(
-  configPatch: { apps: JsonObject },
-  nativeConfig: Record<string, unknown>,
-): JsonObject & { apps: JsonObject } {
-  const apps = { ...configPatch.apps };
-  // Native app.enabled wins over _default. Bindings store admitted apps only,
-  // so every configured app outside that allowlist needs an explicit denial.
-  for (const id of Object.keys(isJsonObject(nativeConfig.apps) ? nativeConfig.apps : {})) {
-    if (id !== "_default" && !Object.hasOwn(apps, id)) {
-      apps[id] = { enabled: false };
-    }
-  }
-  return { ...configPatch, apps };
-}
-
-function buildEnabledAppConfig(
-  policy: {
-    allowDestructiveActions: boolean;
-    allowOpenWorld?: boolean;
-    destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
-  },
-  approvalOverrides: JsonObject = {},
-): JsonObject {
-  return {
-    ...approvalOverrides,
-    enabled: true,
-    destructive_enabled: policy.allowDestructiveActions,
-    open_world_enabled: policy.allowOpenWorld !== false,
-    default_tools_approval_mode: "auto",
-    ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
-  };
-}
-
 /** Rebuilds the safe per-thread apps patch persisted with a Codex thread binding. */
 export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   policyContext: PluginAppPolicyContext,
@@ -579,7 +567,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   return Object.keys(policyContext.apps).length > 0 ? { apps } : disabledConfigPatch;
 }
 
-/** Projects current ask overrides before a side thread replays its bound app policy. */
+/** Refreshes native approval and tool restrictions before replaying bound app policy. */
 export async function refreshCodexPluginAppApprovalPolicy(params: {
   policyContext: PluginAppPolicyContext;
   request: CodexPluginRuntimeRequest;
@@ -595,18 +583,25 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
     };
   }
   const targetApps = Object.entries(params.policyContext.apps)
-    .filter(([, app]) => app.destructiveApprovalMode === "ask")
+    .filter(
+      ([, app]) => app.destructiveApprovalMode === "ask" || requiresCodexAppToolEligibility(app),
+    )
     .toSorted(([left], [right]) => left.localeCompare(right));
-  const targetAppIds = targetApps.map(([id]) => id);
+  const targetAppIds = targetApps
+    .filter(([, app]) => app.destructiveApprovalMode === "ask")
+    .map(([id]) => id);
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [];
   // A persisted binding can be replayed before any normal turn after restart.
   // Fresh targeted inventory retains the current non-read-only tool scope.
   const readParams = { ...params, appCacheKey: "approval-policy-replay" };
-  const [inventory, admissionConfig] = await Promise.all([
+  const [inventory, admissionConfig, toolsByApp] = await Promise.all([
     targetAppIds.length > 0
       ? refreshCodexPluginAppInventory(readParams, new CodexAppInventoryCache(), { targetAppIds })
       : undefined,
     readCodexConfigForAppAdmission(readParams),
+    targetApps.some(([, app]) => requiresCodexAppToolEligibility(app))
+      ? readCodexAppToolsByApp(readParams).catch(() => undefined)
+      : undefined,
   ]);
   const configPatch = disableUnlistedCodexApps(
     buildCodexPluginAppsConfigPatchFromPolicyContext(params.policyContext),
@@ -624,16 +619,24 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
   const apps = { ...params.policyContext.apps };
   for (const [id, policy] of targetApps) {
     const app = currentApps.get(id);
-    if (!app) {
+    const tools = toolsByApp?.get(id);
+    const restricted = requiresCodexAppToolEligibility(policy);
+    if ((policy.destructiveApprovalMode === "ask" && !app) || (restricted && !tools?.size)) {
       diagnostics.push({
         code: "app_not_ready",
         message: `Could not verify current Codex app approval policy for ${id}; the app was not exposed.`,
       });
     } else {
-      configPatch.apps[id] = buildEnabledAppConfig(
-        policy,
-        buildCodexAppApprovalOverrides(admissionConfig.config, app),
-      );
+      configPatch.apps[id] = {
+        ...buildEnabledAppConfig(
+          policy,
+          app ? buildCodexAppApprovalOverrides(admissionConfig.config, app) : undefined,
+        ),
+        ...(restricted && tools
+          ? buildCodexAppToolEligibilityOverrides(admissionConfig.config, id, tools, policy)
+          : {}),
+        enabled: true,
+      };
       continue;
     }
     delete apps[id];

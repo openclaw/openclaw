@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppPolicyContextEntry } from "./plugin-thread-config.js";
 
 export type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CodexScheduledAppTool = {
@@ -77,7 +76,7 @@ export function readCurrentToolPolicy(
 
 export function appToolHintsAllowed(
   tool: CodexScheduledAppTool | undefined,
-  policy: Pick<CodexAppPolicyContextEntry, "allowDestructiveActions" | "allowOpenWorld">,
+  policy: { allowDestructiveActions: boolean; allowOpenWorld?: boolean },
 ): boolean {
   // Codex treats missing annotations as destructive/open-world. Explicit tool
   // enablement bypasses its app flags, so enforce the stored cap before projecting it.

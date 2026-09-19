@@ -533,7 +533,12 @@ cleanup cannot be confirmed.
 `destructive_enabled` on each app comes from the effective global or
 per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, and `"ask"`
 all set `destructive_enabled: true`, and `false` sets it `false`. Codex still
-enforces destructive tool metadata from its native app tool annotations.
+enforces destructive tool metadata from its native app tool annotations. Native
+explicit tool enablement takes precedence over that app default, so OpenClaw
+also projects a per-tool restriction from current native annotations when
+destructive actions are disabled. Saved enablement cannot reopen an excluded
+tool. If current tool metadata is unavailable, OpenClaw reports the restriction
+and withholds that app until it can verify the allowed tools.
 `_default` is disabled with `open_world_enabled: false`; enabled plugin apps
 get `open_world_enabled: true`. OpenClaw does not expose a separate
 plugin-level open-world policy knob and does not maintain per-plugin

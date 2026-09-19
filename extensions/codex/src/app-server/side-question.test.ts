@@ -21,6 +21,7 @@ import {
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { nativeAppToolsResponse } from "./app-inventory.test-helpers.js";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -47,6 +48,9 @@ const {
   runSideQuestionWithManagedWebSearchCall,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
+  mockCall,
+  handleClientRequestWhenReady,
+  startClientRequestWhenReady,
   threadResult,
   turnStartResult,
   agentDelta,
@@ -66,46 +70,6 @@ function supervisionConnectionFingerprint(): string {
       pluginConfig: { supervision: { enabled: true } },
     }),
   );
-}
-
-function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
-  const call = mock.mock.calls.at(index);
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call;
-}
-
-async function handleClientRequestWhenReady(
-  client: ReturnType<typeof createFakeClient>,
-  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
-  assertHandled: (response: unknown) => void = (response) => expect(response).not.toBeUndefined(),
-): Promise<unknown> {
-  let response: unknown;
-  await vi.waitFor(async () => {
-    response = await client.handleRequest(request);
-    assertHandled(response);
-  });
-  return response;
-}
-
-async function startClientRequestWhenReady(
-  client: ReturnType<typeof createFakeClient>,
-  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
-  started: Promise<void>,
-): Promise<void> {
-  await vi.waitFor(async () => {
-    const requestResult = client.handleRequest(request);
-    void requestResult.catch(() => undefined);
-    const state = await Promise.race([
-      started.then(() => "started" as const),
-      requestResult.then(
-        () => "unhandled" as const,
-        () => "unhandled" as const,
-      ),
-    ]);
-    expect(state).toBe("started");
-  });
 }
 
 function flushDiagnosticEvents() {
@@ -1228,6 +1192,12 @@ describe("runCodexAppServerSideQuestion", () => {
             missingAppIds: outcome === "missing-app" ? ["ask-app"] : [],
           };
         }
+        if (method === "mcpServerStatus/list") {
+          return nativeAppToolsResponse("false-app", {
+            read: { annotations: { destructiveHint: false } },
+            write: { annotations: { destructiveHint: true } },
+          });
+        }
         if (method === "config/read") {
           if (outcome === "config-unavailable") {
             throw new Error("native config unavailable");
@@ -1235,7 +1205,18 @@ describe("runCodexAppServerSideQuestion", () => {
           if (outcome === "binding-changed") {
             readCodexAppServerBindingMock.mockReturnValue({ threadId: "replacement-thread" });
           }
-          return { config: { apps: { "ask-app": nativeAppConfig } }, layers: [] };
+          return {
+            config: {
+              apps: {
+                "ask-app": nativeAppConfig,
+                "false-app": {
+                  default_tools_enabled: true,
+                  tools: { write: { enabled: true, approval_mode: "approve" } },
+                },
+              },
+            },
+            layers: [],
+          };
         }
         if (method === "config/batchWrite" || method === "config/value/write") {
           throw new Error("side-question admission cannot write saved app settings");
@@ -1396,6 +1377,8 @@ describe("runCodexAppServerSideQuestion", () => {
         "false-app": {
           enabled: true,
           destructive_enabled: false,
+          default_tools_enabled: false,
+          tools: { read: { enabled: true }, write: { enabled: false, approval_mode: "approve" } },
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
         },

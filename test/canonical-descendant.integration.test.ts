@@ -1298,6 +1298,8 @@ describe("canonical descendant lifecycle through real owners", () => {
                           destructive_enabled: false,
                           open_world_enabled: true,
                           default_tools_approval_mode: "auto",
+                          default_tools_enabled: false,
+                          tools: { delete: { enabled: false }, read: { enabled: true } },
                         },
                       }
                     : {}),

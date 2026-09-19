@@ -191,6 +191,46 @@ export function extractRelayIdFromThreadConfig(config: unknown): string {
   return match[1];
 }
 
+function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
+}
+
+async function handleClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  assertHandled: (response: unknown) => void = (response) => expect(response).not.toBeUndefined(),
+): Promise<unknown> {
+  let response: unknown;
+  await vi.waitFor(async () => {
+    response = await client.handleRequest(request);
+    assertHandled(response);
+  });
+  return response;
+}
+
+async function startClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  started: Promise<void>,
+): Promise<void> {
+  await vi.waitFor(async () => {
+    const requestResult = client.handleRequest(request);
+    void requestResult.catch(() => undefined);
+    const state = await Promise.race([
+      started.then(() => "started" as const),
+      requestResult.then(
+        () => "unhandled" as const,
+        () => "unhandled" as const,
+      ),
+    ]);
+    expect(state).toBe("started");
+  });
+}
+
 function threadResult(threadId: string) {
   const { thread } = nativeThreadStartResult(threadId, "/tmp/workspace");
   return {
@@ -395,6 +435,9 @@ export {
   runCodexAppServerSideQuestion,
   runCodexAppServerSideQuestionImpl,
   createFakeClient,
+  mockCall,
+  handleClientRequestWhenReady,
+  startClientRequestWhenReady,
   threadResult,
   turnStartResult,
   agentDelta,

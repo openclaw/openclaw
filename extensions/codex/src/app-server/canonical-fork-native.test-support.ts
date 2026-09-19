@@ -168,6 +168,26 @@ export async function createCanonicalForkNativeFixture(
       if (method === "config/read") {
         return { config: {}, origins: {}, layers: [] };
       }
+      if (method === "mcpServerStatus/list") {
+        return {
+          data: [
+            {
+              name: "codex_apps",
+              tools: Object.fromEntries(
+                ["read", "delete"].map((name) => [
+                  name,
+                  {
+                    name,
+                    annotations: { destructiveHint: name === "delete", openWorldHint: false },
+                    _meta: { connector_id: "synthetic-app" },
+                  },
+                ]),
+              ),
+            },
+          ],
+          nextCursor: null,
+        };
+      }
       if (method === "app/installed" || method === "app/read") {
         if (typeof params.threadId === "string" && !loaded.has(params.threadId)) {
           throw Object.assign(new Error(`thread not found: ${params.threadId}`), { code: -32600 });
