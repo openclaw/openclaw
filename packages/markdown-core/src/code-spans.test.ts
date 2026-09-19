@@ -3,6 +3,14 @@ import { buildCodeSpanIndex } from "./code-spans.js";
 import { findMarkdownCodeSpans } from "./reasoning-tags.js";
 
 describe("buildCodeSpanIndex", () => {
+  it("keeps triple-backtick inline code separate from following prose", () => {
+    const text = "```<think>literal</think>```\n\n<think>reasoning</think>";
+    const index = buildCodeSpanIndex(text);
+
+    expect(index.isInside(text.indexOf("literal"))).toBe(true);
+    expect(index.isInside(text.indexOf("reasoning"))).toBe(false);
+  });
+
   it("supports backward queries over inline code that encloses a fence", () => {
     const text = "`open\n~~~\ninside\n~~~\nafter` tail";
     const index = buildCodeSpanIndex(text);
