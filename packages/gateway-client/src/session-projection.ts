@@ -201,7 +201,9 @@ function entryMatches(
     return false;
   }
   if (sameTranscriptIdentity(left.identity, right.identity)) {
-    return true;
+    // A keyed commentary fallback and the full row share an id but are distinct display segments.
+    const itemId = readAssistantStreamSegmentIdentity(left.message)?.itemId;
+    return itemId === readAssistantStreamSegmentIdentity(right.message)?.itemId;
   }
   if (sameAssistantPersistenceReceipt(left.identity, right.identity)) {
     return true;
