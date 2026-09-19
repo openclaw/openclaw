@@ -18,6 +18,7 @@ describe("Vitest public reporter output", () => {
       const value =
         kind === "node-multiline" ? [synthetic, synthetic, synthetic].join("\n") : synthetic;
       const marker = `<redacted len=${value.length}>`;
+      const filename = "synthetic.session.test.ts";
       const root = tempDirs.make("oc-reporter-redaction-");
       fs.symlinkSync(
         path.join(repoRoot, "node_modules"),
@@ -36,16 +37,20 @@ export default {
   test: {
     ...sharedVitestConfig.test,
     root: ${JSON.stringify(root)}, dir: ${JSON.stringify(root)},
-    include: ["synthetic.test.ts"], exclude: [], setupFiles: [], runner: undefined,
+    include: [${JSON.stringify(filename)}], exclude: [], setupFiles: [], runner: undefined,
     maxWorkers: 1, fileParallelism: false,
     reporters: ["verbose", ["json", { outputFile: ${JSON.stringify(path.join(root, "result.json"))} }], ["junit", { outputFile: ${JSON.stringify(path.join(root, "result.xml"))} }]],
   },
 };
 `,
       );
-      fs.writeFileSync(
-        path.join(root, "synthetic.test.ts"),
-        `
+      const assertion =
+        kind === "node-multiline"
+          ? "assert.deepStrictEqual(actual, expected);"
+          : kind === "spy-call"
+            ? "const spy = vi.fn(); spy(actual); expect(spy).toHaveBeenCalledWith(expected);"
+            : "expect(actual).toEqual(expected);";
+      const source = `
 import assert from "node:assert/strict";
 import { chai, expect, it, vi } from "vitest";
 chai.config.truncateThreshold = 0;
@@ -53,10 +58,11 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
   await annotate(${JSON.stringify(`AUTHORIZATION=Bearer ${synthetic}\nretained % detail`)}, ${JSON.stringify(`EXAMPLE_TOKEN=${synthetic}`)});
   const actual = ${kind === "entries-array" ? `Object.entries({ ${credential}: ${JSON.stringify(value)}, NORMAL: "received" })` : `{ nested: { env: { ${credential}: ${JSON.stringify(value)} } }, visible: "received" }`};
   const expected = ${kind === "entries-array" ? `Object.entries({ ${credential}: ${JSON.stringify(value)}, NORMAL: "expected" })` : `{ nested: { env: { ${kind === "node-multiline" ? "" : `${credential}: ${JSON.stringify(value)}`} } }, visible: "expected" }`};
-  ${kind === "node-multiline" ? "assert.deepStrictEqual(actual, expected);" : kind === "spy-call" ? "const spy = vi.fn(); spy(actual); expect(spy).toHaveBeenCalledWith(expected);" : "expect(actual).toEqual(expected);"}
+  ${assertion}
 });
-`,
-      );
+`;
+      fs.writeFileSync(path.join(root, filename), source);
+      const assertionLine = source.slice(0, source.indexOf(assertion)).split("\n").length;
       const env = { ...process.env };
       for (const key of Object.keys(env)) {
         if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
@@ -106,11 +112,24 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
       );
       expect(output).toContain(credential);
       expect(output).toContain("[vitest:resources]");
-      for (const file of ["result.json", "result.xml"]) {
-        const report = fs.readFileSync(path.join(root, file), "utf8");
+      const json = fs.readFileSync(path.join(root, "result.json"), "utf8");
+      const junit = fs.readFileSync(path.join(root, "result.xml"), "utf8");
+      for (const [file, report] of [
+        ["result.json", json],
+        ["result.xml", junit],
+      ] as const) {
         expect(report.includes(synthetic), file).toBe(false);
         expect(report, file).toContain(`redacted len=${value.length}`);
       }
+      const failures = JSON.parse(json).testResults[0].assertionResults[0].failureMessages;
+      expect(failures).toHaveLength(1);
+      const location = new RegExp(
+        `synthetic\\.session\\.test\\.ts:${assertionLine}:[1-9]\\d*`,
+        "u",
+      ).exec(failures[0])?.[0];
+      expect(location).toBeDefined();
+      expect(output).toContain(location);
+      expect(junit).toContain(location);
     },
   );
 });

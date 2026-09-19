@@ -82,6 +82,25 @@ function lineEnd(text: string, start: number): number {
   return newline < 0 ? text.length : start + newline;
 }
 
+function isSourceLocation(text: string, match: RegExpExecArray): boolean {
+  if (match[1] || !/^[\w.-]+\.(?:[cm]?[jt]s|[jt]sx):$/u.test(match[0])) {
+    return false;
+  }
+  const start = text.lastIndexOf("\n", match.index - 1) + 1;
+  const prefix = text.slice(start, match.index);
+  const suffix = text.slice(match.index + match[0].length, lineEnd(text, match.index));
+  // Only the filename's coordinate colon is exempt, never another assignment in the frame.
+  if (/^\d+:\d+[\t ]*$/u.test(suffix)) {
+    return /^[\t ]*(?:at[\t ]+(?:async[\t ]+)?|\u276f[\t ]+(?:[^\r\n]*[\t ]+)?)(?:[^\r\n]*[\\/])?$/u.test(
+      prefix,
+    );
+  }
+  return (
+    /^\d+:\d+\)[\t ]*$/u.test(suffix) &&
+    /^[\t ]*at[\t ]+[^\r\n]+\((?:[^\r\n]*[\\/])?$/u.test(prefix)
+  );
+}
+
 function bareFieldEnd(text: string, start: number, object: boolean): number {
   let end = start;
   while (end < text.length && !/[\r\n]/u.test(text.charAt(end))) {
@@ -189,7 +208,8 @@ export function redactCredentialText(text: string): string {
     if (
       match.index < consumed ||
       !credentialKey.test(match[0]) ||
-      quotes.some((quoted) => match.index > quoted.start && match.index < quoted.end)
+      quotes.some((quoted) => match.index > quoted.start && match.index < quoted.end) ||
+      isSourceLocation(plain, match)
     ) {
       continue;
     }
