@@ -357,6 +357,7 @@ function createDefaultState(): WorkboardUiState {
     bulkDialog: null,
     bulkSaving: false,
     bulkResult: null,
+    pendingCardRemovals: new Map(),
     draggedCardId: null,
     dragOverStatus: null,
     dragBeforeCardId: null,

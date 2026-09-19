@@ -1,6 +1,10 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { setWorkboardCards } from "./card-state.ts";
+import {
+  applyPendingCardRemovals,
+  setWorkboardCards,
+  updatePendingCardRemovals,
+} from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -131,6 +135,7 @@ async function loadWorkboardInternal(
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
+      updatePendingCardRemovals(state.pendingCardRemovals, normalized.cards);
       if (catalogOnly) {
         state.boards = normalized.boards;
         // Keep navigation current without replacing cards beneath an unfinished draft.
@@ -155,7 +160,7 @@ async function loadWorkboardInternal(
       }
       const previousTasksByCardId = state.tasksByCardId;
       const taskLinkState: WorkboardTaskLinkState = {
-        cards: normalized.cards,
+        cards: applyPendingCardRemovals(normalized.cards, state.pendingCardRemovals),
         tasksByCardId: new Map(),
         missingTaskIds: new Set(state.missingTaskIds),
       };

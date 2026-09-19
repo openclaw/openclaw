@@ -525,6 +525,50 @@ describe("renderWorkboard", () => {
     },
   );
 
+  it("does not restore a rejected delete after leaving and returning to its scope", async () => {
+    const first = createWorkboardCard({
+      id: "first",
+      metadata: { automation: { boardId: "one" } },
+    });
+    const second = createWorkboardCard({
+      id: "second",
+      metadata: { automation: { boardId: "two" } },
+    });
+    const deletion = createDeferred<unknown>();
+    const request = vi.fn().mockImplementation((method: string) => {
+      return method === "workboard.cards.delete" ? deletion.promise : {};
+    });
+    const { state, container, renderView } = createWorkboardView({
+      client: { request, addEventListener: () => () => undefined },
+      canWrite: true,
+    });
+    state.boardFilter = "one";
+    state.cards = [first, second];
+    state.selectedCardIds = new Set([first.id]);
+    renderView();
+
+    expectDefined(
+      container.querySelector<HTMLButtonElement>(".workboard-selection__delete"),
+      "delete selected",
+    ).click();
+    renderView();
+    expectDefined(
+      container.querySelector<HTMLButtonElement>('.workboard-bulk-dialog button[type="submit"]'),
+      "confirm delete",
+    ).click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    state.boardFilter = "two";
+    renderView();
+    state.boardFilter = "one";
+    renderView();
+    deletion.reject(new Error("gateway refused delete"));
+    await vi.waitFor(() => expect(state.bulkSaving).toBe(false));
+
+    expect(state.selectedCardIds).toEqual(new Set());
+    expect(state.bulkDialog).toBeNull();
+  });
+
   it.each(["board", "agent", "local agent"] as const)(
     "drops a live card outside the selected %s scope before actions and during pending work",
     async (scope) => {
