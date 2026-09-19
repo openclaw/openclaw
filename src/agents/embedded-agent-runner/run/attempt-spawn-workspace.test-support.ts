@@ -59,12 +59,6 @@ type CapturedTrajectoryEvent = {
   workspaceDir?: string;
 };
 
-function normalizeMockProviderId(providerId?: string): string {
-  // Provider ids in mocked model routing follow the same lowercase normalization
-  // as production helpers.
-  return normalizeLowercaseStringOrEmpty(providerId);
-}
-
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
   getAppendParentId: Mock<() => string | null>;
@@ -660,15 +654,15 @@ vi.mock("../../model-selection.js", () => ({
     if (!entries) {
       return undefined;
     }
-    const providerKey = normalizeMockProviderId(provider);
+    const providerKey = normalizeLowercaseStringOrEmpty(provider);
     for (const [key, value] of Object.entries(entries)) {
-      if (normalizeMockProviderId(key) === providerKey) {
+      if (normalizeLowercaseStringOrEmpty(key) === providerKey) {
         return value;
       }
     }
     return undefined;
   },
-  normalizeProviderId: normalizeMockProviderId,
+  normalizeProviderId: normalizeLowercaseStringOrEmpty,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -765,7 +759,10 @@ vi.mock("../cache-ttl.js", () => ({
 }));
 
 vi.mock("../compaction-runtime-context.js", () => ({
-  buildEmbeddedCompactionRuntimeContext: () => ({}),
+  // Pass the inputs through: runtime-identity fields (senderId, workspaceDir,
+  // sessionKey) stay observable to context-engine assertions without resolving
+  // the real model target against the registry.
+  buildEmbeddedCompactionRuntimeContext: (params: Record<string, unknown>) => ({ ...params }),
 }));
 
 vi.mock("./preemptive-compaction.js", async (importOriginal) => {
@@ -1290,6 +1287,7 @@ export async function createContextEngineAttemptRunner(params: {
     info?: Partial<ContextEngineInfo>;
   };
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
+  configPatch?: Record<string, unknown>;
   createSession?: () => EmbeddedAttemptSession;
   sessionMessages?: AgentMessage[];
   sessionMessagesAfterRepair?: AgentMessage[];
@@ -1364,7 +1362,9 @@ export async function createContextEngineAttemptRunner(params: {
       },
       workspaceDir,
       agentDir,
-      config: { session: { store: sessionStore } },
+      // configPatch adds plugin/slot policy without clobbering session.store;
+      // attemptOverrides.config still replaces the whole object when needed.
+      config: { session: { store: sessionStore }, ...params.configPatch },
       prompt: "hello",
       timeoutMs: 10_000,
       runId: "run-context-engine-forwarding",

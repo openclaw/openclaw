@@ -116,6 +116,13 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   provider: string;
   model: string;
   authProfileId?: string;
+  /**
+   * Forwarded into the isolated contract, which revalidates it before
+   * credential handoff and again after its own acquisition window. Without
+   * this gate a completion admitted while the run was active could reach
+   * inference after the parent run was revoked.
+   */
+  assertCurrent?: () => void;
 }): Promise<IsolatedCompletionResult> {
   const prompt = requireIsolatedUserPrompt(params.request);
   const timeoutMs = resolveIsolatedTimeoutMs(params.request.execution.timeoutMs);
@@ -159,6 +166,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
         prompt,
         timeoutMs,
         abortSignal: controller.signal,
+        assertCurrent: params.assertCurrent,
         thinkLevel: params.request.reasoning,
         streamParams: {
           maxTokens: asFiniteNumber(params.request.maxTokens),
@@ -168,6 +176,10 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     })();
     return await Promise.race([operation, abortPromise]);
   } catch (error) {
+    // Revalidate first: a revoked run authority must surface as its own
+    // failure instead of being wrapped as a provider transport error, and
+    // the unusable result must stay unreachable either way.
+    params.assertCurrent?.();
     if (timedOut) {
       throw completionError(
         "LLM_COMPLETION_TIMEOUT",

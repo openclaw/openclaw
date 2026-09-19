@@ -45,6 +45,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   agentDir: string;
   isRawModelRun: boolean;
   resolveActiveContextEnginePluginId: () => string | undefined;
+  /** Keeps retained engine completions from outliving the admitting run. */
+  assertRunAuthorityActive?: () => void;
   setup: EmbeddedAttemptSetup;
   toolBase: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
   toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
@@ -101,6 +103,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     },
     replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
     resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
+    ...(input.assertRunAuthorityActive
+      ? { assertRunAuthorityActive: input.assertRunAuthorityActive }
+      : {}),
     sessionAgentId,
     transcriptLifecycle: sessionLock.transcriptLifecycle,
     withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
@@ -196,6 +201,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     activeSession,
     agentDir: input.agentDir,
+    ...(input.assertRunAuthorityActive
+      ? { assertRunAuthorityActive: input.assertRunAuthorityActive }
+      : {}),
     attempt,
     computerContextEpoch,
     dropThinkingBlocksForEstimate: transcriptPolicy.dropThinkingBlocks,
