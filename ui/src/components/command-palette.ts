@@ -34,12 +34,8 @@ type PaletteItem = CommandPaletteItem;
 
 const SESSION_SEARCH_DEBOUNCE_MS = 50;
 const SESSION_SEARCH_MIN_CHARS = 2;
-// sessions.search caps queries at 4,096 Unicode characters; session prompts are independent.
-const SESSION_SEARCH_MAX_CHARS = 4_096;
-
-function exceedsSessionSearchLimit(query: string): boolean {
-  return Array.from(query).length > SESSION_SEARCH_MAX_CHARS;
-}
+// Deliberate line breaks or paragraph-length input belong to the draft, not search.
+const PROMPT_MIN_CHARS = 160;
 const SESSION_SEARCH_SCOPE = {
   includeGlobal: false,
   includeUnknown: false,
@@ -81,6 +77,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   private get query(): string {
     return this.draft.message;
+  }
+
+  private get promptMode(): boolean {
+    const query = this.query.trim();
+    return query.includes("\n") || Array.from(query).length >= PROMPT_MIN_CHARS;
   }
   @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
@@ -287,7 +288,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const context = this.context;
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
-    if (!context || !this.gateway.connected || !gateway || !client) {
+    if (
+      !this.open ||
+      this.promptMode ||
+      !context ||
+      !this.gateway.connected ||
+      !gateway ||
+      !client
+    ) {
       return Promise.resolve();
     }
     const agentId =
@@ -336,13 +344,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     // Invalidate the previous query immediately so late responses cannot
     // repopulate selectable stale rows during the debounce window.
     this.clearSessionSearch();
+    if (this.promptMode) {
+      // Retire catalog generations too: late results and refresh events must not
+      // revive search while the same field is being used as a session draft.
+      this.clearCatalogSearch();
+      return;
+    }
     const search = normalizeOptionalString(query);
-    if (
-      !this.open ||
-      !search ||
-      search.length < SESSION_SEARCH_MIN_CHARS ||
-      exceedsSessionSearchLimit(search)
-    ) {
+    if (!this.open || !search || search.length < SESSION_SEARCH_MIN_CHARS) {
       return;
     }
     this.sessionSearchPending = Boolean(
@@ -442,6 +451,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
+      promptMode: this.promptMode,
       activeId: this.activeId,
       filter: this.filter,
       onFilterChange: (filter) => {
@@ -465,10 +475,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         ...this.catalogItems,
       ],
       sessionSearchPending: this.sessionSearchPending,
-      searchLimitReached: exceedsSessionSearchLimit(this.query.trim()),
       catalogSearchPending: Boolean(
         normalizeOptionalString(this.query) &&
-        !exceedsSessionSearchLimit(this.query.trim()) &&
+        !this.promptMode &&
         ((this.sessionSearchTimer !== null && this.gateway.connected) ||
           (this.catalogLoad && this.catalogLoad.loadedAt === undefined)),
       ),

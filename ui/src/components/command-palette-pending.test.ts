@@ -11,6 +11,7 @@ import {
   createGateway,
   createSessionResult,
   enterQuery,
+  expectPalettePromptMode,
   findPaletteOption,
   mountPalette,
 } from "./command-palette.test-support.ts";
@@ -29,6 +30,120 @@ describe("CommandPalette pending searches", () => {
     restoreDialogPolyfill();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("cancels a pending search when the query becomes a multiline prompt", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.search" ? { results: [], sessions: [] } : { models: [] },
+    );
+    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
+    const list = vi.fn(async () => createSessionResult("agent:main:plugins", "Plugins discussion"));
+    const { palette } = await mountPalette(createContext(gateway, list));
+    await enterQuery(palette, "plugins");
+    expect(palette.textContent).toContain("Searching sessions");
+    await vi.advanceTimersByTimeAsync(49);
+
+    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    const prompt = "plugins\nReview the available integrations and explain how to configure them.";
+    input.value = prompt;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(100);
+    await palette.updateComplete;
+
+    expect(list).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expectPalettePromptMode(palette);
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    expect(palette.onNavigate).not.toHaveBeenCalled();
+    expect(palette.onSelectSession).not.toHaveBeenCalled();
+    expect(palette.isOpen).toBe(true);
+    expect(input.value).toBe(prompt);
+
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
+    expect(palette.querySelectorAll('[role="option"]').length).toBeGreaterThan(0);
+    expect(list).not.toHaveBeenCalled();
+
+    input.value = "plugins";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ query: "plugins" }),
+    );
+    expect(request).toHaveBeenCalledWith("models.list", expect.anything());
+    expect(palette.querySelectorAll(".cmd-palette__filter")).toHaveLength(3);
+    findPaletteOption(palette, "Plugins discussion")!.click();
+    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:plugins");
+  });
+
+  it("does not restore late session, transcript, or catalog results after entering a prompt", async () => {
+    const metadata = createDeferred<SessionsListResult | null>();
+    const transcript = createDeferred<SessionsSearchResult>();
+    const catalog = createDeferred<{
+      models: { id: string; provider: string; name: string }[];
+      refreshFailed: boolean;
+    }>();
+    const prompt = "zzfixtureunique\nExplain the findings in a new session.";
+    const request = vi.fn((method: string) =>
+      method === "sessions.search" ? transcript.promise : catalog.promise,
+    );
+    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
+    const list = vi.fn(() => metadata.promise);
+    const { palette } = await mountPalette(createContext(gateway, list));
+    await enterQuery(palette, "zzfixtureunique");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(list).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    input.value = prompt;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await palette.updateComplete;
+    const stale = createSessionResult("agent:main:stale", "zzfixtureunique stale session");
+    metadata.resolve(stale);
+    transcript.resolve({
+      sessions: stale.sessions,
+      results: [
+        {
+          sessionKey: "agent:main:stale",
+          sessionId: "stale",
+          messageId: "message",
+          role: "assistant",
+          timestamp: 1,
+          score: 1,
+          snippet: "zzfixtureunique stale transcript",
+        },
+      ],
+      indexing: true,
+      archivedTranscriptsExcluded: 2,
+    });
+    catalog.resolve({
+      models: [{ id: "stale", provider: "fixture", name: prompt }],
+      refreshFailed: true,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await palette.updateComplete;
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
+    expectPalettePromptMode(palette);
+    expect(input.value).toBe(prompt);
+
+    input.value = "zzfixtureunique";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await palette.updateComplete;
+    expect(palette.querySelector('[inert][aria-hidden="true"]')).toBeNull();
+    expect(palette.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(palette.querySelector(".cmd-palette__source-error")).toBeNull();
+    expect(list).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it.each(["match", "empty", "failure"])(
@@ -182,6 +297,13 @@ describe("CommandPalette pending searches", () => {
       await palette.updateComplete;
       expect(palette.textContent).toContain(notice);
       expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      input.value = "zzfixtureunique\nSummarize the findings in a new session.";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      expectPalettePromptMode(palette);
+      expect(list).toHaveBeenCalledOnce();
     },
   );
 
@@ -203,6 +325,12 @@ describe("CommandPalette pending searches", () => {
     await palette.updateComplete;
     expect(palette.textContent).toContain("Model search unavailable");
     expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
+    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    input.value = "zzfixtureunique\nStart a new task without searching models.";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expectPalettePromptMode(palette);
   });
 
   it("keeps static commands usable while session search is pending", async () => {

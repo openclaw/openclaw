@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, noChange, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { pathForAgentPanel, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -38,6 +38,7 @@ type CommandPaletteProps = {
   basePath: string;
   open: boolean;
   query: string;
+  promptMode: boolean;
   activeId: string | null;
   filter: PaletteFilter;
   onFilterChange: (filter: PaletteFilter) => void;
@@ -48,7 +49,6 @@ type CommandPaletteProps = {
   catalogItems: readonly PaletteItem[];
   modelSearchError: string | null;
   sessionSearchPending: boolean;
-  searchLimitReached: boolean;
   catalogSearchPending: boolean;
   sessionSearchFailed: boolean;
   sessionSearchPartial: boolean;
@@ -188,10 +188,12 @@ export function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  const matches = filterCommandPaletteItems({
-    ...props,
-    includeSlashCommands: Boolean(props.onSlashCommand),
-  });
+  const matches = props.promptMode
+    ? []
+    : filterCommandPaletteItems({
+        ...props,
+        includeSlashCommands: Boolean(props.onSlashCommand),
+      });
   const matchesFilter = (item: PaletteItem, filter: PaletteFilter) =>
     filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
   const grouped = groupItems(matches.filter((item) => matchesFilter(item, props.filter)));
@@ -226,13 +228,14 @@ export function renderCommandPalette(props: CommandPaletteProps) {
     Boolean(props.query.trim()) &&
     !props.sessionSearchPending &&
     !props.catalogSearchPending &&
-    !props.searchLimitReached &&
     !props.modelSearchError &&
     !props.sessionSearchFailed &&
     !props.sessionSearchPartial &&
     !props.sessionSearchIndexing &&
     props.archivedTranscriptsExcluded === 0;
 
+  // Keep the outgoing search DOM stable while it collapses; the wrapper retires
+  // focus/accessibility immediately, and keyboard selection uses the empty items.
   return html`
     <openclaw-modal-dialog
       class="cmd-palette-overlay palette"
@@ -247,7 +250,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
       }}
     >
       <div
-        class="cmd-palette"
+        class="cmd-palette ${props.promptMode ? "cmd-palette--prompt" : ""}"
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: KeyboardEvent) => handleKeydown(e, props, items, activeIndex)}
       >
@@ -258,9 +261,9 @@ export function renderCommandPalette(props: CommandPaletteProps) {
           onValueChange: props.onQueryChange,
           disabled: props.draft.submitting,
           readOnly: props.draft.messageLocked,
-          controls: paletteListboxId,
+          controls: props.promptMode ? undefined : paletteListboxId,
           activeDescendant: activeOptionId,
-          describedBy: "cmd-palette-keys",
+          describedBy: props.promptMode ? undefined : "cmd-palette-keys",
           actions: html`
             <openclaw-tooltip content=${startReason ?? t("palette.startSessionBackground")}>
               <button
@@ -277,103 +280,113 @@ export function renderCommandPalette(props: CommandPaletteProps) {
             ${props.draft.renderControls()}
           `,
         })}
-        ${
-          props.query.trim() && props.onSelectSession
-            ? html`<div
-                class="cmd-palette__filters"
-                role="group"
-                aria-label=${t("palette.filterLabel")}
-              >
-                ${(["all", "sessions", "messages"] as const).map((filter) => html`<button type="button" class="cmd-palette__filter" aria-pressed=${props.filter === filter ? "true" : "false"} @click=${() => props.onFilterChange(filter)}>${t(`palette.filters.${filter}`)}<span>${matches.filter((item) => matchesFilter(item, filter)).length}</span></button>`)}
-              </div>`
-            : nothing
-        }
-        ${
-          props.sessionSearchPending || props.catalogSearchPending
-            ? html`<div class="cmd-palette__empty" role="status">
-                ${t(props.sessionSearchPending ? "palette.searchingSessions" : "palette.searchingCommands")}
-              </div>`
-            : nothing
-        }
         <div
-          id=${paletteListboxId}
-          class="cmd-palette__results"
-          ?hidden=${items.length === 0}
-          role="listbox"
-          aria-busy=${props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
+          class="cmd-palette__search"
+          ?inert=${props.promptMode}
+          aria-hidden=${props.promptMode ? "true" : nothing}
         >
-          ${grouped.map(
-            ([category, groupedItems]) => html`
-              <div class="cmd-palette__group-label">
-                ${commandPaletteCategoryLabel(category)}<span class="cmd-palette__group-count"
-                  >${groupedItems.length}</span
-                >
-              </div>
-              ${groupedItems.map((item) => {
-                const globalIndex = items.indexOf(item);
-                const isActive = globalIndex === activeIndex;
-                const agentId = item.session
-                  ? resolveUiSessionRowAgentId(item.session, props.defaultAgentId)
-                  : item.agentId;
-                const agent = agentId
-                  ? (props.agents.find((row) => row.id === agentId) ?? { id: agentId })
-                  : undefined;
-                return html`
-                  <div
-                    id=${getOptionId(globalIndex)}
-                    class="cmd-palette__item ${item.session ? "cmd-palette__item--session" : ""} ${isActive ? "cmd-palette__item--active" : ""}"
-                    role="option"
-                    aria-selected=${isActive ? "true" : "false"}
-                    aria-disabled=${props.draft.submitting ? "true" : nothing}
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      selectItem(item, props);
-                    }}
-                    @mouseenter=${() => props.onActiveIdChange(item.id)}
-                  >
-                    ${renderCommandPaletteResult(item, props.query, agent, props.agentIdentity?.get(agentId))}
-                  </div>
-                `;
-              })}
-            `,
-          )}
+          <div class="cmd-palette__search-content">
+            ${
+              props.promptMode
+                ? noChange
+                : html`
+                    ${
+                      props.query.trim() && props.onSelectSession
+                        ? html`<div
+                            class="cmd-palette__filters"
+                            role="group"
+                            aria-label=${t("palette.filterLabel")}
+                          >
+                            ${(["all", "sessions", "messages"] as const).map((filter) => html`<button type="button" class="cmd-palette__filter" aria-pressed=${props.filter === filter ? "true" : "false"} @click=${() => props.onFilterChange(filter)}>${t(`palette.filters.${filter}`)}<span>${matches.filter((item) => matchesFilter(item, filter)).length}</span></button>`)}
+                          </div>`
+                        : nothing
+                    }
+                    ${
+                      props.sessionSearchPending || props.catalogSearchPending
+                        ? html`<div class="cmd-palette__empty" role="status">
+                            ${t(props.sessionSearchPending ? "palette.searchingSessions" : "palette.searchingCommands")}
+                          </div>`
+                        : nothing
+                    }
+                    <div
+                      id=${paletteListboxId}
+                      class="cmd-palette__results"
+                      ?hidden=${items.length === 0}
+                      role="listbox"
+                      aria-busy=${props.sessionSearchPending || props.catalogSearchPending ? "true" : "false"}
+                    >
+                      ${grouped.map(
+                        ([category, groupedItems]) => html`
+                          <div class="cmd-palette__group-label">
+                            ${commandPaletteCategoryLabel(category)}<span
+                              class="cmd-palette__group-count"
+                              >${groupedItems.length}</span
+                            >
+                          </div>
+                          ${groupedItems.map((item) => {
+                            const globalIndex = items.indexOf(item);
+                            const isActive = globalIndex === activeIndex;
+                            const agentId = item.session
+                              ? resolveUiSessionRowAgentId(item.session, props.defaultAgentId)
+                              : item.agentId;
+                            const agent = agentId
+                              ? (props.agents.find((row) => row.id === agentId) ?? { id: agentId })
+                              : undefined;
+                            return html`
+                              <div
+                                id=${getOptionId(globalIndex)}
+                                class="cmd-palette__item ${item.session ? "cmd-palette__item--session" : ""} ${isActive ? "cmd-palette__item--active" : ""}"
+                                role="option"
+                                aria-selected=${isActive ? "true" : "false"}
+                                aria-disabled=${props.draft.submitting ? "true" : nothing}
+                                @click=${(e: Event) => {
+                                  e.stopPropagation();
+                                  selectItem(item, props);
+                                }}
+                                @mouseenter=${() => props.onActiveIdChange(item.id)}
+                              >
+                                ${renderCommandPaletteResult(item, props.query, agent, props.agentIdentity?.get(agentId))}
+                              </div>
+                            `;
+                          })}
+                        `,
+                      )}
+                    </div>
+                    ${props.modelSearchError ? html`<div class="cmd-palette__source-error" role="status">${props.modelSearchError}</div>` : nothing}
+                    ${notices.map((notice) => html`<div class="cmd-palette__source-error" role="status">${notice}</div>`)}
+                    ${
+                      items.length === 0 && searchSettled
+                        ? html`<div class="cmd-palette__no-results" role="status">
+                            <span class="cmd-palette__no-results-icon" aria-hidden="true"
+                              >${icons.messageSquarePlus}</span
+                            >
+                            <h2>${t("palette.noResults")}</h2>
+                            <p>${t("palette.noResultsStart", { shortcut: startShortcut })}</p>
+                          </div>`
+                        : nothing
+                    }
+                    <div id="cmd-palette-keys" class="cmd-palette__footer">
+                      ${
+                        items.length > 0 && !props.query.includes("\n")
+                          ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
+                              <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>`
+                          : nothing
+                      }
+                      <span
+                        ><kbd>${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newline)}</kbd>
+                        ${t("palette.footer.newline")}</span
+                      >
+                    </div>
+                  `
+            }
+          </div>
         </div>
-        ${props.modelSearchError ? html`<div class="cmd-palette__source-error" role="status">${props.modelSearchError}</div>` : nothing}
-        ${notices.map((notice) => html`<div class="cmd-palette__source-error" role="status">${notice}</div>`)}
-        ${
-          props.searchLimitReached
-            ? html`<div class="cmd-palette__empty" role="status">${t("palette.longPrompt")}</div>`
-            : nothing
-        }
-        ${
-          items.length === 0 && searchSettled
-            ? html`<div class="cmd-palette__no-results" role="status">
-                <span class="cmd-palette__no-results-icon" aria-hidden="true"
-                  >${icons.messageSquarePlus}</span
-                >
-                <h2>${t("palette.noResults")}</h2>
-                <p>${t("palette.noResultsStart", { shortcut: startShortcut })}</p>
-              </div>`
-            : nothing
-        }
         ${
           props.draft.error
             ? html`<div class="cmd-palette__creation-error" role="alert">${props.draft.error}</div>`
             : nothing
         }
-        <div id="cmd-palette-keys" class="cmd-palette__footer">
-          ${props.draft.renderRecovery()}
-          ${
-            items.length > 0 && !props.query.includes("\n")
-              ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
-                  <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>`
-              : nothing
-          }
-          <span
-            ><kbd>${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newline)}</kbd>
-            ${t("palette.footer.newline")}</span
-          >
-        </div>
+        ${props.draft.renderRecovery() !== nothing ? html`<div class="cmd-palette__footer">${props.draft.renderRecovery()}</div>` : nothing}
       </div>
     </openclaw-modal-dialog>
     ${props.draft.renderAuxiliary()}

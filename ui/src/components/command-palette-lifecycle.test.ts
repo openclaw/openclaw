@@ -11,6 +11,8 @@ import {
   createGateway,
   createSessionResult,
   enterQuery,
+  expectPalettePromptMode,
+  findPaletteOption,
   mountPalette,
 } from "./command-palette.test-support.ts";
 import "./command-palette.ts";
@@ -130,6 +132,58 @@ describe("CommandPalette lifecycle", () => {
     expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ search: "retry" }));
     expect(palette.textContent).toContain("Retry chat");
   });
+
+  it.each(["reconnect", "config.changed", "chat.metadata.changed", "agent"])(
+    "keeps prompt searches stopped through %s and resumes when shortened",
+    async (change) => {
+      const request = vi.fn(async (method: string) =>
+        method === "sessions.search"
+          ? { results: [], sessions: [] }
+          : { models: [{ id: "fixture", provider: "fixture", name: "Needle model" }] },
+      );
+      const harness = createGateway(true, { methods: ["sessions.search"], request });
+      const list = vi.fn(async () => createSessionResult("agent:main:needle", "Needle session"));
+      const context = createContext(harness.gateway, list);
+      const { palette } = await mountPalette(context);
+      const prompt = "needle\nSummarize the discussion and prepare a follow-up task.";
+      await enterQuery(palette, prompt);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(list).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+
+      if (change === "reconnect") {
+        harness.setConnected(false);
+        await palette.updateComplete;
+        harness.setConnected(true);
+      } else if (change === "agent") {
+        context.agentSelection.set("reviewer");
+      } else {
+        harness.emit(change);
+      }
+      await palette.updateComplete;
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      expect(input.value).toBe(prompt);
+      expect(list).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+      expectPalettePromptMode(palette);
+
+      input.value = "needle";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(50);
+      await palette.updateComplete;
+      expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "needle" }));
+      expect(request).toHaveBeenCalledWith(
+        "sessions.search",
+        expect.objectContaining({ query: "needle" }),
+      );
+      expect(request).toHaveBeenCalledWith("models.list", expect.anything());
+      expect(findPaletteOption(palette, "Needle session")).toBeDefined();
+      expect(findPaletteOption(palette, "Needle model")).toBeDefined();
+      expect(palette.querySelectorAll(".cmd-palette__filter")).toHaveLength(3);
+    },
+  );
 
   it("clears the old Gateway prompt before searching the replacement context", async () => {
     const initial = createGateway(true);

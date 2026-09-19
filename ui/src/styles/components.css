@@ -4844,7 +4844,6 @@ td.data-table-key-col {
   flex: 0 0 auto;
   min-width: 0;
   padding: 14px 5px 14px 18px;
-  border-bottom: 1px solid var(--border);
 }
 
 .cmd-palette__input-scroll {
@@ -4940,6 +4939,34 @@ td.data-table-key-col {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.cmd-palette__search {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  opacity: 1;
+  transition:
+    grid-template-rows var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) ease;
+}
+
+.cmd-palette__search-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cmd-palette__search-content::before {
+  content: "";
+  flex: 0 0 1px;
+  background: var(--border);
+}
+
+.cmd-palette--prompt .cmd-palette__search {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
 .cmd-palette__filters {

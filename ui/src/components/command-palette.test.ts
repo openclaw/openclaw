@@ -11,6 +11,7 @@ import {
   createGateway,
   createSessionResult,
   enterQuery,
+  expectPalettePromptMode,
   findPaletteOption,
   mountPalette,
 } from "./command-palette.test-support.ts";
@@ -289,12 +290,21 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("preserves a prompt beyond the transcript-search limit without sending an invalid search", async () => {
+  it.each([
+    { name: "160 characters", prompt: "x".repeat(160) },
+    { name: "160 Unicode code points", prompt: "🦞".repeat(160) },
+    {
+      name: "a long single-line request",
+      prompt:
+        "Please review the deployment plan, explain the remaining risks, compare the available options, and prepare a detailed follow-up task that records the evidence before making changes.",
+    },
+    { name: "an internal newline", prompt: "plugins\nsettings" },
+    { name: "text beyond the transcript-search limit", prompt: "x".repeat(4_097) },
+  ])("preserves $name as a prompt without sending searches", async ({ prompt }) => {
     const request = vi.fn(async (_method: string) => ({ models: [], results: [] }));
     const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
     const list = vi.fn(async () => null);
     const { palette } = await mountPalette(createContext(gateway, list));
-    const prompt = "x".repeat(4_097);
 
     await enterQuery(palette, prompt);
     await vi.advanceTimersByTimeAsync(50);
@@ -302,16 +312,50 @@ describe("CommandPalette search", () => {
 
     const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
     expect(input.value).toBe(prompt);
-    expect(list.mock.calls).toHaveLength(0);
-    expect(request.mock.calls.some(([method]) => method === "sessions.search")).toBe(false);
-    expect(palette.textContent).toContain("This prompt is too long to search");
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(list).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expectPalettePromptMode(palette);
     const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     input.dispatchEvent(enter);
     expect(enter.defaultPrevented).toBe(true);
     expect(palette.onNavigate).not.toHaveBeenCalled();
     expect(palette.onSelectSession).not.toHaveBeenCalled();
     expect(input.value).toBe(prompt);
+
+    input.value = "plugins";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
+    expect(palette.querySelector('[inert][aria-hidden="true"]')).toBeNull();
+    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
+  });
+
+  it.each([
+    { name: "159 Unicode code points", query: "🦞".repeat(159) },
+    { name: "159 trimmed characters", query: ` ${"x".repeat(159)} ` },
+    { name: "surrounding blank lines", query: "\n plugins \n" },
+    { name: "a short natural-language query", query: "find my deployment plan" },
+  ])("continues searching for $name", async ({ query }) => {
+    const request = vi.fn(async (_method: string) => ({ models: [], results: [] }));
+    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
+    const list = vi.fn(async () => null);
+    const { palette } = await mountPalette(createContext(gateway, list));
+    await enterQuery(palette, query);
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+
+    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: query.trim() }));
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ query: query.trim() }),
+    );
+    expect(palette.querySelector('[inert][aria-hidden="true"]')).toBeNull();
+    expect(palette.querySelectorAll(".cmd-palette__filter")).toHaveLength(3);
+    expect(palette.querySelector(".cmd-palette__input")?.getAttribute("aria-controls")).toBe(
+      "cmd-palette-listbox",
+    );
   });
 
   it("waits for two characters before searching sessions", async () => {
@@ -651,8 +695,17 @@ describe("CommandPalette search", () => {
       expect(findPaletteOption(palette, "Plugins")).toBeDefined();
     }
 
-    // A new keystroke clears the failure state and retries cleanly.
-    await enterQuery(palette, "zz");
+    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    input.value = `${query}\nExplain what needs to be repaired in a new session.`;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(50);
+    await palette.updateComplete;
+    expectPalettePromptMode(palette);
+    expect(list).toHaveBeenCalledOnce();
+
+    // Shortening the prompt restores search and retries cleanly.
+    input.value = "zz";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     await palette.updateComplete;
     expect(palette.textContent).not.toContain("Chat search failed");
     await vi.advanceTimersByTimeAsync(50);
