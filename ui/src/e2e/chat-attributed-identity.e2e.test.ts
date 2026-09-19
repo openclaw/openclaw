@@ -727,7 +727,7 @@ suite.define(() => {
       await expect(page.locator(".chat-error")).toHaveCount(0);
       await expect(page.locator(".agent-chat__composer-combobox textarea")).toHaveValue("");
       const status = group.locator(".chat-send-status");
-      await expect(status).toHaveText("· Not sent · Retry");
+      await expect(status).toHaveText("· Not sent · Retry · Discard");
       await expect(group.locator(".chat-sender-name")).toHaveCount(0);
       const footerLineCenters = await status
         .locator("span:not([aria-hidden]), button")
@@ -737,8 +737,9 @@ suite.define(() => {
             return rect.top + rect.height / 2;
           }),
         );
-      expect(footerLineCenters).toHaveLength(2);
+      expect(footerLineCenters).toHaveLength(3);
       expect(footerLineCenters[0]).toBeCloseTo(footerLineCenters[1] ?? 0, 0);
+      expect(footerLineCenters[0]).toBeCloseTo(footerLineCenters[2] ?? 0, 0);
       expect(
         await group
           .locator(".chat-bubble")
@@ -762,6 +763,87 @@ suite.define(() => {
       );
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("discards an attributed failed send from the transcript footer and preserves dismissal after reload", async () => {
+    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("bubble-delivery-discard", artifactRoot)
+      : undefined;
+    const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
+    const page = await context.newPage();
+    const sender = {
+      self: true,
+      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      identity: { type: "profile" as const, id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
+      name: "Collin Johnson",
+    };
+    const prompt = "Discard my failed send from the transcript.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for a delivery check.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now() - 1_000,
+        },
+      ],
+      presenceUsers: [sender],
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+      await page.getByText("Ready for a delivery check.").waitFor();
+      await gateway.deferNext("chat.send");
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+
+      const group = page.locator(".chat-group.user", { hasText: prompt });
+      await group.waitFor();
+
+      await gateway.rejectDeferred("chat.send", {
+        code: "INVALID_REQUEST",
+        message: "Mock delivery failure.",
+      });
+      await expect
+        .poll(
+          async () =>
+            (await page.locator(".chat-send-status, .chat-queue__item--failed").count()) > 0,
+        )
+        .toBe(true);
+
+      const status = group.locator(".chat-send-status");
+      await expect(status).toHaveText("· Not sent · Retry · Discard");
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "before-discard.png"),
+        });
+      }
+
+      await group.locator(".chat-send-status__discard").click();
+      await expect(group).toHaveCount(0);
+      await expect(page.locator(".chat-queue__item")).toHaveCount(0);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "after-discard.png"),
+        });
+      }
+
+      await page.reload();
+      await page.getByText("Ready for a delivery check.").waitFor();
+      await expect(page.locator(".chat-group.user", { hasText: prompt })).toHaveCount(0);
+      await expect(page.locator(".chat-queue__item")).toHaveCount(0);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "after-reload.png"),
+        });
+      }
     } finally {
       await context.close();
     }
