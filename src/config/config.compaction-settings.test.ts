@@ -24,6 +24,7 @@ describe("config compaction settings", () => {
       qualityGuard: {
         enabled: true,
         maxRetries: 2,
+        semanticJudgments: true,
       },
       midTurnPrecheck: {
         enabled: true,
@@ -41,6 +42,7 @@ describe("config compaction settings", () => {
     expect(compaction?.identifierPolicy).toBe("strict");
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.qualityGuard?.semanticJudgments).toBe(true);
     expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");

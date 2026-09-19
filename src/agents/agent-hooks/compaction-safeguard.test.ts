@@ -8,6 +8,8 @@ import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-s
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as judgmentRuntimeModule from "../../judgments/runtime.js";
+import type { JudgmentOutcome } from "../../judgments/types.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import {
   requireActivePluginRegistry,
@@ -47,6 +49,13 @@ const { compactionLogger } = vi.hoisted(() => {
   return { compactionLogger: logger };
 });
 
+vi.mock("../../judgments/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../judgments/runtime.js")>(
+    "../../judgments/runtime.js",
+  );
+  return { ...actual, evaluateJudgment: vi.fn(actual.evaluateJudgment) };
+});
+
 vi.mock("../../logging/subsystem.js", async () => {
   const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
     "../../logging/subsystem.js",
@@ -70,6 +79,7 @@ vi.mock("../compaction.js", async () => {
 });
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
+const mockEvaluateJudgment = vi.mocked(judgmentRuntimeModule.evaluateJudgment);
 const actualCompactionModule = await vi.importActual<typeof compactionModule>("../compaction.js");
 const actualCompactionQualityModule = await vi.importActual<typeof compactionQualityModule>(
   "./compaction-safeguard-quality.js",
@@ -134,6 +144,7 @@ beforeEach(() => {
   testing.setSummarizeInStagesForTest(mockSummarizeInStages);
   mockAuditSummaryQuality.mockImplementation(actualCompactionQualityModule.auditSummaryQuality);
   mockAuditSummaryQuality.mockClear();
+  mockEvaluateJudgment.mockReset();
   compactionLogger.warn.mockClear();
 });
 
@@ -226,6 +237,38 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
   },
   customInstructions: "",
   signal: new AbortController().signal,
+});
+
+const createSemanticCompactionEvent = (params: {
+  sourceRequirement: string;
+  latestAsk: string;
+  tokensBefore: number;
+  signal?: AbortSignal;
+}) => ({
+  preparation: {
+    messagesToSummarize: [
+      { role: "user", content: params.sourceRequirement, timestamp: 1 },
+      castAgentMessage({
+        role: "assistant",
+        content: "Acknowledged standing requirement.",
+        timestamp: 2,
+      }),
+      { role: "user", content: params.latestAsk, timestamp: 3 },
+    ] as AgentMessage[],
+    turnPrefixMessages: [] as AgentMessage[],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: params.tokensBefore,
+    fileOps: {
+      read: [],
+      edited: [],
+      written: [],
+    },
+    settings: { reserveTokens: 4_000 },
+    previousSummary: undefined,
+    isSplitTurn: false,
+  },
+  customInstructions: "",
+  signal: params.signal ?? new AbortController().signal,
 });
 
 const createCompactionContext = (params: {
@@ -3813,6 +3856,286 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     expect(result.compaction?.summary).toContain("latest ask status");
+  });
+
+  it("uses a semantic loss finding to drive the registered hook's existing corrective retry", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const firstSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    const repairedSummary = [
+      "## Decisions",
+      "Deploy only to staging.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(firstSummary))
+      .mockResolvedValueOnce(summaryResult(repairedSummary));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "recent-user-1": {
+            type: "choice",
+            choice: "contradicted",
+            probabilities: {
+              preserved: 0.01,
+              missing: 0.01,
+              contradicted: 0.95,
+              inactive_or_completed: 0.01,
+              uncertain: 0.02,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "test-generation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(1);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const repairCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(repairCall.customInstructions).toContain("Semantic fidelity feedback");
+    expect(repairCall.customInstructions).toContain(sourceRequirement);
+    expect(expectCompactionResult(result).summary).toContain(sourceRequirement);
+  });
+
+  it("preserves the deterministic-valid summary when semantic corrective generation fails", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const acceptedSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(acceptedSummary))
+      .mockRejectedValueOnce(new Error("semantic repair failed"));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "recent-user-1": {
+            type: "choice",
+            choice: "contradicted",
+            probabilities: {
+              preserved: 0.01,
+              missing: 0.01,
+              contradicted: 0.95,
+              inactive_or_completed: 0.01,
+              uncertain: 0.02,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "test-generation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result).not.toEqual({ cancel: true });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstFinalizedSummary = requireRecord(
+      mockCallArg(mockAuditSummaryQuality, 0),
+    ).summary;
+    expect(expectCompactionResult(result).summary).toBe(firstFinalizedSummary);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+    expect(compactionLogger.warn.mock.calls.flat().join("\n")).toContain(
+      "preserving the last deterministic-valid summary",
+    );
+  });
+
+  it("preserves the deterministic-valid summary when the semantic retry exhausts on ordinary quality checks", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const acceptedSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(acceptedSummary))
+      .mockResolvedValueOnce(summaryResult("invalid replacement"));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "recent-user-1": {
+            type: "choice",
+            choice: "missing",
+            probabilities: {
+              preserved: 0.01,
+              missing: 0.95,
+              contradicted: 0.01,
+              inactive_or_completed: 0.01,
+              uncertain: 0.02,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "test-generation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result).not.toEqual({ cancel: true });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstFinalizedSummary = requireRecord(
+      mockCallArg(mockAuditSummaryQuality, 0),
+    ).summary;
+    expect(expectCompactionResult(result).summary).toBe(firstFinalizedSummary);
+    expect(compactionLogger.warn.mock.calls.flat().join("\n")).toContain(
+      "semantic corrective retry did not produce a deterministic-valid replacement",
+    );
+  });
+
+  it("propagates caller cancellation while a semantic judgment is pending", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const acceptedSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult(acceptedSummary));
+
+    const controller = new AbortController();
+    let settleJudgment!: () => void;
+    const judgmentStarted = new Promise<void>((resolve) => {
+      mockEvaluateJudgment.mockImplementationOnce(async (_batch, options) => {
+        resolve();
+        await new Promise<void>((settle) => {
+          settleJudgment = settle;
+          options.signal?.addEventListener("abort", settle, { once: true });
+        });
+        options.signal?.throwIfAborted();
+        throw new Error("unreachable");
+      });
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+    event.signal = controller.signal;
+
+    const run = runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+    await judgmentStarted;
+    controller.abort();
+    settleJudgment?.();
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
   it("cancels when corrective generation fails after finalized quality rejection", async () => {

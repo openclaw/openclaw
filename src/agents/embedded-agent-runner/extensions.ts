@@ -152,6 +152,7 @@ export function buildEmbeddedExtensionFactories(params: {
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
+      semanticJudgmentsEnabled: qualityGuardCfg?.semanticJudgments === true,
       model: params.model,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
