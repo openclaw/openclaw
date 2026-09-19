@@ -10,9 +10,10 @@ import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
-import { completePendingPackageLifecycle } from "./package-lifecycle.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
+import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
+import { runPackageUpdateLifecycle } from "./package-update-lifecycle.js";
 import {
   checkGlobalPackageUpdatePermissions,
   classifyPackageUpdatePermissionFailure,
@@ -67,14 +68,6 @@ import {
 import type { UpdateRecovery } from "./update-recovery.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 export type { PackageUpdateTransaction } from "./package-update-swap.js";
-
-type PackageUpdateStepRunner = (params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}) => Promise<UpdateStepResult>;
 
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;
@@ -595,6 +588,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   );
   let localOverrides: LocalPackageOverridesResult | undefined;
   let stagedInstall: StagedPackageInstall | null = null;
+  let uncertainLifecycleStage: StagedPackageInstall | null = null;
   let packedInstallDir: string | null = null;
   const originalPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
   let activePackageRoot = originalPackageRoot;
@@ -1050,47 +1044,28 @@ export async function runGlobalPackageUpdateSteps(params: {
           error !== `unexpected packaged dist file ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
       );
       if (blockingVerificationErrors.length === 0) {
-        let failedLifecycleStep: UpdateStepResult | null = null;
-        try {
-          const completedLifecycle = await completePendingPackageLifecycle({
-            packageRoot: verificationPackageRoot,
-            timeoutMs: params.timeoutMs,
-            runScript: async (script) => {
-              const lifecycleStep = await params.runStep({
-                name: `${params.installTarget.manager} package ${script.name}`,
-                argv: [process.execPath, path.join(verificationPackageRoot, script.relativePath)],
-                cwd: verificationPackageRoot,
-                env: commandEnv,
-                timeoutMs: params.timeoutMs,
-              });
-              steps.push(lifecycleStep);
-              if (lifecycleStep.exitCode !== 0) {
-                failedLifecycleStep = lifecycleStep;
-                throw new Error(lifecycleStep.stderrTail ?? `${lifecycleStep.name} failed`);
-              }
-            },
-          });
-          if (completedLifecycle) {
+        const lifecycle = await runPackageUpdateLifecycle({
+          packageRoot: verificationPackageRoot,
+          manager: params.installTarget.manager,
+          timeoutMs: params.timeoutMs,
+          env: commandEnv,
+          runStep: params.runStep,
+          steps,
+          verifyCompleted: async () => {
             verificationErrors = await collectInstalledGlobalPackageErrors({
               packageRoot: verificationPackageRoot,
               expectedVersion,
               expectedGitCheckout: params.expectedGitCheckout,
             });
+          },
+        });
+        if (lifecycle.status === "failed") {
+          if (lifecycle.preserveStage) {
+            // Another writer may still use this exact candidate. Recovery verifies
+            // the previous runtime while the finalizer preserves this stage.
+            uncertainLifecycleStage = stagedInstall;
           }
-        } catch (error) {
-          if (failedLifecycleStep) {
-            return await packageUpdateFailure(failedLifecycleStep, steps);
-          }
-          const lifecycleStep: UpdateStepResult = {
-            name: `${params.installTarget.manager} package lifecycle`,
-            command: `complete ${verificationPackageRoot}`,
-            cwd: verificationPackageRoot,
-            durationMs: 0,
-            exitCode: 1,
-            stderrTail: formatErrorMessage(error),
-          };
-          steps.push(lifecycleStep);
-          return await packageUpdateFailure(lifecycleStep, steps);
+          return await packageUpdateFailure(lifecycle.step, steps);
         }
       }
       if (!params.expectedGitCheckout && verificationErrors.length === 0) {
@@ -1244,7 +1219,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     );
     return await packageUpdateFailure(failedStep, [...steps, failedStep]);
   } finally {
-    await cleanupStagedPackageInstall(stagedInstall);
+    if (stagedInstall !== uncertainLifecycleStage) {
+      await cleanupStagedPackageInstall(stagedInstall);
+    }
     if (packedInstallDir) {
       await removePackageUpdatePath(packedInstallDir);
     }

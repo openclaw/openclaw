@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
@@ -87,41 +87,94 @@ describe("package lifecycle completion", () => {
     },
   );
 
-  it.each([
-    ["default update", 30 * 60_000],
-    ["automatic update", 45 * 60_000],
-    ["explicit longer update", 75 * 60_000],
-  ])("records the %s lifecycle budget on its lock", async (_name, scriptTimeoutMs) => {
-    await withTestDir({ prefix: "openclaw-package-lifecycle-lock-" }, async (packageRoot) => {
+  it("waits for a held invocation after postinstall clears its pending marker", async () => {
+    await withTestDir({ prefix: "openclaw-lifecycle-marker-settlement-" }, async (packageRoot) => {
+      const marker = await markModernLifecyclePending(packageRoot);
+      const preEntered = createDeferred();
+      const releasePre = createDeferred();
+      const postEntered = createDeferred();
+      const releasePost = createDeferred();
+      const owner = completePendingPackageLifecycle({
+        packageRoot,
+        runScript: async (script) => {
+          if (script.name === "preinstall") {
+            preEntered.resolve();
+            await releasePre.promise;
+          } else {
+            await fs.rm(marker);
+            postEntered.resolve();
+            await releasePost.promise;
+          }
+        },
+      });
+      const completions = [owner];
+      const returned = vi.fn();
+      const contenderScript = vi.fn();
+      const startContender = () => {
+        const contender = completePendingPackageLifecycle({
+          packageRoot,
+          runScript: contenderScript,
+        });
+        completions.push(contender);
+        void contender.then(returned, returned);
+      };
+      try {
+        await preEntered.promise;
+        startContender();
+        releasePre.resolve();
+        await postEntered.promise;
+        startContender();
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        expect(returned).not.toHaveBeenCalled();
+        expect(contenderScript).not.toHaveBeenCalled();
+        releasePost.resolve();
+        await expect(Promise.all(completions)).resolves.toEqual([true, false, false]);
+      } finally {
+        releasePre.resolve();
+        releasePost.resolve();
+        await Promise.allSettled(completions);
+      }
+    });
+  });
+
+  it.each([-1, 1])("keeps an unresolved owner across a %i day clock shift", async (direction) => {
+    await withTestDir({ prefix: "openclaw-package-lifecycle-clock-" }, async (packageRoot) => {
       const markerPath = await markModernLifecyclePending(packageRoot);
-      const { promise: preinstallBlocked, resolve: releasePreinstall } = createDeferred();
-      const { promise: firstPreinstall, resolve: firstPreinstallStarted } = createDeferred();
-      const runScript = async (script: { name: string }) => {
+      const { promise: blocked, resolve: release } = createDeferred();
+      const { promise: started, resolve: entered } = createDeferred();
+      const runScript = vi.fn(async (script: { name: string }) => {
         if (script.name === "preinstall") {
-          firstPreinstallStarted?.();
-          await preinstallBlocked;
+          entered();
+          await blocked;
         } else {
           await fs.rm(markerPath);
         }
-      };
-
-      const startedAt = Date.now();
-      const first = completePendingPackageLifecycle({
-        packageRoot,
-        runScript,
-        timeoutMs: scriptTimeoutMs,
       });
+      const first = completePendingPackageLifecycle({ packageRoot, runScript, timeoutMs: 1000 });
       const completion = Promise.allSettled([first]);
+      let second: Promise<boolean> | undefined;
+      let clock: MockInstance<() => number> | undefined;
       try {
-        await firstPreinstall;
-        const lockStat = await fs.stat(path.join(packageRoot, ".openclaw-lifecycle-lock"));
-        expect(lockStat.mtimeMs).toBeGreaterThanOrEqual(startedAt + scriptTimeoutMs * 2 - 1_000);
-        releasePreinstall();
+        await started;
+        const now = Date.now();
+        clock = vi.spyOn(Date, "now").mockReturnValue(now + direction * 24 * 60 * 60_000);
+        second = completePendingPackageLifecycle({ packageRoot, runScript, timeoutMs: 1000 });
+        void second.catch(() => {});
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(["preinstall"]);
+        clock.mockRestore();
+        release();
         await expect(first).resolves.toBe(true);
-        await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(second).resolves.toBe(false);
       } finally {
-        releasePreinstall();
+        clock?.mockRestore();
+        release();
         await completion;
+        await Promise.allSettled(second ? [second] : []);
       }
     });
   });
