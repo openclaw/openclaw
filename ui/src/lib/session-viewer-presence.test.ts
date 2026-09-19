@@ -176,7 +176,7 @@ describe("session viewer presence store", () => {
       sessionKeys: [],
     });
 
-    vi.mocked(document.hasFocus).mockReturnValue(false);
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
     document.dispatchEvent(new Event("pointermove"));
@@ -189,7 +189,7 @@ describe("session viewer presence store", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
 
-    vi.mocked(document.hasFocus).mockReturnValue(true);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
     window.dispatchEvent(new Event("focus"));
     await flushSync();
     expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
