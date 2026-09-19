@@ -6,6 +6,9 @@ export {
   type TlsCertificateErrorDetails,
   type TlsCertificateErrorKind,
 } from "@openclaw/ai/internal/shared";
+// ProviderJsonParseError is thrown only by the decode/parse step of the bounded JSON readers so
+// plugin authors can distinguish malformed JSON from transport failures; reader-level failures
+// (size caps, stalled or truncated bodies) keep their existing error types.
 export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
@@ -22,6 +25,7 @@ export {
   readProviderTextResponse,
   readResponseTextLimited,
   truncateErrorDetail,
+  ProviderJsonParseError,
 } from "../agents/provider-http-errors.js";
 export {
   readProviderResponseErrorText,
