@@ -139,6 +139,11 @@ const workspaces = Object.fromEntries(
               TEST_ENTRY_GLOB,
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
+              // The Gateway proof imports this test-only API through a computed
+              // module ID, so Knip cannot discover the entrypoint itself.
+              ...(workspace === "extensions/whatsapp"
+                ? ["src/test-support/self-lid-gateway-api.ts!"]
+                : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next
