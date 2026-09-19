@@ -297,6 +297,29 @@ describe("provider failover hook structured signals", () => {
     },
   );
 
+  it.each([
+    ["overloaded", { kind: "reason", reason: "overloaded" }],
+    ["rate_limit", { kind: "reason", reason: "rate_limit" }],
+    // HTTP 400 is a request-shape status, so a provider claiming "server_error"
+    // is rewritten back to "format" rather than being taken at face value.
+    ["server_error", { kind: "reason", reason: "format" }],
+  ] as const)(
+    "keeps a provider-owned %s reason through HTTP 400 request-shape handling",
+    (reason, expected) => {
+      expect(
+        classifyFailoverSignal(
+          { provider: "custom-route", status: 400, message: "upstream refused this prompt" },
+          {
+            providerPlugin: {
+              id: "prepared-owner",
+              classifyFailoverReason: () => reason,
+            },
+          },
+        ),
+      ).toEqual(expected);
+    },
+  );
+
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
     // HTTP 403 is ambiguous; provider-owned stable codes can refine it to
     // billing or rate-limit without weakening default auth handling.

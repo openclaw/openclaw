@@ -19,6 +19,17 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { createOpencodeGoWireWrapper, createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
+// Console Go fronts models whose upstream guard rejects prompts with HTTP 400
+// "data_inspection_failed". The verdict is content-independent and not stable
+// across identical retries, so it is an upstream refusal rather than a payload
+// one, and generic 400 handling would otherwise make it a terminal format
+// failure that strands the run instead of failing over.
+//
+// "overloaded" rather than the more obvious "server_error": on HTTP 400 the
+// status classifier keeps any provider-supplied reason except "server_error",
+// which it rewrites back to "format". "overloaded" also stays clear of the
+// auth-profile cooldown and session-suspension paths that "rate_limit" drives.
+const DATA_INSPECTION_FAILED_RE = /\bdata[_\s-]?inspection[_\s-]?failed\b/i;
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -80,6 +91,12 @@ export default defineSingleProviderPluginEntry({
             baseUrl: normalizedBaseUrl,
           }
         : undefined;
+    },
+    classifyFailoverReason: ({ provider, errorMessage }) => {
+      if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+        return undefined;
+      }
+      return DATA_INSPECTION_FAILED_RE.test(errorMessage) ? "overloaded" : undefined;
     },
     resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
     catalog: {
