@@ -47,6 +47,9 @@ const repositoryScriptEntries = [
   "scripts/dev/computer-use-gateway-live-proof.ts!",
   "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
+  // Maintainer prompt proofs are invoked directly rather than imported.
+  "scripts/dev/message-tool-only-codex-app-server-proof.ts!",
+  "scripts/dev/message-tool-only-prompt-live-proof.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // The Doctor migration guide invokes this source-checkout replay by path.
   "scripts/doctor-config-upgrade-replay.mjs!",

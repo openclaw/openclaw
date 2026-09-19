@@ -602,12 +602,16 @@ describe("prepared harness source delivery", () => {
       expect(modelVisiblePrompt).toContain(
         "Your replies are automatically sent to this conversation",
       );
-      expect(modelVisiblePrompt).not.toContain("Normal final replies are private");
+      expect(modelVisiblePrompt).not.toContain(
+        "message(action=send) is the only delivery path for a visible text reply",
+      );
     } else {
       expect(modelVisiblePrompt).toContain(
         "Current source visible reply MUST use `message(action=send)`",
       );
-      expect(modelVisiblePrompt).toContain("Normal final replies are private");
+      expect(modelVisiblePrompt).toContain(
+        "message(action=send) is the only delivery path for a visible text reply",
+      );
       expect(modelVisiblePrompt).not.toContain(
         "Your replies are automatically sent to this conversation",
       );
