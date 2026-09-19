@@ -75,21 +75,8 @@ export function startOpenClawStateLeaseHeartbeat(
     release();
     throw error;
   }
-  let handleReleaseError: Error | undefined;
-  worker.once("exit", () => {
-    try {
-      release();
-    } catch (error) {
-      handleReleaseError = new Error("state lease heartbeat handle release failed", {
-        cause: error,
-      });
-      params.onLost(handleReleaseError);
-    }
-  });
-  // Worker stdio uses parent message delivery, which maintenance can block.
-  // The heartbeat emits no normal output; drain runtime bootstrap diagnostics.
-  worker.stdout.resume();
-  worker.stderr.resume();
+  let firstFailure: Error | undefined;
+  let releaseFailure: Error | undefined;
   const ready = createDeferredCore();
   let startupRenewal: ReturnType<typeof setTimeout> | undefined;
   const clearStartupTimers = () => {
@@ -98,15 +85,30 @@ export function startOpenClawStateLeaseHeartbeat(
     startupRenewal = undefined;
   };
   const fail = (error: Error) => {
-    if (Atomics.load(shared, state.status) === state.closed) {
+    if (firstFailure || Atomics.load(shared, state.status) === state.closed) {
       return;
     }
+    firstFailure = error;
     Atomics.store(shared, state.status, state.lost);
     Atomics.notify(shared, state.ack);
     clearStartupTimers();
     ready.reject(error);
     params.onLost(error);
   };
+  worker.once("exit", () => {
+    try {
+      release();
+    } catch (error) {
+      releaseFailure = new Error("state lease heartbeat handle release failed", {
+        cause: error,
+      });
+      fail(releaseFailure);
+    }
+  });
+  // Worker stdio uses parent message delivery, which maintenance can block.
+  // The heartbeat emits no normal output; drain runtime bootstrap diagnostics.
+  worker.stdout.resume();
+  worker.stderr.resume();
   const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);
     if (trigger === "timeout" && Atomics.load(shared, state.status) === state.starting) {
@@ -193,8 +195,8 @@ export function startOpenClawStateLeaseHeartbeat(
     stop() {
       close();
       return (stopping ??= worker.terminate().then((code) => {
-        if (handleReleaseError) {
-          throw handleReleaseError;
+        if (releaseFailure) {
+          throw firstFailure ?? releaseFailure;
         }
         return code;
       }));
