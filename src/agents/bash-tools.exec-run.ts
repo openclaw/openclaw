@@ -81,6 +81,12 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
+// A running result proves only that the process was spawned and was alive at
+// that moment. It says nothing about progress, input waits, or a later exit,
+// and a completion event may wake the agent in a turn that cannot message the
+// user. Keep this out of `details.followUp`, which names the follow-up route.
+const BACKGROUND_EXEC_RUNNING_CAUTION =
+  "Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. When it finishes you may be woken with a completion event, but that turn may not be allowed to message the user; do not promise the user updates unless you poll this session until it finishes and report the outcome yourself.";
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
@@ -710,7 +716,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
+                    }). ${BACKGROUND_EXEC_RUNNING_CAUTION} ${BACKGROUND_EXEC_FOLLOW_UP}`,
                   },
                 ],
                 details: {

@@ -448,7 +448,7 @@ function readProgressCommandOutput(input: ResponsesInputItem[], command: string,
   const text = extractToolOutput(input);
   // Provider wires carry content, not process details; JSON stdout remains data.
   const sessionId = !isPoll
-    ? /(?:^|\n\n)Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)\. Use process \(list\/poll\/log\/write\/send-keys\/submit\/paste\/kill\/clear\/remove\) for follow-up\.$/u.exec(
+    ? /(?:^|\n\n)Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)\. Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure\. Do not report progress from this result alone\. When it finishes you may be woken with a completion event, but that turn may not be allowed to message the user; do not promise the user updates unless you poll this session until it finishes and report the outcome yourself\. Use process \(list\/poll\/log\/write\/send-keys\/submit\/paste\/kill\/clear\/remove\) for follow-up\.$/u.exec(
         text,
       )?.[1]
     : undefined;

@@ -9,7 +9,7 @@ const EXEC_PROMPT =
 const ERROR_PROMPT =
   "Tool progress error QA check: read `denied.txt` before answering. After the read fails, reply exactly `PROGRESS_OK`.";
 const RUNNING_OUTPUT =
-  "Command still running (session lucky-slug, pid 3128). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
+  "Command still running (session lucky-slug, pid 3128). Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. When it finishes you may be woken with a completion event, but that turn may not be allowed to message the user; do not promise the user updates unless you poll this session until it finishes and report the outcome yourself. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 const INPUT_WAIT_OUTPUT =
   "Process exited with code 7.\n\nNo new output for 16s; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.";
 const TIMED_OUT_OUTPUT =

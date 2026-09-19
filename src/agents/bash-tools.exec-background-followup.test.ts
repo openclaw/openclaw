@@ -57,6 +57,14 @@ test.each([
       type: "text",
       text: expect.stringContaining(followUp),
     });
+    // A live session is not proof the command's work started; the visible
+    // result must say so before the model relays "running" as progress.
+    expect(started.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining(
+        "Running means the process was started and was alive when this result was written; it says nothing about progress, waiting for input, or a later exit or failure. Do not report progress from this result alone. When it finishes you may be woken with a completion event, but that turn may not be allowed to message the user; do not promise the user updates unless you poll this session until it finishes and report the outcome yourself.",
+      ),
+    });
 
     await fs.writeFile(releasePath, "release");
     await waitForExecScope(scopeKey);
