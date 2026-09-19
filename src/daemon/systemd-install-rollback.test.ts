@@ -7,7 +7,7 @@ import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
-import { installSystemdService } from "./systemd-install.js";
+import { installSystemdService, stageSystemdService } from "./systemd-install.js";
 
 const native = vi.hoisted(() => ({
   exec: vi.fn<typeof import("./systemd-exec.js").execSystemctlUser>(),
@@ -28,6 +28,7 @@ vi.mock("./systemd-service-files.js", async (importOriginal) => ({
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   native.exec.mockReset();
   native.active.mockReset();
@@ -55,6 +56,41 @@ async function createInstallFixture() {
   }
   return { env, unit, environment, originals };
 }
+
+it.each([false, true])(
+  "retains generated input referenced by a concurrent unit edit (replacement=%s)",
+  async (replacement) => {
+    const { env, unit, environment } = await createInstallFixture();
+    await fs.rm(environment);
+    const rename = fs.rename.bind(fs);
+    let edited = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      await rename(source, destination);
+      if (destination === unit && !edited) {
+        edited = true;
+        const contents = `${await fs.readFile(unit, "utf8")}# concurrent edit\n`;
+        const target = replacement ? `${unit}.operator` : unit;
+        await fs.writeFile(target, contents, { mode: 0o600 });
+        if (replacement) {
+          await rename(target, unit);
+        }
+      }
+    });
+
+    await expect(
+      stageSystemdService({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
+        environment: { SERVICE_VALUE: "candidate" },
+        environmentValueSources: { SERVICE_VALUE: "file" },
+      }),
+    ).rejects.toThrow("changed during publication");
+    expect(await fs.readFile(unit, "utf8")).toContain("# concurrent edit");
+    expect(await fs.readFile(unit, "utf8")).toContain(environment);
+    expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+  },
+);
 
 it.each([
   { enabled: "enabled", running: true, failure: "activation" },

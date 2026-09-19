@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { constants, promises as fs, type Stats } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
@@ -28,11 +29,13 @@ import {
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
 import {
+  isNodeSystemdEnvironment,
   readSystemdServiceExecStart,
   resolveSystemdEnvironmentFilePath,
   resolveSystemdUnitPath,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
+import { splitSystemdLogicalLines } from "./systemd-unit.js";
 
 type Snapshot = { contents: Buffer; mode: number } | null;
 type SystemdDefinitionMutation = {
@@ -41,6 +44,7 @@ type SystemdDefinitionMutation = {
   assertCurrent: () => Promise<void>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
   restore: (file: string, snapshot: Snapshot) => Promise<boolean>;
+  restoreAll: () => Promise<boolean>;
   remove: (file: string) => Promise<void>;
 };
 const identity = (stat: Stats, contents?: Buffer) =>
@@ -330,6 +334,7 @@ export async function withSystemdDefinitionMutation<T>(
       async () => false,
     );
     const allowed = new Set([unit, generated, `${unit}.bak`]);
+    const snapshots = initial.snapshots;
     const publications = new Map<string, string>();
     const stagedFiles: GatewayServiceStagedFiles["files"] = [];
     const publish = async (
@@ -431,8 +436,21 @@ export async function withSystemdDefinitionMutation<T>(
       const current = await inspect(env, environment, remainingTimeoutMs());
       // A refreshed global snapshot never grants ownership of another artifact's edit.
       if (current.capability.kind !== "writable" || current.fingerprint.get(file) !== published) {
+        return false;
+      }
+      const currentUnit = current.snapshots.get(unit);
+      const originalUnit = snapshots.get(unit);
+      if (
+        file === generated &&
+        snapshot === null &&
+        currentUnit &&
+        (!originalUnit || !currentUnit.contents.equals(originalUnit.contents)) &&
+        splitSystemdLogicalLines(currentUnit.contents.toString("utf8")).some((line) =>
+          /^\s*EnvironmentFile\s*=\s*\S/u.test(line),
+        )
+      ) {
         throw new Error(
-          `Managed service artifact changed during publication: ${file}; retained for inspection.`,
+          `Managed service unit changed during publication and may still reference ${file}; retained for inspection.`,
         );
       }
       initial = current;
@@ -451,7 +469,7 @@ export async function withSystemdDefinitionMutation<T>(
       return true;
     };
     return await run({
-      snapshots: initial.snapshots,
+      snapshots,
       stagedFiles,
       assertCurrent: async () => {
         await refresh(true);
@@ -464,6 +482,37 @@ export async function withSystemdDefinitionMutation<T>(
       },
       publish,
       restore,
+      restoreAll: async () => {
+        let restored = false;
+        let failure: Error | undefined;
+        const files = [unit, `${unit}.bak`, ...(isNodeSystemdEnvironment(env) ? [] : [generated])];
+        // Restore existing inputs, then their unit, before retiring new inputs.
+        // A superseded artifact is preserved; a failed unit restore still owns its references.
+        const order = files.toSorted(
+          (a, b) =>
+            (a === unit ? 1 : snapshots.has(a) ? 0 : 2) -
+            (b === unit ? 1 : snapshots.has(b) ? 0 : 2),
+        );
+        for (const file of order) {
+          try {
+            restored = (await restore(file, snapshots.get(file) ?? null)) || restored;
+          } catch (error) {
+            if (file === unit || (file === generated && snapshots.has(generated))) {
+              throw error;
+            }
+            failure ??= toErrorObject(error, "Systemd rollback failed.");
+          }
+        }
+        if (failure) {
+          throw failure;
+        }
+        if (files.some((file) => publications.has(file))) {
+          throw new Error(
+            "Managed service artifacts changed during publication; recovery remains pending.",
+          );
+        }
+        return restored;
+      },
       remove,
     });
   };

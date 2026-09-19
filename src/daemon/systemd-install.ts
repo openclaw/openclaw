@@ -285,9 +285,6 @@ async function writeSystemdUnit(
     async (mutation) => {
       const stateDir = resolveStateDir({ ...env, ...environment });
       const environmentFilePath = resolveSystemdEnvironmentFilePath({ stateDir, environment });
-      const environmentFileSnapshot = isNodeSystemdEnvironment(env)
-        ? undefined
-        : (mutation.snapshots.get(environmentFilePath) ?? null);
       const existingUnit = mutation.snapshots.get(unitPath) ?? null;
       const backupPath = `${unitPath}.bak`;
       const existingBackup = mutation.snapshots.get(backupPath) ?? null;
@@ -299,24 +296,7 @@ async function writeSystemdUnit(
             )
           : null;
       const restore = async () => {
-        let restored = false;
-        const files = [
-          [unitPath, existingUnit],
-          [environmentFilePath, environmentFileSnapshot],
-          [backupPath, existingBackup],
-        ] as const;
-        // Restore existing inputs before the unit, and retire new inputs only
-        // after its old references are restored. A failed reference restore must stop retirement.
-        const order = files.toSorted(
-          ([a, beforeA], [b, beforeB]) =>
-            (a === unitPath ? 1 : beforeA ? 0 : 2) - (b === unitPath ? 1 : beforeB ? 0 : 2),
-        );
-        for (const [file, snapshot] of order) {
-          if (snapshot === undefined) {
-            continue;
-          }
-          restored = (await mutation.restore(file, snapshot)) || restored;
-        }
+        const restored = await mutation.restoreAll();
         await recovery?.restore();
         return restored;
       };
