@@ -752,13 +752,24 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let agentId: String?
     public let hasActiveRun: Bool?
     public let activeRunIds: [String]?
+    /// The Gateway's authoritative reasoning visibility (`/reasoning` directive).
+    /// History summaries already carry it on the wire; hosts render reasoning only
+    /// when it is `"on"`, matching the Control UI.
+    public let reasoningLevel: String?
 
     // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
-    public init(hasActiveRun: Bool?, activeRunIds: [String]? = nil, key: String? = nil, agentId: String? = nil) {
+    public init(
+        hasActiveRun: Bool?,
+        activeRunIds: [String]? = nil,
+        key: String? = nil,
+        agentId: String? = nil,
+        reasoningLevel: String? = nil)
+    {
         self.key = key
         self.agentId = agentId
         self.hasActiveRun = hasActiveRun
         self.activeRunIds = activeRunIds
+        self.reasoningLevel = reasoningLevel
     }
 }
 

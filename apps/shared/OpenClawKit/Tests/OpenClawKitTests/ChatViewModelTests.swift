@@ -70,7 +70,8 @@ private func historyPayload(
     activeRunIds: [String]? = nil,
     inFlightRun: OpenClawChatInFlightRun? = nil,
     canonicalKey: String? = nil,
-    agentId: String? = nil) -> OpenClawChatHistoryPayload
+    agentId: String? = nil,
+    reasoningLevel: String? = nil) -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
         sessionKey: sessionKey,
@@ -82,7 +83,8 @@ private func historyPayload(
                 hasActiveRun: hasActiveRun ?? (inFlightRun != nil),
                 activeRunIds: activeRunIds ?? inFlightRun.map { [$0.runId] },
                 key: canonicalKey,
-                agentId: agentId)
+                agentId: agentId,
+                reasoningLevel: reasoningLevel)
             : nil,
         inFlightRun: inFlightRun)
 }
@@ -203,6 +205,7 @@ private func sessionEntry(
     model: String? = nil,
     modelProvider: String? = nil,
     thinkingLevel: String? = nil,
+    reasoningLevel: String? = nil,
     thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
     thinkingOptions: [String]? = nil,
     thinkingDefault: String? = nil,
@@ -231,6 +234,7 @@ private func sessionEntry(
         abortedLastRun: nil,
         thinkingLevel: thinkingLevel,
         verboseLevel: verboseLevel,
+        reasoningLevel: reasoningLevel,
         inputTokens: nil,
         outputTokens: nil,
         totalTokens: totalTokens,
@@ -14154,5 +14158,168 @@ struct ChatViewModelSessionManagementTests {
         // Archived rows only exist server-side; offline archived mode is empty.
         let archivedRows = await vm.fetchSessionList(search: nil, archived: true)
         #expect(archivedRows.isEmpty)
+    }
+}
+
+/// The Gateway's session `reasoningLevel` (`/reasoning` directive) is the
+/// authoritative source for reasoning visibility, mirroring the Control UI.
+/// These tests pin the contract the iOS host relies on: rows render only when
+/// the current session's level is `"on"`.
+@MainActor
+struct ChatReasoningVisibilityGateTests {
+    @Test func `reasoning visibility follows the current session reasoningLevel`() async throws {
+        let (_, vm) = await makeViewModel(sessionKey: "main", historyResponses: [])
+
+        await MainActor.run {
+            vm.sessions = [sessionEntry(key: "main", updatedAt: 1, reasoningLevel: "on")]
+        }
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == true)
+
+        await MainActor.run {
+            vm.sessions = [sessionEntry(key: "main", updatedAt: 1, reasoningLevel: "off")]
+        }
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == false)
+
+        await MainActor.run {
+            vm.sessions = [sessionEntry(key: "main", updatedAt: 1, reasoningLevel: "stream")]
+        }
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == false)
+
+        // Unknown/older rows (no key on the wire) also default to hidden, matching
+        // the Control UI gate `activeSession?.reasoningLevel === "on"`.
+        await MainActor.run {
+            vm.sessions = [sessionEntry(key: "main", updatedAt: 1)]
+        }
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == false)
+    }
+
+    @Test func `current session entry key precedence picks exact over alias`() async throws {
+        let (_, vm) = await makeViewModel(sessionKey: "main", historyResponses: [])
+
+        await MainActor.run {
+            vm.sessions = [
+                sessionEntry(key: "agent:main:alias", updatedAt: 1, reasoningLevel: "off"),
+                sessionEntry(key: "main", updatedAt: 1, reasoningLevel: "on"),
+            ]
+        }
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == true)
+    }
+
+    /// Lifecycle `sessions.changed` events (phase `start`/`end`/`error`) bypass the
+    /// sidebar projection and merge through `mergedLifecycleSession`; the
+    /// authoritative `reasoningLevel` on that snapshot must survive the merge,
+    /// and an absent key must not clobber a known value.
+    @Test @MainActor func `lifecycle snapshot merge carries reasoningLevel`() throws {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        defer { viewModel.detachTransport() }
+
+        viewModel.sessions = [sessionEntry(key: "main", updatedAt: 1, reasoningLevel: "off")]
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "start",
+            runId: "run-1",
+            session: sessionEntry(
+                key: "main",
+                updatedAt: 2,
+                reasoningLevel: "on"))))
+        #expect(viewModel.currentSessionEntry()?.reasoningLevel == "on")
+        #expect(viewModel.currentSessionReasoningVisible == true)
+
+        // An older lifecycle row without the key must not clear a known value.
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "end",
+            runId: "run-1",
+            session: lifecycleSessionEntry(
+                key: "main",
+                updatedAt: 3,
+                status: "done",
+                hasActiveRun: false,
+                activeRunIds: [],
+                endedAt: 3000,
+                runtimeMs: 1000,
+                outputTokens: 10))))
+        #expect(viewModel.currentSessionEntry()?.reasoningLevel == "on")
+
+        // An authoritative "off" snapshot must flip the gate back to hidden.
+        viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: "main",
+            reason: "run-progress",
+            phase: "start",
+            runId: "run-2",
+            session: sessionEntry(
+                key: "main",
+                updatedAt: 4,
+                reasoningLevel: "off"))))
+        #expect(viewModel.currentSessionEntry()?.reasoningLevel == "off")
+        #expect(viewModel.currentSessionReasoningVisible == false)
+    }
+
+    /// Bootstrap fetches a capped (50-row) session list that can omit the active
+    /// session. The last authoritative `reasoningLevel` must survive that
+    /// replacement so reasoning stays visible after `/reasoning on` + relaunch.
+    @Test func `capped session list replacement retains active reasoning state`() async throws {
+        let cappedList = (0 ..< 50).map { sessionEntry(key: "sess-\($0)", updatedAt: Double($0 + 1)) }
+        let (_, vm) = await makeViewModel(
+            sessionKey: "main",
+            historyResponses: [],
+            sessionsResponses: [sessionsResponse(cappedList)])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // History reports the authoritative level while the row is absent from
+        // the capped list.
+        let history = historyPayload(
+            hasActiveRun: false,
+            activeRunIds: [],
+            canonicalKey: "main",
+            reasoningLevel: "on")
+        let request = await MainActor.run { vm.beginHistoryRequest() }
+        await MainActor.run {
+            _ = vm.applyHistoryPayload(history, for: request, preservingOptimisticLocalMessages: false)
+        }
+        #expect(await MainActor.run { vm.currentSessionEntry() } == nil)
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == true)
+
+        // A later list fetch still omits the active session; the retained level
+        // keeps the gate open.
+        await vm.fetchSessions(limit: 50)
+        #expect(await MainActor.run { vm.currentSessionEntry() } == nil)
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == true)
+    }
+
+    /// When the capped list does carry the active session's row, that
+    /// authoritative row owns the gate again and any retained value is dropped.
+    @Test func `capped session list with active row clears the retained reasoning level`() async throws {
+        let (_, vm) = await makeViewModel(
+            sessionKey: "main",
+            historyResponses: [],
+            sessionsResponses: [
+                sessionsResponse([sessionEntry(key: "sess-0", updatedAt: 1)]),
+                sessionsResponse([sessionEntry(key: "main", updatedAt: 5, reasoningLevel: "off")]),
+            ])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        let history = historyPayload(
+            hasActiveRun: false,
+            activeRunIds: [],
+            canonicalKey: "main",
+            reasoningLevel: "on")
+        let request = await MainActor.run { vm.beginHistoryRequest() }
+        await MainActor.run {
+            _ = vm.applyHistoryPayload(history, for: request, preservingOptimisticLocalMessages: false)
+        }
+        #expect(await MainActor.run { vm.currentSessionEntry() } == nil)
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == true)
+
+        // The next list fetch re-includes the active row with "off": the row is
+        // authoritative again and reasoning hides immediately.
+        await vm.fetchSessions(limit: 50)
+        #expect(await MainActor.run { vm.currentSessionEntry()?.reasoningLevel } == "off")
+        #expect(await MainActor.run { vm.currentSessionReasoningVisible } == false)
+        #expect(await MainActor.run { vm.retainedActiveSessionReasoningLevel } == nil)
     }
 }
