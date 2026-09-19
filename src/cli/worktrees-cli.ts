@@ -1,9 +1,6 @@
 import { Option, type Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
-import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
-import { managedWorktrees, resolveWorktreeCleanupLimits } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -33,6 +30,7 @@ export function registerWorktreesCli(program: Command): void {
     .description("List active and restorable managed worktrees")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
+      const { managedWorktrees } = await import("../agents/worktrees/service.js");
       const records = await managedWorktrees.list();
       if (opts.json) {
         printJson({ worktrees: records });
@@ -78,6 +76,7 @@ export function registerWorktreesCli(program: Command): void {
         repoRoot: string,
         opts: JsonOption & { name?: string; baseRef?: string; sourceProfile?: string[] },
       ) => {
+        const { managedWorktrees } = await import("../agents/worktrees/service.js");
         printRecord(
           await managedWorktrees.create({
             repoRoot,
@@ -103,6 +102,7 @@ export function registerWorktreesCli(program: Command): void {
     )
     .option("--json", "Output JSON", false)
     .action(async (id: string, opts: JsonOption & { force?: boolean; ifLossless?: boolean }) => {
+      const { managedWorktrees } = await import("../agents/worktrees/service.js");
       if (opts.ifLossless) {
         const removed = await managedWorktrees.removeIfLossless(id);
         const cleanup = managedWorktrees
@@ -141,6 +141,7 @@ export function registerWorktreesCli(program: Command): void {
     .argument("<id>", "Managed worktree id")
     .option("--json", "Output JSON", false)
     .action(async (id: string, opts: JsonOption) => {
+      const { managedWorktrees } = await import("../agents/worktrees/service.js");
       printRecord(await managedWorktrees.restore({ id }), opts.json === true);
     });
 
@@ -149,6 +150,11 @@ export function registerWorktreesCli(program: Command): void {
     .description("Run managed worktree cleanup now")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
+      const { createManagedWorktreeOwnerPolicy } =
+        await import("../agents/worktrees/owner-protection.js");
+      const { managedWorktrees, resolveWorktreeCleanupLimits } =
+        await import("../agents/worktrees/service.js");
+      const { getRuntimeConfig } = await import("../config/config.js");
       const cfg = getRuntimeConfig();
       const limits = resolveWorktreeCleanupLimits();
       const result = await managedWorktrees.gc({
