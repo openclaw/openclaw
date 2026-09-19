@@ -75,6 +75,7 @@ import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarContextController } from "./sidebar-context-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { SidebarPeopleController } from "./sidebar-people-controller.ts";
+import { SidebarSessionPinFocusController } from "./sidebar-session-pin-focus.ts";
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() teamOnlineExpanded = false;
@@ -193,9 +194,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     },
   );
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+  private readonly pinFocus = new SidebarSessionPinFocusController(
+    this,
+    () => this.projectedSessionSections,
+  );
 
   constructor() {
     super();
+    void this.pinFocus;
     void this.subscriptions;
   }
 
