@@ -22,13 +22,17 @@ const clientConfig = {
   getCode: async () => "fixture-code",
 };
 
-async function setupSuccessfulUpload(params?: { contentType?: string; uploadedUrl?: string }) {
+async function setupSuccessfulUpload(params?: {
+  contentType?: string;
+  uploadedUrl?: string;
+  fileName?: string | null;
+}) {
   const contentType = params?.contentType ?? "image/png";
   const buffer = Buffer.from("fake-image");
   mockReadRemoteMediaBuffer.mockResolvedValue({
     buffer,
     contentType,
-    fileName: "image.png",
+    ...(params?.fileName === null ? {} : { fileName: params?.fileName ?? "image.png" }),
   });
   if (params?.uploadedUrl) {
     mockUploadFile.mockResolvedValue({ url: params.uploadedUrl });
@@ -165,6 +169,7 @@ describe("uploadImageFromUrl", () => {
   it("extracts filename from URL path", async () => {
     await setupSuccessfulUpload({
       contentType: "image/jpeg",
+      fileName: null,
     });
     mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.jpg" });
 
@@ -173,9 +178,22 @@ describe("uploadImageFromUrl", () => {
     expect(requireUploadParams().fileName).toBe("my-image.jpg");
   });
 
+  it("uses the fetched Content-Disposition filename when the URL has no suffix", async () => {
+    await setupSuccessfulUpload({
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+    mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.png" });
+
+    await uploadImageFromUrl("https://cdn.example/download?id=123");
+
+    expect(requireUploadParams().fileName).toBe("photo.png");
+  });
+
   it("uses default filename when URL has no path", async () => {
     await setupSuccessfulUpload({
       contentType: "image/png",
+      fileName: null,
     });
     mockUploadFile.mockResolvedValue({ url: "https://memex.tlon.network/uploaded.png" });
 
