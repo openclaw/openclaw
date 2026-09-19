@@ -18,6 +18,37 @@ function normalizeRangeSnippet(lines: string[], startLine: number, endLine: numb
   return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
 }
 
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/gu;
+
+/**
+ * Comparison-only normalization. Comments are invisible to a reader and any tool
+ * can add or remove one between recording and rehydration, so they must not decide
+ * whether a stored range still matches the lines it was recorded from.
+ */
+function normalizeComparableSnippet(raw: string): string {
+  return normalizeSnippet(raw.replace(HTML_COMMENT_RE, " "));
+}
+
+function lineRangesOverlap(
+  left: { startLine: number; endLine: number },
+  right: { startLine: number; endLine: number },
+): boolean {
+  return left.startLine <= right.endLine && right.startLine <= left.endLine;
+}
+
+/** Returns the index of the tracked group farthest from the stored range. */
+function findFarthestGroupIndex(groups: Array<{ distance: number }>): number {
+  let farthestIndex = 0;
+  for (let index = 1; index < groups.length; index += 1) {
+    const group = groups[index];
+    const farthest = groups[farthestIndex];
+    if (group && farthest && group.distance > farthest.distance) {
+      farthestIndex = index;
+    }
+  }
+  return farthestIndex;
+}
+
 function normalizeListMarkerFreeRangeSnippet(
   lines: string[],
   startLine: number,
@@ -150,6 +181,10 @@ function relocateCandidateRange(
   candidate: PromotionCandidate,
 ): { startLine: number; endLine: number; snippet: string } | null {
   const targetSnippet = normalizeSnippet(candidate.snippet);
+  const comparableTarget = normalizeComparableSnippet(candidate.snippet);
+  const comparisonTarget = comparableTarget || targetSnippet;
+  const toComparable = (snippet: string): string =>
+    comparableTarget ? normalizeComparableSnippet(snippet) : snippet;
   const preferredSpan = Math.max(1, candidate.endLine - candidate.startLine + 1);
   if (targetSnippet.length === 0) {
     const fallbackSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
@@ -164,7 +199,15 @@ function relocateCandidateRange(
   }
 
   const exactSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
-  if (exactSnippet === targetSnippet) {
+  const storedRangeIsManaged = lineRangeOverlapsDreamingFence(
+    lines,
+    candidate.startLine,
+    candidate.endLine,
+  );
+  if (
+    !storedRangeIsManaged &&
+    (exactSnippet === targetSnippet || toComparable(exactSnippet) === comparisonTarget)
+  ) {
     return {
       startLine: candidate.startLine,
       endLine: candidate.endLine,
@@ -174,15 +217,45 @@ function relocateCandidateRange(
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
   const headingLookup = buildRelocatedDailyHeadingLookup(lines);
+  // Managed dreaming windows are resolved once for the whole scan: a window made of the
+  // markers must not win selection, or the post-relocation fence guard would reject the
+  // candidate instead of the eligible window next to it (#151173 review).
+  const managedFenceLines = resolveManagedFenceLines(lines);
+  const overlapsManagedFence = (startLine: number, endLine: number): boolean => {
+    for (let line = startLine; line <= endLine; line += 1) {
+      if (managedFenceLines[line - 1]) {
+        return true;
+      }
+    }
+    return false;
+  };
   let bestMatch:
-    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
+    | {
+        startLine: number;
+        endLine: number;
+        snippet: string;
+        quality: number;
+        distance: number;
+        reconstruction: boolean;
+      }
     | undefined;
+  // Top-quality matches kept for the unresolved-tie check below; bounded because a
+  // repetitive note can match in many places.
+  const MAX_TRACKED_MATCHES = 16;
+  let topQuality = 0;
+  // One entry per distinct place, not per window: blank lines make several windows of the
+  // same occurrence normalize identically, and a window cap would then drop an equally
+  // close second place before the tie check sees it.
+  let topGroups: Array<{ startLine: number; endLine: number; distance: number }> = [];
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
       const endLine = startIndex + span;
+      if (overlapsManagedFence(startLine, endLine)) {
+        continue;
+      }
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
-      const comparison = compareCandidateWindow(targetSnippet, snippet);
+      const comparison = compareCandidateWindow(comparisonTarget, toComparable(snippet));
       const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
       const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
         headingLookup[startLine] ?? null,
@@ -191,18 +264,21 @@ function relocateCandidateRange(
       const listMarkerFreeComparison =
         listMarkerFreeSnippet === snippet
           ? { matched: false, quality: 0 }
-          : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
+          : compareCandidateWindow(comparisonTarget, toComparable(listMarkerFreeSnippet));
       const listMarkerFreeContextComparison =
         listMarkerFreeMatchSnippet === listMarkerFreeSnippet
           ? { matched: false, quality: 0 }
-          : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
+          : compareCandidateWindow(comparisonTarget, toComparable(listMarkerFreeMatchSnippet));
       const targetHeadingBodySnippet = extractTargetHeadingBodySnippet(
         targetSnippet,
         listMarkerFreeSnippet,
       );
       const targetHeadingBodyComparison =
         targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
-          ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
+          ? compareCandidateWindow(
+              normalizeComparableSnippet(targetHeadingBodySnippet),
+              toComparable(listMarkerFreeSnippet),
+            )
           : { matched: false, quality: 0 };
       const useTargetHeadingBodyContext =
         targetHeadingBodyComparison.matched &&
@@ -233,6 +309,34 @@ function relocateCandidateRange(
               : listMarkerFreeSnippet
             : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
+      const matchRange = { startLine, endLine };
+      const reconstructionUsed =
+        useTargetHeadingBodyContext || useListMarkerFreeContext || useListMarkerFree;
+      if (bestComparison.quality > topQuality) {
+        topQuality = bestComparison.quality;
+        topGroups = [];
+      }
+      if (bestComparison.quality === topQuality) {
+        const groupIndex = topGroups.findIndex((group) => lineRangesOverlap(group, matchRange));
+        const group = groupIndex >= 0 ? topGroups[groupIndex] : undefined;
+        if (group) {
+          topGroups[groupIndex] = {
+            startLine: Math.min(group.startLine, startLine),
+            endLine: Math.max(group.endLine, endLine),
+            // Group distance matches bestMatch's window distance semantics, so the
+            // ambiguity check compares the same notion selection does (#151299 Rev 3).
+            distance: Math.min(group.distance, distance),
+          };
+        } else if (topGroups.length < MAX_TRACKED_MATCHES) {
+          topGroups.push({ ...matchRange, distance });
+        } else {
+          const farthestIndex = findFarthestGroupIndex(topGroups);
+          const farthestGroup = topGroups[farthestIndex];
+          if (farthestGroup && distance < farthestGroup.distance) {
+            topGroups.splice(farthestIndex, 1, { ...matchRange, distance });
+          }
+        }
+      }
       if (
         !bestMatch ||
         bestComparison.quality > bestMatch.quality ||
@@ -248,12 +352,25 @@ function relocateCandidateRange(
           snippet: matchedSnippet,
           quality: bestComparison.quality,
           distance,
+          reconstruction: reconstructionUsed,
         };
       }
     }
   }
 
   if (!bestMatch) {
+    return null;
+  }
+  // A fragment of the recorded text is not the recalled text. The heading/list and
+  // capped-snippet reconstruction paths rebuild it, so they stay supported.
+  if (bestMatch.quality < 2 && !bestMatch.reconstruction) {
+    return null;
+  }
+  // Equally close matches of equal quality at distinct places leave the stored range
+  // unresolved, so orphan the candidate instead of deciding it by span.
+  const nearestDistance = Math.min(...topGroups.map((group) => group.distance));
+  const nearestGroups = topGroups.filter((group) => group.distance === nearestDistance);
+  if (nearestGroups.length > 1) {
     return null;
   }
   return {
@@ -266,6 +383,19 @@ function relocateCandidateRange(
 const DREAMING_FENCE_START_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:start\s*-->/i;
 const DREAMING_FENCE_END_RE = /<!--\s*openclaw:dreaming:[a-z][a-z0-9-]*:end\s*-->/i;
 
+/** Marks every line that belongs to a managed dreaming block, markers included. */
+function resolveManagedFenceLines(lines: string[]): boolean[] {
+  const managed: boolean[] = [];
+  let insideFence = false;
+  for (const line of lines) {
+    const isStart = DREAMING_FENCE_START_RE.test(line);
+    const isEnd = DREAMING_FENCE_END_RE.test(line);
+    managed.push(isStart || isEnd || insideFence);
+    insideFence = isStart ? true : isEnd ? false : insideFence;
+  }
+  return managed;
+}
+
 function lineRangeOverlapsDreamingFence(
   lines: string[],
   startLine: number,
@@ -276,25 +406,9 @@ function lineRangeOverlapsDreamingFence(
   }
   const safeStart = Math.max(1, Math.min(startLine, lines.length));
   const safeEnd = Math.max(safeStart, Math.min(endLine, lines.length));
-  let insideFence = false;
-  for (let i = 0; i < safeEnd; i += 1) {
-    const line = lines[i] ?? "";
-    const oneIndexed = i + 1;
-    const isStart = DREAMING_FENCE_START_RE.test(line);
-    const isEnd = DREAMING_FENCE_END_RE.test(line);
-    if (isStart || isEnd) {
-      // The marker line itself is managed-block content. A relocated range
-      // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
-      // build its snippet from raw lines that contain that marker text and
-      // leak it into MEMORY.md alongside any adjacent fenced content captured
-      // by the same window. (#80613)
-      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
-        return true;
-      }
-      insideFence = isStart;
-      continue;
-    }
-    if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+  const managed = resolveManagedFenceLines(lines);
+  for (let line = safeStart; line <= safeEnd; line += 1) {
+    if (managed[line - 1]) {
       return true;
     }
   }
