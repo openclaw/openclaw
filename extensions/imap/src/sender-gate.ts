@@ -134,6 +134,13 @@ function mapImapAuthStrength(
   account: ImapAccountConfig,
 ): ImapAuthEvidence & { transient: boolean } {
   const dmarc = result?.dmarc && result.dmarc.status.result;
+  // A timed-out DKIM key lookup is reported as a nested DKIM temperror; when the
+  // DMARC policy lookup still resolves without an aligned signature it yields
+  // fail. Either temporary outcome must stay on the bounded retry path instead
+  // of permanently skipping validly signed mail.
+  const transient =
+    dmarc === "temperror" ||
+    Boolean(result?.dkim.results.some((entry) => entry.status.result === "temperror"));
   // mailauth omits alignment when no DMARC policy exists or its DNS lookup fails.
   if (result?.dmarc && result.dmarc.alignment?.dkim.underSized) {
     return { strength: "unverified", reason: "dkim-unsigned-body", transient: false };
@@ -156,13 +163,13 @@ function mapImapAuthStrength(
     return {
       strength: "unverified",
       reason: "unverified-authentication",
-      transient: dmarc === "temperror",
+      transient,
     };
   }
   return {
     strength: "unverified",
-    reason: dmarc === "temperror" ? "authentication-temperror" : `dmarc-${dmarc || "none"}`,
-    transient: dmarc === "temperror",
+    reason: transient ? "authentication-temperror" : `dmarc-${dmarc || "none"}`,
+    transient,
   };
 }
 
