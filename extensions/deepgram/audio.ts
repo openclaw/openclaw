@@ -21,21 +21,30 @@ function readDeepgramTranscript(payload: Record<string, unknown>): string | unde
   if (!Array.isArray(results.channels)) {
     throw new Error("Audio transcription failed: malformed JSON response");
   }
-  const channel = asOptionalRecord(results.channels[0]);
-  if (!channel) {
-    return undefined;
+  const transcripts: string[] = [];
+  for (const rawChannel of results.channels) {
+    const channel = asOptionalRecord(rawChannel);
+    if (!channel) {
+      return undefined;
+    }
+    if (!Array.isArray(channel.alternatives)) {
+      throw new Error("Audio transcription failed: malformed JSON response");
+    }
+    const alternative = asOptionalRecord(channel.alternatives[0]);
+    if (!alternative) {
+      return undefined;
+    }
+    if (alternative.transcript !== undefined && typeof alternative.transcript !== "string") {
+      throw new Error("Audio transcription failed: malformed JSON response");
+    }
+    const text = alternative.transcript?.trim();
+    if (text) {
+      transcripts.push(text);
+    }
   }
-  if (!Array.isArray(channel.alternatives)) {
-    throw new Error("Audio transcription failed: malformed JSON response");
-  }
-  const alternative = asOptionalRecord(channel.alternatives[0]);
-  if (!alternative) {
-    return undefined;
-  }
-  if (alternative.transcript !== undefined && typeof alternative.transcript !== "string") {
-    throw new Error("Audio transcription failed: malformed JSON response");
-  }
-  return alternative.transcript;
+  // Multichannel results contain independent tracks, not alternative hypotheses.
+  // Retain the best transcript per track in provider order, including repeats.
+  return transcripts.join("\n\n");
 }
 
 export async function transcribeDeepgramAudio(
