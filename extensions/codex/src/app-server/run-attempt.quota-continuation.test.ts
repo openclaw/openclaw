@@ -8,7 +8,7 @@ import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { isJsonObject } from "./protocol.js";
 import { turnCompleted } from "./protocol.test-helpers.js";
 import {
@@ -101,25 +101,6 @@ describe("Codex settled quota continuation offer", () => {
           details: scenario === "async" ? { async: true, status: "started" } : {},
         };
       };
-      dynamicToolBuildState.openClawCodingToolsFactory = (options) => {
-        if (scenario === "required-cleanup-failure" || scenario === "shared-peer-cleanup-failure") {
-          options?.registerRunCleanup?.(async () => {
-            cleanupCalls++;
-            throw new Error("required tool cleanup failed");
-          });
-        }
-        if (scenario === "required-cleanup-timeout") {
-          vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "15");
-          options?.registerRunCleanup?.(async () => {
-            cleanupCalls++;
-            await new Promise((resolve) => {
-              setTimeout(resolve, 60);
-            });
-            cleanupFinished = true;
-          });
-        }
-        return [tool];
-      };
       if (scenario === "adjusted-arguments") {
         initializeGlobalHookRunner(
           createMockPluginRegistry([
@@ -190,6 +171,25 @@ describe("Codex settled quota continuation offer", () => {
         sharedPeer ? { persistedThreads: ["thread-peer"] } : {},
       );
       const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      setCodexTestToolFactory(params, (options) => {
+        if (scenario === "required-cleanup-failure" || scenario === "shared-peer-cleanup-failure") {
+          options?.registerRunCleanup?.(async () => {
+            cleanupCalls++;
+            throw new Error("required tool cleanup failed");
+          });
+        }
+        if (scenario === "required-cleanup-timeout") {
+          vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "15");
+          options?.registerRunCleanup?.(async () => {
+            cleanupCalls++;
+            await new Promise((resolve) => {
+              setTimeout(resolve, 60);
+            });
+            cleanupFinished = true;
+          });
+        }
+        return [tool];
+      });
       params.prompt = "Perform the action once, then report its result.";
       params.runtimePlan = createCodexRuntimePlanFixture();
       // The shared fixture observer assumes non-message tools are read-only. This

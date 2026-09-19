@@ -4,7 +4,12 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
+import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import {
+  asFiniteNumberInRange,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -28,6 +33,55 @@ const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SHORT_BEARER_TOKEN_PATTERN =
   /\b(Bearer)\s+[-A-Za-z0-9._~+/=]{1,17}(?![-A-Za-z0-9._~+/=…])/giu;
+
+const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
+function resolveMaxSdkRetryWaitSeconds(): number | undefined {
+  const raw = process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS?.trim();
+  if (!raw) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  if (/^(?:0|false|off|none|disabled)$/i.test(raw)) {
+    return undefined;
+  }
+
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (seconds !== undefined) {
+    return seconds;
+  }
+
+  return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+}
+
+export function shouldBypassLongSdkRetry(response: Response): boolean {
+  const maxWaitSeconds = resolveMaxSdkRetryWaitSeconds();
+  if (maxWaitSeconds === undefined) {
+    return false;
+  }
+
+  const status = response.status;
+  const stainlessRetryable = status === 408 || status === 409 || status === 429 || status >= 500;
+  if (!stainlessRetryable) {
+    return false;
+  }
+
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds > maxWaitSeconds;
+  }
+
+  return status === 429;
+}
 
 type ProviderErrorTextRedactionContext = {
   truncated?: boolean;
@@ -550,25 +604,4 @@ export async function readProviderBinaryResponse(
     throw new Error(`${label}: malformed ${kind} response`);
   }
   return bytes;
-}
-
-/** Preserves bounded transport-failure diagnostics without retaining a request owner. */
-export function summarizeProviderTransportError(error: unknown): string {
-  if (!error || typeof error !== "object") {
-    return `type=${typeof error}`;
-  }
-  // SAFETY: The non-null object guard permits key inspection; every reported value stays unknown and is checked below.
-  const record = error as Record<string, unknown>;
-  const cause =
-    record.cause && typeof record.cause === "object"
-      ? (record.cause as Record<string, unknown>) // SAFETY: The preceding non-null object guard establishes key inspection.
-      : undefined;
-  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
-  return [
-    `name=${read(record.name)}`,
-    `code=${read(record.code)}`,
-    `causeName=${read(cause?.name)}`,
-    `causeCode=${read(cause?.code)}`,
-    `message=${error instanceof Error ? error.message : read(record.message)}`,
-  ].join(" ");
 }

@@ -4,18 +4,13 @@ import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw
  *
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
-import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
   isRfc8215LocalUseNat64Ipv6Address,
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
-import {
-  asFiniteNumberInRange,
-  clampTimerTimeoutMs,
-  parseStrictFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -35,6 +30,7 @@ import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   ProviderHttpError,
   readResponseTextLimited,
+  shouldBypassLongSdkRetry,
   summarizeProviderTransportError,
 } from "./provider-http-errors.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
@@ -50,7 +46,6 @@ import {
 import { getProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
 
-const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const SLOW_MODEL_FETCH_MS = 1_000;
 const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
@@ -67,7 +62,6 @@ const SSE_NONOK_BODY_MAX_BYTES = 64 * 1024;
 const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
-const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function hasReadableSseData(block: string): boolean {
   return block
@@ -452,52 +446,6 @@ function requestBodyHasStreamTrue(
   } catch {
     return false;
   }
-}
-
-function resolveMaxSdkRetryWaitSeconds(): number | undefined {
-  const raw = process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS?.trim();
-  if (!raw) {
-    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
-  }
-
-  if (/^(?:0|false|off|none|disabled)$/i.test(raw)) {
-    return undefined;
-  }
-
-  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
-    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
-  }
-
-  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
-    min: 0,
-    minExclusive: true,
-    max: Number.MAX_SAFE_INTEGER,
-  });
-  if (seconds !== undefined) {
-    return seconds;
-  }
-
-  return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
-}
-
-function shouldBypassLongSdkRetry(response: Response): boolean {
-  const maxWaitSeconds = resolveMaxSdkRetryWaitSeconds();
-  if (maxWaitSeconds === undefined) {
-    return false;
-  }
-
-  const status = response.status;
-  const stainlessRetryable = status === 408 || status === 409 || status === 429 || status >= 500;
-  if (!stainlessRetryable) {
-    return false;
-  }
-
-  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
-  if (retryAfterSeconds !== undefined) {
-    return retryAfterSeconds > maxWaitSeconds;
-  }
-
-  return status === 429;
 }
 
 function buildManagedResponse(

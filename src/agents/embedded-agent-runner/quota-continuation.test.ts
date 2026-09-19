@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { attachRuntimePromptMediaFacts } from "../../media/media-facts.js";
+import * as providerRuntime from "../../plugins/provider-runtime.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  createModelGenerationFixture,
+  publishCurrentModelGeneration,
+  resetModelGenerationFixtureState,
+} from "./model.generation-scope.test-support.js";
+import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { isSettledQuotaTranscript } from "./quota-continuation-transcript.js";
 import {
   assertQuotaContinuationProviderPayload,
@@ -16,10 +25,20 @@ import {
   settleQuotaContinuation,
 } from "./quota-continuation.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
+import { runPreparedEmbeddedLoop } from "./run-loop.js";
+import { createEmbeddedRunStageTracker } from "./run/attempt-stage-timing.js";
 import { prepareEmbeddedAttemptTimeout } from "./run/attempt-timeout-prepare.js";
+import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
+import { RUNTIME_AUTH_REFRESH_MIN_DELAY_MS } from "./run/helpers.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
+import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
+import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createQuotaContinuationBudget } from "./run/quota-continuation-budget.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
+
+vi.mock("../harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: async () => undefined,
+}));
 
 const claimQuotaContinuation = (...params: Parameters<typeof claimForApi>) =>
   claimForApi(params[0], params[1], params[2], params[3] ?? "openai-completions");
@@ -559,4 +578,134 @@ describe("private admitted context and successor lineage", () => {
       expect(check).toThrow(/continuation/i);
     }
   });
+});
+
+it("stops prepared runtime auth refresh when quota admission expires before loop entry", async () => {
+  const state = await createOpenClawTestState({
+    label: "quota-admission-cleanup",
+    scenario: "minimal",
+  });
+  onTestFinished(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    resetModelGenerationFixtureState();
+    await state.cleanup();
+  });
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const f = await fixture();
+  onTestFinished(() => f.admission.close());
+  f.params.workspaceDir = state.workspaceDir;
+  f.params.sessionTarget!.storePath = `${state.workspaceDir}/sessions.sqlite`;
+  f.offer();
+  await settleQuotaContinuation(f.result, Promise.resolve());
+  const token = readQuotaContinuation(f.result, f.params, () => true);
+  expect(token).toBeDefined();
+  const generation = createModelGenerationFixture({
+    label: "quota-cleanup",
+    provider: "quota-fallback",
+    requestProvider: "quota-fallback",
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    config: {},
+  });
+  let timersBeforeAuthRefresh = 0;
+  const prepareRuntimeAuth = vi.fn(async () => {
+    timersBeforeAuthRefresh = vi.getTimerCount();
+    now = 1001;
+    return { apiKey: "fixture-runtime-key", expiresAt: Date.now() + 120_000 };
+  });
+  // The external credential exchange is synthetic; runtime preparation and its timer owner are real.
+  vi.spyOn(providerRuntime, "prepareProviderRuntimeAuth").mockImplementation(prepareRuntimeAuth);
+  publishCurrentModelGeneration(generation);
+  await state.writeAuthProfiles({
+    version: 1,
+    profiles: {
+      "quota-fallback:fixture": { type: "api_key", provider: "quota-fallback", key: "fixture-key" },
+    },
+  });
+  const runParams = {
+    ...f.params,
+    agentId: "main",
+    quotaContinuation: token,
+    provider: generation.provider,
+    model: generation.modelId,
+    sessionFile: `${state.workspaceDir}/quota-transcript`,
+    config: {},
+    agentHarnessId: "openclaw",
+    agentHarnessRuntimeOverride: "openclaw",
+  };
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const laneController = createEmbeddedRunLaneController({
+    getLifecycleGeneration: () => lifecycleGeneration,
+    getParams: () => runParams,
+    globalLane: "test",
+    initialQueuedLifecycleGeneration: lifecycleGeneration,
+    sessionLane: "quota-cleanup",
+    setLifecycleGeneration: () => {},
+    setParams: () => {},
+  });
+  const onInitialWriterPrepared = vi.fn();
+  const input: PreparedEmbeddedRunInput = {
+    runParams,
+    provider: generation.provider,
+    modelId: generation.modelId,
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    workspaceResolution: {
+      workspaceDir: state.workspaceDir,
+      isCanonicalWorkspace: true,
+      usedFallback: false,
+      agentId: "main",
+      agentIdSource: "explicit",
+    },
+    isCanonicalWorkspace: true,
+    globalLane: "test",
+    hookRunner: null,
+    hookContext: { sessionId: runParams.sessionId, workspaceDir: state.workspaceDir },
+    fallbackConfigured: false,
+    isProbeSession: false,
+    resolvedSessionKey: runParams.sessionKey!,
+    resolvedToolResultFormat: "plain",
+    startedAtMs: Date.now(),
+    startupStages: createEmbeddedRunStageTracker(),
+    emitStartupStageSummary: () => {},
+    progressController: createEmbeddedRunProgressController({
+      attempt: runParams,
+      noteLaneTaskProgress: () => {},
+      startedAtMs: Date.now(),
+    }),
+    laneController,
+    lifecycleGeneration,
+    suspendForFailure: () => {},
+    onInitialWriterPrepared,
+    preparedModelRuntime: generation.preparedModelRuntime,
+  };
+  const refresh = createEmbeddedAgentPluginRuntimeRefresh(runParams);
+  onTestFinished(() => refresh.close());
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  const cleared = vi.spyOn(globalThis, "clearTimeout");
+  const failure = await runPreparedEmbeddedLoop(refresh, input).catch((error: unknown) => error);
+  expect(
+    prepareRuntimeAuth.mock.calls.length,
+    failure instanceof Error ? failure.stack : String(failure),
+  ).toBe(1);
+  expect(failure).toMatchObject({
+    message: "Quota continuation lost its exact admitted turn or fallback target",
+  });
+  expect(prepareRuntimeAuth).toHaveBeenCalledTimes(1);
+  const authTimerIndex = scheduled.mock.calls.findIndex(
+    (args) => args[1] === RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
+  );
+  expect(authTimerIndex).toBeGreaterThanOrEqual(0);
+  expect(cleared).toHaveBeenCalledWith(scheduled.mock.results[authTimerIndex]?.value);
+  expect(onInitialWriterPrepared).not.toHaveBeenCalled();
+  // The auth-profile read pool owns its separate idle timer; this run must retire only its refresh.
+  expect(vi.getTimerCount()).toBe(timersBeforeAuthRefresh);
+  const scheduledAtExit = scheduled.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(180_000);
+  expect(prepareRuntimeAuth).toHaveBeenCalledTimes(1);
+  expect(scheduled).toHaveBeenCalledTimes(scheduledAtExit);
+  expect(vi.getTimerCount()).toBe(timersBeforeAuthRefresh);
 });

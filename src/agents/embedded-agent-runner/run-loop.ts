@@ -34,11 +34,7 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
 } from "./run/incomplete-turn-recovery.js";
-import {
-  prepareQuotaRunParams,
-  claimQuotaRunParams,
-  resolveEmbeddedLoopPolicy,
-} from "./run/loop-initial-policy.js";
+import { prepareQuotaRunParams, resolveEmbeddedLoopPolicy } from "./run/loop-initial-policy.js";
 import { prepareLoopRuntime } from "./run/loop-runtime-preparation.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import { createProviderReviewRun } from "./run/provider-review-run.js";
@@ -80,14 +76,14 @@ export async function runPreparedEmbeddedLoop(
   } = input;
   const { notifyExecutionPhase } = input.progressController;
   let startupStagesEmitted = false;
-  const preparedRuntime = await prepareLoopRuntime(params, input, provider, modelId);
-  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
-  params = claimQuotaRunParams(
+  const preparedRuntime = await prepareLoopRuntime(
     params,
+    input,
+    provider,
+    modelId,
     quotaContinuation,
-    preparedRuntime.snapshot().agentHarness.id,
-    preparedRuntime.snapshot().effectiveModel.api,
   );
+  params = preparedRuntime.runParams;
   const abortSignal = params.abortSignal;
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
