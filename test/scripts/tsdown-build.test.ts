@@ -2069,6 +2069,26 @@ describe("resolveTsdownBuildInvocation", () => {
     }),
   );
 
+  it("refuses a direct tsdown entry before executeBuild when the live Gateway fence trips", () =>
+    fixture.run(async () => {
+      const executeBuild = vi.fn(async () => 0);
+      const resolveLiveGatewayDistFence = vi.fn(async () => ({
+        refuse: true as const,
+        message: "[openclaw] Refusing to rebuild dist while a managed Gateway is still running.",
+      }));
+
+      await expect(
+        runTsdownBuild(["--config", "tsdown.ai.config.ts"], {
+          cwd: createTempDir("openclaw-tsdown-live-fence-"),
+          executeBuild,
+          resolveLiveGatewayDistFence,
+        }),
+      ).resolves.toBe(1);
+
+      expect(executeBuild).not.toHaveBeenCalled();
+      expect(resolveLiveGatewayDistFence).toHaveBeenCalledOnce();
+    }));
+
   it.each(["OpenClaw.app", "candidates/OpenClaw.app"])(
     "keeps the packaged Mac app intact at %s while rebuilding its replacement runtime",
     (appPath) =>

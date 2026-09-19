@@ -17,6 +17,7 @@ import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
+import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fence.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import type { MemoryLimitParams } from "./lib/process-memory.mts";
 import {
@@ -515,12 +516,14 @@ export async function runBuildAllSteps(
   profile: string,
   params: {
     cacheEnabled?: boolean;
+    cwd?: string;
     env?: NodeJS.ProcessEnv;
     finalizeCache?: typeof finalizeBuildStepCache;
     logger?: Pick<Console, "error" | "warn">;
     memoryLimit?: Omit<MemoryLimitParams, "env">;
     now?: () => number;
     resolveCacheState?: typeof resolveBuildStepCacheState;
+    resolveLiveGatewayDistFence?: typeof resolveLiveManagedGatewayDistFence;
     restoreCache?: typeof restoreBuildStepCacheOutputs;
     runStep?: (
       invocation: ReturnType<typeof resolveBuildAllStep>,
@@ -536,6 +539,14 @@ export async function runBuildAllSteps(
   const steps = params.steps ?? resolveBuildAllSteps(profile, buildEnv);
   const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
   const logger = params.logger ?? console;
+  // One owner for both `pnpm build` and run-node dirty-tree auto-build: both
+  // enter here before clean:dist can delete hashed modules a live Gateway still imports.
+  const resolveFence = params.resolveLiveGatewayDistFence ?? resolveLiveManagedGatewayDistFence;
+  const fence = await resolveFence(params.cwd ?? process.cwd(), { env: buildEnv });
+  if (fence.refuse) {
+    logger.error(fence.message);
+    return { exitCode: 1, timings: [] satisfies BuildAllTiming[] };
+  }
   const now = params.now ?? performance.now.bind(performance);
   const resolveCacheState = params.resolveCacheState ?? resolveBuildStepCacheState;
   const restoreCache = params.restoreCache ?? restoreBuildStepCacheOutputs;
