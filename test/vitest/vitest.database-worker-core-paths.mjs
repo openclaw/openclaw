@@ -45,6 +45,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/skills-cli.workshop.test.ts",
   "src/cli/update-cli.deferred-completion.test.ts",
   "src/cli/update-cli.test.ts",
+  "src/cli/update-cli/update-command-convergence-authority.test.ts",
+  "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",
   "src/cli/update-cli/update-config-provenance.integration.test.ts",

@@ -4,7 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteLockError, sqliteExtendedResultCode } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { loggingState } from "../logging/state.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
@@ -328,9 +329,17 @@ export async function withOpenClawStateLease<T>(
           assertAcquisitionCurrent,
         );
       } catch (error) {
+        // Authority refusals retain their identity; only recorded storage failures are outcomes.
         if (
-          error instanceof OpenClawStateLeaseError &&
-          error.code !== "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
+          !(
+            error instanceof OpenClawStateLeaseError &&
+            error.code === "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
+          ) &&
+          !isLeaseWriteContention(error) &&
+          sqliteExtendedResultCode(error) === undefined &&
+          !isSqliteWorkerError(error, "unavailable") &&
+          !isSqliteWorkerError(error, "overloaded") &&
+          !isSqliteWorkerError(error, "closed")
         ) {
           throw error;
         }

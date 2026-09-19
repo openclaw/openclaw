@@ -10,6 +10,7 @@ import {
 } from "../infra/state-database-coordinator.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -27,6 +28,7 @@ import { OpenClawStateLeaseAcquisitionError } from "./openclaw-state-lease-error
 import * as leaseStorage from "./openclaw-state-lease-storage.js";
 import * as leaseStore from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import * as workerContext from "./openclaw-state-worker-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -42,6 +44,36 @@ function controlElapsedTime() {
     elapsedMs += milliseconds;
   };
 }
+
+it("preserves the caller's typed admission refusal through lease acquisition", async () => {
+  await withOpenClawTestState({ label: "lease-authority-refusal" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const refusal = new StateDatabaseReadAdmissionInvalidatedError("original authority refusal");
+    const capture = workerContext.captureOpenClawStateWorkerContext;
+    vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation((options) => {
+      const context = capture(options);
+      context.admission.assertCurrent = () => {
+        throw refusal;
+      };
+      return context;
+    });
+    const run = vi.fn(async () => undefined);
+    await expect(
+      withOpenClawStateLease(
+        {
+          scope: "core:test",
+          key: "authority-refusal",
+          database: { scope: "shared", options: { env: state.env } },
+          leaseMs: 60_000,
+          waitMs: 0,
+        },
+        run,
+      ),
+    ).rejects.toBe(refusal);
+    expect(run).not.toHaveBeenCalled();
+    expect(database.db.prepare("SELECT * FROM state_leases").all()).toEqual([]);
+  });
+});
 
 it.each(["maintenance", "generic"] as const)(
   "admits %s work after slow database preparation",
