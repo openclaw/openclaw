@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
@@ -506,7 +507,7 @@ describe("assistant image session policy", () => {
           entry.visibility = "draft";
           invalidateSessionSharingSnapshot(sessionKey);
         } else if (change === "role assignment") {
-          setUserProfileRole(profile.id, "denied");
+          seedUserProfileRole(profile.id, "denied");
           invalidateOperatorRolePolicy(profile.id);
         } else {
           cfg.gateway!.roles!.definitions.viewer = {

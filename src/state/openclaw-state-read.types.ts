@@ -26,7 +26,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
-  | { type: "userProfiles.avatar.reconcile"; profileId: string }
+  | { type: "userProfiles.reconcile"; profileId: string }
   | { type: "audit.run.inspect"; input: ExecutionIdentityInspectionQuery }
   | { type: "fleet.list" }
   | { type: "fleet.get"; tenantId: string }
@@ -43,7 +43,7 @@ export type OpenClawStateReadRequest = {
 export type OpenClawStateReadReply =
   | {
       ok: true;
-      type: "userProfiles.avatar.reconcile";
+      type: "userProfiles.reconcile";
       sourceAdmitted: true;
       profile: ProfileDisplayRow | undefined;
     }

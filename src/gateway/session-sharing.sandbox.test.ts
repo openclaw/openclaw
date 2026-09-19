@@ -3,7 +3,8 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -18,7 +19,7 @@ afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 function sandboxRoleClient(role: "view" | "write"): GatewayClient {
   const profile = ensureProfileForEmail(`sandbox-required-${role}@example.test`);
-  setUserProfileRole(profile.id, role);
+  seedUserProfileRole(profile.id, role);
   return {
     connect: {
       minProtocol: 1,

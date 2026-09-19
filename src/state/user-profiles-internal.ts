@@ -18,6 +18,7 @@ import {
 } from "./user-profiles-schema.js";
 import {
   USER_PROFILE_AVATAR_MIME_TYPES,
+  type ProfileDisplayRow,
   type UserProfileAvatarMime,
   type UserProfilesDatabase,
 } from "./user-profiles.types.js";
@@ -76,7 +77,10 @@ export function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
     ]);
   const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
   // Worker transfer removes SQLite rows' null prototype; compare plain descriptors on both sides.
-  return rows.map((row): [string, typeof row] => [row.id, { ...row }]);
+  return rows.map((row): [string, ProfileDisplayRow] => [
+    row.id,
+    { ...row, role: row.role ?? null },
+  ]);
 }
 
 export function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {

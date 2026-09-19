@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   authorizeGatewaySessionCreation,
@@ -90,7 +91,7 @@ describe("operator role policy", () => {
 
       expect(resolveOperatorRolePolicy(identifiedClient(profile.id), cfg)).toEqual(guestRole);
 
-      setUserProfileRole(profile.id, "maintainer");
+      seedUserProfileRole(profile.id, "maintainer");
       invalidateOperatorRolePolicy(profile.id);
 
       expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
@@ -132,7 +133,7 @@ describe("operator role policy", () => {
         resolveCreatorSandbox({}, { actor: { type: "human", source: "profile", id: profile.id } }),
       ).toBeUndefined();
 
-      setUserProfileRole(profile.id, "maintainer");
+      seedUserProfileRole(profile.id, "maintainer");
       invalidateOperatorRolePolicy(profile.id);
 
       expect(
@@ -157,7 +158,7 @@ describe("operator role policy", () => {
   it("falls back from stale assignments to the configured default or denies access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-stale@example.com");
-      setUserProfileRole(profile.id, "retired");
+      seedUserProfileRole(profile.id, "retired");
 
       expect(resolveOperatorRolePolicyForProfile(profile.id, roleConfig())).toEqual(guestRole);
       expect(resolveOperatorRolePolicyForProfile(profile.id, roleConfig(false))).toMatchObject({
@@ -174,7 +175,7 @@ describe("operator role policy", () => {
       const cfg = roleConfig();
 
       expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
-      setUserProfileRole(profile.id, "maintainer");
+      seedUserProfileRole(profile.id, "maintainer");
       expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
 
       invalidateOperatorRolePolicy(profile.id);

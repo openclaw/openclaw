@@ -19,11 +19,8 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   resolveSessionMutationAuthorization,
@@ -678,7 +675,7 @@ test.each([
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("recovery-requester@example.test");
     if (recovering && !systemActor) {
-      setUserProfileRole(recovering.id, "requester");
+      seedUserProfileRole(recovering.id, "requester");
     }
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
@@ -782,7 +779,7 @@ test.each([
 test("sessions.recover cannot create a successor on an agent excluded by the caller's role", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-recovery@example.com");
-  setUserProfileRole(profile.id, "guest");
+  seedUserProfileRole(profile.id, "guest");
   const key = "agent:main:dashboard:role-denied-recovery";
   await writeSessionStore({
     entries: {

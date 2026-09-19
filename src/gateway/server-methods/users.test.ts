@@ -14,7 +14,7 @@ const linkEmail = vi.hoisted(() => vi.fn());
 const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
-const setUserProfileRole = vi.hoisted(() => vi.fn());
+const setNativeUserProfileRole = vi.hoisted(() => vi.fn());
 const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
 const getUserProfileDisplay = vi.hoisted(() => vi.fn());
@@ -34,12 +34,15 @@ vi.mock("../../state/user-profiles.js", async () => {
     resolveUserProfileId,
     setAvatar,
     setDisplayName,
-    setUserProfileRole,
     UserProfileNotFoundError,
   };
 });
 
-vi.mock("../operator-role-policy.js", () => ({ invalidateOperatorRolePolicy }));
+vi.mock("../../state/user-profiles-role.native.js", () => ({ setNativeUserProfileRole }));
+vi.mock("../operator-role-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../operator-role-policy.js")>()),
+  invalidateOperatorRolePolicy,
+}));
 
 async function runUsersHandler(
   method: keyof typeof usersHandlers,
@@ -82,7 +85,7 @@ describe("users gateway methods", () => {
     listProfiles.mockReset();
     setAvatar.mockReset();
     setDisplayName.mockReset();
-    setUserProfileRole.mockReset();
+    setNativeUserProfileRole.mockReset();
     invalidateOperatorRolePolicy.mockReset();
     getUserProfileListItem.mockReturnValue(profile);
     getUserProfileDisplay.mockReturnValue({
@@ -145,7 +148,6 @@ describe("users gateway methods", () => {
       listProfiles,
       setAvatar,
       setDisplayName,
-      setUserProfileRole,
       invalidateOperatorRolePolicy,
     ]) {
       expect(effect).not.toHaveBeenCalled();
@@ -363,7 +365,7 @@ describe("users gateway methods", () => {
       method: "users.setRole",
       operation: "role",
       params: { profileId: "gateway-owner", role: "guest" },
-      store: setUserProfileRole,
+      store: setNativeUserProfileRole,
       message: "the shared owner profile is not governed by operator roles",
     },
   ] as const)(
@@ -418,7 +420,7 @@ describe("users gateway methods", () => {
   it("assigns a configured profile role and invalidates its cached policy", async () => {
     const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
     const disconnectClientsForUserProfile = vi.fn();
-    setUserProfileRole.mockReturnValue(assignedProfile);
+    setNativeUserProfileRole.mockReturnValue(assignedProfile);
 
     const respond = await runUsersHandler(
       "users.setRole",
@@ -432,7 +434,11 @@ describe("users gateway methods", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
     expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest");
+    expect(setNativeUserProfileRole).toHaveBeenCalledWith({
+      profileId: profile.id,
+      role: "guest",
+      assertCurrent: expect.any(Function),
+    });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
     expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
       respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -452,7 +458,7 @@ describe("users gateway methods", () => {
     const respond = vi.fn(() => {
       expect(connectedOperator.scopes).not.toContain("operator.admin");
     });
-    setUserProfileRole.mockReturnValue(assignedProfile);
+    setNativeUserProfileRole.mockReturnValue(assignedProfile);
 
     await expectDefined(
       usersHandlers["users.setRole"],
@@ -472,7 +478,7 @@ describe("users gateway methods", () => {
   });
 
   it("clears profile roles even when role definitions have been removed", async () => {
-    setUserProfileRole.mockReturnValue(profile);
+    setNativeUserProfileRole.mockReturnValue(profile);
 
     const respond = await runUsersHandler(
       "users.setRole",
@@ -482,7 +488,11 @@ describe("users gateway methods", () => {
     );
 
     expect(respond).toHaveBeenCalledWith(true, { profile });
-    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null);
+    expect(setNativeUserProfileRole).toHaveBeenCalledWith({
+      profileId: profile.id,
+      role: null,
+      assertCurrent: expect.any(Function),
+    });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
   });
 
@@ -502,7 +512,7 @@ describe("users gateway methods", () => {
         message: expect.stringContaining("gateway.roles.definitions"),
       }),
     );
-    expect(setUserProfileRole).not.toHaveBeenCalled();
+    expect(setNativeUserProfileRole).not.toHaveBeenCalled();
     expect(invalidateOperatorRolePolicy).not.toHaveBeenCalled();
   });
 
@@ -522,7 +532,7 @@ describe("users gateway methods", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(setUserProfileRole).not.toHaveBeenCalled();
+    expect(setNativeUserProfileRole).not.toHaveBeenCalled();
   });
 
   it("returns protocol-complete avatar mutations", async () => {

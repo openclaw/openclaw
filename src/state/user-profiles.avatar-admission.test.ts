@@ -19,8 +19,8 @@ import {
   ensureProfileForEmail,
   getProfileAvatar,
   UserProfileNotFoundError,
-  setUserProfileRole,
 } from "./user-profiles.js";
+import { seedUserProfileRole } from "./user-profiles.test-support.js";
 
 const boundary = vi.hoisted(() => ({
   beforeOperation: undefined as (() => void) | undefined,
@@ -75,10 +75,10 @@ vi.mock("./user-profile-list.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./user-profile-list.js")>();
   return {
     ...actual,
-    retainUserProfileAvatarPublication: (
-      ...args: Parameters<typeof actual.retainUserProfileAvatarPublication>
+    retainUserProfilePublication: (
+      ...args: Parameters<typeof actual.retainUserProfilePublication>
     ) => {
-      const publication = actual.retainUserProfileAvatarPublication(...args);
+      const publication = actual.retainUserProfilePublication(...args);
       try {
         boundary.duringGrant?.();
       } catch (error) {
@@ -205,7 +205,7 @@ it("preserves a native first-use role in avatar publication after warming a lega
     const version = db.prepare("PRAGMA user_version").get()?.user_version;
     await adoptTailscaleProfileAvatar(profile.id, undefined);
     expect(tableHasColumn(db, "user_profiles", "role")).toBe(false);
-    setUserProfileRole(profile.id, "reader");
+    seedUserProfileRole(profile.id, "reader");
     release = retainUserProfileCatalog();
     const adopted = await adoptTailscaleProfileAvatar(
       profile.id,

@@ -28,9 +28,9 @@ import {
   linkEmail,
   setAvatar,
   setDisplayName,
-  setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profiles.js";
+import { seedUserProfileRole } from "./user-profiles.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -252,7 +252,7 @@ describe("user profiles", () => {
 
     linkEmail("source@example.com", target.id, options);
     const version = readUserProfileVersion();
-    expect(setUserProfileRole(source.id, "maintainer", options)).toMatchObject({
+    expect(seedUserProfileRole(source.id, "maintainer", options)).toMatchObject({
       id: target.id,
       role: "maintainer",
     });
@@ -263,7 +263,7 @@ describe("user profiles", () => {
       expect.objectContaining({ id: target.id, role: "maintainer" }),
     );
 
-    const cleared = setUserProfileRole(source.id, null, options);
+    const cleared = seedUserProfileRole(source.id, null, options);
     expect(readUserProfileVersion()).toBe(version + 2);
     expect(cleared).toMatchObject({ id: target.id });
     expect(cleared).not.toHaveProperty("role");
@@ -277,7 +277,7 @@ describe("user profiles", () => {
     expect(() => getUserProfileRole("missing-profile", options)).toThrow(
       "user profile not found: missing-profile",
     );
-    expect(() => setUserProfileRole("missing-profile", "guest", options)).toThrow(
+    expect(() => seedUserProfileRole("missing-profile", "guest", options)).toThrow(
       "user profile not found: missing-profile",
     );
   });

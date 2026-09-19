@@ -17,18 +17,18 @@ import type {
   OpenClawStateReadOutcome,
 } from "./openclaw-state-read.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+import type { retainUserProfilePublication } from "./user-profile-list.js";
 import type { ProfileDisplayRow } from "./user-profiles.types.js";
 
-type SettlementReadCommand = Extract<
-  OpenClawStateReadCommand,
-  { type: "userProfiles.avatar.reconcile" }
->;
+type SettlementReadCommand = Extract<OpenClawStateReadCommand, { type: "userProfiles.reconcile" }>;
+type SettlementPublication = ReturnType<typeof retainUserProfilePublication> & {
+  onUncertain?: () => void;
+};
 type SettlementRead = {
   bind(
     command: SettlementReadCommand,
     settlement: Promise<SqliteWorkerOperationSettlement>,
-    publish: (profile: ProfileDisplayRow | undefined) => void,
-    release: () => void,
+    publication: SettlementPublication,
   ): void;
   acknowledge(profile: ProfileDisplayRow | undefined): void;
 };
@@ -56,8 +56,7 @@ export async function withOpenClawStateSettlementRead<T>(
     | {
         command: SettlementReadCommand;
         settlement: Promise<SqliteWorkerOperationSettlement>;
-        publish: (profile: ProfileDisplayRow | undefined) => void;
-        release: () => void;
+        publication: SettlementPublication;
       }
     | undefined;
   let transport: ReturnType<typeof createOpenClawStateReadTransport> | undefined;
@@ -83,49 +82,60 @@ export async function withOpenClawStateSettlementRead<T>(
         pending = false;
         return;
       }
-      // A failed transport's retirement is sticky; join it before creating a retry.
-      if (transport) {
-        await transport.close();
-        transport = undefined;
-      }
-      authority.assertCurrent();
-      const readTransport = createOpenClawStateReadTransport(selected.command, () => {});
-      transport = readTransport;
-      let result: OpenClawStateReadOutcome | undefined;
-      const errors: unknown[] = [];
-      try {
-        result = await readTransport.read(
-          {
-            context,
-            location: pathname,
-            checkFreshAdmission: false,
-            expectedIdentity: identity.key,
-          },
-          authority,
-        );
-        if ("error" in result) {
-          errors.push(result.error);
+      // Accepted access changes cannot wait for source validation or projection recovery.
+      const onUncertain = selected.publication.onUncertain;
+      selected.publication.onUncertain = undefined;
+      onUncertain?.();
+      for (;;) {
+        // A failed transport's retirement is sticky; join it before creating a retry.
+        if (transport) {
+          await transport.close();
+          transport = undefined;
         }
-      } catch (error) {
-        errors.push(error);
+        authority.assertCurrent();
+        const prepared = await selected.publication.prepareRecoveryRead();
+        authority.assertCurrent();
+        const readTransport = createOpenClawStateReadTransport(selected.command, () => {});
+        transport = readTransport;
+        let result: OpenClawStateReadOutcome | undefined;
+        const errors: unknown[] = [];
+        try {
+          result = await readTransport.read(
+            {
+              context,
+              location: pathname,
+              checkFreshAdmission: false,
+              expectedIdentity: identity.key,
+            },
+            authority,
+          );
+          if ("error" in result) {
+            errors.push(result.error);
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await readTransport.close();
+          transport = undefined;
+        } catch (error) {
+          errors.push(error);
+        }
+        const taskFailure = await readTransport.readFailure();
+        if (taskFailure && !errors.includes(taskFailure.error)) {
+          errors.unshift(taskFailure.error);
+        }
+        throwSqliteLifecycleErrors(errors, "Shared-state settlement read and cleanup failed");
+        authority.assertCurrent();
+        if (!result || "error" in result || result.value.type !== "userProfiles.reconcile") {
+          throw new Error("Unexpected shared-state settlement read reply");
+        }
+        if (!prepared.publish(result.value.profile)) {
+          continue;
+        }
+        pending = false;
+        return;
       }
-      try {
-        await readTransport.close();
-        transport = undefined;
-      } catch (error) {
-        errors.push(error);
-      }
-      const taskFailure = await readTransport.readFailure();
-      if (taskFailure && !errors.includes(taskFailure.error)) {
-        errors.unshift(taskFailure.error);
-      }
-      throwSqliteLifecycleErrors(errors, "Shared-state settlement read and cleanup failed");
-      authority.assertCurrent();
-      if (!result || "error" in result || result.value.type !== "userProfiles.avatar.reconcile") {
-        throw new Error("Unexpected shared-state settlement read reply");
-      }
-      selected.publish(result.value.profile);
-      pending = false;
     })().finally(() => {
       recovery = undefined;
     }));
@@ -142,7 +152,7 @@ export async function withOpenClawStateSettlementRead<T>(
       borrowed = undefined;
       pin?.release();
       pin = undefined;
-      selected?.release();
+      selected?.publication.release();
       active = false;
       unregister();
     })().finally(() => {
@@ -164,23 +174,23 @@ export async function withOpenClawStateSettlementRead<T>(
   let result!: T;
   try {
     result = await operation({
-      bind(command, settlement, publish, release) {
+      bind(command, settlement, publication) {
         if (selected || !active) {
           throw new Error("Shared-state settlement read was already bound");
         }
         authority.assertCurrent();
-        selected = { command: { ...command }, settlement, publish, release };
+        selected = { command: { ...command }, settlement, publication: { ...publication } };
         pending = true;
       },
       acknowledge(profile) {
         authority.assertCurrent();
         if (selected) {
           if (!profile || profile.id !== selected.command.profileId) {
-            throw new Error("Avatar commit differs from its retained settlement read");
+            throw new Error("Profile commit differs from its retained settlement read");
           }
-          selected.publish(profile);
+          selected.publication.publishCommitted(profile);
         } else if (profile) {
-          throw new Error("Avatar commit did not retain its catalog publication");
+          throw new Error("Profile commit did not retain its catalog publication");
         }
         pending = false;
       },

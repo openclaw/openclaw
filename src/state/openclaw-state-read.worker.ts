@@ -38,7 +38,7 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
     (input.command.type === "admit" ||
-      (input.command.type === "userProfiles.avatar.reconcile" &&
+      (input.command.type === "userProfiles.reconcile" &&
         typeof input.command.profileId === "string") ||
       (input.command.type === "audit.run.inspect" &&
         isRecord(input.command.input) &&
@@ -103,7 +103,7 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
                 row: readConfigMachineStateRowInDatabase(db, command.type),
               };
             }
-            if (command.type === "userProfiles.avatar.reconcile") {
+            if (command.type === "userProfiles.reconcile") {
               return {
                 ok: true,
                 type: command.type,

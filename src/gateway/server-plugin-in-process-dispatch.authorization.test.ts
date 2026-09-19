@@ -10,7 +10,8 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
@@ -249,7 +250,7 @@ describe("typed in-process agent authorization", () => {
     async ({ method, cleanup, scopedActor }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const ownerProfile = ensureProfileForEmail("cleanup-owner@example.test");
-        setUserProfileRole(ownerProfile.id, scopedActor ? "writer" : "limited");
+        seedUserProfileRole(ownerProfile.id, scopedActor ? "writer" : "limited");
         const owner = createOperatorClient({
           profileId: ownerProfile.id,
           scopes: ["operator.write"],
@@ -305,7 +306,7 @@ describe("typed in-process agent authorization", () => {
           scopes: owner.connect.scopes ?? [],
         };
         const limitedProfile = ensureProfileForEmail("limited-cleanup-actor@example.test");
-        setUserProfileRole(limitedProfile.id, "limited");
+        seedUserProfileRole(limitedProfile.id, "limited");
         const withAuthority = <T>(run: () => Promise<T>) =>
           withPluginRuntimeGatewayRequestScope(
             {

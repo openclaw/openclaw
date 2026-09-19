@@ -43,11 +43,8 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   embeddedRunMock,
@@ -509,7 +506,7 @@ test.each([
           ? ensureGatewayOwnerProfile("Gateway Owner")
           : ensureProfileForEmail("checkpoint-requester@example.test");
     if (profile && !systemActor) {
-      setUserProfileRole(profile.id, "requester");
+      seedUserProfileRole(profile.id, "requester");
     }
     const runtimeConfig = (await getGatewayConfigModule()).getRuntimeConfig();
     const cfg = {

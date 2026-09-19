@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual, toUSVString } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
@@ -13,7 +14,11 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
+import {
+  openClawStateDatabaseCache,
+  registerOpenClawStateDatabaseLifecycleListener,
+} from "./openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
@@ -185,6 +190,19 @@ export function readUserProfileAliases(
   return new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 }
 
+export function isProfileDisplayRow(value: unknown): value is ProfileDisplayRow {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.updated_at === "number" &&
+    (value.has_avatar === 0 || value.has_avatar === 1) &&
+    ["display_name", "avatar_mime", "avatar_sha256", "merged_into"].every(
+      (key) => value[key] === null || typeof value[key] === "string",
+    ) &&
+    (value.role === null || typeof value.role === "string")
+  );
+}
+
 function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: string) {
   const raw = rows.get(id);
   return rows.get(raw?.merged_into ?? id) ?? raw;
@@ -196,16 +214,42 @@ type ProfileCatalog = {
   leases: Set<symbol>;
 };
 const profileCatalogs = new Map<string, ProfileCatalog>();
-type AvatarPublication = {
+type ProfilePublication = {
   identity: DatabasePathIdentity;
   profileId: string;
+  before: ProfileDisplayRow;
+  order: { revision: number };
+  settled: Promise<SqliteWorkerOperationSettlement>;
+  superseded: boolean;
   witnesses: Map<
     Map<string, ProfileDisplayRow>,
     { row: ProfileDisplayRow | undefined; late: boolean }
   >;
   catalogs: Map<ProfileCatalog, symbol>;
 };
-const avatarPublications = new Set<AvatarPublication>();
+const profilePublications = new Set<ProfilePublication>();
+
+function advanceProfilePublicationWitnesses(
+  publication: ProfilePublication,
+  rows: Map<string, ProfileDisplayRow>,
+  previous: ProfileDisplayRow | undefined,
+  observed: ProfileDisplayRow | undefined,
+) {
+  let follows = false;
+  for (const candidate of profilePublications) {
+    if (candidate === publication) {
+      follows = true;
+      continue;
+    }
+    if (!follows || candidate.order !== publication.order || candidate.superseded) {
+      continue;
+    }
+    const witness = candidate.witnesses.get(rows);
+    if (witness && witness.row === previous) {
+      witness.row = observed;
+    }
+  }
+}
 let stopCatalogEvents: (() => void) | undefined;
 let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
 const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
@@ -238,16 +282,16 @@ function loadProfileCatalog(
       shared?.rows ??
       new Map(tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : []);
     Object.assign(catalog, { identity, valid: true });
-    for (const publication of avatarPublications) {
-      retainAvatarPublicationCatalog(publication, catalog, true);
+    for (const publication of profilePublications) {
+      retainProfilePublicationCatalog(publication, catalog, true);
     }
     return true;
   }
   return false;
 }
 
-function retainAvatarPublicationCatalog(
-  publication: AvatarPublication,
+function retainProfilePublicationCatalog(
+  publication: ProfilePublication,
   catalog: ProfileCatalog,
   late: boolean,
 ) {
@@ -255,7 +299,7 @@ function retainAvatarPublicationCatalog(
     return;
   }
   if (!publication.catalogs.has(catalog)) {
-    const lease = Symbol("pending avatar publication");
+    const lease = Symbol("pending profile publication");
     publication.catalogs.set(catalog, lease);
     catalog.leases.add(lease);
   }
@@ -280,48 +324,122 @@ function releaseProfileCatalog(catalog: ProfileCatalog, lease: symbol) {
 }
 
 /** Capture under the worker's write transaction; native commits replace these row objects. */
-export function retainUserProfileAvatarPublication(
+export function retainUserProfilePublication(
   identity: DatabasePathIdentity,
   before: ProfileDisplayRow,
+  settled: Promise<SqliteWorkerOperationSettlement>,
 ) {
   const profileId = before.id;
-  const publication: AvatarPublication = {
+  const order = [...profilePublications].find(
+    (pending) => pending.identity.key === identity.key && pending.profileId === profileId,
+  )?.order ?? { revision: 0 };
+  order.revision += 1;
+  const publication: ProfilePublication = {
     identity,
     profileId,
+    before,
+    order,
+    settled,
+    superseded: false,
     witnesses: new Map(),
     catalogs: new Map(),
   };
-  avatarPublications.add(publication);
+  profilePublications.add(publication);
   for (const catalog of profileCatalogs.values()) {
-    retainAvatarPublicationCatalog(publication, catalog, false);
+    retainProfilePublicationCatalog(publication, catalog, false);
   }
-  return {
-    reconcile(this: void, observed: ProfileDisplayRow | undefined) {
-      let changed = false;
-      for (const catalog of publication.catalogs.keys()) {
-        const witness = publication.witnesses.get(catalog.rows);
-        if (
-          catalog.valid &&
-          catalog.identity.key === identity.key &&
-          witness &&
-          catalog.rows.get(profileId) === witness.row &&
-          (!witness.late || isDeepStrictEqual(witness.row, before)) &&
-          !isDeepStrictEqual(witness.row, observed)
-        ) {
-          if (observed) {
-            catalog.rows.set(profileId, observed);
-          } else {
-            catalog.rows.delete(profileId);
-          }
-          changed = true;
+  const publishRows = (observed: ProfileDisplayRow | undefined, committed: boolean) => {
+    let changed = false;
+    for (const catalog of publication.catalogs.keys()) {
+      const witness = publication.witnesses.get(catalog.rows);
+      if (
+        catalog.valid &&
+        catalog.identity.key === identity.key &&
+        witness &&
+        catalog.rows.get(profileId) === witness.row &&
+        (!witness.late || isDeepStrictEqual(witness.row, before))
+      ) {
+        changed ||= !isDeepStrictEqual(witness.row, observed);
+        if (observed) {
+          catalog.rows.set(profileId, observed);
+        } else {
+          catalog.rows.delete(profileId);
+        }
+        if (committed) {
+          advanceProfilePublicationWitnesses(publication, catalog.rows, witness.row, observed);
         }
       }
-      if (changed || !isDeepStrictEqual(before, observed)) {
+    }
+    if (committed || changed || !isDeepStrictEqual(before, observed)) {
+      emitUserProfilesChanged();
+    }
+  };
+  return {
+    publishCommitted(this: void, observed: ProfileDisplayRow) {
+      if (publication.superseded) {
         emitUserProfilesChanged();
+        return;
+      }
+      for (const pending of profilePublications) {
+        if (pending.order === order) {
+          pending.superseded = true;
+        }
+        if (pending === publication) {
+          break;
+        }
+      }
+      publishRows(observed, true);
+    },
+    async prepareRecoveryRead(this: void) {
+      // Native settlement never waits for the host publication callback making this join.
+      for (;;) {
+        const revision = order.revision;
+        const covered = [...profilePublications].filter((pending) => pending.order === order);
+        await Promise.all(covered.map((pending) => pending.settled));
+        if (revision !== order.revision) {
+          continue;
+        }
+        const catalogs = [...publication.catalogs.keys()].map((catalog) => ({
+          catalog,
+          valid: catalog.valid,
+          identity: catalog.identity.key,
+          rows: catalog.rows,
+          row: catalog.rows.get(profileId),
+        }));
+        for (const snapshot of catalogs) {
+          publication.witnesses.set(snapshot.rows, { row: snapshot.row, late: false });
+        }
+        return {
+          publish(observed: ProfileDisplayRow | undefined) {
+            if (publication.superseded) {
+              return true;
+            }
+            if (
+              revision !== order.revision ||
+              catalogs.length !== publication.catalogs.size ||
+              catalogs.some(
+                ({ catalog, valid, identity: key, rows, row }) =>
+                  !publication.catalogs.has(catalog) ||
+                  catalog.valid !== valid ||
+                  catalog.identity.key !== key ||
+                  catalog.rows !== rows ||
+                  rows.get(profileId) !== row,
+              )
+            ) {
+              return false;
+            }
+            // This stable read includes the entire settled cohort, even through repeated ABA.
+            for (const pending of covered) {
+              pending.superseded = true;
+            }
+            publishRows(observed, false);
+            return true;
+          },
+        };
       }
     },
     release(this: void) {
-      avatarPublications.delete(publication);
+      profilePublications.delete(publication);
       for (const [catalog, lease] of publication.catalogs) {
         releaseProfileCatalog(catalog, lease);
       }
@@ -381,12 +499,28 @@ export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions =
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */
 export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: string[]): void {
   const catalog = profileCatalogHandles.get(db);
-  if (catalog) {
-    const rows = selectProfileDisplayEntries(db, profileIds);
+  const location = profilePublications.size ? db.location() : undefined;
+  const identity = location
+    ? openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(location)
+    : undefined;
+  const superseded = identity
+    ? [...profilePublications].filter(
+        (pending) =>
+          pending.identity.key === identity.key && profileIds.includes(pending.profileId),
+      )
+    : [];
+  if (catalog || superseded.length) {
+    const rows = catalog ? selectProfileDisplayEntries(db, profileIds) : [];
     stageSqliteTransactionState(db, {
       stage: () => {},
       rollback: () => {},
-      commit: () => rows.forEach(([id, row]) => catalog.set(id, row)),
+      commit: () => {
+        // Native commit ordering exists even before the first catalog is retained.
+        for (const pending of superseded) {
+          pending.superseded = true;
+        }
+        rows.forEach(([id, row]) => catalog?.set(id, row));
+      },
     });
   }
 }

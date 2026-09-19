@@ -11,8 +11,8 @@ import {
   getUserProfileDisplay,
   getUserProfileListItem,
   setDisplayName,
-  setUserProfileRole,
 } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
@@ -273,10 +273,10 @@ describe("GitHub public identity metadata cache", () => {
         expect(warm.authenticatedUserProfile?.updatedAt).toBe(
           first.authenticatedUserProfile.updatedAt,
         );
-        setUserProfileRole(profileId, "maintainer");
+        seedUserProfileRole(profileId, "maintainer");
         invalidateOperatorRolePolicy(profileId);
         expect((await resolve()).operatorRolePolicy?.scopes).toContain("operator.admin");
-        setUserProfileRole(profileId, null);
+        seedUserProfileRole(profileId, null);
         invalidateOperatorRolePolicy(profileId);
         expect((await resolve()).operatorRolePolicy?.scopes).toEqual([]);
         access.email = "other@example.test";

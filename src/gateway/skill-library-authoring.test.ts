@@ -6,7 +6,8 @@ import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-co
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -238,7 +239,7 @@ describe("human personal namespace authority", () => {
     const run = await admitted(prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!);
     try {
       const saving = run.invoke({ action: "create", slug: "revoked", content });
-      setUserProfileRole(alice.id, "reader");
+      seedUserProfileRole(alice.id, "reader");
       await expect(saving).rejects.toMatchObject({ code: "FORBIDDEN" });
       expect(listSkillLibrary(libraryAuthority(owner)).entries).toHaveLength(0);
     } finally {

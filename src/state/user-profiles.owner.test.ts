@@ -16,9 +16,9 @@ import {
   ensureProfileForTailscaleIdentity,
   linkEmail,
   setDisplayName,
-  setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profiles.js";
+import { seedUserProfileRole } from "./user-profiles.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -99,7 +99,7 @@ describe("gateway owner profiles", () => {
     }
     const before = profileState(options);
 
-    expect(() => setUserProfileRole(profileId, role, options)).toThrow(
+    expect(() => seedUserProfileRole(profileId, role, options)).toThrow(
       "the shared owner profile is not governed by operator roles",
     );
     expect(profileState(options)).toEqual(before);

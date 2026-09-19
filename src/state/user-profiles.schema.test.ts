@@ -4,7 +4,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import {
@@ -18,8 +17,11 @@ import {
   getUserProfileListItem,
   getUserProfileRole,
   resolveUserProfileId,
-  setUserProfileRole,
 } from "./user-profiles.js";
+import {
+  createLegacyUserProfilesTable,
+  seedUserProfileRole,
+} from "./user-profiles.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -33,27 +35,10 @@ function stateOptions() {
   return { path: join(directory, "openclaw.sqlite") };
 }
 
-function createLegacyProfileDatabase(options: ReturnType<typeof stateOptions>) {
-  const database = openOpenClawStateDatabase(options).db;
-  database.exec(`
-    CREATE TABLE user_profiles (
-      id TEXT NOT NULL PRIMARY KEY,
-      display_name TEXT,
-      avatar BLOB,
-      avatar_mime TEXT,
-      avatar_sha256 TEXT,
-      merged_into TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    ) STRICT;
-  `);
-  return database;
-}
-
 describe("user profile role schema", () => {
   it("lazily adds a downgrade-safe nullable role without changing the schema version", () => {
     const options = stateOptions();
-    const database = createLegacyProfileDatabase(options);
+    const database = createLegacyUserProfilesTable(options);
     const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
     const profile = ensureProfileForEmail("ada@example.com", options);
     const release = retainUserProfileCatalog(options);
@@ -80,7 +65,7 @@ describe("user profile role schema", () => {
         }),
       );
 
-      setUserProfileRole(profile.id, "maintainer", options);
+      seedUserProfileRole(profile.id, "maintainer", options);
       expect(readUserProfileIdentity(profile.id, options)?.role).toBe("maintainer");
       database
         .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
@@ -105,7 +90,7 @@ describe("user profile role schema", () => {
     "keeps legacy profile reads working after a %s role migration rollback",
     (scope) => {
       const options = stateOptions();
-      const database = createLegacyProfileDatabase(options);
+      const database = createLegacyUserProfilesTable(options);
       const profile = ensureProfileForEmail("rollback@example.test", options);
       const assertRestored = () => {
         expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
@@ -115,7 +100,7 @@ describe("user profile role schema", () => {
       };
       const rollBackRole = () =>
         runOpenClawStateWriteTransaction(() => {
-          expect(setUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
+          expect(seedUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
             id: profile.id,
             role: "maintainer",
           });
@@ -130,7 +115,7 @@ describe("user profile role schema", () => {
         }, options);
       }
       assertRestored();
-      expect(setUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
+      expect(seedUserProfileRole(profile.id, "maintainer", options)).toMatchObject({
         id: profile.id,
         role: "maintainer",
       });

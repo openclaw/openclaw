@@ -15,7 +15,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -88,11 +89,11 @@ describe("gateway presence audience", () => {
     );
     const creator = ensureProfileForEmail("creator@example.com");
     const restricted = ensureProfileForEmail("restricted@example.com");
-    setUserProfileRole(restricted.id, "restricted");
-    setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
-    setUserProfileRole(ensureProfileForEmail("watcher@example.com").id, "maintainer");
-    setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
-    setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
+    seedUserProfileRole(restricted.id, "restricted");
+    seedUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
+    seedUserProfileRole(ensureProfileForEmail("watcher@example.com").id, "maintainer");
+    seedUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
+    seedUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
     const sharedKey = "agent:main:presence-shared";
     const sharedSessionId = randomUUID();
     const draftKey = "agent:main:presence-draft";

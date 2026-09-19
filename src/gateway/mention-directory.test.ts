@@ -9,9 +9,9 @@ import {
   ensureProfileForEmail,
   linkEmail,
   setDisplayName,
-  setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import {
   SESSION_KEY,
   SESSION_ID,
@@ -344,9 +344,9 @@ describe("human mention directory", () => {
         },
       };
       await withInbox(async (f) => {
-        setUserProfileRole(f.alice.id, "administrator");
+        seedUserProfileRole(f.alice.id, "administrator");
         invalidateOperatorRolePolicy(f.alice.id);
-        setUserProfileRole(f.bob.id, role);
+        seedUserProfileRole(f.bob.id, role);
         invalidateOperatorRolePolicy(f.bob.id);
         f.aliceClient.connect.scopes = ["operator.admin"];
         f.bobClient.connect.scopes = ["operator.admin"];

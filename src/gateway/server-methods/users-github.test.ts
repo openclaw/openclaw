@@ -35,8 +35,8 @@ import {
   ensureProfileForEmail,
   getUserProfileListItem,
   linkEmail,
-  setUserProfileRole,
 } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -347,7 +347,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
                 default: "blocked",
               },
             };
-            setUserProfileRole(owner(), "blocked");
+            seedUserProfileRole(owner(), "blocked");
             invalidateOperatorRolePolicy(owner());
           }
         }
@@ -655,7 +655,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
             default: "blocked",
           },
         };
-        setUserProfileRole(owner(), "blocked");
+        seedUserProfileRole(owner(), "blocked");
         invalidateOperatorRolePolicy(owner());
       }
       if (race === "expiry") {

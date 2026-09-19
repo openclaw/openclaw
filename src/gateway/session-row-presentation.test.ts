@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createExpectedProfileBinding,
@@ -26,7 +27,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
     const owner = ensureProfileForEmail("owner@presentation.test");
     const member = ensureProfileForEmail("member@presentation.test");
     const viewer = ensureProfileForEmail("viewer@presentation.test");
-    setUserProfileRole(viewer.id, "none");
+    seedUserProfileRole(viewer.id, "none");
     const clients = [owner, member, viewer].map((profile) => {
       const client = Object.assign(sharingPolicyClient({ user: profile.id }), {
         connId: profile.id,

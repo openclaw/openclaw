@@ -17,6 +17,8 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { changeUserProfileRole } from "../../state/user-profiles-role.js";
+import { setNativeUserProfileRole } from "../../state/user-profiles-role.native.js";
 import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
   getUserProfileDisplay,
@@ -26,11 +28,11 @@ import {
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
-  setUserProfileRole,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -42,6 +44,7 @@ import {
   requireProfileMutationAccess,
   resolveAuthenticatedProfileId,
 } from "./users-profile-access.js";
+import { prepareUserProfileRoleMutation } from "./users-role-access.js";
 import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
@@ -256,32 +259,43 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setRole": ({ context, params, respond }) => {
+  "users.setRole": async (options) => {
+    const { context, params, respond, signal } = options;
     if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
       return;
     }
-    const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
-    if (
-      params.role !== null &&
-      (!roleDefinitions || !Object.hasOwn(roleDefinitions, params.role))
-    ) {
+    try {
+      const guard = prepareUserProfileRoleMutation(options, params.role);
+      const onRoleChanged = (profileId: string) => {
+        invalidateOperatorRolePolicy(profileId);
+        context.disconnectClientsForUserProfile?.(profileId);
+      };
+      if (guard.family === "native-compatibility") {
+        const profile = setNativeUserProfileRole({
+          profileId: params.profileId,
+          role: params.role,
+          assertCurrent: guard.assertCurrent,
+        });
+        onRoleChanged(profile.id);
+        respond(true, { profile });
+        return;
+      }
+      const profile = await changeUserProfileRole({
+        profileId: params.profileId,
+        role: params.role,
+        guard,
+        onRoleChanged,
+        signal,
+      });
+      respond(true, { profile });
+    } catch (error) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unknown operator role "${params.role}"; define it under gateway.roles.definitions before assigning it`,
-        ),
+        error instanceof SessionMutationAuthorizationChangedError
+          ? error.error
+          : profileError(error),
       );
-      return;
-    }
-    try {
-      const profile = setUserProfileRole(params.profileId, params.role);
-      invalidateOperatorRolePolicy(profile.id);
-      context.disconnectClientsForUserProfile?.(profile.id);
-      respond(true, { profile });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
     }
   },
   "users.setAvatar": ({ client, context, params, respond }) => {

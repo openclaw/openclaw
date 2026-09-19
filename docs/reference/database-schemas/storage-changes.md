@@ -74,7 +74,7 @@ session, and role policy and publishes the RPC response in one synchronous step.
 Prepared directory rows are descriptive
 facts, never permission or current alias authority. Project recents retain a narrow
 fresh canonical-profile and alias query for their disclosure scope. Profile creation,
-display-name and role changes, explicit avatar uploads, identity merges, and final
+display-name changes, explicit avatar uploads, identity merges, and final
 identity/permission lookups keep their existing native owners.
 
 Post-login Tailscale avatar adoption reads and conditionally writes through the
@@ -87,6 +87,19 @@ reconciliation of the original physical source through close, without replaying
 the mutation or converting the original error into success. Failed reconciliation
 or reader retirement remains owned by canonical close for retry. Profile schema,
 avatar bytes, fetch limits, and final identity and permission checks are unchanged.
+
+Ordinary WebSocket `users.setRole` mutations use that shared worker and the existing
+role SQL owner. The transaction resolves current requester and target profiles;
+transaction and commit admission recheck captured request authority and current
+role definitions. An authorized self-downgrade retains its pre-mutation authority.
+Acknowledged writes publish the profile catalog, invalidate role access, and retire
+affected connections in one retained host continuation. An uncertain commit
+invalidates access after native settlement even when catalog recovery fails; the
+original source retains read-only reconciliation and cleanup custody without
+replaying the mutation. Repeated worker publications preserve later committed
+writes and native edits. Shipped plugin dispatch with opaque synchronous guards
+retains a narrow native adapter beside the same SQL kernel. The RPC shape, owner
+protection, role policy, optional role column, and retention are unchanged.
 
 Explicit promotion notice and claim annotations execute in the shared-state
 worker. The CLI awaits their best-effort completion before reporting results;

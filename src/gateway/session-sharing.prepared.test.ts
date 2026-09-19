@@ -1,7 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -23,9 +24,9 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
     });
     const stop = onUserProfilesChanged(() => prepareGatewayRecipientProfile(client));
     try {
-      setUserProfileRole(source.id, "view");
+      seedUserProfileRole(source.id, "view");
       expect(client.preparedSessionProfile?.role).toBe("view");
-      setUserProfileRole(target.id, "none");
+      seedUserProfileRole(target.id, "none");
       linkEmail("source@example.test", target.id);
       expect(client.preparedSessionProfile).toEqual({
         profileId: target.id,

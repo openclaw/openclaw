@@ -13,7 +13,8 @@ import {
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import * as secretsRuntimeState from "../../secrets/runtime-state.js";
 import { listSecretStoreEntries, readSecretStoreValue } from "../../secrets/store/secret-store.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortChatRunById,
@@ -192,7 +193,7 @@ describe("question gateway methods", () => {
       const owner = ensureProfileForEmail("question-owner@example.test");
       const viewer = ensureProfileForEmail("question-viewer@example.test");
       const guest = ensureProfileForEmail("question-guest@example.test");
-      setUserProfileRole(viewer.id, "viewer");
+      seedUserProfileRole(viewer.id, "viewer");
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: requestParams.sessionKey },
         {

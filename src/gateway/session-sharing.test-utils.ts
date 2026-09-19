@@ -1,7 +1,7 @@
 import { afterEach } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { seedProfileForRole } from "../state/user-profiles.test-support.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -101,8 +101,7 @@ export function roleClient(
   role: "none" | "view" | "suggest" | "write",
   label: string = role,
 ): GatewayClient {
-  const profile = ensureProfileForEmail(`${label}@example.test`);
-  setUserProfileRole(profile.id, role);
+  const profile = seedProfileForRole(`${label}@example.test`, role);
   const client = sharingPolicyClient({ user: profile.id }) as GatewayWsClient;
   const refresh = () => prepareGatewayRecipientProfile(client);
   refresh();

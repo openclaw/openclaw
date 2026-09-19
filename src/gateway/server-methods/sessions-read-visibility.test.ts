@@ -10,7 +10,8 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
@@ -35,7 +36,7 @@ afterEach(() => {
 
 test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
   const ownerId = ensureProfileForEmail("recap-reader@example.test").id;
-  setUserProfileRole(ownerId, "view");
+  seedUserProfileRole(ownerId, "view");
   const client = identifiedClient(ownerId);
   const foreignId = ensureProfileForEmail("recap-owner@example.test").id;
   const storePath = resolveStorePath(undefined, { agentId: "main" });

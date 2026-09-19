@@ -74,6 +74,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/sessions-read-visibility.test.ts",
   "src/gateway/server-methods/sessions-read.test.ts",
   "src/gateway/server-methods/sessions-sharing.test.ts",
+  "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/worktrees.authorization.test.ts",
   "src/gateway/server-methods/worktrees.test.ts",
   "src/gateway/server.sessions.create-worktree-spawn.test.ts",

@@ -3,7 +3,8 @@ import { expect } from "vitest";
 import { writeConfigFile } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -110,8 +111,8 @@ export async function withAuthenticatedTaskGateway(
   const adminProfile = ensureProfileForEmail("admin@example.com");
   const viewerProfile = ensureProfileForEmail("viewer@example.com");
   const foreignProfile = ensureProfileForEmail("foreign@example.com");
-  setUserProfileRole(adminProfile.id, "maintainer");
-  setUserProfileRole(viewerProfile.id, "restricted");
+  seedUserProfileRole(adminProfile.id, "maintainer");
+  seedUserProfileRole(viewerProfile.id, "restricted");
   const auth: GatewayAuthConfig = {
     mode: "trusted-proxy" as const,
     identityScopes: {

@@ -13,10 +13,18 @@ import { listUserProfilesSync } from "./user-profile-list.js";
 import {
   selectProfileDisplayEntries,
   selectResolvedUserProfileById,
+  selectResolvedUserProfileMetadataById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import { writeUserProfileRole } from "./user-profiles-role.kernel.js";
+import type { UserProfileRoleAdmission } from "./user-profiles-role.types.js";
+import {
+  ensureUserProfilesSchema,
+  ensureUserProfileRoleSchema,
+  UserProfileNotFoundError,
+  UserProfileOwnerError,
+} from "./user-profiles-schema.js";
 import type { ProfileDisplayRow, UserProfileAvatarMime } from "./user-profiles.types.js";
 
 type UserProfileReadWorkerOperations = {
@@ -121,15 +129,96 @@ function executeUserProfileAvatarCommand(
   );
 }
 
+type RoleWriteResult =
+  | {
+      kind: "committed";
+      profile: ReturnType<typeof writeUserProfileRole>;
+      committed: ProfileDisplayRow;
+    }
+  | { kind: "not-found" }
+  | { kind: "owner" };
+
+type UserProfileRoleWorkerOperations = {
+  "userProfiles.setRole": {
+    input: { profileId: string; role: string | null; requesterReference: string | null };
+    output: RoleWriteResult;
+  };
+};
+
+function executeUserProfileRoleCommand(
+  command: SqliteWorkerCommand<UserProfileRoleWorkerOperations>,
+  options: OpenClawStateDatabaseOptions,
+): RoleWriteResult {
+  const { input } = command;
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: "profile-role" });
+      ensureUserProfileRoleSchema(options, database);
+      const { db } = database;
+      const requester = input.requesterReference
+        ? selectResolvedUserProfileMetadataById(db, input.requesterReference)
+        : undefined;
+      let admission: UserProfileRoleAdmission = {
+        kind: "profile-role",
+        requester: {
+          profileId: requester?.id ?? null,
+          assignedRole: requester?.role ?? null,
+        },
+      };
+      let result: RoleWriteResult;
+      try {
+        const profile = writeUserProfileRole(
+          db,
+          input.profileId,
+          input.role,
+          Date.now(),
+          (profileId) => {
+            admission = {
+              ...admission,
+              before: selectProfileDisplayEntries(db, [profileId])[0]![1],
+            };
+            requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: admission });
+          },
+        );
+        result = {
+          kind: "committed",
+          profile,
+          committed: selectProfileDisplayEntries(db, [profile.id])[0]![1],
+        };
+      } catch (error) {
+        if (
+          !(error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError)
+        ) {
+          throw error;
+        }
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: admission });
+        result = { kind: error instanceof UserProfileNotFoundError ? "not-found" : "owner" };
+      }
+      // The requester's preimage keeps a legitimate self-downgrade authorized through commit.
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: admission });
+      return result;
+    },
+    options,
+    { operationLabel: "user-profiles.set-role" },
+  );
+}
+
 export type UserProfileWorkerOperations = UserProfileReadWorkerOperations &
-  UserProfileAvatarWorkerOperations;
+  UserProfileAvatarWorkerOperations &
+  UserProfileRoleWorkerOperations;
 
 export function executeUserProfileCommand(
   command: SqliteWorkerCommand<UserProfileWorkerOperations>,
   options: OpenClawStateDatabaseOptions,
 ): UserProfileWorkerOperations[keyof UserProfileWorkerOperations]["output"] {
-  if (command.type === "userProfiles.list" || command.type === "userProfiles.directory") {
-    return executeUserProfileReadCommand(command, options);
+  if (command.type === "userProfiles.setRole") {
+    return executeUserProfileRoleCommand(command, options);
   }
-  return executeUserProfileAvatarCommand(command, options);
+  if (
+    command.type === "userProfiles.avatar.inspect" ||
+    command.type === "userProfiles.avatar.adopt"
+  ) {
+    return executeUserProfileAvatarCommand(command, options);
+  }
+  return executeUserProfileReadCommand(command, options);
 }

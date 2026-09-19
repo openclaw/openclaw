@@ -7,9 +7,9 @@ import {
   linkEmail,
   setAvatar,
   setDisplayName,
-  setUserProfileRole,
   syncGitHubIdentity,
 } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { usersHandlers } from "./users.js";
 
@@ -25,7 +25,7 @@ it("enumerates protocol profile facts through the real users.list entry without 
     linkEmail("old@example.test", alpha.id);
     setDisplayName(alpha.id, "Alpha");
     setDisplayName(grace.id, "Grace");
-    setUserProfileRole(grace.id, "reader");
+    seedUserProfileRole(grace.id, "reader");
     expect(setAvatar(alpha.id, new Uint8Array([1, 2]), "image/png").ok).toBe(true);
     syncGitHubIdentity({
       identity: { accountId: 101, login: "alpha-primary" },
@@ -160,7 +160,7 @@ it("observes native first-use role assignment after warming a legacy worker read
     });
     expect(tableHasColumn(db, "user_profiles", "role")).toBe(false);
 
-    setUserProfileRole(profile.id, "maintainer");
+    seedUserProfileRole(profile.id, "maintainer");
     await read(expect.objectContaining({ id: profile.id, role: "maintainer" }));
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
   } finally {

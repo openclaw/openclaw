@@ -2,7 +2,8 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "./user-profiles.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
+import { seedUserProfileRole } from "./user-profiles.test-support.js";
 
 export function profileState(options: OpenClawStateDatabaseOptions) {
   const db = openOpenClawStateDatabase(options).db;
@@ -17,7 +18,7 @@ export function profileState(options: OpenClawStateDatabaseOptions) {
 
 export function mergeOwnerIntoPerson(ownerId: string, options: OpenClawStateDatabaseOptions) {
   const person = ensureProfileForEmail("person@example.test", options);
-  setUserProfileRole(person.id, "guest", options);
+  seedUserProfileRole(person.id, "guest", options);
   openOpenClawStateDatabase(options)
     .db.prepare("UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = ?")
     .run(person.id, ownerId);

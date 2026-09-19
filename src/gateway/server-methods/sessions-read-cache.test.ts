@@ -35,7 +35,8 @@ import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
@@ -869,7 +870,7 @@ describe("resident sessions.list", () => {
         listSessions({ client: identifiedClient(profile.id), context, request });
       const privileged = await listProfileSessions();
       expect(privileged.sessions.map((session) => session.key)).toContain("agent:main:active");
-      setUserProfileRole(profile.id, "guest");
+      seedUserProfileRole(profile.id, "guest");
       invalidateOperatorRolePolicy(profile.id);
       const restricted = await listProfileSessions();
       expect(restricted.sessions.map((session) => session.key)).not.toContain("agent:main:active");

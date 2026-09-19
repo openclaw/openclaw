@@ -16,9 +16,9 @@ import {
   ensureGatewayOwnerProfile,
   linkEmail,
   setAvatar,
-  setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
@@ -223,7 +223,7 @@ describe("personal avatar HTTP authentication", () => {
     });
     linkEmail("work@example.test", primary.id);
     setAvatar(primary.id, PNG, "image/png");
-    setUserProfileRole(primary.id, "reader");
+    seedUserProfileRole(primary.id, "reader");
     avatarPath = "/api/users/" + primary.id + "/avatar";
     const readAvatar = vi.spyOn(userProfiles, "getProfileAvatar");
     const send = async (email = identity.email) => {
@@ -269,12 +269,12 @@ describe("personal avatar HTTP authentication", () => {
     expect(metadata).toHaveBeenCalledTimes(2);
     expect(readAvatar).toHaveBeenCalledTimes(2);
     readAvatar.mockClear();
-    setUserProfileRole(primary.id, null);
+    seedUserProfileRole(primary.id, null);
     invalidateOperatorRolePolicy(primary.id);
     expect((await send()).status).toBe(403);
     expect(metadata).toHaveBeenCalledTimes(2);
     expect(readAvatar).not.toHaveBeenCalled();
-    setUserProfileRole(primary.id, "reader");
+    seedUserProfileRole(primary.id, "reader");
     invalidateOperatorRolePolicy(primary.id);
     identity.id = 512;
     expect((await send()).status).toBe(403);

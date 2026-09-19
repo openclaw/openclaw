@@ -18,8 +18,8 @@ import {
   linkEmail,
   setAvatar,
   setDisplayName,
-  setUserProfileRole,
 } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
@@ -519,7 +519,7 @@ describe("profile-owned skill publication and selection", () => {
           expectDefined(getProfileAvatar(alice.profileId!, options), "stored avatar").bytes,
         ),
       ).toEqual(avatar);
-      setUserProfileRole(alice.profileId!, "viewer", options);
+      seedUserProfileRole(alice.profileId!, "viewer", options);
       const viewerEntries = listSkillLibrary(
         {
           ...authority,

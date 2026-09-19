@@ -9,8 +9,8 @@ import {
   ensureProfileForEmail,
   linkEmail,
   setDisplayName,
-  setUserProfileRole,
 } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import {
   SESSION_KEY,
@@ -511,12 +511,12 @@ describe("temporary human mention Inbox", () => {
       f.post();
       const delayed = f.push.mock.calls[0]?.[0];
       expect(delayed?.isCurrent()).toBe(true);
-      setUserProfileRole(f.bob.id, "denied");
+      seedUserProfileRole(f.bob.id, "denied");
       invalidateOperatorRolePolicy(f.bob.id);
       await Promise.resolve();
       expect(delayed?.isCurrent()).toBe(false);
       expect(f.inbox.list(f.bobClient)).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-      setUserProfileRole(f.bob.id, "reader");
+      seedUserProfileRole(f.bob.id, "reader");
       invalidateOperatorRolePolicy(f.bob.id);
       await f.setSession({ sessionId: "replacement-session" });
       emitSessionIdentityMutation({

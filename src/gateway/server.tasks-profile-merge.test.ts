@@ -7,7 +7,8 @@ import type {
 import { writeConfigFile } from "../config/config.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -29,8 +30,8 @@ test("expires task cursors when a profile merge changes the same caller's sessio
   const adminProfile = ensureProfileForEmail("admin@example.test");
   const viewerProfile = ensureProfileForEmail("viewer@example.test");
   const sourceProfile = ensureProfileForEmail("source@example.test");
-  setUserProfileRole(adminProfile.id, "maintainer");
-  setUserProfileRole(viewerProfile.id, "restricted");
+  seedUserProfileRole(adminProfile.id, "maintainer");
+  seedUserProfileRole(viewerProfile.id, "restricted");
   const origin = "https://control.example.test";
   const auth: GatewayAuthConfig = {
     mode: "trusted-proxy",

@@ -19,8 +19,8 @@ import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
-  selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
+import { selectUserProfileListItemById } from "./user-profile-list-item.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import {
   requireResolvedUserProfileMetadataById,
@@ -28,7 +28,6 @@ import {
   toUserProfile,
   type UserProfile,
   type UserProfileRow,
-  userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { mergeUserProfiles } from "./user-profiles-merge.js";
@@ -36,7 +35,6 @@ import { ensureGatewayOwnerProfileRow } from "./user-profiles-owner.js";
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
-  hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
@@ -104,43 +102,6 @@ function insertUserProfile(
   return row;
 }
 
-function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
-  const kysely = userProfilesDb(db);
-  const profile = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("user_profiles")
-      .select([
-        "id",
-        "display_name",
-        "avatar_mime",
-        "merged_into",
-        ...(hasEnsuredUserProfileRoleSchema(db) ? (["role"] as const) : []),
-        "created_at",
-        "updated_at",
-        userProfileAvatarPresence,
-      ])
-      .where("id", "=", profileId),
-  );
-  if (!profile) {
-    throw new UserProfileNotFoundError(profileId);
-  }
-  const emails = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("user_profile_emails")
-      .select("email")
-      .where("profile_id", "=", profileId)
-      .orderBy("email", "asc"),
-  ).rows;
-  return {
-    ...toUserProfile(profile),
-    emails: emails.map((alias) => alias.email),
-    githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
-    hasAvatar: profile.has_avatar === 1,
-  };
-}
-
 /** Resolves a durable profile reference to its current one-hop merge head. */
 export function resolveUserProfileId(
   profileId: string,
@@ -170,35 +131,6 @@ export function getUserProfileRole(
   ensureUserProfileRoleSchema(options);
   const { db } = openOpenClawStateDatabase(options);
   return requireResolvedUserProfileMetadataById(db, profileId).role ?? null;
-}
-
-/** Assigns or clears the role on an existing profile's current merge head. */
-export function setUserProfileRole(
-  profileId: string,
-  role: string | null,
-  options: OpenClawStateDatabaseOptions = {},
-): UserProfileListItem {
-  ensureUserProfileRoleSchema(options);
-  const now = Date.now();
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const profile = requireResolvedUserProfileMetadataById(db, profileId);
-      if (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID) {
-        throw new UserProfileOwnerError("role");
-      }
-      executeSqliteQuerySync(
-        db,
-        userProfilesDb(db)
-          .updateTable("user_profiles")
-          .set({ role, updated_at: now })
-          .where("id", "=", profile.id),
-      );
-      publishUserProfilesChange(db, profile.id);
-      return selectUserProfileListItemById(db, profile.id);
-    },
-    options,
-    { operationLabel: "user-profiles.set-role" },
-  );
 }
 
 function ensureProfileForEmailWithInitialName(

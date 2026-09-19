@@ -3,7 +3,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -594,7 +595,7 @@ describe("event Web Push classification", () => {
         await withOpenClawTestState({ scenario: "minimal" }, async () => {
           const owner = ensureProfileForEmail("draft-owner@example.test");
           const recipient = ensureProfileForEmail("draft-admin@example.test");
-          setUserProfileRole(recipient.id, "admin");
+          seedUserProfileRole(recipient.id, "admin");
           let cfg: OpenClawConfig = {
             gateway: {
               roles: {
@@ -640,7 +641,7 @@ describe("event Web Push classification", () => {
           if (scenario === "device downgrade") {
             listDevicePairingMock.mockReturnValue({ paired: [pairedOperator("admin-browser")] });
           } else if (scenario === "profile downgrade") {
-            setUserProfileRole(recipient.id, "reader");
+            seedUserProfileRole(recipient.id, "reader");
             invalidateOperatorRolePolicy(recipient.id);
           } else if (scenario === "missing role policy") {
             cfg = {};

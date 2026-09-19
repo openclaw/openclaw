@@ -26,7 +26,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../state/user-profiles.test-support.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
@@ -348,7 +349,7 @@ async function archiveSourceSession(storePath?: string): Promise<void> {
 describe("session message-cut methods", () => {
   it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
     const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
-    setUserProfileRole(profile.id, "guest");
+    seedUserProfileRole(profile.id, "guest");
     const client = {
       connect: { scopes: ["operator.write"] },
       authenticatedUserProfile: {
@@ -391,7 +392,7 @@ describe("session message-cut methods", () => {
 
   it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
     const profile = ensureProfileForEmail("sandbox-required-fork-creator@example.com");
-    setUserProfileRole(profile.id, "guest");
+    seedUserProfileRole(profile.id, "guest");
     const client = {
       connect: { scopes: ["operator.write"] },
       authenticatedUserProfile: {
@@ -778,7 +779,7 @@ describe("session message-cut methods", () => {
 
   it("preserves the authenticated creator and required sandbox when a harness materializes an upstream fork", async () => {
     const profile = ensureProfileForEmail("sandbox-required-upstream-fork@example.com");
-    setUserProfileRole(profile.id, "guest");
+    seedUserProfileRole(profile.id, "guest");
     const client = {
       connect: { scopes: ["operator.write"] },
       authenticatedUserProfile: {

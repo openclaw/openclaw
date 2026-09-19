@@ -19,7 +19,8 @@ import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.j
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
@@ -161,7 +162,7 @@ describe("gateway identity scope grants", () => {
     );
     const profile = ensureProfileForEmail("admin@example.com");
     if (scenario.assignedRole) {
-      setUserProfileRole(profile.id, scenario.assignedRole);
+      seedUserProfileRole(profile.id, scenario.assignedRole);
     }
 
     await withGatewayServer(async ({ port }) => {

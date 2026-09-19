@@ -40,8 +40,8 @@ import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-ow
 import {
   ensureProfileForEmail,
   hasMultipleSessionSharingIdentities,
-  setUserProfileRole,
 } from "../../../state/user-profiles.js";
+import { seedUserProfileRole } from "../../../state/user-profiles.test-support.js";
 import {
   GatewayClient,
   type GatewayClientOptions,
@@ -131,7 +131,7 @@ describe("gateway connect pairing exemptions", () => {
     try {
       expect((await connectReq(started.ws, connectOptions)).ok).toBe(true);
       const person = ensureProfileForEmail("person@example.test");
-      setUserProfileRole(person.id, "guest");
+      seedUserProfileRole(person.id, "guest");
       const personSessionKey = "agent:main:merged-owner-person";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: personSessionKey },

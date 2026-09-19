@@ -8,7 +8,8 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -99,7 +100,7 @@ describe.each(["write-default", "trusted-operator"] as const)(
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const email = "plugin-role@example.test";
         const profile = ensureProfileForEmail(email);
-        setUserProfileRole(profile.id, roleCase.role);
+        seedUserProfileRole(profile.id, roleCase.role);
         const cfg: OpenClawConfig = {
           gateway: {
             trustedProxies: [proxyAddress],

@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveControlUiPluginAuthCookieGrants,
@@ -62,14 +63,14 @@ describe("Control UI plugin auth cookie profile binding", () => {
     async (role) => {
       await withRoleConfig(async () => {
         const profile = ensureProfileForEmail("plugin-reader@example.test");
-        setUserProfileRole(profile.id, role);
+        seedUserProfileRole(profile.id, role);
         const cookie = issueCookie(profile.id);
         try {
           expect(authorizeCookie(cookie)?.requestAuth).toMatchObject({
             authenticatedUserProfile: { profileId: profile.id },
             controlUiPluginGrants: [{ pluginId: "example", scopes: ["operator.read"] }],
           });
-          setUserProfileRole(profile.id, "denied");
+          seedUserProfileRole(profile.id, "denied");
           invalidateOperatorRolePolicy(profile.id);
           expect(authorizeCookie(cookie)?.requestAuth.controlUiPluginGrants).toMatchObject([
             { pluginId: "example", scopes: [] },

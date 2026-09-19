@@ -9,7 +9,8 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -120,7 +121,7 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
 test("sessions.reset stamps the creator's required sandbox only when materializing a new row", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("sandboxed-reset-creator@example.test");
-  setUserProfileRole(profile.id, "guest");
+  seedUserProfileRole(profile.id, "guest");
   const { writeConfigFile } = await import("../config/config.js");
   await writeConfigFile({
     gateway: {

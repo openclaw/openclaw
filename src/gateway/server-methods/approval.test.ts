@@ -32,7 +32,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { seedProfileForRole } from "../../state/user-profiles.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
@@ -483,8 +483,7 @@ describe("unified approval handlers", () => {
       throw new Error("expected isolated approval state directory");
     }
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
-      setUserProfileRole(profile.id, "guest", databaseOptions);
+      const profile = seedProfileForRole("approval-guest@example.test", "guest", databaseOptions);
       const ownerKey = "agent:main:approval-owned";
       const foreignKey = "agent:main:approval-foreign";
       for (const [sessionKey, creatorId] of [

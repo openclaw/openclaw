@@ -80,7 +80,7 @@ it.each([false, true])(
     ])[0]![1];
     await closeOpenClawStateDatabaseAsync();
     const context = captureOpenClawStateWorkerContext(options);
-    const command = { type: "userProfiles.avatar.reconcile", profileId: profile.id } as const;
+    const command = { type: "userProfiles.reconcile", profileId: profile.id } as const;
     const reply: OpenClawStateReadReply = {
       ok: true,
       type: command.type,
@@ -97,7 +97,7 @@ it.each([false, true])(
     const retirement = new Error("first settlement worker stop failed");
     const retryFailure = new Error("settlement close retry failed");
     const mutation = vi.fn();
-    const publish = vi.fn();
+    const publish = vi.fn(() => true);
     const release = vi.fn();
     mock.run.mockImplementationOnce(() => {
       started.resolve();
@@ -112,7 +112,11 @@ it.each([false, true])(
     try {
       const result = withOpenClawStateSettlementRead(context, async (read) => {
         mutation();
-        read.bind(command, Promise.resolve({ kind: "completed" }), publish, release);
+        read.bind(command, Promise.resolve({ kind: "completed" }), {
+          publishCommitted: publish,
+          prepareRecoveryRead: async () => ({ publish }),
+          release,
+        });
         mock.selectLibrary.mockClear();
         throw delivery;
       }).catch((error: unknown) => error);

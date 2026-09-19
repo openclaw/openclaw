@@ -6,7 +6,8 @@ import * as sqliteQueries from "../infra/kysely-sync.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
@@ -46,7 +47,7 @@ async function withSyntheticReader(
     const reader = ensureProfileForEmail("synthetic-reader@example.test");
     const ownerEmail = "synthetic-owner@example.test";
     const owner = ensureProfileForEmail(ownerEmail);
-    setUserProfileRole(reader.id, "reader");
+    seedUserProfileRole(reader.id, "reader");
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       {
@@ -158,7 +159,7 @@ describe("synthetic plugin session reads", () => {
 
   it.each(methods)("recognizes merged-profile ownership on %s", async (method) => {
     await withSyntheticReader(async ({ readerId, ownerEmail, dispatch }) => {
-      setUserProfileRole(readerId, "blocked");
+      seedUserProfileRole(readerId, "blocked");
       linkEmail(ownerEmail, readerId);
       expectVisible(method, await dispatch(method), "owner");
     }, "draft");
@@ -170,7 +171,7 @@ describe("synthetic plugin session reads", () => {
       const pending = method === "sessions.list" ? dispatch(method) : undefined;
       try {
         await gate.entered;
-        setUserProfileRole(readerId, "blocked");
+        seedUserProfileRole(readerId, "blocked");
         if (pending) {
           gate.release();
         }

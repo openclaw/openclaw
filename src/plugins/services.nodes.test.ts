@@ -13,7 +13,7 @@ import {
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { seedProfileForRole } from "../state/user-profiles.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -113,8 +113,7 @@ describe("service-owned node invocation", () => {
     async (profileBacked) => {
       await withOpenClawTestState({}, async () => {
         const fixture = await startFixture();
-        const profile = ensureProfileForEmail("reader@example.test");
-        setUserProfileRole(profile.id, "limited");
+        const profile = seedProfileForRole("reader@example.test", "limited");
         const reader = createSyntheticPluginRuntimeClient({
           scopes: ["operator.read"],
           ...(profileBacked

@@ -70,11 +70,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { seedUserProfileRole } from "../state/user-profiles.test-support.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -940,7 +937,7 @@ test.each([
       ? ensureGatewayOwnerProfile("Gateway Owner")
       : ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
     if (!systemActor) {
-      setUserProfileRole(profile.id, "guest");
+      seedUserProfileRole(profile.id, "guest");
     }
     const cfg = {
       ...getRuntimeConfig(),
@@ -1011,7 +1008,7 @@ test.each([
 test("operator role agent allowlists protect creation without blocking existing sessions", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("restricted-session-creator@example.com");
-  setUserProfileRole(profile.id, "guest");
+  seedUserProfileRole(profile.id, "guest");
   const cfg = {
     ...getRuntimeConfig(),
     session: { ...getRuntimeConfig().session, store: storePath },
