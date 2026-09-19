@@ -65,11 +65,14 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
     }
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
     // Shared commits do not prove that their promised blobs are present.
+    // --refetch hints auto-maintenance into a full repack of the source repository, so keep
+    // this sizing fetch from running gc there, like every other fetch in the product.
     await requireGit(
       repoRoot,
       [
         "fetch",
         "--refetch",
+        "--no-auto-maintenance",
         remote,
         "--no-tags",
         "--no-write-fetch-head",
