@@ -160,6 +160,41 @@ function createIdentityAvatarIssue(
   return withConfigIssuePath({ path: pathSegments.join("."), message }, pathSegments);
 }
 
+function createAgentDirIssue(
+  source: ReturnType<typeof listAgentEntriesWithSource>[number]["source"],
+  message: string,
+): ConfigValidationIssue {
+  const pathSegments =
+    source.kind === "entries"
+      ? (["agents", "entries", source.key, "agentDir"] as const)
+      : (["agents", "list", source.index, "agentDir"] as const);
+  return withConfigIssuePath({ path: pathSegments.join("."), message }, pathSegments);
+}
+
+/**
+ * Reject explicitly blank agentDir values as field-level issues at the
+ * configuration boundary while preserving the shipped runtime fallback. The
+ * resolver keeps trimming and falling back to the default state directory, so
+ * previously valid blank configurations keep loading across upgrade; callers
+ * receive a consistent { ok: false, issues } result instead of a thrown error
+ * escaping through duplicate-directory probing.
+ */
+function collectBlankAgentDirIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  for (const { entry, source } of listAgentEntriesWithSource(config)) {
+    const agentDir = entry.agentDir;
+    if (typeof agentDir === "string" && !agentDir.trim()) {
+      issues.push(
+        createAgentDirIssue(
+          source,
+          "agentDir must not be blank; omit the key to use the default agent directory.",
+        ),
+      );
+    }
+  }
+  return issues;
+}
+
 function validateIdentityAvatar(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -452,6 +487,12 @@ export function validateConfigObjectRaw(
       ok: false,
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
+  }
+  // Field-level blank-agentDir rejection must run before avatar resolution so
+  // the resolver's loud runtime throw cannot escape validation.
+  const blankAgentDirIssues = collectBlankAgentDirIssues(validatedConfig);
+  if (blankAgentDirIssues.length > 0) {
+    return { ok: false, issues: blankAgentDirIssues };
   }
   const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
   if (avatarIssues.length > 0) {

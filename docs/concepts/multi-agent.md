@@ -57,6 +57,8 @@ when personas must not share compiled wiki knowledge.
 | Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
+> **Note:** An explicitly configured `agents.entries.*.agentDir` must not be blank. A blank value is a configuration error and OpenClaw rejects it instead of silently falling back to the default agent directory.
+
 ### Single-agent mode (default)
 
 If you configure nothing, OpenClaw runs one agent:
