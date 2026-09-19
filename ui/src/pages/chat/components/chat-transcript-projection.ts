@@ -572,7 +572,16 @@ export function projectChatTranscript(
       }
     }
   }
-  const realtimeConversation = renderRealtimeTalkConversation(props);
+  // The live voice-turn block is a chronological outlier: it renders at the tail
+  // while typed messages sort into history above it. History already persists the
+  // finalized voice turns (gateway voice-transcript write), so once the realtime
+  // session goes idle the persisted copies own chronology. Showing the unpinned
+  // live block while idle would render those earlier voice turns BELOW newer
+  // typed messages — out of order. Only show the live block while a session is
+  // active; idle turns render in their correct chronological slot from history.
+  const realtimeConversation = props.realtimeTalkActive
+    ? renderRealtimeTalkConversation(props)
+    : nothing;
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
       kind: "content",

@@ -156,6 +156,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   pluginToolIcons?: PluginToolIcons;
   githubRepo?: MarkdownRenderOptions["githubRepo"];
   autoExpandToolCalls?: boolean;
+  realtimeTalkActive?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly { id: string; label: string; preview?: string }[];
   onOpenSidebar?: (content: SidebarContent) => void;
