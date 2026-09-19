@@ -224,9 +224,13 @@ completed imports and unrelated files. Device backfill remains nonblocking at st
 monitor retirement cancels and joins it before releasing storage. Hosts without
 data-only comparison support retain the existing native metadata and import decisions
 under the declared plugin API floor. Worker failures never select that fallback.
+Monitor bot-account discovery awaits selected credential reads after authentication,
+then checks cancellation before acquiring the client or installing handlers. Each
+identity uses one observed credential and the shared account-readiness rules; no
+namespace scan or new bulk-read capability is required.
 Approval actor and reaction approver lists resolve from account configuration without
 reading credentials; native delivery eligibility still checks enabled and configured
-account readiness. Synchronous credential readiness and package auth-presence probes
+account readiness. Synchronous public account readiness and package auth-presence probes
 retain their separate SDK contracts.
 
 Reef registration binding reads, reservations, finalization, release, and setup-session

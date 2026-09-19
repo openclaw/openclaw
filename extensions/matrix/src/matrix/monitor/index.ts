@@ -146,10 +146,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let needsRoomAliasesForConfig = false;
   const initialAllowFrom = (accountConfig.dm?.allowFrom ?? []).map(String);
   const initialGroupAllowFrom = (accountConfig.groupAllowFrom ?? []).map(String);
-  const configuredBotUserIds = resolveConfiguredMatrixBotUserIds({
-    cfg,
-    accountId: effectiveAccountId,
-  });
 
   const {
     allowFrom,
@@ -187,6 +183,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   };
 
   const auth = await resolveMatrixAuth({ cfg, accountId: effectiveAccountId });
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
+  const configuredBotUserIds = await resolveConfiguredMatrixBotUserIds({
+    cfg,
+    accountId: effectiveAccountId,
+    abortSignal: opts.abortSignal,
+  });
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
   const resolvedInitialSyncLimit =
     resolveOptionalIntegerOption(opts.initialSyncLimit, { min: 0 }) ?? auth.initialSyncLimit;
   const authWithLimit =
