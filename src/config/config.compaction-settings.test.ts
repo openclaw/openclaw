@@ -25,6 +25,10 @@ describe("config compaction settings", () => {
         enabled: true,
         maxRetries: 2,
       },
+      semanticCuration: {
+        mode: "shadow",
+        timeoutMs: 600,
+      },
       midTurnPrecheck: {
         enabled: true,
       },
@@ -41,6 +45,8 @@ describe("config compaction settings", () => {
     expect(compaction?.identifierPolicy).toBe("strict");
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.semanticCuration?.mode).toBe("shadow");
+    expect(compaction?.semanticCuration?.timeoutMs).toBe(600);
     expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");

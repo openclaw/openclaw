@@ -330,6 +330,9 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.semanticCuration",
+  "agents.defaults.compaction.semanticCuration.mode",
+  "agents.defaults.compaction.semanticCuration.timeoutMs",
   "agents.defaults.compaction.midTurnPrecheck",
   "agents.defaults.compaction.midTurnPrecheck.enabled",
   "agents.defaults.compaction.postCompactionSections",
@@ -396,6 +399,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
     '"inherit"',
   ],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"'],
+  "agents.defaults.compaction.semanticCuration.mode": ['"off"', '"shadow"'],
 };
 
 export const TOOLS_HOOKS_TARGET_KEYS = [

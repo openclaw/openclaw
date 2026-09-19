@@ -1,6 +1,7 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
+import { COMPACTION_FIELD_LABELS } from "./schema.labels.compaction.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
@@ -607,33 +608,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
-  "agents.defaults.compaction": "Compaction",
-  "agents.defaults.compaction.enabled": "Embedded Auto-Compaction",
-  "agents.defaults.compaction.mode": "Compaction Mode",
-  "agents.defaults.compaction.provider": "Compaction Provider",
-  "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
-  "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
-  "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
-  "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
-  "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
-  "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
-  "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
-  "agents.defaults.compaction.midTurnPrecheck": "Compaction Mid-turn Precheck",
-  "agents.defaults.compaction.midTurnPrecheck.enabled": "Compaction Mid-turn Precheck Enabled",
-  "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
-  "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
-  "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
-  "agents.defaults.compaction.model": "Compaction Model Override",
-  "agents.defaults.compaction.maxActiveTranscriptBytes":
-    "Compaction Active Transcript Size Threshold",
-  "agents.defaults.compaction.notifyUser": "Compaction Notify User",
-  "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
-  "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
-  "agents.defaults.compaction.memoryFlush.model": "Compaction Memory Flush Model Override",
-  "agents.defaults.compaction.memoryFlush.softThresholdTokens":
-    "Compaction Memory Flush Soft Threshold",
-  "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    "Compaction Memory Flush Transcript Size Threshold",
+  ...COMPACTION_FIELD_LABELS,
   "agents.defaults.embeddedAgent": "Embedded OpenClaw",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     "Embedded OpenClaw Project Settings Policy",
