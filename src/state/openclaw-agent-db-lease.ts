@@ -42,7 +42,7 @@ import {
   resolveOpenClawStateSqlitePath,
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
-import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 type AgentDatabaseLeaseDatabase = Pick<

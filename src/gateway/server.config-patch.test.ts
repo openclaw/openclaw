@@ -1,4 +1,5 @@
 // Config RPCs cover control-UI edits, secrets, auth persistence, and rate limiting.
+import { randomUUID } from "node:crypto";
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,6 +25,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
+import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { startGatewayServer } from "./server.js";
 
 const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
@@ -51,7 +53,6 @@ const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 let client: GatewayClient | undefined;
-let rateLimitEpochMs = Date.now();
 const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
 const unarmedConfigWatchers: ReturnType<typeof chokidar.watch>[] = [];
 
@@ -306,8 +307,7 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
 function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions = {}) {
   beforeEach(() => startConfigRpcGateway(options));
   beforeEach(() => {
-    rateLimitEpochMs += 60_000;
-    vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
   afterEach(stopConfigRpcGateway);
 }
@@ -950,7 +950,6 @@ describe("gateway config methods", () => {
   });
 
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
-    vi.mocked(Date.now).mockRestore();
     const operations = [
       {
         method: "agents.create",
@@ -1662,7 +1661,7 @@ describe("gateway config methods", () => {
 
   it("acknowledges sandbox config only after the runtime snapshot applies it", async () => {
     const original = await getCurrentConfigObject();
-    const image = `openclaw-settlement-${rateLimitEpochMs}:test`;
+    const image = `openclaw-settlement-${randomUUID()}:test`;
 
     try {
       const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {

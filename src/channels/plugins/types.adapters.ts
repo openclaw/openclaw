@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals-core.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,

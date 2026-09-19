@@ -2,6 +2,26 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import ts from "typescript";
 import { expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+
+const components = [
+  "scripts/pr",
+  "scripts/pr-lib",
+  ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
+];
+
+it.each(["src/state/openclaw-state.worker.ts", "src/infra/sqlite-store.worker.ts"])(
+  "retains %s and its eager runtime dependencies in the wrapper inventory",
+  (entrypoint) => {
+    const closure = collectRuntimeImportClosure(process.cwd(), [entrypoint]);
+    expect(
+      closure.filter(
+        (file) =>
+          !components.some((component) => file === component || file.startsWith(`${component}/`)),
+      ),
+    ).toEqual([]);
+  },
+);
 
 it.each([
   "src/infra/sqlite-coordinator.ts",
@@ -11,11 +31,6 @@ it.each([
   "retains %s and its relative ESM runtime dependencies in the wrapper inventory",
   (entrypoint) => {
     const root = process.cwd();
-    const components = [
-      "scripts/pr",
-      "scripts/pr-lib",
-      ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
-    ];
     const pending = [entrypoint];
     const visited = new Set<string>();
     const missing = new Set<string>();

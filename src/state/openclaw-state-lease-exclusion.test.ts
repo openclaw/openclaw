@@ -1,14 +1,38 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
-import { describe, expect, it } from "vitest";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import { describe, expect, it, vi } from "vitest";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+
+const heartbeatWorkers = vi.hoisted(() => ({
+  onCreate: undefined as ((worker: Worker) => void) | undefined,
+}));
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  const [{ runtimeProcessEntrypoints }, { resolveRuntimeWorkerUrl }] = await Promise.all([
+    import("../infra/runtime-process-entrypoints.js"),
+    import("../infra/runtime-worker-url.js"),
+  ]);
+  const heartbeatUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, workerOptions: WorkerOptions = {}) {
+        super(filename, workerOptions);
+        if (String(filename) === heartbeatUrl.href) {
+          heartbeatWorkers.onCreate?.(this);
+        }
+      }
+    },
+  };
+});
 
 function requiredCapture(lease: OpenClawStateLeaseContext) {
   if (!lease.withDatabaseFileExclusion) {
@@ -45,7 +69,7 @@ describe("lease-backed file capture", () => {
     await withOpenClawTestState({ label: "lease-capture-real" }, async (state) => {
       const workers: Worker[] = [];
       const onWorker = (worker: Worker) => workers.push(worker);
-      process.on("worker", onWorker);
+      heartbeatWorkers.onCreate = onWorker;
       let retained: (() => void) | undefined;
       try {
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
@@ -80,7 +104,7 @@ describe("lease-backed file capture", () => {
         });
         expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
       } finally {
-        process.removeListener("worker", onWorker);
+        heartbeatWorkers.onCreate = undefined;
       }
     });
   });
@@ -89,7 +113,7 @@ describe("lease-backed file capture", () => {
     await withOpenClawTestState({ label: "lease-capture-expiry" }, async (state) => {
       const workers: Worker[] = [];
       const onWorker = (worker: Worker) => workers.push(worker);
-      process.on("worker", onWorker);
+      heartbeatWorkers.onCreate = onWorker;
       try {
         await expect(
           withOpenClawStateLease({ ...options(state.env), leaseMs: 1_000 }, async (lease) => {
@@ -102,7 +126,7 @@ describe("lease-backed file capture", () => {
         expect(workers).toHaveLength(1);
         expect(workers[0]?.threadId).toBe(-1);
       } finally {
-        process.removeListener("worker", onWorker);
+        heartbeatWorkers.onCreate = undefined;
       }
     });
   });
@@ -284,7 +308,7 @@ describe("lease-backed file capture", () => {
           });
         }
       };
-      process.on("worker", onWorker);
+      heartbeatWorkers.onCreate = onWorker;
       try {
         await withOpenClawStateLease(options(state.env), async (lease) => {
           current = lease;
@@ -296,7 +320,7 @@ describe("lease-backed file capture", () => {
           lease.assertOwned();
         });
       } finally {
-        process.removeListener("worker", onWorker);
+        heartbeatWorkers.onCreate = undefined;
       }
     });
   });

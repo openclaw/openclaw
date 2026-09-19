@@ -317,31 +317,26 @@ describe("plugin lifecycle lease", () => {
         waitMs: 3_000,
       });
 
-      vi.useFakeTimers();
+      const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
+        events.push("first-enter");
+        firstEntered.resolve();
+        await releaseFirst.promise;
+        events.push("first-exit");
+      });
+      await firstEntered.promise;
+      const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
+        events.push("second-enter");
+      });
       try {
-        const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
-          events.push("first-enter");
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          events.push("first-exit");
-        });
-        await firstEntered.promise;
-        const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
-          events.push("second-enter");
-        });
-        try {
-          await vi.advanceTimersByTimeAsync(100);
-          expect(events).toEqual(["first-enter"]);
-        } finally {
-          releaseFirst.resolve();
-          // Drive the pending acquisition retry after the first owner releases.
-          await vi.advanceTimersByTimeAsync(250);
-          await Promise.all([first, second]);
-        }
-        expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
+        await expect(
+          withPluginLifecycleLease({ ...leaseOptions("state-b"), waitMs: 0 }, async () => {}),
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
+        expect(events).toEqual(["first-enter"]);
       } finally {
-        vi.useRealTimers();
+        releaseFirst.resolve();
+        await Promise.all([first, second]);
       }
+      expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
     });
   });
 

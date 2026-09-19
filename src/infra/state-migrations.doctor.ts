@@ -47,8 +47,6 @@ import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admi
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
-  repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -182,6 +180,7 @@ import {
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths,
 } from "./state-migrations.state-dir.js";
+import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
 import {
   PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
   TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
@@ -1124,31 +1123,6 @@ function buildUnresolvedBlockedMigrationSteps(params: {
       },
     ];
   });
-}
-
-function createStateSchemaMigrationStep(params: {
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  mode: LegacyStateMigrationMode;
-  requiredness: PreparedLegacyStateMigrationStep["requiredness"];
-}): LegacyStateMigrationStep {
-  const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  const database: LegacyStateMigrationEndpoint = {
-    kind: "sqlite",
-    path: resolveOpenClawStateSqlitePath(stateEnv),
-  };
-  return {
-    id: "state-schema",
-    phase: "shared",
-    source: [database],
-    target: [database],
-    requiredness: params.requiredness,
-    reversibility: "checkpoint-required",
-    run: () =>
-      params.mode === "doctor"
-        ? repairOpenClawStateDatabaseSchema({ env: stateEnv })
-        : repairOpenClawStateDatabaseSchemaIfNeeded({ env: stateEnv }),
-  };
 }
 
 function createPluginInstallIndexStep(params: {

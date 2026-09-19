@@ -236,13 +236,24 @@ describe("transcripts bounded export names", () => {
   });
 
   it("keeps an older dated handle separate from an active next-day capture", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
     const harness = createHarness();
     const sessionId = "notes-" + "x".repeat(900);
-    await capture(harness, "import", sessionId);
+    const yesterday = new Date();
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const historicalSession = {
+      sessionId,
+      startedAt: yesterday.toISOString(),
+      stoppedAt: yesterday.toISOString(),
+      source: { providerId: "room-audio" },
+    };
+    await harness.store.writeSession(historicalSession);
+    await harness.store.appendUtteranceForSession(historicalSession, { text: note, final: true });
+    const imported = await harness.tool.execute("historical-summary", {
+      action: "summarize",
+      sessionId,
+    });
+    expect(asOptionalRecord(imported.details)?.summaryExportError).toBeUndefined();
     const older = (await harness.store.listSessionEntries())[0]!;
-    vi.setSystemTime(new Date("2026-07-02T10:00:00.000Z"));
     await capture(harness, "start", sessionId);
     const current = (await harness.store.listSessionEntries())[0]!;
     await harness.tool.execute("old-stop", { action: "stop", sessionId: older.selector });

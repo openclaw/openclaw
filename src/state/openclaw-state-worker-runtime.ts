@@ -93,7 +93,7 @@ import {
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, type OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
   withOpenClawStateDatabaseReadOnly,
@@ -102,10 +102,10 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
-import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
-import { acquireOpenClawStateLeaseInTransaction } from "./openclaw-state-lease-store.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
+import {
+  acquireOpenClawStateLeaseInWorker,
+  assertOpenClawStateLeaseWorkerOwnedInTransaction,
+} from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
@@ -259,44 +259,7 @@ export function executeSharedStateCommand(
   }
   // Existing-schema acquisition must precede normal database bootstrap.
   if (command.type === "stateLease.acquire") {
-    const { identity, leaseMs, operationLabel, schemaPolicy } = command.input;
-    const acquire = (db: OpenClawStateDatabase["db"]) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return result;
-    };
-    try {
-      return schemaPolicy === "existing"
-        ? withLeaseWriteTransaction(
-            {
-              scope: "shared",
-              schemaPolicy,
-              options: {
-                path: context.databasePath,
-                env: getSqliteWorkerStateContext().environment,
-              },
-            },
-            operationLabel,
-            acquire,
-            OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-          )
-        : runOpenClawStateWriteTransaction(
-            ({ db }) => acquire(db),
-            {
-              database: open(),
-              path: context.databasePath,
-              env: getSqliteWorkerStateContext().environment,
-            },
-            { operationLabel },
-          );
-    } catch (cause) {
-      // Preserve native contention facts through the worker's closed error transport.
-      throw new OpenClawStateLeaseError("State lease acquisition could not complete", {
-        code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-        cause,
-      });
-    }
+    return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
   }
   if (command.type === "plugins.conversationBindingApprovals.upsert") {
     const database = open();

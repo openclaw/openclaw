@@ -15,6 +15,7 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   publishOpenClawStateDatabaseWorkerAdmission,
@@ -195,14 +196,16 @@ function createSharedStateWorkerOwner() {
           await retire(entry);
         }
       };
-      const timer: IdleTimer = setTimeout(() => {
-        void settle().catch((error: unknown) => {
-          log.warn("Idle shared-state worker retirement failed", {
-            path: entry.context.admission.databasePath,
-            error,
+      const timer: IdleTimer = runInDetachedAsyncContext(() =>
+        setTimeout(() => {
+          void settle().catch((error: unknown) => {
+            log.warn("Idle shared-state worker retirement failed", {
+              path: entry.context.admission.databasePath,
+              error,
+            });
           });
-        });
-      }, delay);
+        }, delay),
+      );
       entry.idleTimer = timer;
       timer.unref?.();
     };
@@ -436,20 +439,22 @@ function createSharedStateWorkerOwner() {
           existingOnly,
           activeOperations: 0,
           operationGeneration: 0,
-          opening: openSharedStateSqliteWorkerStore<StoreOperations>(
-            {
-              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
-              databasePath: admission.databasePath,
-              existingOnly,
-            },
-            context,
-            assertOpeningAdmission,
-            {
-              maintenanceScope: context.maintenanceScope,
-              retainCleanup: (cleanup) => {
-                admitted.cleanup = cleanup;
+          opening: runInDetachedAsyncContext(() =>
+            openSharedStateSqliteWorkerStore<StoreOperations>(
+              {
+                moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore),
+                databasePath: admission.databasePath,
+                existingOnly,
               },
-            },
+              context,
+              assertOpeningAdmission,
+              {
+                maintenanceScope: context.maintenanceScope,
+                retainCleanup: (cleanup) => {
+                  admitted.cleanup = cleanup;
+                },
+              },
+            ),
           ),
         };
         entry = admitted;
