@@ -17,13 +17,15 @@ type PersistReplySessionEntryParams = {
   skipMaintenance?: boolean;
   storePath: string;
   touchedFields?: ReadonlyArray<keyof SessionEntry>;
+  /** Async validation performed inside the exclusive writer lane before the synchronous commit. */
+  validatePreparedCommit?: () => Promise<string | undefined>;
   validateCommit?: () => string | undefined;
 };
 
 type PersistReplySessionEntryResult =
   | { status: "current"; entry: SessionEntry }
   | { status: "model-selection-locked"; entry: SessionEntry }
-  | { status: "commit-rejected"; error: string; entry: SessionEntry }
+  | { status: "commit-rejected"; error: string; entry: SessionEntry; entryExisted: boolean }
   | { status: "lifecycle-invalidated"; error: string; entry?: SessionEntry };
 
 class SessionCommitRejectedError extends Error {}
@@ -35,12 +37,27 @@ export async function persistReplySessionEntry(
   let lifecycleError: string | undefined;
   let lifecycleEntry: SessionEntry | undefined;
   let lockedEntry: SessionEntry | undefined;
+  let preparedCommitError: string | undefined;
+  let commitEntryExisted = false;
   let commitEntry = params.initialEntry;
   let persisted: SessionEntry | null;
+  const prepareCommit = (
+    entry: SessionEntry,
+  ): SessionEntry | null | Promise<SessionEntry | null> => {
+    const validate = params.validatePreparedCommit;
+    if (!validate) {
+      return entry;
+    }
+    return validate().then((error) => {
+      preparedCommitError = error;
+      return error ? null : entry;
+    });
+  };
   try {
     persisted = await patchSessionEntryCore(
       { sessionKey: params.sessionKey, storePath: params.storePath },
       (_entry, context) => {
+        commitEntryExisted = context.existingEntry !== undefined;
         commitEntry = context.existingEntry ?? params.initialEntry;
         if (!context.existingEntry) {
           if (params.allowCreate !== true) {
@@ -49,7 +66,7 @@ export async function persistReplySessionEntry(
             });
             return null;
           }
-          return params.entry;
+          return prepareCommit(params.entry);
         }
         lifecycleError = resolveSessionWorkStartError(params.sessionKey, context.existingEntry, {
           expectedSessionId: params.initialEntry.sessionId,
@@ -77,12 +94,14 @@ export async function persistReplySessionEntry(
         }
         // Reply flows persist broad snapshots. Project only reply-owned changes
         // so concurrent lifecycle, policy, and privacy updates remain authoritative.
-        return mergeSessionSnapshotChanges({
-          initial: params.initialEntry,
-          next: params.entry,
-          current: context.existingEntry,
-          reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
-        });
+        return prepareCommit(
+          mergeSessionSnapshotChanges({
+            initial: params.initialEntry,
+            next: params.entry,
+            current: context.existingEntry,
+            reassertLiveModelSwitchPending: params.reassertLiveModelSwitchPending,
+          }),
+        );
       },
       {
         fallbackEntry: params.entry,
@@ -100,7 +119,12 @@ export async function persistReplySessionEntry(
     );
   } catch (error) {
     if (error instanceof SessionCommitRejectedError) {
-      return { status: "commit-rejected", error: error.message, entry: commitEntry };
+      return {
+        status: "commit-rejected",
+        error: error.message,
+        entry: commitEntry,
+        entryExisted: commitEntryExisted,
+      };
     }
     throw error;
   }
@@ -113,6 +137,14 @@ export async function persistReplySessionEntry(
   }
   if (lockedEntry) {
     return { status: "model-selection-locked", entry: lockedEntry };
+  }
+  if (preparedCommitError) {
+    return {
+      status: "commit-rejected",
+      error: preparedCommitError,
+      entry: commitEntry,
+      entryExisted: commitEntryExisted,
+    };
   }
   if (!persisted) {
     return {

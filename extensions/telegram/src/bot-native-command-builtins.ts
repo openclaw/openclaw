@@ -27,12 +27,16 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 import {
   prepareTelegramCommandDispatch,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { buildModelSelectionCallbackData } from "./model-buttons.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
+
+const TELEGRAM_INLINE_KEYBOARD_BUTTON_MAX = 100;
 
 const loadTelegramLoginCommandExecutor = createLazyRuntimeModule(
   () => import("./bot-native-command-login.js"),
@@ -243,6 +247,9 @@ function formatTelegramCommandArgMenuTitle(params: {
       ? `${params.currentFastModeStatus}\nOptions: ${options}.`
       : params.currentFastModeStatus;
   }
+  if (params.command.key === "model") {
+    return `${title}\nSelecting a model also applies its configured runtime.`;
+  }
   return title;
 }
 
@@ -352,6 +359,7 @@ export async function executeTelegramBuiltinCommand(
         args: commandArgs,
         cfg: dispatch.runtimeCfg,
         session: { agentId: dispatch.route.agentId, sessionKey: dispatch.targetSessionKey },
+        agentId: dispatch.route.agentId,
         ...menuModelContext,
         catalog: menuModelCatalog,
       })
@@ -387,16 +395,31 @@ export async function executeTelegramBuiltinCommand(
     });
     const rows: Array<Array<{ text: string; callback_data: string }>> = [];
     for (let index = 0; index < menu.choices.length; index += 2) {
-      rows.push(
-        menu.choices.slice(index, index + 2).map((choice) => ({
-          text: choice.label,
-          callback_data: buildTelegramNativeCommandCallbackData(
-            buildCommandTextFromArgs(commandDefinition, {
-              values: { [menu.arg.name]: choice.value },
-            }),
-          ),
-        })),
-      );
+      const row = menu.choices.slice(index, index + 2).flatMap((choice) => {
+        // Model selections share the canonical callback route regardless of payload length.
+        const commandText = buildCommandTextFromArgs(commandDefinition, {
+          values: { [menu.arg.name]: choice.value },
+        });
+        const nativeCallbackData = buildTelegramNativeCommandCallbackData(commandText);
+        const separatorIndex = choice.value.indexOf("/");
+        const callbackData =
+          commandDefinition.key === "model" && separatorIndex > 0
+            ? buildModelSelectionCallbackData({
+                provider: choice.value.slice(0, separatorIndex),
+                model: choice.value.slice(separatorIndex + 1),
+              })
+            : fitsTelegramCallbackData(nativeCallbackData)
+              ? nativeCallbackData
+              : null;
+        return callbackData ? [{ text: choice.label, callback_data: callbackData }] : [];
+      });
+      if (row.length > 0) {
+        rows.push(row);
+      }
+    }
+    const buttonCount = rows.reduce((total, row) => total + row.length, 0);
+    if (buttonCount === 0 || buttonCount > TELEGRAM_INLINE_KEYBOARD_BUTTON_MAX) {
+      return "fall-through";
     }
     const replyMarkup = buildInlineKeyboard(rows);
     await withTelegramApiErrorLogging({
@@ -404,7 +427,7 @@ export async function executeTelegramBuiltinCommand(
       runtime: dispatch.runtime,
       fn: () =>
         dispatch.bot.api.sendMessage(dispatch.chatId, title, {
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          reply_markup: replyMarkup,
           ...dispatch.threadParams,
         }),
     });

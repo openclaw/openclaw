@@ -15,10 +15,17 @@ const SLACK_EXTERNAL_ARG_MENU_TTL_MS = 10 * 60 * 1000;
 
 export const SLACK_EXTERNAL_ARG_MENU_PREFIX = "openclaw_cmdarg_ext:";
 
-export type SlackExternalArgMenuChoice = { label: string; value: string };
-type SlackExternalArgMenuEntry = {
+export type SlackExternalArgMenuChoice = { label: string; value: string; searchValue: string };
+export type SlackExternalArgMenuScope = {
+  accountId: string;
+  teamId: string;
+  channelId: string;
+  channelType: "im" | "mpim" | "channel" | "group";
+};
+export type SlackExternalArgMenuEntry = {
   choices: SlackExternalArgMenuChoice[];
   userId: string;
+  scope: SlackExternalArgMenuScope;
   expiresAt: number;
 };
 
@@ -51,7 +58,11 @@ export function createSlackExternalArgMenuStore() {
 
   return {
     create(
-      params: { choices: SlackExternalArgMenuChoice[]; userId: string },
+      params: {
+        choices: SlackExternalArgMenuChoice[];
+        userId: string;
+        scope: SlackExternalArgMenuScope;
+      },
       now = Date.now(),
     ): string {
       pruneSlackExternalArgMenuStore(store, now);
@@ -63,6 +74,7 @@ export function createSlackExternalArgMenuStore() {
         store.set(token, {
           choices: params.choices,
           userId: params.userId,
+          scope: params.scope,
           expiresAt,
         });
       }
@@ -72,8 +84,14 @@ export function createSlackExternalArgMenuStore() {
       if (typeof raw !== "string" || !raw.startsWith(SLACK_EXTERNAL_ARG_MENU_PREFIX)) {
         return undefined;
       }
-      const token = raw.slice(SLACK_EXTERNAL_ARG_MENU_PREFIX.length).trim();
-      return SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN.test(token) ? token : undefined;
+      const encoded = raw.slice(SLACK_EXTERNAL_ARG_MENU_PREFIX.length).trim();
+      const separatorIndex = encoded.indexOf(":");
+      const token = separatorIndex >= 0 ? encoded.slice(0, separatorIndex) : encoded;
+      const rowSuffix = separatorIndex >= 0 ? encoded.slice(separatorIndex + 1) : "";
+      return SLACK_EXTERNAL_ARG_MENU_TOKEN_PATTERN.test(token) &&
+        (separatorIndex < 0 || /^[0-9a-z]+$/u.test(rowSuffix))
+        ? token
+        : undefined;
     },
     get(token: string, now = Date.now()): SlackExternalArgMenuEntry | undefined {
       pruneSlackExternalArgMenuStore(store, now);

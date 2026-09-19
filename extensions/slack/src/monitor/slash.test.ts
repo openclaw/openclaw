@@ -26,6 +26,8 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createArgMenusHarness } from "./slash.arg-menu.test-support.js";
+import { createSlackRoutedModelMenuConfig } from "./slash.model-menu.test-support.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
@@ -98,6 +100,7 @@ const slashCommandFixtures = vi.hoisted(() => {
     defineMenuCommand({
       name: "reportexternal",
       choices: [
+        { value: "provider/raw-model-ref", label: "Opaque catalog entry" },
         ...Array.from({ length: 140 }, (_value, index) => ({
           value: `period-${index + 1}`,
           label: `Period ${index + 1}`,
@@ -246,106 +249,6 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
   return payload.blocks?.find((block) => block.type === "actions") as
     | { type: string; elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }> }
     | undefined;
-}
-
-function createArgMenusHarness(
-  cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
-  scope?: {
-    installationIdentity?:
-      | { kind: "workspace"; teamId: string }
-      | { kind: "enterprise"; enterpriseId: string };
-    teamId?: string;
-  },
-) {
-  const commands = new Map<string | RegExp, (args: unknown) => Promise<void>>();
-  const commandRegistrations: Array<string | RegExp> = [];
-  const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
-  const options = new Map<string, (args: unknown) => Promise<void>>();
-  const optionsReceiverContexts: unknown[] = [];
-
-  const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
-  const listenerClient = { chat: { postEphemeral } };
-  const installationIdentity = scope?.installationIdentity ?? {
-    kind: "workspace" as const,
-    teamId: scope?.teamId ?? "T1",
-  };
-  const boltContext =
-    installationIdentity.kind === "enterprise"
-      ? {
-          teamId: scope?.teamId,
-          enterpriseId: installationIdentity.enterpriseId,
-          isEnterpriseInstall: true,
-        }
-      : { teamId: installationIdentity.teamId, isEnterpriseInstall: false };
-  const withBoltScope = (args: unknown) => {
-    const typed = args as { context?: Record<string, unknown>; client?: unknown };
-    return {
-      ...typed,
-      context: { ...boltContext, ...typed.context },
-      client: typed.client ?? listenerClient,
-    };
-  };
-  const app = {
-    client: listenerClient,
-    command: (name: string | RegExp, handler: (args: unknown) => Promise<void>) => {
-      commandRegistrations.push(name);
-      commands.set(name, async (args) => await handler(withBoltScope(args)));
-    },
-    action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
-      actions.set(id, async (args) => await handler(withBoltScope(args)));
-    },
-    options(this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
-      optionsReceiverContexts.push(this);
-      options.set(id, async (args) => await handler(withBoltScope(args)));
-    },
-  };
-
-  const ctx = {
-    cfg,
-    runtime: {},
-    botToken: "bot-token",
-    botUserId: "bot",
-    teamId: installationIdentity.kind === "enterprise" ? "" : installationIdentity.teamId,
-    installationIdentity,
-    allowFrom: ["*"],
-    dmEnabled: true,
-    dmPolicy: "open",
-    groupDmEnabled: false,
-    groupDmChannels: [],
-    defaultRequireMention: true,
-    groupPolicy: "open",
-    useAccessGroups: false,
-    channelsConfig: undefined,
-    slashCommand: {
-      enabled: false,
-      name: "openclaw",
-      ephemeral: true,
-      sessionPrefix: "slack:slash",
-    },
-    textLimit: 4000,
-    app,
-    isChannelAllowed: () => true,
-    resolveChannelName: async () => ({ name: "dm", type: "im" }),
-    resolveUserName: async () => ({ name: "Ada" }),
-  };
-
-  Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
-  const account = {
-    accountId: "acct",
-    config: { commands: { native: true, nativeSkills: false } },
-  } as unknown;
-
-  return {
-    commandRegistrations,
-    commands,
-    actions,
-    options,
-    optionsReceiverContexts,
-    postEphemeral,
-    ctx,
-    account,
-    app,
-  };
 }
 
 function requireHandler(
@@ -1034,6 +937,33 @@ describe("Slack native command argument menus", () => {
     },
   );
 
+  it("renders /model choices from the routed agent policy", async () => {
+    const { resolveAgentRouteMock } = getSlackSlashMocks();
+    resolveAgentRouteMock.mockReturnValue({
+      agentId: "research",
+      sessionKey: "agent:research:slack:direct:U1",
+      accountId: "acct",
+    });
+    const testHarness = createArgMenusHarness(createSlackRoutedModelMenuConfig());
+    await registerCommands(testHarness.ctx, testHarness.account);
+    const handler = requireHandler(testHarness.commands, "/model", "/model");
+    const routedArgMenuHandler = requireHandler(
+      testHarness.actions,
+      /^openclaw_cmdarg/,
+      "routed /model arg-menu action",
+    );
+
+    const element = (await getFirstActionElementFromCommand(handler)) as {
+      value?: string;
+    };
+    const encodedValue = element.value;
+    expect(encodedValue?.split("|")[3]).toBe(encodeURIComponent("anthropic/claude-sonnet-4-6"));
+
+    await runArgMenuAction(routedArgMenuHandler, { action: { value: encodedValue } });
+
+    expectSingleDispatchedSlashBody("/model anthropic/claude-sonnet-4-6");
+  });
+
   it("falls back to static menus when app.options() throws during registration", async () => {
     const testHarness = createArgMenusHarness();
     const runtimeLog = vi.fn();
@@ -1057,9 +987,9 @@ describe("Slack native command argument menus", () => {
       ),
     ).toBe(true);
 
-    // The /reportexternal command (140 choices) should fall back to static_select
-    // instead of external_select since options registration failed
-    const handler = requireHandler(testHarness.commands, "/reportexternal", "/reportexternal");
+    // Even values that cannot fit directly in static_select options stay reachable
+    // when the searchable menu registration is unavailable.
+    const handler = requireHandler(testHarness.commands, "/reporthugebutton", "/reporthugebutton");
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -1069,11 +999,29 @@ describe("Slack native command argument menus", () => {
     });
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = firstCallPayload(respond, "response") as {
-      blocks?: Array<{ type: string }>;
+      blocks?: Array<{
+        type: string;
+        block_id?: string;
+        elements?: Array<{ type?: string; options?: Array<{ value?: string }> }>;
+      }>;
     };
-    const actionsBlock = findFirstActionsBlock(payload);
-    // Should be static_select (fallback) not external_select
-    expect(actionsBlock?.elements?.[0]?.type).toBe("static_select");
+    const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
+    expect(actionBlocks).toHaveLength(3);
+    expect(actionBlocks.every((block) => block.elements?.[0]?.type === "static_select")).toBe(true);
+    expect(new Set(actionBlocks.map((block) => block.block_id)).size).toBe(actionBlocks.length);
+    const lastBlock = actionBlocks.at(-1);
+    const lastValue = lastBlock?.elements?.[0]?.options?.at(-1)?.value;
+    expect(lastValue?.length).toBeLessThanOrEqual(150);
+
+    const fallbackArgMenuHandler = requireHandler(
+      testHarness.actions,
+      /^openclaw_cmdarg/,
+      "fallback arg-menu action",
+    );
+    await runArgMenuAction(fallbackArgMenuHandler, {
+      action: { block_id: lastBlock?.block_id, selected_option: { value: lastValue } },
+    });
+    expectSingleDispatchedSlashBody(`/reporthugebutton 250-${"x".repeat(170)}`);
   });
 
   it("shows a button menu when required args are omitted", async () => {
@@ -1110,44 +1058,73 @@ describe("Slack native command argument menus", () => {
     expect(firstElement).toHaveProperty("confirm");
   });
 
-  it("truncates button labels when static_select value limit would be exceeded", async () => {
-    const firstElement = (await getFirstActionElementFromCommand(reportLongButtonHandler)) as
+  it("keeps Slack-valid button values self-contained beyond the select limit", async () => {
+    const { payload, blockId } = await runCommandAndResolveActionsBlock(reportLongButtonHandler);
+    const firstElement = findFirstActionsBlock(payload)?.elements?.[0] as
       | { type?: string; text?: { text?: string }; value?: string; confirm?: unknown }
       | undefined;
     expect(firstElement?.type).toBe("button");
     expect(firstElement?.text?.text).toHaveLength(75);
     expect(firstElement?.text?.text?.endsWith("…")).toBe(true);
-    expect(firstElement?.value?.length).toBeGreaterThan(75);
+    expect(firstElement?.value?.length).toBeGreaterThan(150);
+    expect(firstElement?.value?.length).toBeLessThanOrEqual(2000);
+    expect(blockId).toBeUndefined();
     expect(firstElement).toHaveProperty("confirm");
+
+    await runArgMenuAction(argMenuHandler, {
+      action: { value: firstElement?.value },
+    });
+    expectSingleDispatchedSlashBody(`/reportlongbutton ${"x".repeat(170)}`);
   });
 
-  it("caps large button fallback menus to Slack's block limit", async () => {
-    const { respond } = await runCommandHandler(reportHugeButtonHandler);
-    expect(respond).toHaveBeenCalledTimes(1);
-    const payload = firstCallPayload(respond, "response") as {
-      blocks?: Array<{ type: string; elements?: unknown[] }>;
+  it("keeps the last oversized value in a large catalog selectable", async () => {
+    const { payload, blockId } = await runCommandAndResolveActionsBlock(reportHugeButtonHandler);
+    const actions = findFirstActionsBlock(payload);
+    expect(actions?.elements?.[0]?.type).toBe("external_select");
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "Long button label 250",
+        actions: [{ block_id: blockId }],
+      },
+    });
+    const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
+      options?: Array<{ value?: string }>;
     };
-    const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
-    expect(payload.blocks).toHaveLength(50);
-    expect(actionBlocks).toHaveLength(47);
-    expect(actionBlocks.at(-1)?.elements).toHaveLength(5);
+    const selectedValue = optionsPayload.options?.[0]?.value;
+    expect(selectedValue?.length).toBeLessThanOrEqual(150);
+
+    await runArgMenuAction(argMenuHandler, {
+      action: { block_id: blockId, selected_option: { value: selectedValue } },
+    });
+    expectSingleDispatchedSlashBody(`/reporthugebutton 250-${"x".repeat(170)}`);
   });
 
-  it("drops fallback buttons whose encoded values exceed Slack's button value limit", async () => {
+  it("keeps values beyond Slack's button value limit selectable through bounded refs", async () => {
     const { respond } = await runCommandHandler(reportHugeValueHandler);
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = firstCallPayload(respond, "response") as {
       blocks?: Array<{
         type: string;
+        block_id?: string;
         elements?: Array<{ text?: { text?: string }; value?: string }>;
       }>;
     };
     const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
     expect(actionBlocks).toHaveLength(1);
-    expect(actionBlocks[0]?.elements).toHaveLength(1);
-    const element = actionBlocks[0]?.elements?.[0];
-    expect(element?.text?.text).toBe("Valid");
+    expect(actionBlocks[0]?.elements).toHaveLength(2);
+    const element = actionBlocks[0]?.elements?.[1];
+    expect(element?.text?.text).toBe("Overlong");
     expect(element?.value?.length).toBeLessThanOrEqual(2000);
+
+    await runArgMenuAction(argMenuHandler, {
+      action: { block_id: actionBlocks[0]?.block_id, value: element?.value },
+    });
+    expectSingleDispatchedSlashBody(`/reporthugevalue ${"x".repeat(2500)}`);
   });
 
   it("shows an overflow menu when choices fit compact range", async () => {
@@ -1380,6 +1357,27 @@ describe("Slack native command argument menus", () => {
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
     expect(optionTexts.join("\n")).toContain("Period 12");
+  });
+
+  it("searches external_select choices by their raw canonical value", async () => {
+    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "provider/raw-model-ref",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    expect(optionsPayload.options).toHaveLength(1);
+    expect(optionsPayload.options?.[0]?.text?.text).toBe("Opaque catalog entry");
+    expect(optionsPayload.options?.[0]?.value?.length).toBeLessThanOrEqual(150);
   });
 
   it("truncates served option labels on a surrogate boundary", async () => {

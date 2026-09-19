@@ -6,22 +6,29 @@ import {
 } from "./external-arg-menu-store.js";
 
 describe("createSlackExternalArgMenuStore", () => {
-  const choices = [{ label: "Daily", value: "day" }];
+  const choices = [{ label: "Daily", value: "encoded-day", searchValue: "day" }];
+  const scope = {
+    accountId: "acct",
+    teamId: "T1",
+    channelId: "D1",
+    channelType: "im" as const,
+  };
 
   it("returns entries before their expiry", () => {
     const store = createSlackExternalArgMenuStore();
-    const token = store.create({ choices, userId: "U1" }, 1_700_000_000_000);
+    const token = store.create({ choices, userId: "U1", scope }, 1_700_000_000_000);
 
     expect(store.get(token, 1_700_000_001_000)).toEqual({
       choices,
       userId: "U1",
+      scope,
       expiresAt: 1_700_000_600_000,
     });
   });
 
   it("drops entries when the current clock is not a valid date timestamp", () => {
     const store = createSlackExternalArgMenuStore();
-    const token = store.create({ choices, userId: "U1" }, 1_700_000_000_000);
+    const token = store.create({ choices, userId: "U1", scope }, 1_700_000_000_000);
 
     expect(store.get(token, Number.NaN)).toBeUndefined();
     expect(store.get(token, 1_700_000_001_000)).toBeUndefined();
@@ -29,17 +36,19 @@ describe("createSlackExternalArgMenuStore", () => {
 
   it("does not retain entries when expiry would exceed the valid date range", () => {
     const store = createSlackExternalArgMenuStore();
-    const token = store.create({ choices, userId: "U1" }, 8_640_000_000_000_000);
+    const token = store.create({ choices, userId: "U1", scope }, 8_640_000_000_000_000);
 
     expect(store.get(token, 1_700_000_001_000)).toBeUndefined();
   });
 
   it("reads only prefixed valid menu tokens", () => {
     const store = createSlackExternalArgMenuStore();
-    const token = store.create({ choices, userId: "U1" }, 1_700_000_000_000);
+    const token = store.create({ choices, userId: "U1", scope }, 1_700_000_000_000);
 
     expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}${token}`)).toBe(token);
+    expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}${token}:2`)).toBe(token);
     expect(store.readToken(token)).toBeUndefined();
     expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}not a token`)).toBeUndefined();
+    expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}${token}:bad!row`)).toBeUndefined();
   });
 });

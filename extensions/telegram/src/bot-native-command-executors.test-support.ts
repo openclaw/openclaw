@@ -31,6 +31,8 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 >;
 type ResolveCommandArgMenuFn =
   typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgMenu;
+type FindCommandByNativeNameFn =
+  typeof import("openclaw/plugin-sdk/command-auth-native").findCommandByNativeName;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
 type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loadModelCatalog;
 type ResolveDefaultModelForAgentFn =
@@ -56,6 +58,7 @@ const sessionMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(),
 }));
 const commandAuthMocks = vi.hoisted(() => ({
+  findCommandByNativeName: vi.fn<FindCommandByNativeNameFn>(),
   resolveCommandArgMenu: vi.fn<ResolveCommandArgMenuFn>(),
 }));
 const agentRuntimeMocks = vi.hoisted(() => ({
@@ -168,9 +171,11 @@ vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth-native")>(
     "openclaw/plugin-sdk/command-auth-native",
   );
+  commandAuthMocks.findCommandByNativeName.mockImplementation(actual.findCommandByNativeName);
   commandAuthMocks.resolveCommandArgMenu.mockImplementation(actual.resolveCommandArgMenu);
   return {
     ...actual,
+    findCommandByNativeName: commandAuthMocks.findCommandByNativeName,
     resolveCommandArgMenu: commandAuthMocks.resolveCommandArgMenu,
   };
 });
@@ -389,6 +394,7 @@ export function resetSessionMetaMocks() {
   );
   persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
   persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
+  commandAuthMocks.findCommandByNativeName.mockClear();
   commandAuthMocks.resolveCommandArgMenu.mockClear().mockImplementation(({ command, args }) => {
     if (args?.raw || (args?.values && Object.keys(args.values).length > 0)) {
       return null;

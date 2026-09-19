@@ -14,6 +14,83 @@ import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-autho
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 
 describe("Telegram inbound admission authorization", () => {
+  it("reauthorizes model callbacks against the current owner policy", async () => {
+    const senderId = "42";
+    const chatId = 42;
+    const cfg = {
+      commands: { ownerAllowFrom: [`telegram:${senderId}`] },
+      channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
+    } as OpenClawConfig;
+    let runtimeCfg = cfg;
+    const params = {
+      accountId: "default",
+      ownerAgentId: "main",
+      bot: {} as RegisterTelegramHandlerParams["bot"],
+      cfg,
+      mediaMaxBytes: 1,
+      opts: { token: "test-token" },
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+      telegramCfg: cfg.channels?.telegram ?? {},
+      telegramDeps: {
+        ...defaultTelegramBotDeps,
+        getRuntimeConfig: () => runtimeCfg,
+        readChannelAllowFromStore: async () => [],
+      },
+      logger: getChildLogger({ module: "telegram/model-callback-auth-test" }),
+      resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({}),
+      shouldSkipUpdate: () => false,
+      processMessage: async () => ({ kind: "completed" as const }),
+    } satisfies RegisterTelegramHandlerParams;
+    const threadSpec = { scope: "none" as const };
+    const authorization = createTelegramHandlerAuthorization(params);
+    const context = await authorization.resolveTelegramEventAuthorizationContext({
+      cfg,
+      chatId,
+      isGroup: false,
+      senderId,
+      threadSpec,
+    });
+
+    await expect(
+      authorization.authorizeTelegramEventSender({
+        chatId,
+        isGroup: false,
+        senderId,
+        senderUsername: "owner",
+        mode: "callback-allowlist",
+        context,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      authorization.isTelegramModelCallbackAuthorized({
+        chatId,
+        isGroup: false,
+        senderId,
+        senderUsername: "owner",
+        context,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorization.reauthorizeTelegramModelCallback(
+        { chatId, isGroup: false, senderId, senderUsername: "owner" },
+        threadSpec,
+      ),
+    ).resolves.toBe(true);
+
+    runtimeCfg = {
+      channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
+    } as OpenClawConfig;
+    await expect(
+      authorization.reauthorizeTelegramModelCallback(
+        { chatId, isGroup: false, senderId, senderUsername: "owner" },
+        threadSpec,
+      ),
+    ).resolves.toBe(false);
+  });
+
   it("binds a forum admission to the finalized parent and topic scope", async () => {
     const chatId = -1001234567890;
     const topicId = 99;

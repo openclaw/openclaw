@@ -69,6 +69,15 @@ export interface TelegramHandlerAuthorization {
     senderUsername: string;
     context: TelegramEventAuthorizationContext;
   }) => Promise<boolean>;
+  reauthorizeTelegramModelCallback: (
+    params: {
+      chatId: number;
+      isGroup: boolean;
+      senderId: string;
+      senderUsername: string;
+    },
+    threadSpec: TelegramThreadSpec,
+  ) => Promise<boolean>;
   authorizeInboundMessage: (params: {
     msg: Message;
     chatId: number;
@@ -338,6 +347,25 @@ export function createTelegramHandlerAuthorization({
       })
     ).authorized;
   };
+  const reauthorizeTelegramModelCallback = async (
+    params: {
+      chatId: number;
+      isGroup: boolean;
+      senderId: string;
+      senderUsername: string;
+    },
+    threadSpec: TelegramThreadSpec,
+  ): Promise<boolean> =>
+    await isTelegramModelCallbackAuthorized({
+      ...params,
+      context: await resolveTelegramEventAuthorizationContext({
+        cfg: telegramDeps.getRuntimeConfig(),
+        chatId: params.chatId,
+        isGroup: params.isGroup,
+        senderId: params.senderId,
+        threadSpec,
+      }),
+    });
   // Single authorization gate for every message-like update that can reach the
   // reply-chain cache or dispatch: fresh messages, edits, channel posts. Must run
   // before any cache/dedupe side effect so blocked content is never recorded.
@@ -489,6 +517,7 @@ export function createTelegramHandlerAuthorization({
     resolveTelegramEventAuthorizationContext,
     authorizeTelegramEventSender,
     isTelegramModelCallbackAuthorized,
+    reauthorizeTelegramModelCallback,
     authorizeInboundMessage,
   };
 }
