@@ -3,10 +3,16 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
+import type {
+  WorkspaceSkillSourceRequest,
+  WorkspaceSkillSources,
+} from "../skills/loading/workspace-skill-sources.types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
 /** Host-owned workspace files; callers keep their existing allowlists. */
 export type AgentWorkspaceAccess = {
+  /** Read native source tiers and execution-host facts without applying Gateway policy. */
+  loadSkills?: (request: WorkspaceSkillSourceRequest) => Promise<WorkspaceSkillSources>;
   bridge: Pick<
     SandboxFsBridge,
     "readFile" | "readFileWithSource" | "readDirectory" | "writeFile" | "stat"
@@ -99,6 +105,22 @@ export function registerAgentWorkspaceAccess(
     };
   }
   const boundAccess: AgentWorkspaceAccess = { bridge: Object.freeze(bridge) };
+  const loadSkills = access.loadSkills?.bind(access);
+  if (loadSkills) {
+    boundAccess.loadSkills = async (request) => {
+      assertCurrent();
+      let result: WorkspaceSkillSources;
+      try {
+        result = await loadSkills(request);
+      } catch (cause) {
+        throw new WorkspaceAccessUnavailableError("Remote workspace skill discovery failed", {
+          cause,
+        });
+      }
+      assertCurrent();
+      return result;
+    };
+  }
   binding.access = Object.freeze(boundAccess);
   bindings.set(key, binding);
   return () => {

@@ -73,6 +73,13 @@ files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
 and consume the classifier's `readSources` input; otherwise automatic remote
 Memory context is excluded. Missing source metadata cannot select a local copy.
 
+Async Skill preparation can use the binding's optional `loadSkills` callback.
+It reads workspace-owned Skill roots on the Harness, while bundled and
+Gateway-installed plugin roots stay on Gateway. The callback returns native
+discovery facts and Harness platform/binary availability; Gateway still applies
+configuration and filters. Local workspaces retain local discovery. A remote
+binding without `loadSkills` fails explicitly when preparing Skills.
+
 This binding provides remote document and bootstrap access. It does not enable
 a remote OpenClaw worker or move its agent loop. Memory search and maintenance,
 skills, attachments, and host provisioning require separate integration and

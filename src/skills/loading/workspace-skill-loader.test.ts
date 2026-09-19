@@ -503,6 +503,13 @@ describe("loadWorkspaceSkills", () => {
       config: {},
       bundledSkillsDir,
     });
+    const [preparedBundled] = await prepareWorkspaceSkills(workspaceDir, {
+      bundledSkillName: "control-ui",
+      eligibility: {},
+      config: {},
+      bundledSkillsDir,
+    });
+    expect(preparedBundled).toEqual(bundledControlUi);
 
     expect(mergedControlUi?.skill.source).toBe("openclaw-workspace");
     expect(bundledControlUi?.skill.source).toBe("openclaw-bundled");

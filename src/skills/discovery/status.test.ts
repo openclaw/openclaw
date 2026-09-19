@@ -16,6 +16,28 @@ type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildWorkspaceSkillStatus", () => {
+  it("selects dependency recipes using the workspace host platform and binaries", () => {
+    const hostPlatform = process.platform === "darwin" ? "linux" : "darwin";
+    const entry = createEntry("host-installer", {
+      metadata: {
+        os: [hostPlatform],
+        install: [
+          { id: "gateway-only", kind: "node", package: "wrong-package", os: [process.platform] },
+          { id: "brew", kind: "brew", formula: "host-package", os: [hostPlatform] },
+          { id: "node", kind: "node", package: "host-package", os: [hostPlatform] },
+        ],
+      },
+    });
+    const status = (bins: string[]) =>
+      buildWorkspaceSkillStatus("/tmp/host-installer", {
+        entries: [entry],
+        files: [],
+        runtime: { platform: hostPlatform, bins },
+        config: { skills: { install: { preferBrew: true } } },
+      }).skills[0];
+    expect(status(["brew"])?.install.map((item) => item.id)).toEqual(["brew"]);
+    expect(status([])?.install.map((item) => item.id)).toEqual(["node"]);
+  });
   it("refreshes dependency eligibility and installer preference after a binary is installed", async () => {
     const workspaceDir = tempDirs.make("openclaw-skill-status-");
     const entries = ["first", "second"].map((name) =>
