@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   callGateway,
+  classifyPortListener,
   inspectPortUsage,
   makeGatewayService,
   monotonicClock,
+  requestStartupProbe,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
@@ -15,6 +17,175 @@ const { waitForGatewayHealthyRestart, formatGatewayRestartFailure } =
 describe("restart startup progress", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it.each([20_000, 90_000])(
+    "observes explicit startup phases before readiness at %d ms",
+    async (readyAtMs) => {
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      });
+      requestStartupProbe.mockImplementation(async () => ({
+        statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
+        body: JSON.stringify(
+          monotonicClock.nowMs < readyAtMs
+            ? { status: "starting", pendingReason: "plugin-convergence" }
+            : { status: "started" },
+        ),
+      }));
+      callGateway.mockImplementation(gatewayHealthResponse());
+      const onProgress = vi.fn();
+      const result = await waitForGatewayHealthyRestart({
+        service: makeGatewayService({ status: "running", pid: 8000 }),
+        port: 18789,
+        requirePluginHealth: false,
+        timeoutMs: 60_000,
+        onProgress,
+      });
+      expect(result).toMatchObject(
+        readyAtMs < 60_000
+          ? { healthy: true, waitOutcome: "healthy", elapsedMs: readyAtMs }
+          : {
+              healthy: false,
+              waitOutcome: "still-starting",
+              elapsedMs: 60_000,
+              startupPhase: "plugin-convergence",
+            },
+      );
+      expect(onProgress).toHaveBeenCalledWith("plugin-convergence");
+      expect(callGateway).toHaveBeenCalledTimes(readyAtMs < 60_000 ? 1 : 0);
+    },
+  );
+
+  it.each([
+    { statusCode: 503, body: '{"ready":false,"failing":["discord"]}' },
+    { statusCode: 503, body: '{"status":"draining","pendingReason":"shutdown"}' },
+    { statusCode: 200, body: '{"status":"starting","pendingReason":"invalid-status"}' },
+  ])("does not mistake another HTTP readiness outcome for startup: %j", async (response) => {
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000 }],
+      hints: [],
+    });
+    requestStartupProbe.mockResolvedValue(response);
+    callGateway.mockImplementation(gatewayHealthResponse());
+    const result = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      requirePluginHealth: false,
+    });
+    expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
+  });
+
+  it("does not retain still-starting evidence across a changed process generation", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockImplementation(async () => ({
+      status: "running",
+      pid: monotonicClock.nowMs < 1_000 ? 8000 : 9000,
+    }));
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000 }, { pid: 9000 }],
+      hints: [],
+    });
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 503,
+      body: '{"status":"starting","pendingReason":"plugin-convergence"}',
+    });
+    const result = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      timeoutMs: 2_000,
+      requirePluginHealth: false,
+    });
+    expect(result).toMatchObject({
+      healthy: false,
+      waitOutcome: "generation-changed",
+      elapsedMs: 2_000,
+    });
+  });
+
+  it.each([
+    {
+      name: "stopped service with a stale Gateway listener",
+      stopped: true,
+      listenerPid: 9000,
+      outcome: "stale-pids",
+    },
+    {
+      name: "running service with an unrelated listener",
+      listenerPid: 9000,
+      foreign: true,
+      outcome: "timeout",
+    },
+    {
+      name: "owned listener running the wrong version",
+      listenerPid: 8000,
+      expectedVersion: "candidate-version",
+      outcome: "version-mismatch",
+    },
+    {
+      name: "owned listener running the wrong build",
+      listenerPid: 8000,
+      expectedBuildId: "candidate-build",
+      outcome: "build-id-mismatch",
+    },
+  ])(
+    "does not let HTTP startup hide $name",
+    async ({ stopped, listenerPid, foreign, expectedVersion, expectedBuildId, outcome }) => {
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: listenerPid }],
+        hints: [],
+      });
+      requestStartupProbe.mockResolvedValue({
+        statusCode: 503,
+        body: '{"status":"starting","pendingReason":"plugin-convergence"}',
+      });
+      if (foreign) {
+        classifyPortListener.mockReturnValue("unknown");
+      }
+      if (expectedVersion || expectedBuildId) {
+        callGateway.mockImplementation(
+          gatewayHealthResponse({
+            server: { version: "previous-version", buildId: "previous-build" },
+          }),
+        );
+      }
+      const result = await waitForGatewayHealthyRestart({
+        service: makeGatewayService(
+          stopped ? { status: "stopped" } : { status: "running", pid: 8000 },
+        ),
+        port: 18789,
+        timeoutMs: 2_000,
+        requireRunningService: true,
+        requirePluginHealth: false,
+        expectedVersion,
+        expectedBuildId,
+      });
+      expect(result).toMatchObject({ healthy: false, waitOutcome: outcome });
+      if (stopped) {
+        expect(result.staleGatewayPids).toEqual([9000]);
+      }
+      if (expectedVersion) {
+        expect(result.versionMismatch).toEqual({
+          expected: expectedVersion,
+          actual: "previous-version",
+        });
+      }
+      if (expectedBuildId) {
+        expect(result.buildIdMismatch).toEqual({
+          expected: expectedBuildId,
+          actual: "previous-build",
+        });
+      }
+    },
+  );
 
   it.each([null, 1])("observes delayed child readiness with exitCode=%s", async (exitCode) => {
     const child = { pid: process.pid, exitCode, signalCode: null };

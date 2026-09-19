@@ -1,8 +1,13 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
+}));
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { ExitError } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -813,6 +818,55 @@ describe("healthCommand", () => {
 
     expect(runtime.log).not.toHaveBeenCalled();
     expect(probeGatewayStatusMock).not.toHaveBeenCalled();
+  });
+
+  it.each([4000, 5000])(
+    "keeps the health RPC within the budget after %d ms of startup",
+    async (elapsedMs) => {
+      vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+        healthy: true,
+        waitOutcome: "healthy",
+        elapsedMs,
+        runtime: { status: "running", pid: 42 },
+        portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+        staleGatewayPids: [],
+      });
+      if (elapsedMs === 5000) {
+        await expect(healthCommand({ timeoutMs: 5000, config: {} }, runtime)).rejects.toThrow(
+          "Gateway diagnostic budget exhausted",
+        );
+        expect(callGatewayMock).not.toHaveBeenCalled();
+      } else {
+        callGatewayMock.mockResolvedValueOnce(createHealthSummary());
+        await healthCommand({ timeoutMs: 5000, config: {} }, runtime);
+        expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+      }
+    },
+  );
+
+  it("keeps readiness exhaustion machine-readable without a second network probe", async () => {
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+      healthy: false,
+      waitOutcome: "timeout",
+      elapsedMs: 5000,
+      probeError: "connect ECONNREFUSED",
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      staleGatewayPids: [],
+    });
+    const { formatGatewayTransportErrorJson } =
+      await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
+    formatGatewayTransportErrorJsonMock.mockImplementation(formatGatewayTransportErrorJson);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
+
+    expect(JSON.parse(requireFirstRuntimeLog())).toMatchObject({
+      ok: false,
+      error: { type: "gateway_transport_error", kind: "timeout", timeoutMs: 5000 },
+      gateway: { url: TEST_GATEWAY_URL },
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("keeps credential failures machine-readable when the gateway is unreachable", async () => {

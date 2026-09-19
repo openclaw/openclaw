@@ -161,6 +161,7 @@ export async function appendStatusAllDiagnosis(params: {
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
@@ -470,6 +471,11 @@ export async function appendStatusAllDiagnosis(params: {
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
+  } else if (params.gatewayStartupPhase) {
+    emitCheck(
+      `Channel issues skipped (gateway still starting (phase ${params.gatewayStartupPhase}))`,
       "ok",
     );
   } else {

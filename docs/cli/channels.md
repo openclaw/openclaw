@@ -63,7 +63,7 @@ With `--json`, every channel entry includes `label` alongside its accounts, inst
 values. Omit the option to keep each command's default or broader account scope;
 do not pass an empty shell variable to request that scope.
 
-- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `60000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
@@ -79,6 +79,8 @@ such as `discord-archive` do not match `discord`.
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+Before probing channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
 
 `channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
 

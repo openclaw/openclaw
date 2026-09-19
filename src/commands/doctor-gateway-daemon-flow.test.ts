@@ -1085,7 +1085,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(healthCommand).toHaveBeenCalledOnce();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "Gateway is healthy after recent restart; skipping restart prompt.",
+      "Preserving the recent Gateway restart; skipping restart prompt.",
       "Gateway",
     );
   });

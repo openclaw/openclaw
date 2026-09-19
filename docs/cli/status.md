@@ -31,8 +31,10 @@ openclaw status --usage --agent work
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
 | `--agent <id>`          | Selects the agent auth/profile scope for `--usage`. Required when an explicit multi-agent fleet has no default. |
 | `--json`                | Machine-readable output.                                                                                        |
-| `--timeout <ms>`        | Probe timeout in milliseconds (default: `10000`).                                                               |
+| `--timeout <ms>`        | Probe timeout in milliseconds (default: `60000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
+
+Local Gateway probes share the restart readiness budget and report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel probes. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` still limits the readiness wait.
 
 Channels without a probe, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
@@ -157,6 +159,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 - `--usage` prints normalized provider usage windows as `X% left`.
   It also adds usage snapshots to `--all`; `--agent` keeps the same usage-only scope.
+  Usage probes receive the remaining shared probe budget, capped by `--timeout` when set;
+  providers that exceed that bound report `Timeout` in the usage output.
 - In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
   `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
   inspect another agent; without either owner, OpenClaw does not guess one

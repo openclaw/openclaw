@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
   resolveGatewayProbeTarget: vi.fn(),
   probeGateway: vi.fn(),
+  waitForGatewayDiagnosticReadiness: vi.fn(),
   callGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   pickGatewaySelfPresence: vi.fn(),
@@ -109,6 +110,10 @@ vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
 
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,
+}));
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
@@ -124,6 +129,7 @@ vi.mock("./gateway-presence.js", () => ({
 describe("resolveGatewayProbeSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.waitForGatewayDiagnosticReadiness.mockReset();
     mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
@@ -164,6 +170,75 @@ describe("resolveGatewayProbeSnapshot", () => {
       password: undefined,
     });
   });
+
+  it.each(["healthy", "plugin-errors", "channel-errors"])(
+    "waits through a 22-second cold start before probing the selected Gateway (%s)",
+    async (waitOutcome) => {
+      vi.useFakeTimers();
+      try {
+        mocks.resolveGatewayProbeTarget.mockReturnValue({
+          gatewayMode: "local",
+          remoteUrlMissing: false,
+        });
+        const startedAt = Date.now();
+        mocks.waitForGatewayDiagnosticReadiness.mockImplementation(async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 22_000);
+          });
+          return { healthy: waitOutcome === "healthy", elapsedMs: 22_000, waitOutcome };
+        });
+        mocks.probeGateway.mockImplementation(async () => ({
+          ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+          ok: Date.now() - startedAt >= 22_000,
+        }));
+        const pending = resolveGatewayProbeSnapshot({ cfg: {}, opts: {} });
+        await vi.advanceTimersByTimeAsync(22_000);
+        const result = await pending;
+
+        expect(result.gatewayReachable).toBe(true);
+        expect(readProbeCall()).toMatchObject({
+          timeoutMs: 38_000,
+          auth: { token: "tok", password: "pw" },
+        });
+        expect(mocks.waitForGatewayDiagnosticReadiness).toHaveBeenCalledWith({
+          config: {},
+          timeoutMs: 60_000,
+          onProgress: undefined,
+          token: "tok",
+          password: "pw",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { waitOutcome: "still-starting", startupPhase: "plugins", error: null },
+    { waitOutcome: "timeout", startupPhase: undefined, error: "connection refused" },
+  ])(
+    "preserves $waitOutcome without another probe budget",
+    async ({ waitOutcome, startupPhase, error }) => {
+      mocks.resolveGatewayProbeTarget.mockReturnValue({
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+      });
+      mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({ auth: {}, warning: undefined });
+      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+        healthy: false,
+        elapsedMs: 60_000,
+        waitOutcome,
+        startupPhase,
+        probeError: error,
+      });
+      const result = await resolveGatewayProbeSnapshot({ cfg: {}, opts: {} });
+
+      expect(result.gatewayProbe).toMatchObject({ ok: false, error });
+      expect(result.gatewayProbe?.startupPhase).toBe(startupPhase);
+      expect(mocks.probeGateway).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("can probe the local fallback when remote url is missing", async () => {
     mocks.probeGateway.mockResolvedValue({
@@ -342,7 +417,7 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     const probeCall = readProbeCall();
     expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
-    expect(probeCall.timeoutMs).toBe(2500);
+    expect(probeCall.timeoutMs).toBe(60_000);
     const gatewayCall = readGatewayCall();
     expect(gatewayCall.config).toEqual({});
     expect(gatewayCall.timeoutMs).toBe(2000);

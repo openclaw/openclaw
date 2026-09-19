@@ -189,6 +189,11 @@ export async function statusCommand(
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
+    ...(scan.gatewayProbeDeadlineMs !== undefined
+      ? { gatewayProbeDeadlineMs: scan.gatewayProbeDeadlineMs }
+      : {}),
+    ...(gatewayProbe?.startupPhase ? { gatewayStartupPhase: gatewayProbe.startupPhase } : {}),
+    ...(gatewayProbe?.error ? { gatewayProbeError: gatewayProbe.error } : {}),
     includeSecurityAudit: opts.all === true || opts.deep === true,
     resolveSecurityAudit: async (input) =>
       await withProgress(

@@ -1,11 +1,16 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
+}));
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import {
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
 } from "../../packages/gateway-client/src/protocol-request.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
@@ -81,6 +86,31 @@ describe("checkGatewayHealth", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("keeps a starting Gateway non-failing without running diagnostics or prompting recovery", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async (opts) => {
+      opts.onProgress?.("startup-sidecars");
+      return {
+        healthy: false,
+        waitOutcome: "still-starting",
+        startupPhase: "startup-sidecars",
+        elapsedMs: 60_000,
+        runtime: { status: "running", pid: 42 },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+        staleGatewayPids: [],
+      };
+    });
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toEqual({
+      healthOk: true,
+      authenticated: false,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Gateway is still starting (phase: startup-sidecars).",
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

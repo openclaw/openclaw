@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
+import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   compareCliGatewayStateDirs,
   GATEWAY_SERVICE_PATHS_UNVERIFIED,
@@ -31,6 +32,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
 import { projectDoctorSecretRuntimeDegradations } from "./doctor-secret-runtime-degradation.js";
+import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -152,16 +154,25 @@ export async function checkGatewayHealth(params: {
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
+    typeof params.timeoutMs === "number" && params.timeoutMs > 0
+      ? params.timeoutMs
+      : DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
   let healthOk = false;
   let status: StatusSummary | undefined;
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
   try {
+    const remainingMs = await waitForGatewayDiagnostic(
+      { config: params.cfg, timeoutMs },
+      params.runtime,
+    );
+    if (remainingMs === undefined) {
+      return { healthOk: true, authenticated: false };
+    }
     const statusStartedAt = performance.now();
     status = await callGateway<StatusSummary>({
       method: "status",
       params: { includeChannelSummary: false },
-      timeoutMs,
+      timeoutMs: remainingMs,
       config: params.cfg,
       onHelloOk: ({ snapshot }: GatewayHello) => {
         gatewaySnapshot = snapshot;

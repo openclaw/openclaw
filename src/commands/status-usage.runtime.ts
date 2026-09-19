@@ -17,6 +17,7 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
   resolveUsageCredentialType,
 } from "../status/codex-synthetic-usage.js";
+import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 
 const providerUsageLoader = createLazyImportLoader(() => import("../infra/provider-usage.js"));
 
@@ -67,6 +68,10 @@ export type StatusUsageSummaryOptions = {
 
 /** Loads provider usage for status output from an explicit or ambient system-agent scope. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
+  const budget = {
+    timeoutMs: params.timeoutMs,
+    gatewayProbeDeadlineMs: performance.now() + resolveStatusGatewayProbeTimeoutMs(params),
+  };
   const { loadProviderUsageSummary } = await providerUsageLoader.load();
   const rawAgentId = params.agentId?.trim();
   if (params.agentId !== undefined && !rawAgentId) {
@@ -86,7 +91,7 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
   const usage = await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
+    timeoutMs: resolveStatusGatewayProbeTimeoutMs(budget),
     config: params.config,
     agentDir,
   });
@@ -100,7 +105,7 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     return usage;
   }
   const codexUsage = await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
+    timeoutMs: resolveStatusGatewayProbeTimeoutMs(budget),
     providers: ["openai"],
     auth: [buildCodexSyntheticUsageAuth()],
     config: params.config,

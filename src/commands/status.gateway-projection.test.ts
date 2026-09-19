@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   localSummary: vi.fn(),
   callGateway: vi.fn(),
   probeGateway: vi.fn(),
+  waitForGatewayDiagnosticReadiness: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -45,9 +46,13 @@ vi.mock("./status.update.js", () => ({
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.waitForGatewayDiagnosticReadiness.mockReset();
   mocks.fullConfigReads = 0;
   mocks.probeGateway.mockResolvedValue({
     ok: true,
@@ -64,12 +69,13 @@ beforeEach(() => {
 });
 
 it.each([
-  { withProjection: false, remote: false },
-  { withProjection: true, remote: false },
-  { withProjection: true, remote: true },
+  { withProjection: false, remote: false, readinessElapsedMs: 0 },
+  { withProjection: true, remote: false, readinessElapsedMs: 0 },
+  { withProjection: true, remote: true, readinessElapsedMs: 0 },
+  { withProjection: true, remote: false, readinessElapsedMs: 22_000 },
 ])(
-  "serves online fleet JSON without local discovery ($withProjection, remote: $remote)",
-  async ({ withProjection, remote }) => {
+  "serves online fleet JSON without local discovery ($withProjection, remote: $remote, startup: $readinessElapsedMs)",
+  async ({ withProjection, remote, readinessElapsedMs }) => {
     await withOpenClawTestState(
       { layout: "split", prefix: "status-gateway-projection-" },
       async (state) => {
@@ -136,10 +142,24 @@ it.each([
           sessions: { ...summary.sessions, count: 99 },
         });
 
+        const clock = readinessElapsedMs
+          ? vi.spyOn(performance, "now").mockReturnValue(0)
+          : undefined;
+        if (clock) {
+          mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+            healthy: true,
+            elapsedMs: readinessElapsedMs,
+            waitOutcome: "healthy",
+          });
+          mocks.probeGateway.mockImplementationOnce(async () => {
+            clock.mockReturnValue(1000);
+            return { ok: true, connectLatencyMs: 1, error: null, status: null, presence: [] };
+          });
+        }
         const result = await scanStatusJsonFast(
           {},
           { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        );
+        ).finally(() => clock?.mockRestore());
 
         expect(mocks.fullConfigReads).toBe(0);
         expect(mocks.localAgents).not.toHaveBeenCalled();
@@ -157,6 +177,7 @@ it.each([
           expect.objectContaining({
             method: "status",
             params: { includeChannelSummary: false, includeCliProjection: true },
+            ...(readinessElapsedMs ? { timeoutMs: 37_000 } : {}),
           }),
         );
       },
@@ -197,6 +218,7 @@ it("keeps offline config diagnostics and local collection", async () => {
       expect(mocks.localSummary).toHaveBeenCalledOnce();
       expect(result.agentStatus).toEqual(local);
       expect(result.gatewayReachable).toBe(false);
+      expect(mocks.waitForGatewayDiagnosticReadiness).toHaveBeenCalledOnce();
       expect(result.collection).toBeUndefined();
       expect(result.configDiagnostics?.issues).toEqual(
         expect.arrayContaining([

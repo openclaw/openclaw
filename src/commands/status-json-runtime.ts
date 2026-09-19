@@ -34,6 +34,13 @@ export async function resolveStatusJsonOutput(params: {
       usage: opts.usage,
       deep: opts.deep,
       gatewayReachable: scan.gatewayReachable,
+      ...(scan.gatewayProbeDeadlineMs !== undefined
+        ? { gatewayProbeDeadlineMs: scan.gatewayProbeDeadlineMs }
+        : {}),
+      ...(scan.gatewayProbe?.startupPhase
+        ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
+        : {}),
+      ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
       includeSecurityAudit: params.includeSecurityAudit && !scan.collection,
       suppressHealthErrors: params.suppressHealthErrors,
       ...(scan.collection && opts.usage

@@ -9,20 +9,18 @@ import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from 
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { applyLoggingConfig } from "../logging/logger.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { StatusSessionStores } from "../status/session-stores.js";
 import type { StatusSummary } from "../status/summary.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { AgentLocalStatusesResult } from "./status.agent-local.js";
+import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 import {
   buildColdStartStatusSummary,
   createStatusScanCoreBootstrap,
 } from "./status.scan.bootstrap-shared.js";
-import {
-  resolveStatusGatewayProbeTimeoutMs,
-  type GatewayProbeSnapshot,
-} from "./status.scan.shared.js";
+import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
 const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
@@ -54,11 +52,18 @@ async function resolveStatusChannelsStatus(params: {
   cfg: OpenClawConfig;
   configPath: string;
   gatewayReachable: boolean;
+  gatewayProbeDeadlineMs?: number;
   opts: { timeoutMs?: number; all?: boolean };
   gatewayCallOverrides?: GatewayProbeSnapshot["gatewayCallOverrides"];
   useGatewayCallOverrides?: boolean;
 }) {
-  if (!params.gatewayReachable) {
+  if (
+    !params.gatewayReachable ||
+    resolveStatusGatewayProbeTimeoutMs({
+      ...params.opts,
+      gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+    }) === 0
+  ) {
     // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
     return null;
   }
@@ -72,7 +77,10 @@ async function resolveStatusChannelsStatus(params: {
       timeoutMs: Math.min(8000, params.opts.timeoutMs ?? 10_000),
     },
     timeoutMs: Math.min(
-      resolveStatusGatewayProbeTimeoutMs({ all: params.opts.all }),
+      resolveStatusGatewayProbeTimeoutMs({
+        ...params.opts,
+        gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+      }),
       params.opts.timeoutMs ?? 10_000,
     ),
     ...(params.useGatewayCallOverrides === true ? (params.gatewayCallOverrides ?? {}) : {}),
@@ -103,6 +111,7 @@ export type StatusScanOverviewResult = {
     | "gatewayProbeAuthWarning"
     | "gatewayProbe"
     | "gatewayReachable"
+    | "gatewayProbeDeadlineMs"
     | "gatewaySelf"
     | "gatewayCallOverrides"
   >;
@@ -143,6 +152,7 @@ export async function collectStatusScanOverview(params: {
   includeLiveChannelStatus?: boolean;
   includeLocalStatusRpcFallback?: boolean;
   gatewayProbeTimeoutMs?: number;
+  gatewaySnapshot?: GatewayProbeSnapshot;
   includeChannelSetupRuntimeFallback?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeAdvertisedControlUiLinks?: boolean;
@@ -233,6 +243,16 @@ export async function collectStatusScanOverview(params: {
     includeRegistryUpdate: params.includeRegistryUpdate,
     includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
     gatewayProbeTimeoutMs,
+    gatewaySnapshot: params.gatewaySnapshot,
+    onGatewayProgress: params.progress
+      ? (phase) => {
+          const message = `Gateway still starting (phase ${phase})`;
+          params.progress?.setLabel(message);
+          if (!process.stderr.isTTY) {
+            (params.runtime ?? defaultRuntime).log(message);
+          }
+        }
+      : undefined,
     getTailnetHostname: async (runner) => {
       return await statusScanDepsRuntimeModuleLoader
         .load()
@@ -282,21 +302,26 @@ export async function collectStatusScanOverview(params: {
   if (gatewaySnapshot.gatewayReachable) {
     const status =
       gatewaySnapshot.gatewayProbe?.status ??
-      (await measureCliCommandStartup(
-        "status.gateway-degradation",
-        () =>
-          gatewayCallModuleLoader.load().then(({ callGateway }) =>
-            callGateway<StatusSummary>({
-              config: cfg,
-              configPath: snapshot.path,
-              method: "status",
-              params: { includeChannelSummary: false },
-              timeoutMs: Math.min(5000, params.opts.timeoutMs ?? 10_000),
-              ...gatewaySnapshot.gatewayCallOverrides,
-            }).catch(() => null),
-          ),
-        { config: cfg, env },
-      ));
+      (resolveStatusGatewayProbeTimeoutMs({ ...params.opts, ...gatewaySnapshot }) > 0
+        ? await measureCliCommandStartup(
+            "status.gateway-degradation",
+            () =>
+              gatewayCallModuleLoader.load().then(({ callGateway }) =>
+                callGateway<StatusSummary>({
+                  config: cfg,
+                  configPath: snapshot.path,
+                  method: "status",
+                  params: { includeChannelSummary: false },
+                  timeoutMs: Math.min(
+                    5000,
+                    resolveStatusGatewayProbeTimeoutMs({ ...params.opts, ...gatewaySnapshot }),
+                  ),
+                  ...gatewaySnapshot.gatewayCallOverrides,
+                }).catch(() => null),
+              ),
+            { config: cfg, env },
+          )
+        : null);
     runtimeDegradation = status
       ? {
           degradedSecretOwners: status.degradedSecretOwners ?? [],
@@ -335,6 +360,7 @@ export async function collectStatusScanOverview(params: {
               cfg,
               configPath: snapshot.path,
               gatewayReachable: gatewaySnapshot.gatewayReachable,
+              gatewayProbeDeadlineMs: gatewaySnapshot.gatewayProbeDeadlineMs,
               opts: params.opts,
               gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
               useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,

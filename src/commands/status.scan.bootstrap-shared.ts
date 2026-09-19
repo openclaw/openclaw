@@ -81,6 +81,7 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   includeLocalStatusRpcFallback?: boolean;
   gatewayProbeTimeoutMs?: number;
   gatewaySnapshot?: GatewayProbeSnapshot;
+  onGatewayProgress?: (phase: string) => void;
   getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
@@ -140,6 +141,7 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
                 : {}),
               ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
               localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
+              onProgress: params.onGatewayProgress,
             },
           }),
         { config: params.cfg, env: params.env },
