@@ -1,182 +1,21 @@
 // Logs CLI tests cover log command routing and runtime log output behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayTransportError } from "../gateway/call.js";
-import type { RuntimeExitOptions } from "../runtime.js";
-import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { registerLogsCli } from "./logs-cli.js";
-
-const { MockGatewayTransportError } = vi.hoisted(() => ({
-  MockGatewayTransportError: class extends Error {
-    readonly kind: string;
-    readonly connectionDetails: unknown;
-    readonly code?: number;
-    readonly reason?: string;
-    readonly timeoutMs?: number;
-
-    constructor(params: {
-      kind: string;
-      message: string;
-      connectionDetails: unknown;
-      code?: number;
-      reason?: string;
-      timeoutMs?: number;
-    }) {
-      super(params.message);
-      this.name = "GatewayTransportError";
-      this.kind = params.kind;
-      this.connectionDetails = params.connectionDetails;
-      if (params.code !== undefined) {
-        this.code = params.code;
-      }
-      if (params.reason !== undefined) {
-        this.reason = params.reason;
-      }
-      if (params.timeoutMs !== undefined) {
-        this.timeoutMs = params.timeoutMs;
-      }
-    }
-  },
-}));
-
-const callGatewayFromCli = vi.fn();
-const readConfiguredLogTail = vi.fn();
-const readSystemdServiceRuntime = vi.fn();
-const execFileUtf8Tail = vi.fn();
-const buildGatewayConnectionDetails = vi.fn(
-  (_options?: {
-    configPath?: string;
-    config?: unknown;
-    url?: string;
-    urlSource?: "cli" | "env";
-  }) => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    message: "",
-  }),
-);
-
-vi.mock("../gateway/call.js", () => ({
-  GatewayTransportError: MockGatewayTransportError,
-  buildGatewayConnectionDetails: (
-    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
-  ) => buildGatewayConnectionDetails(...args),
-  isGatewayTransportError: (value: unknown) => value instanceof MockGatewayTransportError,
-}));
-
-vi.mock("../logging/log-tail.js", () => ({
-  readConfiguredLogTail: (
-    ...args: Parameters<typeof import("../logging/log-tail.js").readConfiguredLogTail>
-  ) => readConfiguredLogTail(...args),
-}));
-
-vi.mock("./logs-cli.runtime.js", () => ({
-  buildGatewayConnectionDetails: (
-    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
-  ) => buildGatewayConnectionDetails(...args),
-  readSystemdServiceRuntime: (
-    ...args: Parameters<typeof import("../daemon/systemd.js").readSystemdServiceRuntime>
-  ) => readSystemdServiceRuntime(...args),
-  execFileUtf8Tail: (
-    ...args: Parameters<typeof import("./logs-cli.runtime.js").execFileUtf8Tail>
-  ) => execFileUtf8Tail(...args),
-  resolveGatewaySystemdServiceName: (
-    ..._args: Parameters<typeof import("../daemon/constants.js").resolveGatewaySystemdServiceName>
-  ) => "openclaw-gateway",
-}));
-
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: vi.fn().mockReturnValue(0),
-}));
-
-vi.mock("./gateway-rpc.js", async () => {
-  const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
-  return {
-    ...actual,
-    callGatewayFromCli: (...args: Parameters<typeof actual.callGatewayFromCli>) =>
-      callGatewayFromCli(...args),
-  };
-});
-
-vi.mock("../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
-  const terminalRestore = await vi.importActual<
-    typeof import("../../packages/terminal-core/src/restore.js")
-  >("../../packages/terminal-core/src/restore.js");
-  return {
-    ...actual,
-    defaultRuntime: {
-      ...actual.defaultRuntime,
-      exit: vi.fn((code: number, opts?: RuntimeExitOptions) => {
-        terminalRestore.restoreTerminalState("runtime exit", {
-          resumeStdinIfPaused: false,
-          resetStream: opts?.resetStream,
-        });
-        process.exit(code);
-      }),
-    },
-  };
-});
-
-async function runLogsCli(argv: string[]) {
-  await runRegisteredCli({
-    register: registerLogsCli as (program: import("commander").Command) => void,
-    argv,
-  });
-}
-
-function createGatewayCloseError(params: {
-  code: number;
-  reason: string;
-  message: string;
-  url?: string;
-  urlSource?: "cli" | "local loopback";
-}) {
-  return new GatewayTransportError({
-    kind: "closed",
-    code: params.code,
-    reason: params.reason,
-    connectionDetails: {
-      url: params.url ?? "ws://127.0.0.1:18789",
-      urlSource: params.urlSource ?? "local loopback",
-      message: "",
-    },
-    message: params.message,
-  });
-}
-
-function captureStdoutWrites() {
-  const writes: string[] = [];
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-    writes.push(String(chunk));
-    return true;
-  });
-  return writes;
-}
-
-function captureStderrWrites() {
-  const writes: string[] = [];
-  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-    writes.push(String(chunk));
-    return true;
-  });
-  return writes;
-}
+import {
+  buildGatewayConnectionDetails,
+  callGatewayFromCli,
+  captureStderrWrites,
+  captureStdoutWrites,
+  createGatewayCloseError,
+  execFileUtf8Tail,
+  readConfiguredLogTail,
+  readSystemdServiceRuntime,
+  runLogsCli,
+  useLogsCliTestHarness,
+} from "./logs-cli.test-harness.js";
 
 describe("logs cli", () => {
-  beforeEach(() => {
-    readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
-    execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
-  });
-
-  afterEach(() => {
-    callGatewayFromCli.mockClear();
-    readConfiguredLogTail.mockClear();
-    buildGatewayConnectionDetails.mockClear();
-    readSystemdServiceRuntime.mockClear();
-    execFileUtf8Tail.mockClear();
-    vi.restoreAllMocks();
-  });
+  useLogsCliTestHarness();
 
   it("writes output directly to stdout/stderr", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
@@ -484,6 +323,85 @@ describe("logs cli", () => {
   });
 
   describe("--follow retry behavior", () => {
+    it.each([
+      { mode: "plain", bridge: false, failReread: false },
+      { mode: "json", bridge: false, failReread: false },
+      { mode: "json", bridge: true, failReread: false },
+      { mode: "plain", bridge: false, failReread: true },
+    ])(
+      "reads the complete new file in $mode mode (journal: $bridge, failed reread: $failReread)",
+      async ({ mode, bridge, failReread }) => {
+        const closeError = createGatewayCloseError({
+          code: 1006,
+          reason: "abnormal closure",
+          message: "gateway closed (1006 abnormal closure): abnormal closure",
+        });
+        callGatewayFromCli.mockResolvedValueOnce({
+          file: "/tmp/old.log",
+          cursor: 10,
+          lines: ["old file line"],
+        });
+        if (bridge) {
+          vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+          callGatewayFromCli.mockRejectedValueOnce(closeError);
+          readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
+          execFileUtf8Tail.mockResolvedValueOnce({
+            stdout: "journal bridge line\n-- cursor: s=bridge",
+            stderr: "",
+            code: 0,
+            truncated: false,
+          });
+        }
+        let failedReread = false;
+        callGatewayFromCli.mockImplementation(
+          async (_method, _options, { cursor }: { cursor?: number }) => {
+            if (cursor === 50) {
+              throw new Error("stop after appended line");
+            }
+            if (cursor === undefined && failReread && !failedReread) {
+              failedReread = true;
+              throw closeError;
+            }
+            return {
+              file: "/tmp/new.log",
+              cursor: cursor === 40 ? 50 : 40,
+              lines:
+                cursor === 40
+                  ? ["appended line"]
+                  : cursor === undefined
+                    ? ["new first line", "new last line"]
+                    : ["new last line"],
+            };
+          },
+        );
+        const stdoutWrites = captureStdoutWrites();
+        captureStderrWrites();
+        vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+        try {
+          await runLogsCli(["logs", "--follow", `--${mode}`, "--interval", "1"]);
+          const lines = stdoutWrites.join("").trim().split("\n");
+          const messages =
+            mode === "json"
+              ? lines
+                  .map((line) => JSON.parse(line) as { type: string; raw?: string })
+                  .filter((record) => record.type === "raw")
+                  .map((record) => record.raw)
+              : lines.filter((line) => !line.startsWith("Log file:"));
+          expect(messages).toEqual([
+            "old file line",
+            ...(bridge ? ["journal bridge line"] : []),
+            "new first line",
+            "new last line",
+            "appended line",
+          ]);
+          expect(failedReread).toBe(failReread);
+        } finally {
+          callGatewayFromCli.mockReset();
+        }
+      },
+    );
+
     it("uses the active systemd journal for implicit local follow failures", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const closeError = createGatewayCloseError({
@@ -1177,4 +1095,3 @@ describe("logs cli", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

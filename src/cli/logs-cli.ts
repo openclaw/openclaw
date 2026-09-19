@@ -38,23 +38,12 @@ import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
-
-type LogsTailPayload = {
-  file?: string;
-  source?: string;
-  sourceKind?: "file" | "journal";
-  service?: {
-    pid?: number;
-    unit?: string;
-  };
-  cursor?: number | string;
-  size?: number;
-  lines?: string[];
-  truncated?: boolean;
-  reset?: boolean;
-  skippedBytes?: number;
-  localFallback?: boolean;
-};
+import {
+  buildLogMetaRecord,
+  buildLogSourceIdentity,
+  normalizeLogTailPayloadSource,
+  type LogsTailPayload,
+} from "./logs-cli-source.js";
 
 type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
 
@@ -76,15 +65,6 @@ type GatewayRecoveryState =
       abortController: AbortController;
     }
   | { kind: "settled"; result: GatewayRecoveryResult };
-
-type LogSourceIdentity = {
-  file?: string;
-  source?: string;
-  sourceKind?: LogsTailPayload["sourceKind"];
-  servicePid?: number;
-  serviceUnit?: string;
-  localFallback?: boolean;
-};
 
 async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
   return await import("./logs-cli.runtime.js");
@@ -122,42 +102,6 @@ function parsePositiveInt(value: string | undefined, fallback: number, flag: str
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
-}
-
-function normalizeLogTailPayloadSource(payload: LogsTailPayload): LogsTailPayload {
-  if (payload.sourceKind || !payload.file) {
-    return payload;
-  }
-  return { ...payload, sourceKind: "file" };
-}
-
-function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
-  const sourceKind = payload.sourceKind ?? (payload.file ? "file" : undefined);
-  if (!sourceKind && !payload.file && !payload.source) {
-    return undefined;
-  }
-  const identity: LogSourceIdentity = {
-    file: payload.file,
-    source: payload.source,
-    sourceKind,
-    servicePid: payload.service?.pid,
-    serviceUnit: payload.service?.unit,
-    localFallback: payload.localFallback === true ? true : undefined,
-  };
-  return JSON.stringify(identity);
-}
-
-function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
-  return {
-    type: "meta",
-    file: payload.file,
-    source: payload.source,
-    sourceKind: payload.sourceKind ?? (payload.file ? "file" : undefined),
-    service: payload.service,
-    cursor: payload.cursor,
-    size: payload.size,
-    localFallback: payload.localFallback === true ? true : undefined,
-  };
 }
 
 async function fetchGatewayLogs(
@@ -562,6 +506,7 @@ export function registerLogsCli(program: Command) {
     const limit = parsePositiveInt(opts.limit, 200, "--limit");
     const maxBytes = parsePositiveInt(opts.maxBytes, 250_000, "--max-bytes");
     let gatewayCursor: number | undefined;
+    let gatewayFile: string | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
     let preferJournal = false;
@@ -651,6 +596,21 @@ export function registerLogsCli(program: Command) {
             showProgress,
             { limit, maxBytes },
           );
+        }
+        if (
+          gatewayCursor !== undefined &&
+          gatewayFile !== undefined &&
+          payload.file !== undefined &&
+          payload.file !== gatewayFile
+        ) {
+          // Byte cursors belong to one file, including across journal recovery.
+          // Discard the stale cursor before retrying so a failed reread stays cursorless.
+          gatewayCursor = undefined;
+          gatewayPollStartedAt = new Date().toISOString();
+          payload = await fetchLogs(opts, { journal: journalCursor, journalSince }, false, {
+            limit,
+            maxBytes,
+          });
         }
       } catch (err) {
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
@@ -802,6 +762,7 @@ export function registerLogsCli(program: Command) {
         gatewayRecovery = { kind: "idle" };
         if (typeof payload.cursor === "number" && Number.isFinite(payload.cursor)) {
           gatewayCursor = payload.cursor;
+          gatewayFile = payload.file;
           if (opts.follow) {
             // A recovered Gateway cursor supersedes the prior journal bridge.
             // A later fallback must start from this poll, not replay the old outage.
