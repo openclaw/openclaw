@@ -16,7 +16,8 @@ function catalogProjectionIdentity(message: unknown): string | null {
   if (typeof content !== "string" && !Array.isArray(content)) {
     return null;
   }
-  const metadata = isRecord(message.__openclaw) ? message.__openclaw : undefined;
+  const openclawMetadata = message["__openclaw"];
+  const metadata = isRecord(openclawMetadata) ? openclawMetadata : undefined;
   try {
     return `projection:${JSON.stringify([
       message.role,
