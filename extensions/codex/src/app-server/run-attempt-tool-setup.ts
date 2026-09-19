@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  HEARTBEAT_RESPONSE_TOOL_NAME,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
@@ -26,6 +27,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { createInactiveCodexHeartbeatResponseTool } from "./heartbeat-tool-fallback.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import {
@@ -566,6 +568,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     const toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredFallbackTools:
+        params.trigger === "heartbeat" ||
+        params.enableHeartbeatTool === true ||
+        params.forceHeartbeatTool === true
+          ? undefined
+          : registeredWithScopedMcp
+              .filter((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME)
+              .map(createInactiveCodexHeartbeatResponseTool),
       registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
