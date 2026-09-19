@@ -466,7 +466,7 @@ export async function executeCliProcess(params: {
         Boolean(params.resolvedSessionId) &&
         Boolean(context.openClawHistoryPrompt) &&
         Boolean(runParams.sessionKey) &&
-        runParams.timeoutMs - (Date.now() - context.started) > 0;
+        runParams.timeoutMs - (performance.now() - context.startedMonotonicMs) > 0;
       if (runParams.sessionKey && params.events.emitLiveEvents && !deferNotice) {
         const stallNotice = [
           `CLI agent (${runParams.provider}) produced no output for ${timeoutSeconds}s and was terminated.`,
