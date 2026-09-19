@@ -5,6 +5,7 @@ export {
   declareAgentWorkspaceAccess,
   registerAgentWorkspaceAccess,
   getAgentWorkspaceAccess,
+  prepareAgentWorkspaceAttachments,
   type AgentWorkspaceAccess,
 } from "../agents/workspace-access.js";
 export { createWorkspaceBootstrapFilePolicy } from "../agents/workspace-bootstrap-policy.js";

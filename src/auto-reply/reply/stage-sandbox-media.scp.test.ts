@@ -2,10 +2,12 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import * as globals from "../../globals.js";
 import * as mediaRoots from "../../media/channel-inbound-roots.js";
 import * as mediaReference from "../../media/media-reference.js";
+import { getMediaDir } from "../../media/store.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -24,6 +26,7 @@ import {
   waitForPidFile,
   waitForPidToExit,
 } from "../../test-utils/process-tree.js";
+import { pinConfigDir } from "../../utils.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
@@ -181,6 +184,46 @@ function releaseInstalledOwnerSnapshot(): void {
 afterEach(() => vi.restoreAllMocks());
 
 describe("stageSandboxMedia SCP", () => {
+  it("caches remote-channel inputs on Gateway when the workspace belongs to a remote host", async () => {
+    const previousEnv = { ...process.env };
+    try {
+      await withOpenClawTestState({ label: "scp-remote-workspace" }, async (state) => {
+        pinConfigDir();
+        const params = remoteStageParams(state);
+        const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+          bridge: {
+            readFile: async () => {
+              throw new Error("unexpected workspace read");
+            },
+            writeFile: async () => {
+              throw new Error("unexpected workspace write");
+            },
+            stat: async () => {
+              throw new Error("unexpected workspace stat");
+            },
+          },
+        });
+        vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
+          await fs.writeFile(argv.at(-1)!, "cached input");
+          return SUCCESS;
+        });
+        try {
+          const result = await stageSandboxMedia(params);
+          const cached = result.staged.get(0)!;
+          expect(cached.startsWith(path.join(getMediaDir(), "remote-cache") + path.sep)).toBe(true);
+          expect(await fs.readFile(cached, "utf8")).toBe("cached input");
+          expect(params.ctx.media?.[0]?.path).toBe(cached);
+          expect(params.sessionCtx.media).toEqual(params.ctx.media);
+          expect(existsSync(state.path("sandbox"))).toBe(false);
+        } finally {
+          release();
+        }
+      });
+    } finally {
+      pinConfigDir(previousEnv);
+    }
+  });
+
   it("stages bytes and both contexts through the strict bounded SCP command", async () => {
     await withOpenClawTestState({ label: "scp-stage" }, async (state) => {
       const params = remoteStageParams(state);

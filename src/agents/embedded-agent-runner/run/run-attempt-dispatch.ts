@@ -687,7 +687,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const rawAttempt = await withPreparedEmbeddedGatewayTools(
     attemptParams,
     attemptControls.isCurrent,
-    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
+    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
   )
     .catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;

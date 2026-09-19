@@ -3,7 +3,17 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+
+type WorkspaceAttachmentTurn = {
+  abortSignal?: AbortSignal;
+  config?: OpenClawConfig;
+  media?: MediaFact[];
+  timeoutMs: number;
+};
 
 /** Host-owned workspace files; callers keep their existing allowlists. */
 export type AgentWorkspaceAccess = {
@@ -11,6 +21,11 @@ export type AgentWorkspaceAccess = {
     SandboxFsBridge,
     "readFile" | "readFileWithSource" | "readDirectory" | "writeFile" | "stat"
   >;
+  /** Transfer admitted originals and return execution-only paths; leave recorded media unchanged. */
+  prepareTurnAttachments?: (
+    turn: WorkspaceAttachmentTurn,
+    assertCurrent: () => void,
+  ) => Promise<string | undefined>;
 };
 
 const bindings = new Map<string, { access?: AgentWorkspaceAccess; active: boolean }>();
@@ -99,6 +114,20 @@ export function registerAgentWorkspaceAccess(
     };
   }
   const boundAccess: AgentWorkspaceAccess = { bridge: Object.freeze(bridge) };
+  const prepareTurnAttachments = access.prepareTurnAttachments?.bind(access);
+  if (prepareTurnAttachments) {
+    boundAccess.prepareTurnAttachments = async (turn, assertRunCurrent) => {
+      const assertPreparationCurrent = () => {
+        assertCurrent();
+        turn.abortSignal?.throwIfAborted();
+        assertRunCurrent();
+      };
+      assertPreparationCurrent();
+      const note = await prepareTurnAttachments(turn, assertPreparationCurrent);
+      assertPreparationCurrent();
+      return note;
+    };
+  }
   binding.access = Object.freeze(boundAccess);
   bindings.set(key, binding);
   return () => {
@@ -113,4 +142,46 @@ export function getAgentWorkspaceAccess(workspaceDir: string): AgentWorkspaceAcc
     throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
   }
   return binding?.access;
+}
+
+/** Prepare execution-only paths while retaining canonical media and transcript facts. */
+export async function prepareAgentWorkspaceAttachments(params: {
+  workspaceDir: string;
+  turn: WorkspaceAttachmentTurn & { userTurnTranscriptRecorder?: UserTurnTranscriptRecorder };
+  assertCurrent: () => void;
+}): Promise<string | undefined> {
+  if (!params.turn.media?.length && !params.turn.userTurnTranscriptRecorder) {
+    return undefined;
+  }
+  const access = getAgentWorkspaceAccess(params.workspaceDir);
+  if (!access?.prepareTurnAttachments) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    params.turn.abortSignal?.throwIfAborted();
+    params.assertCurrent();
+    if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
+      throw new Error("Workspace access changed during attachment preparation");
+    }
+  };
+  assertCurrent();
+  const recorder = params.turn.userTurnTranscriptRecorder;
+  const message = (await recorder?.resolveMessage()) ?? recorder?.message;
+  assertCurrent();
+  // Deferred originals can differ from both the initial snapshot and runtime media.
+  const facts = (message ? readPersistedMediaFacts(message) : undefined) ?? params.turn.media ?? [];
+  if (!facts.some((fact) => fact.path?.trim() || fact.url?.trim())) {
+    return undefined;
+  }
+  const note = await access.prepareTurnAttachments(
+    {
+      config: params.turn.config,
+      media: facts,
+      timeoutMs: params.turn.timeoutMs,
+      abortSignal: params.turn.abortSignal,
+    },
+    assertCurrent,
+  );
+  assertCurrent();
+  return note;
 }

@@ -135,12 +135,12 @@ describe("Codex app-server steering queue", () => {
       const controller = new AbortController();
       const queue = createQueue(harness.client, {
         signal: controller.signal,
-        prepareMessage: async (text, options) => {
+        prepareMessage: async (text, options, assertCurrent) => {
           if (text === "independent") {
             preparing.resolve();
             await release.promise;
           }
-          return prepareMessage(text, options);
+          return prepareMessage(text, options, assertCurrent);
         },
       });
       const acceptance = vi.fn();
@@ -491,7 +491,7 @@ describe("Codex app-server steering queue", () => {
       },
     );
     const images = [{ type: "image" as const, data: PNG_1X1, mimeType: "image/png" }];
-    const prepared = await prepareMessage("delayed image", { images });
+    const prepared = await prepareMessage("delayed image", { images }, () => {});
     const onQueueAccepted = vi.fn();
     const queued = queue.queue("delayed image", { images, debounceMs: 0, onQueueAccepted });
     const rejected = expect(queued).rejects.toThrow(reason);

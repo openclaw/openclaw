@@ -496,6 +496,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
             ...provider,
             context,
             workspaceDir: input.workspaceDir,
+            agentWorkspaceDir: attempt.workspaceDir,
             workspaceOnly: input.workspaceOnly,
             localRoots: input.workspaceOnly
               ? undefined
