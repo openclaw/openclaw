@@ -10,8 +10,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { Command } from "commander";
-import { buildBundleMcpToolsFromCatalog } from "../agents/agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog } from "../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -529,7 +528,7 @@ async function probeMcpServerIssues(params: {
     manifestRegistry: { plugins: [] },
   });
   try {
-    const result = formatMcpProbeResult(await runtime.getCatalog());
+    const result = await readMcpProbeResult(runtime);
     const diagnostic = result.diagnostics[0];
     if (diagnostic) {
       return [issue("error", `probe failed: ${diagnostic.message}`)];
@@ -614,22 +613,11 @@ async function buildMcpStatusEntries(
   );
 }
 
-function formatMcpProbeResult(catalog: McpToolCatalog) {
-  const projectedTools = buildBundleMcpToolsFromCatalog({
-    catalog,
-    createResourceListExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP resources_list");
-    },
-    createResourceReadExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP resources_read");
-    },
-    createPromptListExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP prompts_list");
-    },
-    createPromptGetExecute: () => async () => {
-      throw new Error("probe projection cannot execute MCP prompts_get");
-    },
-  });
+async function readMcpProbeResult(runtime: SessionMcpRuntime) {
+  const { buildBundleMcpToolsFromCatalog } =
+    await import("../agents/agent-bundle-mcp-materialize.js");
+  const catalog = await runtime.getCatalog();
+  const projectedTools = buildBundleMcpToolsFromCatalog({ catalog });
   return {
     generatedAt: new Date(catalog.generatedAt).toISOString(),
     servers: Object.fromEntries(
@@ -708,7 +696,7 @@ function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record
 }
 
 function resolveMcpProbeIssue(params: {
-  result: ReturnType<typeof formatMcpProbeResult>;
+  result: Awaited<ReturnType<typeof readMcpProbeResult>>;
   servers: Record<string, Record<string, unknown>>;
   path: string;
 }): string | undefined {
@@ -735,7 +723,7 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
-}): Promise<ReturnType<typeof formatMcpProbeResult>> {
+}): Promise<Awaited<ReturnType<typeof readMcpProbeResult>>> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
       name,
@@ -749,7 +737,7 @@ async function probeMcpServersOrFail(params: {
     manifestRegistry: { plugins: [] },
   });
   try {
-    const result = formatMcpProbeResult(await runtime.getCatalog());
+    const result = await readMcpProbeResult(runtime);
     failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
     return result;
   } finally {
@@ -943,7 +931,7 @@ export function registerMcpCli(program: Command) {
         manifestRegistry: { plugins: [] },
       });
       try {
-        const result = formatMcpProbeResult(await runtime.getCatalog());
+        const result = await readMcpProbeResult(runtime);
         if (opts.json) {
           printJson(result);
         } else {

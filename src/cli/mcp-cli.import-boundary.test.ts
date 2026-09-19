@@ -107,6 +107,22 @@ it("keeps MCP client and catalog paths free of plugin tool construction and chan
   expect(stdout).toContain("Disposed cached MCP runtimes.");
 });
 
+it("keeps registry reads independent of agent tool materialization", async () => {
+  await runImportBoundaryChild(
+    /\/src\/agents\/agent-bundle-mcp-materialize\.(?:ts|js)(?:[?#].*)?$/u,
+    String.raw`
+      const { Command } = await import("commander");
+      const { registerMcpCli } = await import(${JSON.stringify(new URL("./mcp-cli.ts", import.meta.url).href)});
+      const program = new Command();
+      program.exitOverride();
+      registerMcpCli(program);
+      for (const command of ["list", "show", "status", "doctor"]) {
+        assert.equal(await program.parseAsync(["mcp", command, "--json"], { from: "user" }), program);
+      }
+    `,
+  );
+});
+
 it("keeps the metadata owner independent of plugin loading and channel serving", async () => {
   await runImportBoundaryChild(
     /\/src\/(?:plugins\/(?:tools|loader)|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
