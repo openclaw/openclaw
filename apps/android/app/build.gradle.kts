@@ -323,6 +323,7 @@ dependencies {
 
   implementation(project(":wear-shared"))
   implementation(libs.play.services.wearable)
+  implementation(libs.androidx.car.app)
 
   implementation(libs.androidx.core.ktx)
   // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
