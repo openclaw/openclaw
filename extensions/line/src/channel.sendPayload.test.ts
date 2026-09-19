@@ -1,5 +1,4 @@
 // Line tests cover channel.sendPayload plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
@@ -87,9 +86,16 @@ describe("line outbound sendPayload", () => {
         type: String(args[1]).includes("Large") ? "oversized-table-text" : "text",
       })),
       ...mocks.pushMessagesLine.mock.calls.flatMap((args, index) =>
-        args[1].map((message: { type: string; altText?: string }) => ({
+        args[1].map((message: { type: string; altText?: string; text?: string }) => ({
           position: mocks.pushMessagesLine.mock.invocationCallOrder[index],
-          type: message.altText === "Code" ? "code-card" : message.type,
+          type:
+            message.altText === "Code"
+              ? "code-card"
+              : message.altText === "Table"
+                ? "valid-table-card"
+                : message.type === "text" && message.text?.includes("Large")
+                  ? "oversized-table-text"
+                  : message.type,
         })),
       ),
     ]
@@ -102,11 +108,14 @@ describe("line outbound sendPayload", () => {
       true,
     );
     if (quickReplies.length > 0) {
-      expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      expect(mocks.pushMessagesLine.mock.calls.at(-1)).toEqual([
         "line:user:ordered",
-        [expect.objectContaining({ altText: "Code", quickReply: { items: quickReplies } })],
+        [
+          expect.objectContaining({ type: "text", text: "After" }),
+          expect.objectContaining({ altText: "Code", quickReply: { items: quickReplies } }),
+        ],
         expect.any(Object),
-      );
+      ]);
       expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
     }
   });
@@ -155,14 +164,19 @@ describe("line outbound sendPayload", () => {
 
     // The pin LINE will not render still reaches the chat as the text it was
     // made of; the builder owns that degradation, so delivery must not skip it.
-    expect(mocks.pushLocationMessage).toHaveBeenCalledWith(
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
       "line:user:U123",
-      { ...location, latitude: 35.6895, longitude: 139.6917 },
-      expect.any(Object),
-    );
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
-      "line:user:U123",
-      "Meet me there.",
+      [
+        {
+          type: "text",
+          text: [location.title, location.address]
+            .map((label) => label.trim())
+            .filter(Boolean)
+            .concat("35.6895, 139.6917")
+            .join("\n"),
+        },
+        { type: "text", text: "Meet me there." },
+      ],
       expect.any(Object),
     );
   });
@@ -272,41 +286,55 @@ describe("line outbound sendPayload", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("publishes completed Flex receipts before a later legacy text send fails", async () => {
+  it("publishes completed batch receipts before a later batch send fails", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
-    const cfg = {
-      channels: { line: { channelAccessToken: "line-fixture-token" } },
-    } as OpenClawConfig;
-    const laterFailure = new Error("second LINE Flex send failed");
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ sentMessages: [{ id: "m-first-flex" }] }))
-      .mockRejectedValueOnce(laterFailure);
-    vi.stubGlobal("fetch", fetch);
-    mocks.pushFlexMessage
-      .mockResolvedValueOnce(lineResult("m-first-flex"))
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const laterFailure = new Error("second LINE batch send failed");
+    mocks.pushMessagesLine
+      .mockResolvedValueOnce(lineResult("m-first-batch"))
       .mockRejectedValueOnce(laterFailure);
     const onDeliveryResult = vi.fn();
+    const text = Array.from(
+      { length: 6 },
+      (_, index) => `\`\`\`js\nmessage${index + 1}()\n\`\`\``,
+    ).join("\n\n");
 
     await expect(
       lineOutboundAdapter.sendText!({
         to: "line:user:U123",
-        text: "```js\nfirst()\n```\n\n```js\nsecond()\n```",
+        text,
         accountId: "default",
         cfg,
         onDeliveryResult,
       }),
-    ).rejects.toThrow("second LINE Flex send failed");
+    ).rejects.toThrow("second LINE batch send failed");
 
+    expect(mocks.pushMessagesLine).toHaveBeenCalledTimes(2);
+    expect(mocks.pushMessagesLine.mock.calls[0]?.[1]).toHaveLength(5);
+    expect(mocks.pushMessagesLine.mock.calls[1]?.[1]).toHaveLength(1);
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageId: "m-first-flex",
-        receipt: expect.objectContaining({ platformMessageIds: ["m-first-flex"] }),
+        messageId: "m-first-batch",
+        receipt: expect.objectContaining({ platformMessageIds: ["m-first-batch"] }),
       }),
     );
-    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("publishes a single receipt for a mixed Flex payload", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const result = await lineOutboundAdapter.sendText!({
+      to: "line:user:U123",
+      text: "```js\nfirst()\n```\n\n```js\nsecond()\n```",
+      accountId: "default",
+      cfg: { channels: { line: {} } } as OpenClawConfig,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessagesLine.mock.calls[0]?.[1]).toHaveLength(2);
+    expect(result.messageId).toBe("m-batch");
   });
 
   it("sends flex message without dropping text", async () => {
@@ -334,12 +362,50 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.pushFlexMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", "Now playing:", {
-      verbose: false,
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:group:1",
+      [
+        { type: "flex", altText: "Now playing", contents: { type: "bubble" } },
+        { type: "text", text: "Now playing:" },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("batches a card, caption, and media into one provider request", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:batch",
+      text: "Caption",
+      payload: {
+        text: "Caption",
+        mediaUrl: "https://example.com/image.jpg",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Card", contents: { type: "bubble" } },
+          },
+        },
+      },
       accountId: "default",
       cfg,
     });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
+      "line:user:batch",
+      [
+        { type: "flex", altText: "Card", contents: { type: "bubble" } },
+        { type: "text", text: "Caption" },
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/image.jpg",
+          previewImageUrl: "https://example.com/image.jpg",
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
   });
 
   it("reports each platform result for text and media payloads", async () => {
@@ -360,11 +426,7 @@ describe("line outbound sendPayload", () => {
       onDeliveryResult,
     });
 
-    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
-      "m-text",
-      "m-media",
-    ]);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(["m-batch"]);
   });
 
   it("preserves every provider receipt and conversation for an inline LINE batch", async () => {
@@ -453,12 +515,11 @@ describe("line outbound sendPayload", () => {
     });
 
     expect(mocks.buildTemplateMessageFromPayload).toHaveBeenCalledTimes(1);
-    expect(mocks.pushTemplateMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:1", "Choose one:", {
-      verbose: false,
-      accountId: "default",
-      cfg,
-    });
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:1",
+      [expect.objectContaining({ type: "template" }), { type: "text", text: "Choose one:" }],
+      { verbose: false, accountId: "default", cfg },
+    );
   });
 
   it("attaches quick replies while preserving the provider's full Flex alternative-text limit", async () => {
@@ -588,26 +649,17 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/img.jpg",
-      mediaKind: undefined,
-      previewImageUrl: undefined,
-      durationMs: undefined,
-      trackingId: undefined,
-      accountId: "default",
-      cfg,
-    });
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
       "line:user:3",
-      "Hello",
-      ["One", "Two"],
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/img.jpg",
+          previewImageUrl: "https://example.com/img.jpg",
+        },
+        { type: "text", text: "Hello", quickReply: { items: ["One", "Two"] } },
+      ],
       { verbose: false, accountId: "default", cfg },
-    );
-    const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
-    const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
-    expect(expectDefined(mediaOrder, "LINE media invocation")).toBeLessThan(
-      expectDefined(quickReplyOrder, "LINE quick-reply invocation"),
     );
   });
 
@@ -924,13 +976,22 @@ describe("line outbound sendPayload", () => {
             mediaUrl: "https://example.com/image.jpg",
             accountId: "primary",
           });
-          expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
-            verbose: false,
-            mediaUrl: "https://example.com/image.jpg",
-            accountId: "primary",
-            cfg,
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
+          expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+            "line:user:U123",
+            [
+              {
+                type: "text",
+                text: "image",
+              },
+              {
+                type: "image",
+                originalContentUrl: "https://example.com/image.jpg",
+                previewImageUrl: "https://example.com/image.jpg",
+              },
+            ],
+            { verbose: false, accountId: "primary", cfg },
+          );
+          expect(result?.receipt.platformMessageIds).toEqual(["m-batch"]);
         },
         replyTo: async () => {
           recordLineQuoteToken({
