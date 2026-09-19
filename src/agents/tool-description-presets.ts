@@ -155,7 +155,7 @@ export function describeSessionsSpawnTool(options?: {
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
-    "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read.",
+    "A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. Hidden child: research, parallel/batch reads, throwaway side tasks -- including multi-step trial-and-error against external APIs/services (auth probing, endpoint discovery, iterative debugging). No spawn for quick lookup/single read.",
     "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }
