@@ -279,7 +279,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       }
       pending.push(...session.children);
       if (
-        session.childSessionKeys.length > 0 &&
+        (session.childLoadParentKeys?.length ?? 0) > 0 &&
         (session.visuallyActive || this.isSessionChildrenExpanded(session))
       ) {
         for (const key of session.childLoadParentKeys ?? [session.key]) {

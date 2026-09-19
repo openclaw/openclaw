@@ -61,6 +61,7 @@ export type SessionListRowContext = {
   identityProjection?: SessionIdentityProjection;
   workerPlacementEnvironment?: NodeJS.ProcessEnv;
   projectedAgentRuns?: ProjectedAgentRunIndex;
+  projectedSubagentActivity?: ReadonlySet<string>;
   subagentRuns: SubagentRunReadIndex<SubagentRunReadRecord>;
   subagentRunsByChildSessionKey: ReadonlyMap<string, readonly SubagentRunReadRecord[]>;
   configuredDefaultModelByAgent: Map<string, ReturnType<typeof resolveSessionModelRef>>;

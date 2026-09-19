@@ -14,6 +14,7 @@ import {
   resolveSessionGoalDisplayState,
   type SessionEntry,
 } from "../config/sessions.js";
+import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
@@ -96,7 +97,10 @@ export function projectGatewaySessionRunState(params: {
   key: string;
   entry?: SessionEntry;
   now: number;
-  rowContext?: Pick<SessionListRowContext, "subagentRuns">;
+  rowContext?: Pick<
+    SessionListRowContext,
+    "subagentRuns" | "projectedAgentRuns" | "projectedSubagentActivity"
+  >;
 }) {
   const { key, entry, now, rowContext } = params;
   const subagentRuns = rowContext?.subagentRuns ?? buildSubagentSessionListReadIndex(now);
@@ -105,8 +109,24 @@ export function projectGatewaySessionRunState(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
+  const hasProjectedRun = (sessionKey: string, sessionId?: string) => {
+    if (!rowContext?.projectedAgentRuns) {
+      return false;
+    }
+    const state = resolveProjectedAgentRunProgressState({
+      sessionKeys: [sessionKey],
+      sessionId,
+      index: rowContext.projectedAgentRuns,
+    });
+    return state !== undefined;
+  };
+  // Follow-up turns retain the child session while owning a different run from its original spawn.
   const hasActiveSubagentRun =
-    liveSubagentRunActive || subagentRuns.countActiveDescendantRuns(key) > 0;
+    liveSubagentRunActive ||
+    subagentRuns.countActiveDescendantRuns(key) > 0 ||
+    ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
+      hasProjectedRun(key, entry?.sessionId)) ||
+    rowContext?.projectedSubagentActivity?.has(key) === true;
   const fields: Pick<
     GatewaySessionRow,
     "status" | "subagentRunState" | "hasActiveSubagentRun" | "startedAt" | "endedAt" | "runtimeMs"

@@ -1,7 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  claimAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -17,8 +25,140 @@ import { prepareProjectedSessionPresentation } from "./session-row-presentation.
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["running", "queued", "capacity-wait"] as const)(
+  "projects %s follow-up activity through completed subagent lineage outside the selected list page",
+  async (state) => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const parent = "agent:main:parent";
+      const child = "agent:main:subagent:child";
+      const grandchild = "agent:main:subagent:grandchild";
+      const movedParent = "agent:main:moved-parent";
+      const endedAt = Date.now() - 3_600_000;
+      for (const [key, owner] of [
+        [parent],
+        [movedParent],
+        [child, parent],
+        [grandchild, child],
+      ] as const) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: key },
+          {
+            sessionId: key,
+            updatedAt: endedAt,
+            label: key === parent ? "Selected parent" : "Hidden child",
+            status: "done",
+            endedAt,
+            ...(owner ? { spawnedBy: owner } : {}),
+          },
+        );
+        if (owner) {
+          const entry = createSubagentRunRecord({
+            runId: `original:${key}`,
+            childSessionKey: key,
+            requesterSessionKey: owner,
+            requesterDisplayKey: owner,
+            task: "Original completed task",
+            cleanup: "keep",
+            createdAt: endedAt - 1_000,
+            startedAt: endedAt - 1_000,
+            endedAt,
+            outcome: { status: "ok" },
+          });
+          subagentRuns.set(entry.runId, entry);
+          subagentRuns.commitOwnership(entry);
+        }
+      }
+      const projection = await createSessionRowProjection({ cfg });
+      const connection = createGatewayConnectionState({ bootId: "follow-up", cfg });
+      const runId = "follow-up";
+      const claim = claimAgentRunContext(
+        runId,
+        {
+          agentId: "main",
+          sessionKey: grandchild,
+          sessionId: grandchild,
+          ...(state === "capacity-wait" ? {} : { projectSessionActive: true }),
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      const releaseWait =
+        state === "running"
+          ? undefined
+          : registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      try {
+        const list = () =>
+          listProjectedSessions({
+            projection,
+            opts: { search: "Selected parent", limit: 1 },
+          });
+        const active = await list();
+        expect(active.sessions).toHaveLength(1);
+        expect(active.sessions[0]).toMatchObject({
+          key: parent,
+          hasActiveSubagentRun: true,
+          childSessions: [child],
+        });
+        const presentation = prepareProjectedSessionPresentation(
+          projection,
+          undefined,
+          Date.now(),
+          createVisibleActiveSessionRunProjector(
+            connection,
+            projection.state.rowContext.projectedAgentRuns,
+          ),
+        );
+        expect(presentation.snapshot({ key: child, agentId: "main" }).row).toMatchObject({
+          hasActiveSubagentRun: true,
+          childSessions: [grandchild],
+        });
+        expect(presentation.snapshot({ key: grandchild, agentId: "main" }).row).toMatchObject({
+          hasActiveSubagentRun: true,
+          subagentRunState: "historical",
+        });
+        const originalChild = subagentRuns.get(`original:${child}`)!;
+        const movedChild = {
+          ...originalChild,
+          generation: 2,
+          requesterSessionKey: movedParent,
+          controllerSessionKey: movedParent,
+        };
+        subagentRuns.set(movedChild.runId, movedChild);
+        subagentRuns.commitOwnership(movedChild);
+        expect((await list()).sessions[0]?.hasActiveSubagentRun).not.toBe(true);
+        expect(projection.snapshot({ key: movedParent, agentId: "main" }).row).toMatchObject({
+          hasActiveSubagentRun: true,
+          childSessions: [child],
+        });
+        releaseWait?.();
+        releaseAgentRunContext(runId, claim);
+        const stopped = await list();
+        expect(stopped.sessions[0]?.hasActiveSubagentRun).not.toBe(true);
+        expect(stopped.sessions[0]?.childSessions).toBeUndefined();
+        expect(
+          projection.snapshot({ key: movedParent, agentId: "main" }).row?.hasActiveSubagentRun,
+        ).not.toBe(true);
+        expect(
+          projection.snapshot({ key: movedParent, agentId: "main" }).row?.childSessions,
+        ).toBeUndefined();
+        expect(subagentRuns.get(`original:${grandchild}`)?.execution.endedAt).toBe(endedAt);
+      } finally {
+        releaseWait?.();
+        releaseAgentRunContext(runId, claim);
+        projection.dispose();
+        connection.mentionInbox.dispose();
+        for (const key of [child, grandchild]) {
+          subagentRuns.delete(`original:${key}`);
+        }
+      }
+    });
+  },
+);
 
 it("presents current recipient roles without SQLite while rejecting source overrides and excluded children", async () => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
