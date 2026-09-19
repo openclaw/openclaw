@@ -50,6 +50,7 @@ runs to the end of the file.
 - `tools.fs.workspaceOnly` contains `apply_patch` independently, so clearing one setting can leave the other in force.
 - An explicit session permission mode overrides both configuration settings: `full` removes their containment, `guarded` and `workspace` contain `apply_patch`, and `read-only` omits the tool.
 - Required workspace roots and sandbox restrictions still apply in `full` mode. Keep patch paths inside a required root; changing either configuration setting or the session mode cannot lift it.
+- When a host workspace boundary rejects a patch, the operator log names the configuration, session policy, worker default, or required root responsible. This advice is available in both the OpenClaw and Codex harnesses; the model-visible rejection stays unchanged. Sandbox bridge rejections retain their own explanation.
 - Memory-flush runs expose only `read` and append-only `write`, so `apply_patch` is unavailable even in `full` mode.
 - Runs whose entire agent executes on a worker (`worker-turn`) ignore both configuration settings. With no permission mode, they contain `apply_patch` whenever it is available; an explicit `full` mode disables that tool containment. Workers used only for remote commands (`remote-exec`) follow the locally running agent's file-tool policy.
 - `*** Add File:` and a non-self `*** Move to:` require the destination path to be absent. To intentionally replace a path, delete it earlier in the same patch before adding or moving the replacement.

@@ -266,6 +266,7 @@ export {
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+export { readToolOperatorHint } from "../agents/tool-operator-hint.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 export { resolveSessionAgentIds } from "./agent-scope-runtime.js";

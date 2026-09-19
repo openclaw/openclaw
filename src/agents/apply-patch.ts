@@ -9,13 +9,21 @@ import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import {
+  type ApplyPatchContainmentSource,
+  withApplyPatchContainmentHint,
+} from "./apply-patch-containment-hint.js";
+import {
   type ApplyPatchFileOptions,
   createPatchTarget,
   type PatchFileOps,
   resolvePatchFileOps,
   type SandboxApplyPatchConfig,
 } from "./apply-patch-file-ops.js";
-import { resolveApplyPatchInputPath } from "./apply-patch-paths.js";
+import {
+  relativePathEscapesRoot,
+  resolveApplyPatchInputPath,
+  toDisplayPath,
+} from "./apply-patch-paths.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
@@ -24,7 +32,7 @@ import {
   resolveSandboxPathMapping,
 } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
+import { assertSandboxPath, markHostRootEscape } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import {
   resolveFileMutationQueueKey,
@@ -125,6 +133,7 @@ export function createApplyPatchTool(
     root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   } = {},
@@ -153,14 +162,22 @@ export function createApplyPatchTool(
         throw createAbortError("Aborted");
       }
 
-      const result = await applyPatch(input, {
-        cwd,
-        root,
-        sandbox,
-        workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        signal: executionSignal,
-      });
+      let result: Awaited<ReturnType<typeof applyPatch>>;
+      try {
+        result = await applyPatch(input, {
+          cwd,
+          root,
+          sandbox,
+          workspaceOnly,
+          memoryWriteProvenance: options.memoryWriteProvenance,
+          signal: executionSignal,
+        });
+      } catch (error) {
+        throw withApplyPatchContainmentHint(
+          error,
+          workspaceOnly ? options.containmentSource : undefined,
+        );
+      }
 
       // A no-op patch is not terminal — the model may still be mid-task and
       // needs a continuation, not an ended turn.
@@ -450,7 +467,9 @@ async function resolvePatchPath(
         resolved.containerPath,
       );
       if (!legacyBridge && !workspaceMapping) {
-        throw new Error(`Path escapes sandbox root (${options.sandbox.root}): ${filePath}`);
+        throw markHostRootEscape(
+          new Error(`Path escapes sandbox root (${options.sandbox.root}): ${filePath}`),
+        );
       }
       if (resolved.hostPath) {
         // Descriptor-less SDK bridges retain their published host-root admission.
@@ -500,26 +519,6 @@ async function resolvePatchPath(
     queueKey: await resolveFileMutationQueueKey(resolved),
     display: toDisplayPath(resolved, options.cwd),
   };
-}
-
-function toDisplayPath(resolved: string, cwd: string): string {
-  const relative = path.relative(cwd, resolved);
-  if (!relative || relative === "") {
-    return path.basename(resolved);
-  }
-  if (relativePathEscapesRoot(relative)) {
-    return resolved;
-  }
-  return relative;
-}
-
-function relativePathEscapesRoot(relativePath: string): boolean {
-  return (
-    relativePath === ".." ||
-    relativePath.startsWith("../") ||
-    relativePath.startsWith("..\\") ||
-    path.isAbsolute(relativePath)
-  );
 }
 
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {

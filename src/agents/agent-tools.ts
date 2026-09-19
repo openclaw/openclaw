@@ -36,7 +36,7 @@ import {
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isApplyPatchAllowedForModel } from "./apply-patch-model-policy.js";
+import { resolveConfiguredApplyPatchPolicy } from "./apply-patch-policy.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -294,19 +294,15 @@ export function createOpenClawCodingToolsInternal(
     ...(attachmentReadRoot ? { readOnlyRoots: [attachmentReadRoot] } : {}),
   };
   const readOnly = sessionCoreToolPolicy?.readOnly ?? false;
-  const applyPatchConfig = execConfig.applyPatch;
-  // Required file roots still constrain patches after a full-mode change; shell policy is separate.
-  const applyPatchWorkspaceOnly =
-    workspaceOnly ||
-    (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
-  const applyPatchEnabled =
-    !readOnly &&
-    applyPatchConfig?.enabled !== false &&
-    isApplyPatchAllowedForModel({
-      modelProvider: options?.modelProvider,
-      modelId: options?.modelId,
-      allowModels: applyPatchConfig?.allowModels,
-    });
+  const applyPatchPolicy = resolveConfiguredApplyPatchPolicy({
+    config: execConfig.applyPatch,
+    workspaceOnly,
+    readOnly,
+    requireWorkspaceOnly: options?.requireWorkspaceOnly === true,
+    sessionPolicy: sessionCoreToolPolicy,
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
+  });
 
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
@@ -338,8 +334,7 @@ export function createOpenClawCodingToolsInternal(
     imageSanitization,
     modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
-    applyPatchEnabled,
-    applyPatchWorkspaceOnly,
+    ...applyPatchPolicy,
     execDefaults: {
       ...execDefaults,
       ...effectiveExecPolicy,

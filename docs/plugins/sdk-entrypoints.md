@@ -104,3 +104,12 @@ Workspace access that has not started or has stopped throws
 `WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
 to recognize this condition through wrapped errors or separate SDK instances.
 The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
+
+## Tool failure diagnostics
+
+Agent harnesses can import `readToolOperatorHint(error)` from
+`openclaw/plugin-sdk/agent-harness-runtime` to read optional operator advice
+attached to a tool failure. Include it only in the operator log. Keep it out of
+model responses, tool-result callbacks, and serialized transcripts, and preserve
+the original error message. An unannotated or immutable error needs no substitute
+hint; the reader returns `undefined` when no advice is available.
