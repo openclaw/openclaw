@@ -393,6 +393,27 @@ function listBundledPluginEntrySources(
   return sources;
 }
 
+// The retry-after failover e2e (embedded-agent-runner.retry-after-failover)
+// imports these built runtime entries so it exercises the compiled plugin
+// runtime rather than transpiling every bundled plugin through Jiti per worker.
+// They are runtime entrypoints and so fall outside the default declaration set;
+// their declarations are emitted (see buildUnifiedDeclarationPartitions) so the
+// suite typechecks against real types instead of allowJs inference. This map is
+// the single source of truth for both the build entries and the declaration set.
+const E2E_TYPED_RUNTIME_ENTRIES = {
+  "agents/embedded-agent-runner": "src/agents/embedded-agent-runner.ts",
+  "agents/model-fallback-runner": "src/agents/model-fallback-runner.ts",
+  "agents/admitted-run-context": "src/agents/admitted-run-context.ts",
+  "state/openclaw-agent-db": "src/state/openclaw-agent-db.ts",
+} as const;
+
+const E2E_TYPED_RUNTIME_ENTRY_NAMES = new Set<string>(Object.keys(E2E_TYPED_RUNTIME_ENTRIES));
+
+// The declaration sources these entries add to the base partition, exported so
+// the tsdown-config declaration-boundary test asserts against one source of truth.
+export const E2E_TYPED_RUNTIME_DECLARATION_SOURCES: readonly string[] =
+  Object.values(E2E_TYPED_RUNTIME_ENTRIES);
+
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
@@ -414,6 +435,10 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
+    // The retry-after failover e2e drives these internals directly. Stable entries
+    // let that suite load the built runtime, so plugin artifacts resolve as built
+    // instead of being transpiled from source by Jiti on every worker.
+    ...E2E_TYPED_RUNTIME_ENTRIES,
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
@@ -729,10 +754,14 @@ function buildUnifiedDeclarationPartitions(
     .filter(([name]) =>
       name.startsWith("plugin-sdk/")
         ? shouldBuildPrivateQaEntries || publicPluginSdkEntryNames.has(name)
-        : name === "index" || Object.hasOwn(pluginContracts, name),
+        : name === "index" ||
+          E2E_TYPED_RUNTIME_ENTRY_NAMES.has(name) ||
+          Object.hasOwn(pluginContracts, name),
     )
     .toSorted(([left], [right]) => left.localeCompare(right));
-  const baseEntries = sortedEntries.filter(([name]) => name === "index");
+  const baseEntries = sortedEntries.filter(
+    ([name]) => name === "index" || E2E_TYPED_RUNTIME_ENTRY_NAMES.has(name),
+  );
   const pluginSdkEntries = sortedEntries.filter(([name]) => name.startsWith("plugin-sdk/"));
   const extensionEntriesById = new Map<string, UnifiedEntry[]>();
   for (const entry of sortedEntries) {

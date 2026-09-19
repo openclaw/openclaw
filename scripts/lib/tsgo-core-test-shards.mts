@@ -1,5 +1,21 @@
 export const TSGO_CORE_TEST_MAX_ROOTS = 720;
 
+// Test files that import built runtime declarations from dist/. Their type-check
+// shard needs those .d.ts present, so the shard runner builds the typed runtime
+// dist entries before checking a shard that owns one of these files. Each entry
+// names the repo-relative POSIX test path and the shard that owns it; the
+// boundary check enforces one owner per root, and a guard test asserts each
+// named owner actually includes its file.
+export const TSGO_CORE_TEST_DIST_DEPENDENT_FILES: readonly {
+  file: string;
+  shard: string;
+}[] = [
+  {
+    file: "src/agents/embedded-agent-runner.retry-after-failover.e2e.test.ts",
+    shard: "agents-root",
+  },
+];
+
 export const TSGO_CORE_TEST_SHARDS = [
   {
     name: "agents-root",
@@ -99,6 +115,26 @@ export const TSGO_TARGETED_TEST_SHARED_SHARDS = [
     sparseRoots: ["extensions", "src", "ui/src"],
   },
 ] as const;
+
+/**
+ * Configs of the selected shards that own a dist-dependent test file. The shard
+ * runner builds the typed runtime dist entries before checking these so the
+ * `../../dist/*.js` imports resolve to real declarations instead of TS2307.
+ */
+export function selectDistDependentTsgoCoreTestConfigs(
+  shards: readonly { name: string; config: string }[],
+): string[] {
+  const dependentShardNames = new Set<string>(
+    TSGO_CORE_TEST_DIST_DEPENDENT_FILES.map((entry) => entry.shard),
+  );
+  const configByName = new Map<string, string>(
+    TSGO_CORE_TEST_SHARDS.map((shard) => [shard.name, shard.config]),
+  );
+  const selectedConfigs = new Set(shards.map((shard) => shard.config));
+  return [...dependentShardNames]
+    .map((name) => configByName.get(name))
+    .filter((config): config is string => config !== undefined && selectedConfigs.has(config));
+}
 
 export function selectTsgoCoreTestShards(
   requestedGroup?: string,

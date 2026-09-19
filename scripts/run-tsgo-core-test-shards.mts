@@ -2,6 +2,7 @@
 
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
 // accumulate while the next shard loads.
+import fs from "node:fs";
 import path from "node:path";
 import type { CoreTsgoGraph } from "./check-tsgo-core-boundary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -12,9 +13,12 @@ import {
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { buildTsgoCoreTestTypedRuntimeDist } from "./lib/tsgo-core-test-dist-build.mts";
 import {
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
+  selectDistDependentTsgoCoreTestConfigs,
+  TSGO_CORE_TEST_DIST_DEPENDENT_FILES,
   TSGO_CORE_TEST_SHARDS,
   selectTsgoCoreTestStripe,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -46,6 +50,21 @@ async function runTsgoCoreTestShards(
   // The batch owns outputs once; its existing compiler concurrency stays intact
   // without children waiting to reacquire their parent's lock.
   return await withDistArtifactOwnership(repoRoot, async () => {
+    // A shard owning a dist-dependent test resolves `../../dist/*.js` imports, so
+    // build the typed runtime dist entries first or those imports report TS2307.
+    // Gate on the file existing: synthetic fixtures select the full shard list
+    // without carrying the real test, and must not start a build they cannot run.
+    if (
+      selectDistDependentTsgoCoreTestConfigs(shards).length > 0 &&
+      TSGO_CORE_TEST_DIST_DEPENDENT_FILES.some((entry) =>
+        fs.existsSync(path.join(repoRoot, entry.file)),
+      )
+    ) {
+      const buildCode = await buildTsgoCoreTestTypedRuntimeDist(env, repoRoot);
+      if (buildCode !== 0) {
+        return buildCode;
+      }
+    }
     const queue = [...shards];
     let failureCode = 0;
     const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {

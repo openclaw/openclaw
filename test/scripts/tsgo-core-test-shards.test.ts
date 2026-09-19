@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
+  selectDistDependentTsgoCoreTestConfigs,
   TSGO_CORE_GRAPHS,
   selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
+  TSGO_CORE_TEST_DIST_DEPENDENT_FILES,
   TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -71,6 +73,45 @@ describe("tsgo core test shards", () => {
         file,
       ).toEqual([owner]);
     }
+  });
+
+  it("pins every dist-dependent test to a shard that actually owns it", () => {
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.resolve(config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      return parsed.fileNames.map((file) =>
+        path.relative(process.cwd(), file).replaceAll(path.sep, "/"),
+      );
+    };
+
+    expect(TSGO_CORE_TEST_DIST_DEPENDENT_FILES.length).toBeGreaterThan(0);
+    for (const { file, shard } of TSGO_CORE_TEST_DIST_DEPENDENT_FILES) {
+      // The file must exist on disk so a rename cannot silently orphan the entry.
+      expect(fs.existsSync(path.resolve(file)), file).toBe(true);
+      const owner = TSGO_CORE_TEST_SHARDS.find((entry) => entry.name === shard);
+      expect(owner, `unknown owner shard ${shard}`).toBeDefined();
+      // The named owner shard must resolve to include the dist-dependent file, and
+      // the boundary check above guarantees no other shard also owns it.
+      expect(roots(owner!.config), `${shard} must own ${file}`).toContain(file);
+      // The selector reports the owner's config only when that shard is selected.
+      expect(selectDistDependentTsgoCoreTestConfigs([owner!])).toEqual([owner!.config]);
+    }
+    // A shard that owns no dist-dependent file triggers no build.
+    const ownerNames = new Set(TSGO_CORE_TEST_DIST_DEPENDENT_FILES.map((entry) => entry.shard));
+    const independent = TSGO_CORE_TEST_SHARDS.filter((shard) => !ownerNames.has(shard.name));
+    expect(selectDistDependentTsgoCoreTestConfigs(independent)).toEqual([]);
   });
 
   it("stripes partition the full shard list exactly once", () => {
