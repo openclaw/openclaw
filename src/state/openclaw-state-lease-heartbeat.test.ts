@@ -1,6 +1,6 @@
 import { once } from "node:events";
-import type { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import {
   acquireStateDatabaseCoordinator,
@@ -17,6 +17,36 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+
+const heartbeatWorkers = vi.hoisted(() => ({
+  onCreate: undefined as ((worker: Worker) => void) | undefined,
+}));
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  const [{ runtimeProcessEntrypoints }, { resolveRuntimeWorkerUrl }] = await Promise.all([
+    import("../infra/runtime-process-entrypoints.js"),
+    import("../infra/runtime-worker-url.js"),
+  ]);
+  const heartbeatUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, workerOptions: WorkerOptions = {}) {
+        super(filename, workerOptions);
+        if (String(filename) === heartbeatUrl.href) {
+          heartbeatWorkers.onCreate?.(this);
+        }
+      }
+    },
+  };
+});
+
+function nextHeartbeatWorker(): Promise<Worker> {
+  return new Promise((resolve) => {
+    heartbeatWorkers.onCreate = resolve;
+  });
+}
 
 function block(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -43,6 +73,7 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -58,7 +89,7 @@ describe("maintenance lease heartbeat", () => {
           held.release();
         }
       };
-      process.once("worker", onWorker);
+      heartbeatWorkers.onCreate = onWorker;
       let entered = false;
       try {
         await expect(
@@ -69,7 +100,7 @@ describe("maintenance lease heartbeat", () => {
         expect(entered).toBe(false);
         expect(readLease(state.env)).toBeUndefined();
       } finally {
-        process.removeListener("worker", onWorker);
+        heartbeatWorkers.onCreate = undefined;
       }
     });
   });
@@ -115,14 +146,14 @@ describe("maintenance lease heartbeat", () => {
           held = undefined;
         }, 800);
       };
-      process.once("worker", onWorker);
+      heartbeatWorkers.onCreate = onWorker;
       try {
         await withOpenClawStateLease({ ...options(state.env), leaseMs: 5_000 }, async (lease) => {
           expect(held).toBeUndefined();
           lease.assertOwned();
         });
       } finally {
-        process.removeListener("worker", onWorker);
+        heartbeatWorkers.onCreate = undefined;
         clearTimeout(releaseTimer);
         held?.release();
       }
@@ -206,10 +237,10 @@ describe("maintenance lease heartbeat", () => {
 
   it("rejects a terminated worker before its queued exit event reaches the parent", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-worker-loss" }, async (state) => {
-      const spawned = once(process, "worker") as Promise<[Worker]>;
+      const spawned = nextHeartbeatWorker();
       await expect(
         withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
-          const [worker] = await spawned;
+          const worker = await spawned;
           void worker.terminate();
           block(100);
           const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
@@ -240,7 +271,7 @@ describe("maintenance lease heartbeat", () => {
       const terminate = (worker: Worker) => {
         void worker.terminate();
       };
-      process.once("worker", terminate);
+      heartbeatWorkers.onCreate = terminate;
       let entered = false;
       try {
         await expect(
@@ -251,16 +282,14 @@ describe("maintenance lease heartbeat", () => {
         expect(entered).toBe(false);
         expect(readLease(state.env)).toBeUndefined();
       } finally {
-        process.removeListener("worker", terminate);
+        heartbeatWorkers.onCreate = undefined;
       }
     });
   });
 
   it("accepts published readiness when the parent notification is withheld", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-delayed-ready" }, async (state) => {
-      const spawned = new Promise<Worker>((resolve) => {
-        process.once("worker", resolve);
-      });
+      const spawned = nextHeartbeatWorker();
       const operation = withOpenClawStateLease(
         { ...options(state.env), leaseMs: 10_000 },
         async (lease) => {
@@ -323,14 +352,14 @@ describe("maintenance lease heartbeat", () => {
     async (ending) => {
       await withOpenClawTestState({ label: `maintenance-lease-${ending}` }, async (state) => {
         const controller = new AbortController();
-        const spawned = once(process, "worker") as Promise<[Worker]>;
+        const spawned = nextHeartbeatWorker();
         let retained: OpenClawStateLeaseContext | undefined;
         const operation = withOpenClawStateLease(
           { ...options(state.env, controller.signal), leaseMs: 10_000 },
           async (lease) => {
             retained = lease;
             if (ending === "abort") {
-              const [worker] = await spawned;
+              const worker = await spawned;
               controller.abort();
               await once(worker, "exit");
               const stopped = readLease(state.env);
@@ -351,7 +380,7 @@ describe("maintenance lease heartbeat", () => {
             ending === "throw" ? "operation failed" : "was aborted",
           );
         }
-        const [worker] = await spawned;
+        const worker = await spawned;
         expect(worker.threadId).toBe(-1);
         expect(readLease(state.env)).toBeUndefined();
         expect(retained).toBeDefined();

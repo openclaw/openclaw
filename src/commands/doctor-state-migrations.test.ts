@@ -2451,10 +2451,8 @@ describe("doctor legacy state migrations", () => {
   it("leaves debug proxy sources in place when a session id conflicts", async () => {
     const root = makeDoctorStateDir();
     const { sourcePath, blobDir } = writeLegacyDebugProxyCaptureSidecar(root);
-    const state = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    state.db
+    const state = () => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }).db;
+    state()
       .prepare(
         `INSERT INTO capture_sessions (
           id, started_at, mode, source_scope, source_process
@@ -2469,7 +2467,7 @@ describe("doctor legacy state migrations", () => {
     ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(blobDir)).toBe(true);
-    expect(state.db.prepare("SELECT COUNT(*) AS count FROM capture_events").get()).toEqual({
+    expect(state().prepare("SELECT COUNT(*) AS count FROM capture_events").get()).toEqual({
       count: 0,
     });
   });
@@ -2944,7 +2942,7 @@ describe("doctor legacy state migrations", () => {
       }),
       "utf8",
     );
-    const { db } = openOpenClawStateDatabase({ env });
+    const db = () => openOpenClawStateDatabase({ env }).db;
     writeConfigMachineState(
       "update.checkState",
       {
@@ -2953,18 +2951,20 @@ describe("doctor legacy state migrations", () => {
       },
       { env },
     );
-    db.prepare(
-      `INSERT INTO config_health_entries (
+    db()
+      .prepare(
+        `INSERT INTO config_health_entries (
         config_path, last_known_good_json, last_promoted_good_json,
         last_observed_suspicious_signature, updated_at_ms
       ) VALUES (?, ?, ?, ?, ?)`,
-    ).run(
-      configPath,
-      JSON.stringify({ hash: "sqlite-known" }),
-      JSON.stringify({ hash: "sqlite-promoted" }),
-      "sqlite:size-drop",
-      1,
-    );
+      )
+      .run(
+        configPath,
+        JSON.stringify({ hash: "sqlite-known" }),
+        JSON.stringify({ hash: "sqlite-promoted" }),
+        "sqlite:size-drop",
+        1,
+      );
 
     const result = await runLegacyStateMigrationsForRoot(root);
 
@@ -2990,7 +2990,7 @@ describe("doctor legacy state migrations", () => {
       lastAvailableVersion: "2026.7.2",
     });
     expect(
-      db
+      db()
         .prepare("SELECT last_known_good_json FROM config_health_entries WHERE config_path = ?")
         .get(configPath),
     ).toMatchObject({ last_known_good_json: JSON.stringify({ hash: "sqlite-known" }) });

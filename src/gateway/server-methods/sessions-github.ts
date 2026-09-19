@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { prepareCurrentGitHubPublicationOptionsIdentity } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -52,24 +53,32 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       return await handler(options);
     } catch (error) {
       const publishing = method === "sessions.github.publish";
-      const busy = error instanceof SessionWorkspaceReservationBusyError;
       if (publishing && error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
+      const acquisition =
+        error instanceof OpenClawStateLeaseAcquisitionError ? error.outcome : undefined;
+      const busy = error instanceof SessionWorkspaceReservationBusyError;
+      const forbidden = acquisition ? acquisition.kind === "held" : !publishing && !busy;
       options.respond(
         false,
         undefined,
         errorShape(
-          publishing || busy ? ErrorCodes.UNAVAILABLE : ErrorCodes.FORBIDDEN,
+          forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE,
           error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
-          busy
-            ? { retryable: true }
-            : publishing &&
-                error instanceof GitHubPublicationKnownFailure &&
-                "idempotencyKey" in options.params &&
-                error.rejection?.idempotencyKey === options.params.idempotencyKey
-              ? { details: error.rejection }
-              : undefined,
+          acquisition
+            ? {
+                retryable: acquisition.kind === "store-unavailable",
+                details: { leaseAcquisition: acquisition },
+              }
+            : busy
+              ? { retryable: true }
+              : publishing &&
+                  error instanceof GitHubPublicationKnownFailure &&
+                  "idempotencyKey" in options.params &&
+                  error.rejection?.idempotencyKey === options.params.idempotencyKey
+                ? { details: error.rejection }
+                : undefined,
         ),
       );
     }

@@ -4,13 +4,15 @@ import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteLockError, sqliteExtendedResultCode } from "../infra/sqlite-error-diagnostics.js";
+import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { loggingState } from "../logging/state.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 import {
   OpenClawStateLeaseError,
+  OpenClawStateLeaseAcquisitionError,
   toOpenClawStateLeaseVerificationError,
   type OpenClawStateLeaseErrorCode,
 } from "./openclaw-state-lease-error.js";
@@ -18,13 +20,14 @@ import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclus
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import {
   prepareLeaseDatabase,
+  acquireLease,
   readLeaseDatabase,
   resolveLeaseDatabasePath,
   withLeaseWriteTransaction,
   type OpenClawStateLeaseDatabase,
 } from "./openclaw-state-lease-storage.js";
 import {
-  acquireOpenClawStateLeaseInTransaction,
+  type OpenClawStateLeaseAcquisition,
   readOpenClawStateLeaseExpiry,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
@@ -37,8 +40,6 @@ type OpenClawStateLeaseOptions = {
   database: OpenClawStateLeaseDatabase;
   leaseMs: number;
   waitMs: number;
-  /** False keeps occupied leases fail-fast; waitMs bounds only storage-contention retries. */
-  waitForLease?: boolean;
   signal?: AbortSignal;
   /** Maintenance prepares normal storage before waiting for its operation lease. */
   prepareDatabase?: boolean;
@@ -166,7 +167,6 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
       MAX_TIMER_TIMEOUT_MS,
     ),
     waitMs: validateDuration(options.waitMs, `${leaseLabel} waitMs`, 0, MAX_TIMER_TIMEOUT_MS),
-    waitForLease: options.waitForLease !== false,
     signal: options.signal,
     prepareDatabase: options.prepareDatabase === true,
     heartbeat: options.heartbeat,
@@ -175,38 +175,12 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
   };
 }
 
-function acquisitionRefusal(
-  options: ReturnType<typeof validateOptions>,
-  message: string,
-  cause?: unknown,
-): OpenClawStateLeaseError {
-  if (options.waitForLease) {
-    return leaseError(
-      "OPENCLAW_STATE_LEASE_TIMEOUT",
-      `timed out waiting for ${options.leaseLabel} ${options.scope}/${options.key}`,
-    );
-  }
-  return leaseError("STATE_LEASE_BUSY", message, cause);
-}
-
 type LeaseIdentity = {
   scope: string;
   key: string;
   owner: string;
   leaseLabel: string;
 };
-
-function tryAcquire(
-  params: LeaseIdentity & {
-    database: OpenClawStateLeaseDatabase;
-    operationLabel: string;
-    leaseMs: number;
-  },
-): number | undefined {
-  return withLeaseWriteTransaction(params.database, params.operationLabel, (db) =>
-    acquireOpenClawStateLeaseInTransaction(db, params, params.leaseMs),
-  );
-}
 
 function renew(
   params: LeaseIdentity & {
@@ -294,118 +268,131 @@ async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise
   }
 }
 
-function abortError(
-  signal: AbortSignal,
-  label: string,
-  leaseLabel: string,
-): OpenClawStateLeaseError {
-  return leaseError(
-    "OPENCLAW_STATE_LEASE_ABORTED",
-    `${leaseLabel} ${label} was aborted`,
-    signal.reason,
-  );
-}
-
 /** Run one trusted operation under a host-owned SQLite lease. */
 export async function withOpenClawStateLease<T>(
   options: OpenClawStateLeaseOptions,
   run: (lease: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
   const validated = validateOptions(options);
-  if (validated.signal?.aborted) {
-    throw abortError(validated.signal, "acquisition", validated.leaseLabel);
-  }
+  const abortOperation = () =>
+    leaseError(
+      "OPENCLAW_STATE_LEASE_ABORTED",
+      `${validated.leaseLabel} operation was aborted`,
+      validated.signal?.reason,
+    );
   const owner = randomUUID();
-  // Acquisition budgets are elapsed-time contracts. Wall-clock changes still
-  // affect persisted expiry timestamps, but must not lengthen or shorten waits.
-  let deadline = performance.now() + validated.waitMs;
+  // This elapsed-time budget waits for recorded holders; storage owns write admission.
+  const acquisitionStartedAt = performance.now();
+  let deadline = acquisitionStartedAt + validated.waitMs;
   let prepareDatabase =
     validated.prepareDatabase &&
     validated.waitMs > 0 &&
     validated.database.schemaPolicy !== "existing";
   let attempt = 0;
   let confirmedExpiresAt: number | undefined;
-  while (confirmedExpiresAt === undefined) {
-    let storageContention: unknown;
+  const label = `${validated.leaseLabel} ${validated.scope}/${validated.key}`;
+  let acquisitionAbort: OpenClawStateLeaseAcquisitionError | undefined;
+  const abortAcquisition = () =>
+    (acquisitionAbort ??= new OpenClawStateLeaseAcquisitionError(
+      label,
+      {
+        kind: "aborted",
+        reason: "caller-signal",
+        elapsedMs: Math.max(0, Math.round(performance.now() - acquisitionStartedAt)),
+      },
+      validated.signal?.reason,
+    ));
+  const assertAcquisitionCurrent = () => {
     if (validated.signal?.aborted) {
-      throw abortError(validated.signal, "acquisition", validated.leaseLabel);
+      throw abortAcquisition();
     }
-    try {
-      if (prepareDatabase) {
-        prepareDatabase = false;
-        // Cold integrity/schema work is not lease contention. Preparation never
-        // waits on locks; a refused attempt keeps the original acquisition budget.
-        prepareLeaseDatabase(validated.database);
-        deadline = performance.now() + validated.waitMs;
-      }
-      confirmedExpiresAt = tryAcquire({
-        database: validated.database,
-        operationLabel: validated.operationLabel,
-        scope: validated.scope,
-        key: validated.key,
-        owner,
-        leaseMs: validated.leaseMs,
-        leaseLabel: validated.leaseLabel,
-      });
-    } catch (error) {
-      if (error instanceof OpenClawStateLeaseError) {
-        throw error;
-      }
-      if (!isLeaseWriteContention(error)) {
-        throw leaseError(
-          "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-          `failed to acquire ${validated.leaseLabel} ${validated.scope}/${validated.key}`,
+  };
+  validated.signal?.addEventListener("abort", abortAcquisition, { once: true });
+  try {
+    while (confirmedExpiresAt === undefined) {
+      assertAcquisitionCurrent();
+      let outcome: OpenClawStateLeaseAcquisition;
+      try {
+        if (prepareDatabase) {
+          prepareDatabase = false;
+          // Cold integrity/schema preparation is outside the holder wait budget.
+          prepareLeaseDatabase(validated.database);
+          deadline = performance.now() + validated.waitMs;
+        }
+        outcome = await acquireLease(
+          validated.database,
+          {
+            operationLabel: validated.operationLabel,
+            identity: { scope: validated.scope, key: validated.key, owner },
+            leaseMs: validated.leaseMs,
+          },
+          assertAcquisitionCurrent,
+        );
+      } catch (error) {
+        // Authority refusals retain their identity; only recorded storage failures are outcomes.
+        if (
+          !(
+            error instanceof OpenClawStateLeaseError &&
+            error.code === "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
+          ) &&
+          !isLeaseWriteContention(error) &&
+          sqliteExtendedResultCode(error) === undefined &&
+          !isSqliteWorkerError(error, "unavailable") &&
+          !isSqliteWorkerError(error, "overloaded") &&
+          !isSqliteWorkerError(error, "closed")
+        ) {
+          throw error;
+        }
+        const failure = error instanceof OpenClawStateLeaseError ? error.cause : error;
+        // Join the refused write before reporting cancellation; preserve other storage failures.
+        if (isLeaseWriteContention(failure)) {
+          assertAcquisitionCurrent();
+        }
+        throw new OpenClawStateLeaseAcquisitionError(
+          label,
+          {
+            kind: "store-unavailable",
+            reason: isSqliteLockError(failure)
+              ? "sqlite-busy"
+              : failure instanceof StateDatabaseCoordinatorContentionError
+                ? "lifecycle-busy"
+                : "storage-error",
+          },
           error,
         );
       }
-      storageContention = error;
-    }
-    const now = performance.now();
-    if (confirmedExpiresAt !== undefined) {
-      // Storage-only waits must not reject a slow but uncontended first acquisition.
-      const boundedAdmission = validated.waitForLease || attempt > 0;
-      if (
-        validated.signal?.aborted ||
-        (boundedAdmission && validated.waitMs > 0 && now >= deadline)
-      ) {
-        await releaseBestEffort({
-          database: validated.database,
-          operationLabel: validated.operationLabel,
-          scope: validated.scope,
-          key: validated.key,
-          owner,
-          leaseLabel: validated.leaseLabel,
-        });
+      const now = performance.now();
+      if (outcome.kind === "acquired") {
+        confirmedExpiresAt = outcome.expiresAt;
         if (validated.signal?.aborted) {
-          throw abortError(validated.signal, "acquisition", validated.leaseLabel);
+          const failure = abortOperation();
+          await releaseBestEffort({
+            database: validated.database,
+            operationLabel: validated.operationLabel,
+            scope: validated.scope,
+            key: validated.key,
+            owner,
+            leaseLabel: validated.leaseLabel,
+          });
+          throw failure;
         }
-        throw acquisitionRefusal(
-          validated,
-          `could not finish acquiring ${validated.leaseLabel} ${validated.scope}/${validated.key} within the ${validated.waitMs} ms wait budget. Retry the operation.`,
-        );
+        break;
       }
-      break;
-    }
-    if (now >= deadline || (!validated.waitForLease && storageContention === undefined)) {
-      const reason = storageContention
-        ? "shared-state database is busy"
-        : "another operation holds the lease";
-      throw acquisitionRefusal(
-        validated,
-        `could not acquire ${validated.leaseLabel} ${validated.scope}/${validated.key} (wait budget ${validated.waitMs} ms): ${reason}. Retry after the current operation finishes.`,
-        storageContention,
-      );
-    }
-    attempt += 1;
-    const delayMs = Math.min(deadline - now, computeBackoff(ACQUIRE_BACKOFF, attempt));
-    try {
-      await sleepWithAbort(delayMs, validated.signal);
-    } catch (error) {
-      if (validated.signal?.aborted) {
-        throw abortError(validated.signal, "acquisition", validated.leaseLabel);
+      assertAcquisitionCurrent();
+      if (now >= deadline) {
+        throw new OpenClawStateLeaseAcquisitionError(label, outcome);
       }
-      throw error;
+      attempt += 1;
+      const delayMs = Math.min(deadline - now, computeBackoff(ACQUIRE_BACKOFF, attempt));
+      try {
+        await sleepWithAbort(delayMs, validated.signal);
+      } catch (error) {
+        assertAcquisitionCurrent();
+        throw error;
+      }
     }
+  } finally {
+    validated.signal?.removeEventListener("abort", abortAcquisition);
   }
 
   const identity: LeaseIdentity = {
@@ -512,7 +499,7 @@ export async function withOpenClawStateLease<T>(
       throw leaseLost.signal.reason;
     }
     if (validated.signal?.aborted) {
-      throw abortError(validated.signal, "operation", validated.leaseLabel);
+      throw abortOperation();
     }
     if (closed) {
       abortLost();
@@ -734,7 +721,7 @@ export async function withOpenClawStateLease<T>(
       const authorityError: unknown = leaseLost.signal.aborted
         ? leaseLost.signal.reason
         : validated.signal?.aborted
-          ? abortError(validated.signal, "operation", validated.leaseLabel)
+          ? abortOperation()
           : undefined;
       workerOperations?.rethrowIfUncertain(failure, authorityError);
       if (authorityError instanceof Error) {

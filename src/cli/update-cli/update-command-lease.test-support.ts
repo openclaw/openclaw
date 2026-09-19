@@ -201,7 +201,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       if (!(error instanceof Error) || !("code" in error)) {
         throw error;
       }
-      assert.equal(error.code, "OPENCLAW_STATE_LEASE_TIMEOUT");
+      assert.equal(error.code, "OPENCLAW_STATE_LEASE_HELD");
       process.stdout.write("excluded");
     }
     return;

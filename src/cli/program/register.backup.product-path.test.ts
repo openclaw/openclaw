@@ -186,19 +186,18 @@ describe("backup create CLI", () => {
         );
         const markerPath = state.path("sqlite-backup-entered");
         const preloadPath = await state.writeText(
-          "shift-clock-at-sqlite-backup.mjs",
+          "stall-at-sqlite-backup.mjs",
           `
             import fs from "node:fs";
             import { syncBuiltinESMExports } from "node:module";
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
-            let shifted = false;
+            let stalled = false;
             sqlite.backup = async (...args) => {
-              if (!shifted) {
-                shifted = true;
+              if (!stalled) {
+                stalled = true;
                 fs.writeFileSync(process.env.PROOF_SNAPSHOT_MARKER, "entered\\n", { mode: 0o600 });
-                const realNow = Date.now.bind(Date);
-                Date.now = () => realNow() + 61_000;
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 61_000);
               }
               return await originalBackup(...args);
             };

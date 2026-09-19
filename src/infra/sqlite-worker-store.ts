@@ -87,7 +87,20 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
   assertCurrent: () => void,
   nativeLocations: readonly string[],
 ): Promise<T> {
-  return runSqliteWorkerStoreOperation(store, operation, undefined, assertCurrent, () => {
+  return runSqliteWorkerStoreOperation(
+    store,
+    operation,
+    undefined,
+    assertCurrent,
+    createSqliteWorkerWriteAdmission(assertCurrent, nativeLocations),
+  );
+}
+
+export function createSqliteWorkerWriteAdmission(
+  assertCurrent: () => void,
+  nativeLocations: readonly string[],
+): SqliteWorkerAdmissionFactory {
+  return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
     return {
       nativeLocations,
@@ -107,7 +120,7 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
         phase = phase === "waiting" ? "transaction" : "commit";
       }),
     };
-  });
+  };
 }
 
 /** Read the broker's recorded lifecycle state without probing native storage. */

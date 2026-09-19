@@ -1,6 +1,6 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { exactClaimForPlacement } from "./github-publication-coordinator-methods.js";
 import {
   bindRepositoryGitHubPublicationCheckpoint,
@@ -85,8 +85,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         } catch (error) {
           if (
             error instanceof SessionWorkspaceReservationBusyError ||
-            (error instanceof OpenClawStateLeaseError &&
-              error.code === "OPENCLAW_STATE_LEASE_TIMEOUT")
+            (error instanceof OpenClawStateLeaseAcquisitionError && error.outcome.kind === "held")
           ) {
             continue;
           }

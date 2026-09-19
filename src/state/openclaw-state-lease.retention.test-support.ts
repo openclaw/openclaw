@@ -70,6 +70,10 @@ await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
   };
   const scenario = process.argv[2];
   if (scenario === "completed" || scenario === "completed-worker") {
+    if (scenario === "completed-worker") {
+      // Observe the heartbeat, not the shared acquisition worker. The completed case stays cold.
+      await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+    }
     const { reference, retained } = await captureCompletedLease({
       ...options,
       ...(scenario === "completed-worker" ? { heartbeat: "worker" as const } : {}),

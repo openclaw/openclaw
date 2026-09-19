@@ -286,7 +286,7 @@ describe("plugin lifecycle lease", () => {
         await cleanupEntered.promise;
         await expect(
           withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "acquired"),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
       } finally {
         releaseCleanup.resolve();
         await completion;
@@ -317,31 +317,26 @@ describe("plugin lifecycle lease", () => {
         waitMs: 3_000,
       });
 
-      vi.useFakeTimers();
+      const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
+        events.push("first-enter");
+        firstEntered.resolve();
+        await releaseFirst.promise;
+        events.push("first-exit");
+      });
+      await firstEntered.promise;
+      const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
+        events.push("second-enter");
+      });
       try {
-        const first = withPluginLifecycleLease(leaseOptions("state-a"), async () => {
-          events.push("first-enter");
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          events.push("first-exit");
-        });
-        await firstEntered.promise;
-        const second = withPluginLifecycleLease(leaseOptions("state-b"), async () => {
-          events.push("second-enter");
-        });
-        try {
-          await vi.advanceTimersByTimeAsync(100);
-          expect(events).toEqual(["first-enter"]);
-        } finally {
-          releaseFirst.resolve();
-          // Drive the pending acquisition retry after the first owner releases.
-          await vi.advanceTimersByTimeAsync(250);
-          await Promise.all([first, second]);
-        }
-        expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
+        await expect(
+          withPluginLifecycleLease({ ...leaseOptions("state-b"), waitMs: 0 }, async () => {}),
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
+        expect(events).toEqual(["first-enter"]);
       } finally {
-        vi.useRealTimers();
+        releaseFirst.resolve();
+        await Promise.all([first, second]);
       }
+      expect(events).toEqual(["first-enter", "first-exit", "second-enter"]);
     });
   });
 
@@ -401,7 +396,7 @@ describe("plugin lifecycle lease", () => {
         let assertionError: unknown;
         try {
           await expect(fs.readFile(secondResult, "utf8")).resolves.toBe(
-            "OPENCLAW_STATE_LEASE_TIMEOUT",
+            "OPENCLAW_STATE_LEASE_HELD",
           );
           await expect(fs.access(secondMarker)).rejects.toMatchObject({ code: "ENOENT" });
         } catch (error) {

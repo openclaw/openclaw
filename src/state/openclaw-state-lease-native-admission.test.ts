@@ -13,13 +13,13 @@ vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: fixture.forbiddenSqlite,
 }));
 vi.mock("./openclaw-state-lease-storage.js", () => ({
+  acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   prepareLeaseDatabase: fixture.forbiddenSqlite,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   readLeaseDatabase: (_database: unknown, run: () => unknown) => run(),
   withLeaseWriteTransaction: (_database: unknown, _label: string, run: () => unknown) => run(),
 }));
 vi.mock("./openclaw-state-lease-store.js", () => ({
-  acquireOpenClawStateLeaseInTransaction: () => fixture.expiresAt,
   readOpenClawStateLeaseExpiry: () =>
     Date.now() < fixture.expiresAt ? fixture.expiresAt : undefined,
   renewOpenClawStateLeaseInTransaction: () => {

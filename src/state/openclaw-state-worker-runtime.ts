@@ -102,7 +102,10 @@ import {
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
+import {
+  acquireOpenClawStateLeaseInWorker,
+  assertOpenClawStateLeaseWorkerOwnedInTransaction,
+} from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
@@ -253,6 +256,10 @@ export function executeSharedStateCommand(
   }
   if (command.type === "plugins.conversationBindingApprovals.read") {
     return readPluginBindingApprovalsInDatabase(open().db);
+  }
+  // Existing-schema acquisition must precede normal database bootstrap.
+  if (command.type === "stateLease.acquire") {
+    return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
   }
   if (command.type === "plugins.conversationBindingApprovals.upsert") {
     const database = open();
