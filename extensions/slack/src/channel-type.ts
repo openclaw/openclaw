@@ -136,13 +136,13 @@ export async function resolveSlackConversationInfo(params: {
             params.assertDirectAdapterHandoff,
           )
         : params.assertDirectAdapterHandoff
-        ? createSlackReadClient(
-            token,
-            { teamId: params.teamId },
-            undefined,
-            params.assertDirectAdapterHandoff,
-          )
-        : createSlackReadClient(token, { teamId: params.teamId });
+          ? createSlackReadClient(
+              token,
+              { teamId: params.teamId },
+              undefined,
+              params.assertDirectAdapterHandoff,
+            )
+          : createSlackReadClient(token, { teamId: params.teamId });
       const info = await client.conversations.info({ channel: channelId });
       const channel = info.channel as
         | { is_im?: boolean; is_mpim?: boolean; name?: string; user?: string }
