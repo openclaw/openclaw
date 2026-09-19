@@ -1,3 +1,4 @@
+import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { toErrorObject } from "./errors.js";
@@ -46,6 +47,11 @@ function send(message: UpdateRepairWorkerMessage, complete?: () => void): void {
   });
 }
 
+async function finish(message: UpdateRepairWorkerMessage) {
+  await closeOpenClawStateDatabaseAsync();
+  send(message, () => process.exit(0));
+}
+
 process.once("disconnect", () => controller.abort(new Error("Repair orchestrator disconnected.")));
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => controller.abort(new Error("Repair worker cancelled.")));
@@ -71,6 +77,17 @@ process.on("message", (raw: unknown) => {
         throw new Error("Repair worker already owns an execution.");
       }
       started = true;
+      if (message.type === "turn") {
+        void import("./update-repair-turn-worker.js")
+          .then(({ runDelegatedUpdateRepairTurn }) =>
+            runDelegatedUpdateRepairTurn(message, ledgerEnv, controller.signal, (route) =>
+              send({ type: "event", event: { type: "route-selected", ...route } }),
+            ),
+          )
+          .then((result) => finish({ type: "turn-result", result }))
+          .catch(() => process.exit(1));
+        return;
+      }
       void (async () => {
         const runtime = await import("./update-repair-agent.runtime.js");
         const requester = message.requester;
@@ -122,10 +139,7 @@ process.on("message", (raw: unknown) => {
           },
         });
       })()
-        .then(async (result) => {
-          await closeOpenClawStateDatabaseAsync();
-          send({ type: "result", result }, () => process.exit(0));
-        })
+        .then((result) => finish({ type: "result", result }))
         .catch(() => process.exit(1));
     }
   } catch (error) {
@@ -135,4 +149,13 @@ process.on("message", (raw: unknown) => {
     }
   }
 });
-send({ type: "ready", candidateRehearsal: true });
+void withCliProcessScope(retainCliProcessJobUntilExit).then(
+  () =>
+    send({
+      type: "ready",
+      candidateRehearsal: true,
+      repairTurns: true,
+      executorDelegation: "pid-start-v1",
+    }),
+  () => process.exit(1),
+);
