@@ -23,7 +23,10 @@ import {
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { registerPreparedPluginRetirement } from "./prepared-model-runtime.lifecycle.js";
+import {
+  registerPreparedPluginRetirement,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   closeEphemeralPreparedModelRuntimeResources,
   retainPreparedModelRuntimeSnapshotResources,
@@ -248,6 +251,7 @@ export function publishPreparedPluginGeneration(
       // leases retain the same generation independently until their work finishes.
       if (owner.generation === version) {
         owner.generation++;
+        retirePreparedModelRuntimeGeneration(owner);
         owner.needsRefresh = true;
         owner.refreshError = new Error("Prepared model runtime plugin generation retired");
         owner.pluginGeneration = undefined;

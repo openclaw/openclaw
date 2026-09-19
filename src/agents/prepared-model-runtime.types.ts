@@ -246,6 +246,7 @@ export type PreparedModelRuntimeOwner = {
   catalogMode: PreparedModelRuntimeCatalogMode;
   provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";
   generation: number;
+  generationRetirement?: AbortController;
   /** First-build auth events need replay only once this owner has begun reading credentials. */
   authCaptureStarted?: boolean;
   needsRefresh: boolean;

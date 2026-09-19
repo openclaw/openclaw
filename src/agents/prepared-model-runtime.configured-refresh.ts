@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   ownerKey,
   prepareModelRuntimeOwner,
@@ -60,6 +61,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     }
     if (!knownKeys.has(key) && (gatewayLifecycleActive || owner.provenance === "configured")) {
       owners.delete(key);
+      retirePreparedModelRuntimeGeneration(owner);
       releasePreparedPluginPublication(owner);
     }
   }

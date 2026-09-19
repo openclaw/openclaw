@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   normalizePreparedModelRuntimeInput,
@@ -139,10 +140,12 @@ export function updateOwnersForScopedRefresh(
     if (options.retireStandalone && owner.provenance === "standalone") {
       owner.generation += 1;
       owners.delete(key);
+      retirePreparedModelRuntimeGeneration(owner);
       retiredPublications.push(owner);
       continue;
     }
     owner.generation += 1;
+    retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
     owner.refreshError = staleError;
     if (options.clearPending) {

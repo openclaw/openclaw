@@ -16,10 +16,7 @@ import {
   type PreparedModelCatalogAuth,
   type PreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
-import type {
-  PreparedModelRuntimeAgentFacts,
-  PreparedModelRuntimeCatalogFacts,
-} from "./prepared-model-runtime.catalog-contract.js";
+import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   preparedProviderCatalogCredentials,
@@ -51,23 +48,15 @@ import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthet
 import type {
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
-  PreparedModelRuntimeOwner,
-  PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
 
-export function createFullModelCatalogAccess(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  nativeConfigFingerprint: string;
-  catalogFacts: PreparedModelRuntimeCatalogFacts;
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-  isCurrent: () => boolean;
-  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
-    Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
-}): PreparedModelRuntimeCatalogAccess {
+export function createFullModelCatalogAccess(
+  params: PreparedModelRuntimeCatalogAccessParams,
+): PreparedModelRuntimeCatalogAccess {
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
@@ -243,6 +232,7 @@ export function createFullModelCatalogAccess(params: {
     pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
     preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
     isCurrent: params.isCurrent,
+    retirementSignal: params.retirementSignal,
   });
   const staticCatalog = project(params.catalogFacts.modelCatalog);
   if (!nativeCatalogAcquired) {

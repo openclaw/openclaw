@@ -645,8 +645,10 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     env,
   };
   let current = true;
+  const retirement = new AbortController();
   params.retireAfterTest(() => {
     current = false;
+    retirement.abort();
   });
   const build = (
     await startSerializedSnapshotBuildBatch(
@@ -656,6 +658,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           inventoryOwner,
           isGenerationCurrent: () => current,
+          retirementSignal: retirement.signal,
           isBuildCurrent: () => current,
         },
       ],
