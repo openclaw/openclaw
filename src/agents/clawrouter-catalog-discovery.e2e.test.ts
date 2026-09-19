@@ -169,6 +169,14 @@ describe("ClawRouter cold prepared catalog", () => {
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
+    expect(result.runtimeModels.get("clawrouter")).toContainEqual(
+      expect.objectContaining({
+        provider: "clawrouter",
+        id: "codex-latest",
+        api: "openai-responses",
+        baseUrl: `${baseUrl}/v1`,
+      }),
+    );
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
       agentId,
