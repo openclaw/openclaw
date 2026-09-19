@@ -517,6 +517,43 @@ describe("channels controller DM pairing", () => {
     });
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
     expect(channels.state.pairingBusyRequestId).toBeNull();
+    expect(channels.state.pairingBusyKind).toBeNull();
+    channels.dispose();
+  });
+
+  it("records dismiss as the in-flight pairing operation", async () => {
+    const dismissal = createDeferred();
+    let listCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.pairing.list") {
+        listCount += 1;
+        return listCount === 1 ? pendingPairing : emptyPairing;
+      }
+      if (method === "channels.pairing.dismiss") {
+        return dismissal.promise;
+      }
+      return {};
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+    await channels.refreshPairing();
+
+    const pending = channels.dismissPairing({
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+    });
+    await vi.waitFor(() => {
+      expect(channels.state.pairingBusyRequestId).toBe("request-1");
+      expect(channels.state.pairingBusyKind).toBe("dismiss");
+    });
+
+    dismissal.resolve();
+    await expect(pending).resolves.toBe(true);
+    expect(channels.state.pairingBusyRequestId).toBeNull();
+    expect(channels.state.pairingBusyKind).toBeNull();
     channels.dispose();
   });
 
@@ -551,7 +588,10 @@ describe("channels controller DM pairing", () => {
       notify: false,
       bootstrapCommandOwner: false,
     });
-    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await vi.waitFor(() => {
+      expect(channels.state.pairingBusyRequestId).toBe("request-1");
+      expect(channels.state.pairingBusyKind).toBe("approve");
+    });
     await channels.refreshPairing();
     expect(listCount).toBe(1);
 
@@ -664,7 +704,10 @@ describe("channels controller DM pairing", () => {
       notify: false,
       bootstrapCommandOwner: false,
     });
-    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await vi.waitFor(() => {
+      expect(channels.state.pairingBusyRequestId).toBe("request-1");
+      expect(channels.state.pairingBusyKind).toBe("approve");
+    });
     snapshot = {
       ...snapshot,
       hello: { auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] } },
