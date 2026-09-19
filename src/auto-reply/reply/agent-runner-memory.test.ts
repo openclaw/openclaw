@@ -231,7 +231,16 @@ async function writeTestSessionTranscript(params: {
     storePath: path.join(params.rootDir, "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
-  await replaceTranscriptEvents(scope, params.events);
+  // Write through SessionManager so the transcript carries the tree structure that
+  // model-context reads require; flat replaceTranscriptEvents rows are only visible
+  // to display-history reads, which preflight estimation no longer uses.
+  const manager = SessionManager.open(scope);
+  for (const event of params.events) {
+    if (event.type !== "message") {
+      throw new Error(`writeTestSessionTranscript: unsupported event type ${event.type}`);
+    }
+    manager.appendMessage(event.message);
+  }
   await waitForSessionTranscriptProjection(scope);
 }
 
