@@ -212,6 +212,27 @@ sidebarTitle: "Setup"
 
     ### Check and recover Codex OAuth routing
 
+    #### After enabling Advanced Account Security
+
+    If you enroll the ChatGPT account in [Advanced Account Security](https://help.openai.com/en/articles/20001221-advanced-account-security), OpenAI signs you out of all devices after initial setup and may require interactive sign-in more often. This account-session behavior does not by itself mean that OpenClaw is incompatible with Advanced Account Security.
+
+    For an OpenClaw-managed profile, complete a fresh browser OAuth login through OpenClaw with the enrolled passkey or security key. Select the same agent that owns the failing route and, when you use multiple logins, the same profile:
+
+    ```bash
+    openclaw models auth login --provider openai --agent <id>
+    openclaw models auth login --provider openai --agent <id> --profile-id openai:<profile>
+    ```
+
+    A standalone `codex login` updates native Codex user-home auth; it does not replace an OpenClaw-managed credential. Use the documented [native user-home mode](/plugins/codex-harness-reference/auth#auth-and-environment-isolation) only when `appServer.homeScope: "user"` is intentional.
+
+    After signing in, verify the intended agent, runtime, and model with a real request. A model listing or a successful browser callback alone does not prove model access:
+
+    ```bash
+    openclaw models status --agent <id> --probe --probe-provider openai
+    ```
+
+    If a fresh login still fails, record the exact sanitized error and stage: browser or security-key interaction, localhost callback, token exchange, refresh, or model request. Separate a model-specific authorization error from a general account-login failure.
+
     ```bash
     openclaw models status
     openclaw models auth list --provider openai
