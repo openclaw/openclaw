@@ -175,7 +175,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   /** Reject a reconstructed private snapshot before any retry reaches the SDK. */
-  assertRequest?: (request: OpenAIResponsesRequestParams) => void;
+  assertRequest?: (request: OpenAIResponsesRequestParams) => void | Promise<void>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
   initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
   onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
@@ -197,7 +197,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     let attempt = initialAttempt;
     for (;;) {
       // Admission/observer failures are not provider rejections and must not enter recovery.
-      params.assertRequest?.(attempt.request);
+      await params.assertRequest?.(attempt.request);
       params.observePrompt?.(attempt.request, {
         egress: "responses-sdk",
         payloadVariant: attempt.kind,

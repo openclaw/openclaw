@@ -10,6 +10,7 @@ import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-err
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionBranchSummaryWorkerInput,
+  SessionContextMessagesWorkerInput,
   SessionEntryWorkerInput,
   SessionModelContextWorkerInput,
   SessionSqliteTargetWorkerInput,
@@ -24,8 +25,8 @@ function prepareSqliteReadWorker() {
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 const modelContextReads = new WorkerTaskPool<
-  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput,
-  SessionTranscriptWorkerReply<"model-context" | "sqlite-target">
+  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput | SessionContextMessagesWorkerInput,
+  SessionTranscriptWorkerReply<"model-context" | "sqlite-target" | "context-messages">
 >({
   workerUrl,
   prepareWorker: prepareSqliteReadWorker,
@@ -76,6 +77,21 @@ export async function readSessionTranscriptModelContextAsync(
     throw new Error("Session context worker returned a database target instead of context");
   }
   return value;
+}
+
+export async function readSessionTranscriptContextMessagesAsync(
+  target: SessionTranscriptRuntimeTarget,
+  limits: SessionContextMessagesWorkerInput["limits"],
+  admission?: SessionContextMessagesWorkerInput["admission"],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  return unwrapSessionTranscriptWorkerReply<"context-messages">(
+    (await modelContextReads.run(
+      { kind: "context-messages", target, admission, limits },
+      { timeoutMs: 60_000, signal },
+    )) as SessionTranscriptWorkerReply<"context-messages">, // SAFETY: The request discriminant selects this reply value.
+  );
 }
 
 export async function resolveSessionSqliteTargetInWorker(

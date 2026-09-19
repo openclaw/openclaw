@@ -38,7 +38,7 @@ export async function runQuotaContinuation<T extends EmbeddedAgentRunResult>(inp
   } = input;
   let fallbackResult = originalFallbackResult;
   let quotaContinued = false;
-  const quotaContinuation = readQuotaContinuation(
+  const quotaContinuation = await readQuotaContinuation(
     originalFallbackResult.result.result,
     params.identity,
     () => !params.abortSignal?.aborted && canFallback?.() !== false,

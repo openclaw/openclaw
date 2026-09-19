@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { attachRuntimePromptMediaFacts } from "../../media/media-facts.js";
-import * as providerRuntime from "../../plugins/provider-runtime.js";
+import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -36,6 +37,8 @@ import { createEmbeddedRunProgressController } from "./run/progress-controller.j
 import { createQuotaContinuationBudget } from "./run/quota-continuation-budget.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
+vi.mock("../../plugins/provider-runtime.js", { spy: true });
+
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: async () => undefined,
 }));
@@ -43,12 +46,18 @@ vi.mock("../harness/runtime-plugin.js", () => ({
 const claimQuotaContinuation = (...params: Parameters<typeof claimForApi>) =>
   claimForApi(params[0], params[1], params[2], params[3] ?? "openai-completions");
 
-const disk = vi.hoisted(() => ({ messages: [] as unknown[] }));
-vi.mock("../../config/sessions/session-accessor.sqlite-model-context.js", () => ({
-  readSessionTranscriptContextMessages: (
-    _target: unknown,
-    read: (messages: unknown[]) => unknown,
-  ) => read(disk.messages),
+const disk = vi.hoisted(() => ({
+  messages: [] as unknown[],
+  beforeRead: undefined as undefined | (() => Promise<void>),
+  limitExceeded: false,
+}));
+vi.mock("../../config/sessions/session-transcript-read-worker-runtime.js", () => ({
+  readSessionTranscriptContextMessagesAsync: async () => {
+    await disk.beforeRead?.();
+    return disk.limitExceeded
+      ? { kind: "limit-exceeded" }
+      : { kind: "ok", messages: disk.messages };
+  },
 }));
 
 function messages(): AgentMessage[] {
@@ -73,6 +82,34 @@ async function fixture() {
   const admission = prepareSystemAgentRunAdmission({}, "quota-test", "main", "quota-test");
   const admittedRunContext = await admission.admit("plugin-harness");
   const abort = new AbortController();
+  const recorded = messages();
+  const user = recorded[0];
+  if (!user || user.role !== "user") {
+    throw new Error("missing quota fixture user message");
+  }
+  const recorder = createUserTurnTranscriptRecorder({
+    message: user,
+    target: {
+      agentId: "main",
+      sessionId: "quota-session",
+      sessionKey: "agent:main:quota-test",
+      sessionEntry: undefined,
+      storePath: "/synthetic/agent.sqlite",
+    },
+  });
+  recorder.markRuntimePersisted(user, {
+    agentId: "main",
+    sessionId: "quota-session",
+    sessionKey: "agent:main:quota-test",
+    storePath: "/synthetic/agent.sqlite",
+    generation: "quota-generation",
+    entryId: "quota-user",
+    rawSeq: 1,
+    effectiveParentId: null,
+    activeMessagePosition: 0,
+    logicalTurnId: "quota-logical-turn",
+    role: "user",
+  });
   const params: RunEmbeddedAgentInternalParams = {
     admittedRunContext,
     runId: "quota-test",
@@ -89,12 +126,12 @@ async function fixture() {
       sessionKey: "agent:main:quota-test",
       storePath: "/synthetic/agent.sqlite",
     },
+    userTurnTranscriptRecorder: recorder,
     abortSignal: abort.signal,
   };
   params.quotaBudget = createQuotaContinuationBudget(params);
   params.quotaBudget.initialize(params.timeoutMs);
   onTestFinished(() => params.quotaBudget?.dispose());
-  const recorded = messages();
   disk.messages = recorded;
   const attempt = makeEmbeddedRunnerAttempt({
     terminal: {
@@ -132,15 +169,64 @@ async function fixture() {
 describe("settled quota continuation custody", () => {
   beforeEach(() => {
     disk.messages = [];
+    disk.beforeRead = undefined;
+    disk.limitExceeded = false;
+  });
+
+  it("rejects a transcript that exceeds the worker-owned bounds", async () => {
+    const f = await fixture();
+    onTestFinished(() => f.admission.close());
+    disk.limitExceeded = true;
+    await f.offer();
+    await settleQuotaContinuation(f.result, Promise.resolve());
+    expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+  });
+
+  it("revalidates run authority after the transcript worker returns", async () => {
+    const f = await fixture();
+    let release!: () => void;
+    disk.beforeRead = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const offer = f.offer();
+    f.admission.close();
+    release();
+    await offer;
+    expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+  });
+
+  it("revalidates run authority after the final-payload transcript read", async () => {
+    const f = await fixture();
+    onTestFinished(() => f.admission.close());
+    await f.offer();
+    await settleQuotaContinuation(f.result, Promise.resolve());
+    const token = (await readQuotaContinuation(f.result, f.params, () => true))!;
+    await claimQuotaContinuation(token, { ...f.params, provider: "fallback" }, "openclaw");
+    bindQuotaContinuationSuccessor(token);
+    let release!: () => void;
+    disk.beforeRead = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const assertion = assertQuotaContinuationProviderPayload(
+      token,
+      {},
+      "openai-completions",
+      "host instruction",
+    );
+    f.admission.close();
+    release();
+    await expect(assertion).rejects.toThrow();
   });
 
   it("separates one-shot continuation from unsafe whole-turn replay", async () => {
     const f = await fixture();
     onTestFinished(() => f.admission.close());
-    f.offer();
-    expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+    await f.offer();
+    expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    const token = readQuotaContinuation(f.result, f.params, () => true);
+    const token = await readQuotaContinuation(f.result, f.params, () => true);
     expect(token).toBeDefined();
     expect(
       classifyEmbeddedAgentRunResultForModelFallback({
@@ -150,8 +236,8 @@ describe("settled quota continuation custody", () => {
       }),
     ).toBeNull();
     const next = { ...f.params, provider: "fallback-provider", model: "fallback-model" };
-    claimQuotaContinuation(token!, next, "openclaw");
-    expect(() => claimQuotaContinuation(token!, next, "openclaw")).toThrow();
+    await claimQuotaContinuation(token!, next, "openclaw");
+    await expect(claimQuotaContinuation(token!, next, "openclaw")).rejects.toThrow();
     expect(f.result.meta.replayInvalid).toBe(true);
     expect(f.result.meta.error?.fallbackSafe).toBe(false);
   });
@@ -164,9 +250,9 @@ describe("settled quota continuation custody", () => {
       buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "Earlier reply" }] }),
       ...disk.messages,
     ];
-    f.offer();
+    await f.offer();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    expect(readQuotaContinuation(f.result, f.params, () => true)).toBeDefined();
+    expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeDefined();
     expect(disk.messages).toHaveLength(5);
   });
 
@@ -183,9 +269,9 @@ describe("settled quota continuation custody", () => {
         },
         ...disk.messages,
       ];
-      f.offer();
+      await f.offer();
       await settleQuotaContinuation(f.result, Promise.resolve());
-      expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+      expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
       expect(f.result.meta.error?.message).toBe("Quota exhausted");
     },
   );
@@ -212,9 +298,9 @@ describe("settled quota continuation custody", () => {
         Object.assign(caption, { MediaPath: media[0]!.path, MediaType: "image/png" });
       }
       disk.messages.unshift(caption);
-      f.offer();
+      await f.offer();
       await settleQuotaContinuation(f.result, Promise.resolve());
-      expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+      expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
     },
   );
 
@@ -223,35 +309,35 @@ describe("settled quota continuation custody", () => {
     async (api) => {
       const f = await fixture();
       onTestFinished(() => f.admission.close());
-      f.offer();
+      await f.offer();
       await settleQuotaContinuation(f.result, Promise.resolve());
-      const token = readQuotaContinuation(f.result, f.params, () => true)!;
-      expect(() =>
+      const token = (await readQuotaContinuation(f.result, f.params, () => true))!;
+      await expect(
         claimQuotaContinuation(token, { ...f.params, provider: "fallback" }, "openclaw", api),
-      ).toThrow("exact admitted turn or fallback target");
+      ).rejects.toThrow("exact admitted turn or fallback target");
     },
   );
 
   it("revalidates historical media and explicit destination image inputs at claim", async () => {
     const f = await fixture();
     onTestFinished(() => f.admission.close());
-    f.offer();
+    await f.offer();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    const token = readQuotaContinuation(f.result, f.params, () => true)!;
+    const token = (await readQuotaContinuation(f.result, f.params, () => true))!;
     const next = { ...f.params, provider: "fallback-provider" };
-    expect(() =>
+    await expect(
       claimQuotaContinuation(
         token,
         { ...next, images: [{ type: "image", data: "synthetic", mimeType: "image/png" }] },
         "openclaw",
       ),
-    ).toThrow();
+    ).rejects.toThrow();
     disk.messages.unshift({
       role: "user",
       content: [{ type: "image", data: "synthetic", mimeType: "image/png" }],
       timestamp: 0,
     });
-    expect(() => claimQuotaContinuation(token, next, "openclaw")).toThrow();
+    await expect(claimQuotaContinuation(token, next, "openclaw")).rejects.toThrow();
   });
 
   it.each(["missing-result", "duplicate-result", "new-user", "changed-result"] as const)(
@@ -274,9 +360,9 @@ describe("settled quota continuation custody", () => {
           { ...messages()[2], content: [{ type: "text", text: "different" }] },
         ];
       }
-      f.offer();
+      await f.offer();
       await settleQuotaContinuation(f.result, Promise.resolve());
-      expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+      expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
     },
   );
 
@@ -328,9 +414,9 @@ describe("settled quota continuation custody", () => {
     if (kind === "media-facts") {
       f.params.media = [{ path: "/synthetic/private.png", contentType: "image/png" }];
     }
-    f.offer();
+    await f.offer();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+    expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
     expect(f.result.meta.error?.message).toBe("Quota exhausted");
   });
 
@@ -339,7 +425,7 @@ describe("settled quota continuation custody", () => {
     async (kind) => {
       const f = await fixture();
       onTestFinished(() => f.admission.close());
-      f.offer();
+      await f.offer();
       if (kind === "abort") {
         f.abort.abort();
       }
@@ -353,7 +439,7 @@ describe("settled quota continuation custody", () => {
         f.result,
         kind === "cleanup" ? Promise.reject(new Error("cleanup failed")) : Promise.resolve(),
       );
-      expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+      expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
     },
   );
 
@@ -364,10 +450,10 @@ describe("settled quota continuation custody", () => {
     const f = await fixture();
     onTestFinished(() => f.admission.close());
     now = 990;
-    f.offer();
+    await f.offer();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    const token = readQuotaContinuation(f.result, f.params, () => true)!;
-    claimQuotaContinuation(token, { ...f.params, provider: "fallback-provider" }, "openclaw");
+    const token = (await readQuotaContinuation(f.result, f.params, () => true))!;
+    await claimQuotaContinuation(token, { ...f.params, provider: "fallback-provider" }, "openclaw");
     const abort = vi.fn();
     const timeout = prepareEmbeddedAttemptTimeout({
       attempt: {
@@ -396,21 +482,21 @@ describe("settled quota continuation custody", () => {
   it("rejects forged custody and foreign admissions", async () => {
     const f = await fixture();
     onTestFinished(() => f.admission.close());
-    f.offer();
+    await f.offer();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    const token = readQuotaContinuation(f.result, f.params, () => true)!;
+    const token = (await readQuotaContinuation(f.result, f.params, () => true))!;
     const next = { ...f.params, provider: "fallback-provider" };
-    expect(() =>
+    await expect(
       claimQuotaContinuation({ kind: "settled-quota-continuation" }, next, "openclaw"),
-    ).toThrow();
-    expect(() =>
+    ).rejects.toThrow();
+    await expect(
       claimQuotaContinuation(
         token,
         { ...next, admittedRunContext: { ...f.params.admittedRunContext! } },
         "openclaw",
       ),
-    ).toThrow();
-    expect(() => claimQuotaContinuation(token, next, "other-harness")).toThrow();
+    ).rejects.toThrow();
+    await expect(claimQuotaContinuation(token, next, "other-harness")).rejects.toThrow();
   });
 
   it("accepts the durable native text-result block and rejects a mismatched nested receipt", () => {
@@ -442,9 +528,9 @@ describe("settled quota continuation custody", () => {
         throw new Error("malformed evidence");
       },
     });
-    expect(f.offer).not.toThrow();
+    await expect(f.offer()).resolves.toBeUndefined();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+    expect(await readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
     expect(f.result.meta.error?.message).toBe("Quota exhausted");
     expect(f.result.meta.error?.fallbackSafe).toBe(false);
     expect(f.result.meta.replayInvalid).toBe(true);
@@ -487,10 +573,10 @@ describe("private admitted context and successor lineage", () => {
     const older =
       kind === "older-identical" ? [{ role: "user", content: f.params.prompt, timestamp: 0 }] : [];
     disk.messages = [...older, ...disk.messages];
-    f.offer();
+    await f.offer();
     await settleQuotaContinuation(f.result, Promise.resolve());
-    const token = readQuotaContinuation(f.result, f.params, () => true)!;
-    claimQuotaContinuation(token, { ...f.params, provider: "fallback" }, "openclaw");
+    const token = (await readQuotaContinuation(f.result, f.params, () => true))!;
+    await claimQuotaContinuation(token, { ...f.params, provider: "fallback" }, "openclaw");
     const observe = bindQuotaContinuationSuccessor(token);
     const result = { content: [{ type: "text", text: "distinct successor result" }] };
     if (kind !== "unowned") {
@@ -570,12 +656,12 @@ describe("private admitted context and successor lineage", () => {
         { role: "tool", tool_call_id: "renamed-duplicate", content: "one committed write" },
       );
     }
-    const check = () =>
+    const check = async () =>
       assertQuotaContinuationProviderPayload(token, wire, "openai-completions", "host instruction");
     if (kind === "normal" || kind === "older-identical" || kind === "denied") {
-      expect(check).not.toThrow();
+      await expect(check()).resolves.toBeUndefined();
     } else {
-      expect(check).toThrow(/continuation/i);
+      await expect(check()).rejects.toThrow(/continuation/i);
     }
   });
 });
@@ -596,10 +682,34 @@ it("stops prepared runtime auth refresh when quota admission expires before loop
   const f = await fixture();
   onTestFinished(() => f.admission.close());
   f.params.workspaceDir = state.workspaceDir;
-  f.params.sessionTarget!.storePath = `${state.workspaceDir}/sessions.sqlite`;
-  f.offer();
+  const sessionTarget = f.params.sessionTarget;
+  if (!sessionTarget?.agentId || !sessionTarget.sessionId || !sessionTarget.sessionKey) {
+    throw new Error("missing quota transcript target");
+  }
+  sessionTarget.storePath = `${state.workspaceDir}/sessions.sqlite`;
+  const transcriptAdmission = f.params.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const persistedMessage = f.params.userTurnTranscriptRecorder?.getPersistedMessage?.();
+  if (!transcriptAdmission || !persistedMessage) {
+    throw new Error("missing quota transcript admission");
+  }
+  const recorder = createUserTurnTranscriptRecorder({
+    message: persistedMessage,
+    target: {
+      agentId: sessionTarget.agentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+      sessionEntry: undefined,
+      storePath: sessionTarget.storePath,
+    },
+  });
+  recorder.markRuntimePersisted(persistedMessage, {
+    ...transcriptAdmission,
+    storePath: sessionTarget.storePath,
+  });
+  f.params.userTurnTranscriptRecorder = recorder;
+  await f.offer();
   await settleQuotaContinuation(f.result, Promise.resolve());
-  const token = readQuotaContinuation(f.result, f.params, () => true);
+  const token = await readQuotaContinuation(f.result, f.params, () => true);
   expect(token).toBeDefined();
   const generation = createModelGenerationFixture({
     label: "quota-cleanup",
@@ -616,7 +726,7 @@ it("stops prepared runtime auth refresh when quota admission expires before loop
     return { apiKey: "fixture-runtime-key", expiresAt: Date.now() + 120_000 };
   });
   // The external credential exchange is synthetic; runtime preparation and its timer owner are real.
-  vi.spyOn(providerRuntime, "prepareProviderRuntimeAuth").mockImplementation(prepareRuntimeAuth);
+  vi.mocked(prepareProviderRuntimeAuth).mockImplementation(prepareRuntimeAuth);
   publishCurrentModelGeneration(generation);
   await state.writeAuthProfiles({
     version: 1,

@@ -36,7 +36,7 @@ export async function prepareLoopRuntime(
   );
   try {
     const snapshot = runtime.snapshot();
-    const runParams = claimQuotaRunParams(
+    const runParams = await claimQuotaRunParams(
       { ...params, admittedRunContext: runtime.admittedRunContext },
       quotaContinuation,
       snapshot.agentHarness.id,

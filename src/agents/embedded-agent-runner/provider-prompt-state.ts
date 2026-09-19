@@ -161,7 +161,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
   recordEvent?: (type: string, data?: Record<string, unknown>) => void;
-  assertFinalPayload?: (payload: unknown, api: string) => void;
+  assertFinalPayload?: (payload: unknown, api: string) => void | Promise<void>;
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
@@ -178,7 +178,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
           const finalPayload = params.assertFinalPayload
             ? captureContinuationPayload(candidate, normalize)
             : normalize(candidate);
-          params.assertFinalPayload?.(finalPayload, payloadModel.api);
+          await params.assertFinalPayload?.(finalPayload, payloadModel.api);
           if (admittedPayloads && finalPayload !== null && typeof finalPayload === "object") {
             admittedPayloads.add(finalPayload);
           }
@@ -192,7 +192,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
           return finalPayload;
         },
         admittedPayloads
-          ? (payload, payloadModel) => {
+          ? async (payload, payloadModel) => {
               if (
                 payload === null ||
                 typeof payload !== "object" ||
@@ -200,7 +200,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
               ) {
                 throw new Error("Quota continuation transport substituted the admitted payload");
               }
-              params.assertFinalPayload?.(payload, payloadModel.api);
+              await params.assertFinalPayload?.(payload, payloadModel.api);
             }
           : undefined,
       ),

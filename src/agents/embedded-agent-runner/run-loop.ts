@@ -648,7 +648,7 @@ export async function runPreparedEmbeddedLoop(
         continue;
       }
       if (!quotaContinuation && settledTurnFinalizationOutcome === "not-attempted") {
-        offerQuotaContinuation({
+        await offerQuotaContinuation({
           params,
           attempt: terminalAttempt,
           result: terminalResolution.result,

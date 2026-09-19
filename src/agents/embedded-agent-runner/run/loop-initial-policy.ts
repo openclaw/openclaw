@@ -24,16 +24,16 @@ export function prepareQuotaRunParams(
   return { ...params, timeoutMs: remaining };
 }
 
-export function claimQuotaRunParams(
+export async function claimQuotaRunParams(
   params: RunEmbeddedAgentParamsWithSessionFile,
   token: QuotaContinuation | undefined,
   harnessId: string,
   api: string,
-): RunEmbeddedAgentParamsWithSessionFile {
+): Promise<RunEmbeddedAgentParamsWithSessionFile> {
   if (!token) {
     return params;
   }
-  claimQuotaContinuation(token, params, harnessId, api);
+  await claimQuotaContinuation(token, params, harnessId, api);
   return {
     ...params,
     activeQuotaContinuation: token,

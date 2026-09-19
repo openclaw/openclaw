@@ -23,6 +23,42 @@ const model = {
 } satisfies Model<"openai-responses">;
 
 describe("Responses streamed recovery lifecycle", () => {
+  it("awaits asynchronous admission before the SDK request", async () => {
+    const admission = createDeferred();
+    const assertRequest = vi.fn(async () => admission.promise);
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            type: "response.completed",
+            response: { id: "resp_admitted", status: "completed", output: [] },
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    const client = new OpenAI({
+      apiKey: "fixture-key",
+      baseURL: model.baseUrl,
+      maxRetries: 0,
+      fetch,
+    });
+    const request: OpenAIResponsesRequestParams = { model: model.id, stream: true, input: [] };
+
+    const pending = createResponsesStreamWithEncryptedContentRetry({
+      client,
+      request,
+      requestOptions: undefined,
+      model,
+      assertRequest,
+    });
+    await vi.waitFor(() => expect(assertRequest).toHaveBeenCalledExactlyOnceWith(request));
+    expect(fetch).not.toHaveBeenCalled();
+
+    admission.resolve();
+    await pending;
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       secondFailure: "streamed",

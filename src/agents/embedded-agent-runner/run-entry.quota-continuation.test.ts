@@ -26,7 +26,7 @@ function createDirectHarness() {
 describe("logical quota continuation chain", () => {
   it("continues only after the quota source, never consuming an earlier embedded candidate twice", async () => {
     const token = { kind: "settled-quota-continuation" as const };
-    const read = vi.spyOn(quotaContinuationOwner, "readQuotaContinuation").mockReturnValue(token);
+    const read = vi.spyOn(quotaContinuationOwner, "readQuotaContinuation").mockResolvedValue(token);
     const chain = ["native-a", "embedded-b", "native-c", "embedded-d"].map((provider, index) => ({
       provider,
       model: `model-${index}`,

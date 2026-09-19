@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { readSessionTranscriptContextMessages } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { readSessionTranscriptContextMessagesAsync } from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { hasCommittedOutboundDeliveryEvidence } from "./delivery-evidence.js";
@@ -22,6 +23,7 @@ export type QuotaContinuation = Readonly<{ kind: "settled-quota-continuation" }>
 
 type ContinuationState = {
   params: RunEmbeddedAgentInternalParams;
+  transcriptAdmission: UserTurnTranscriptAdmissionReceipt;
   messages: readonly AgentMessage[];
   assertActive: () => void;
   quiescent: boolean;
@@ -32,9 +34,19 @@ type ContinuationState = {
 };
 const offers = new WeakMap<EmbeddedAgentRunResult, QuotaContinuation>();
 const states = new WeakMap<QuotaContinuation, ContinuationState>();
+const MAX_CONTINUATION_MESSAGES = 4_096;
+const MAX_CONTINUATION_BYTES = 4 * 1024 * 1024;
 
-function assertTranscriptCurrent(state: ContinuationState): void {
+function assertTranscriptAdmissionCurrent(state: ContinuationState): void {
+  const current = state.params.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (!current || !isDeepStrictEqual(current, state.transcriptAdmission)) {
+    throw new Error("Quota continuation transcript admission changed");
+  }
+}
+
+async function readCurrentTranscript(state: ContinuationState): Promise<AgentMessage[]> {
   state.assertActive();
+  assertTranscriptAdmissionCurrent(state);
   if (state.canContinue && !state.canContinue()) {
     throw new Error("Quota continuation has committed delivery or lost its caller");
   }
@@ -42,48 +54,59 @@ function assertTranscriptCurrent(state: ContinuationState): void {
   if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
     throw new Error("Quota continuation has no durable transcript target");
   }
-  const matches = readSessionTranscriptContextMessages(
+  const result = await readSessionTranscriptContextMessagesAsync(
     {
       agentId: target.agentId,
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       storePath: target.storePath,
     },
-    (history) => {
-      // Only the latest user turn can be continued. Earlier matching text is not a receipt.
-      let tail: AgentMessage[] = [];
-      const admittedHistory: AgentMessage[] = [];
-      let bytes = 0;
-      for (const message of history) {
-        // The successor loads the entire model context, not merely the settled suffix.
-        // A text-only current turn must not silently transfer older attachments.
-        if (!hasTextOnlyHistoryContent(message)) {
-          return false;
-        }
-        bytes += Buffer.byteLength(JSON.stringify(message));
-        if (admittedHistory.length >= 4096 || bytes > 4 * 1024 * 1024) {
-          return false;
-        }
-        admittedHistory.push(message);
-        if (message.role === "user") {
-          tail = [];
-        }
-        tail.push(message);
-        if (tail.length > state.messages.length) {
-          // Keep scanning for a later user boundary, without retaining an unbounded suffix.
-          tail = tail.slice(-state.messages.length - 1);
-        }
-      }
-      if (!isDeepStrictEqual(tail, state.messages)) {
-        return false;
-      }
-      if (state.admittedHistory && !isDeepStrictEqual(state.admittedHistory, admittedHistory)) {
-        return false;
-      }
-      state.admittedHistory ??= structuredClone(admittedHistory);
-      return true;
-    },
+    { maxMessages: MAX_CONTINUATION_MESSAGES, maxBytes: MAX_CONTINUATION_BYTES },
+    undefined,
+    state.params.abortSignal,
   );
+  state.assertActive();
+  assertTranscriptAdmissionCurrent(state);
+  if (state.canContinue && !state.canContinue()) {
+    throw new Error("Quota continuation has committed delivery or lost its caller");
+  }
+  if (result.kind === "limit-exceeded") {
+    throw new Error("Quota continuation transcript exceeds bounded worker limits");
+  }
+  return result.messages;
+}
+
+async function assertTranscriptCurrent(state: ContinuationState): Promise<void> {
+  const history = await readCurrentTranscript(state);
+  const matches = (() => {
+    // Only the latest user turn can be continued. Earlier matching text is not a receipt.
+    let tail: AgentMessage[] = [];
+    const admittedHistory: AgentMessage[] = [];
+    for (const message of history) {
+      // The successor loads the entire model context, not merely the settled suffix.
+      // A text-only current turn must not silently transfer older attachments.
+      if (!hasTextOnlyHistoryContent(message)) {
+        return false;
+      }
+      admittedHistory.push(message);
+      if (message.role === "user") {
+        tail = [];
+      }
+      tail.push(message);
+      if (tail.length > state.messages.length) {
+        // Keep scanning for a later user boundary, without retaining an unbounded suffix.
+        tail = tail.slice(-state.messages.length - 1);
+      }
+    }
+    if (!isDeepStrictEqual(tail, state.messages)) {
+      return false;
+    }
+    if (state.admittedHistory && !isDeepStrictEqual(state.admittedHistory, admittedHistory)) {
+      return false;
+    }
+    state.admittedHistory ??= structuredClone(admittedHistory);
+    return true;
+  })();
   state.assertActive();
   if (!matches) {
     throw new Error("Quota continuation transcript changed or is not durably settled");
@@ -98,9 +121,9 @@ type QuotaContinuationOfferInput = {
 };
 
 /** Called by the host after a harness returned, with its tool capabilities already closed. */
-export function offerQuotaContinuation(input: QuotaContinuationOfferInput): void {
+export async function offerQuotaContinuation(input: QuotaContinuationOfferInput): Promise<void> {
   try {
-    offerQuotaContinuationIfSettled(input);
+    await offerQuotaContinuationIfSettled(input);
   } catch {
     // Optional proof must never turn an unsafe result into a generic thrown retry.
     // Keep the original quota and replay-veto diagnostics even for malformed evidence.
@@ -108,21 +131,22 @@ export function offerQuotaContinuation(input: QuotaContinuationOfferInput): void
   }
 }
 
-function offerQuotaContinuationIfSettled(input: QuotaContinuationOfferInput): void {
+async function offerQuotaContinuationIfSettled(input: QuotaContinuationOfferInput): Promise<void> {
   const { params, attempt, result } = input;
   const evidence = attempt.settledQuotaContinuation;
   const admitted = params.admittedRunContext;
   const recorder = params.userTurnTranscriptRecorder;
   const user = recorder?.getPersistedMessage?.();
   const admission = recorder?.getAdmissionReceipt();
+  const target = params.sessionTarget;
   const hostUser =
     recorder?.hasPersisted() &&
     user &&
     admission &&
-    admission.agentId === params.sessionTarget?.agentId &&
+    admission.agentId === target?.agentId &&
     admission.sessionId === params.sessionId &&
     admission.sessionKey === params.sessionKey &&
-    admission.storePath === params.sessionTarget?.storePath
+    admission.storePath === target?.storePath
       ? user
       : undefined;
   // Native attempts omit the prompt when the host already owns its durable row.
@@ -136,6 +160,8 @@ function offerQuotaContinuationIfSettled(input: QuotaContinuationOfferInput): vo
     !evidence ||
     evidence.reason !== "quota_exhausted" ||
     !admitted ||
+    !admission ||
+    !hostUser ||
     input.tainted ||
     params.sessionPersistence === "detached" ||
     params.sessionManager ||
@@ -180,13 +206,14 @@ function offerQuotaContinuationIfSettled(input: QuotaContinuationOfferInput): vo
   const token: QuotaContinuation = Object.freeze({ kind: "settled-quota-continuation" });
   const state: ContinuationState = {
     params,
+    transcriptAdmission: structuredClone(admission),
     messages,
     assertActive,
     quiescent: false,
     claimed: false,
   };
   try {
-    assertTranscriptCurrent(state);
+    await assertTranscriptCurrent(state);
     states.set(token, state);
     offers.set(result, token);
   } catch {
@@ -218,7 +245,7 @@ export async function settleQuotaContinuation(
       states.delete(token);
       return;
     }
-    assertTranscriptCurrent(state);
+    await assertTranscriptCurrent(state);
     state.quiescent = true;
   } catch {
     offers.delete(result);
@@ -228,11 +255,11 @@ export async function settleQuotaContinuation(
   }
 }
 
-export function readQuotaContinuation(
+export async function readQuotaContinuation(
   result: EmbeddedAgentRunResult,
   identity: { runId: string; sessionId: string; sessionKey?: string },
   canContinue: () => boolean,
-): QuotaContinuation | undefined {
+): Promise<QuotaContinuation | undefined> {
   const token = offers.get(result);
   const state = token && states.get(token);
   if (
@@ -247,7 +274,7 @@ export function readQuotaContinuation(
   }
   try {
     state.canContinue ??= canContinue;
-    assertTranscriptCurrent(state);
+    await assertTranscriptCurrent(state);
     return token;
   } catch {
     return undefined;
@@ -260,12 +287,12 @@ export function isQuotaContinuationClaimed(token: QuotaContinuation): boolean {
 }
 
 /** The successor must reuse the exact live admission; matching run IDs are insufficient. */
-export function claimQuotaContinuation(
+export async function claimQuotaContinuation(
   token: QuotaContinuation,
   params: RunEmbeddedAgentInternalParams,
   harnessId: string,
   modelApi = "",
-): void {
+): Promise<void> {
   const state = states.get(token);
   if (
     !state ||
@@ -289,7 +316,7 @@ export function claimQuotaContinuation(
   ) {
     throw new Error("Quota continuation lost its exact admitted turn or fallback target");
   }
-  assertTranscriptCurrent(state);
+  await assertTranscriptCurrent(state);
   state.claimed = true;
 }
 
@@ -304,12 +331,12 @@ export function remainingQuotaContinuationMs(token: QuotaContinuation, cap: numb
 }
 
 /** Called after provider transforms/onPayload, immediately before transport admission. */
-export function assertQuotaContinuationProviderPayload(
+export async function assertQuotaContinuationProviderPayload(
   token: QuotaContinuation,
   payload: unknown,
   api: string,
   continuationPrompt: string,
-): void {
+): Promise<void> {
   const state = states.get(token);
   if (
     !state?.claimed ||
@@ -334,29 +361,18 @@ export function assertQuotaContinuationProviderPayload(
   ) {
     throw new Error("Quota continuation has no owned context inventory");
   }
-  readSessionTranscriptContextMessages(
-    {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-    },
-    (history) => {
-      const current = [...history];
-      if (
-        !isDeepStrictEqual(current.slice(0, admitted.length), admitted) ||
-        current.some((message) => !hasTextOnlyHistoryContent(message))
-      ) {
-        throw new Error("Quota continuation admitted context changed");
-      }
-      const successor = outcomes.assert(current.slice(admitted.length));
-      assertQuotaPrefixInProviderPayload(state.messages, payload, api, {
-        before: admitted.slice(0, admitted.length - state.messages.length),
-        after: [{ role: "user", content: continuationPrompt }, ...successor],
-      });
-    },
-  );
-  state.assertActive();
+  const current = await readCurrentTranscript(state);
+  if (
+    !isDeepStrictEqual(current.slice(0, admitted.length), admitted) ||
+    current.some((message) => !hasTextOnlyHistoryContent(message))
+  ) {
+    throw new Error("Quota continuation admitted context changed");
+  }
+  const successor = outcomes.assert(current.slice(admitted.length));
+  assertQuotaPrefixInProviderPayload(state.messages, payload, api, {
+    before: admitted.slice(0, admitted.length - state.messages.length),
+    after: [{ role: "user", content: continuationPrompt }, ...successor],
+  });
 }
 
 /** Attach only to the owned agent loop, before extension callbacks can transform facts. */

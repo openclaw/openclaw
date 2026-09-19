@@ -10,7 +10,7 @@ type NormalizingPayloadHook = (
 
 // Key by the hook, not its containing options: provider adapters copy options
 // while retaining callbacks. This is an internal ordering contract, not authority.
-type PayloadAdmission = (payload: unknown, model: Model) => void;
+type PayloadAdmission = (payload: unknown, model: Model) => void | Promise<void>;
 const normalizingHooks = new WeakMap<
   PayloadHook,
   { run: NormalizingPayloadHook; assertAdmitted?: PayloadAdmission }
