@@ -109,5 +109,13 @@ export function resolveFeishuMessageDedupeKey(event: FeishuMessageDedupeInput): 
   if (messageType === "text") {
     return resolveTextRetryDedupeKey(event) ?? messageId;
   }
+  if (messageType === "post") {
+    const retryKey = resolveTextRetryDedupeKey(event);
+    if (!retryKey) {
+      return messageId;
+    }
+    const topicId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+    return topicId ? JSON.stringify([retryKey, topicId]) : retryKey;
+  }
   return messageId;
 }
