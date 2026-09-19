@@ -864,10 +864,136 @@ try {
           "  $global:LASTEXITCODE = 0",
           "  Write-Output 'Chocolatey output'",
           "}",
-          "function Check-Node { return $false }",
+          "$script:portableCalled = $false",
+          "function Install-PortableNode { $script:portableCalled = $true }",
+          "function Check-Node { return $script:portableCalled }",
           "$result = @(Install-Node)",
-          'if ($result.Count -ne 1 -or $result[0] -ne $false) { throw "Install-Node returned $result" }',
+          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
+          "if (-not $script:portableCalled) { throw 'Portable Node fallback was not attempted' }",
           "",
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-command-failures",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($Name -eq $script:manager) { return $true }
+    return $null
+}
+filter Out-Host { }
+function Invoke-FixtureManager {
+    $script:attempts += 1
+    Write-Output 'package-manager output must not become a success result'
+    if ($script:failure -eq 'throw') { throw 'fixture package-manager failure' }
+    $global:LASTEXITCODE = if ($script:failure -eq 'exit') { 17 } else { 0 }
+}
+function winget { Invoke-FixtureManager }
+function choco { Invoke-FixtureManager }
+function scoop { Invoke-FixtureManager }
+function Refresh-ProcessPath { $script:refreshes += 1 }
+function Add-InstalledNodeToProcessPath { $script:discoveries += 1; return $true }
+function Check-Node { return $script:portableReady }
+function Install-PortableNode { $script:portableCalls += 1; $script:portableReady = $true }
+foreach ($script:manager in @('winget', 'choco', 'scoop')) {
+    foreach ($script:failure in @('exit', 'throw', 'unsupported')) {
+        $script:attempts = 0
+        $script:refreshes = 0
+        $script:discoveries = 0
+        $script:portableCalls = 0
+        $script:portableReady = $false
+        $global:LASTEXITCODE = 0
+        $result = @(Install-Node)
+        if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) {
+            throw "manager=$script:manager failure=$script:failure result=$result"
+        }
+        $expectedAttempts = if ($script:manager -eq 'scoop' -and $script:failure -eq 'unsupported') { 3 } else { 1 }
+        $expectedDiscoveries = if ($script:manager -eq 'winget') { 1 } else { 0 }
+        if ($script:attempts -ne $expectedAttempts -or $script:refreshes -ne 1 -or $script:discoveries -ne $expectedDiscoveries -or $script:portableCalls -ne 1) {
+            throw "unexpected recovery order/count: $script:manager $script:failure"
+        }
+        if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
+    }
+}
+`,
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-next-manager-success",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$script:events = New-Object System.Collections.Generic.List[string]
+$script:ready = $false
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($Name -in @('winget', 'choco', 'scoop')) { return $true }
+    return $null
+}
+filter Out-Host { }
+function winget { $script:events.Add('winget'); $global:LASTEXITCODE = 17; Write-Output 'winget failed' }
+function choco { $script:events.Add('choco'); $global:LASTEXITCODE = 0; $script:ready = $true; Write-Output 'choco success' }
+function scoop { throw 'Scoop must not run after supported Node is found' }
+function Refresh-ProcessPath { $script:events.Add('refresh') }
+function Add-InstalledNodeToProcessPath { $script:events.Add('discover'); return $false }
+function Check-Node { $script:events.Add('check'); return $script:ready }
+function Install-PortableNode { throw 'portable fallback must not run after supported Node is found' }
+$result = @(Install-Node)
+if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) { throw "result=$result" }
+if (($script:events -join '|') -ne 'winget|refresh|discover|check|choco|refresh|check') {
+    throw "events=$($script:events -join '|')"
+}
+`,
+        ].join("\n"),
+      },
+      {
+        name: "package-manager-node-entrypoint-refusal",
+        source: [
+          scriptWithoutEntryPoint,
+          String.raw`
+$NodeOnly = $false
+$NodePrefix = ''
+$DryRun = $false
+$InstallMethod = 'npm'
+$NoOnboard = $true
+function Check-ExistingOpenClaw { return $false }
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name)
+    if ($Name -eq 'choco') { return $true }
+    return $null
+}
+filter Out-Host { }
+function choco { $global:LASTEXITCODE = 17; Write-Output 'fixture choco failure' }
+function Refresh-ProcessPath { }
+function Check-Node { return $false }
+function Install-PortableNode {
+    $script:portableCalls += 1
+    if ($script:portableFailure -eq 'throw') { throw 'fixture portable failure' }
+}
+function Install-OpenClaw { throw 'package install must not run without a supported Node' }
+foreach ($script:portableFailure in @('throw', 'unsupported')) {
+    $script:InstallExitCode = 0
+    $script:portableCalls = 0
+    $caught = $false
+    try {
+`,
+          ...entrypointLines.map((line) => `        ${line}`),
+          String.raw`
+    } catch {
+        if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 1.') { throw }
+        $caught = $true
+    }
+    if (-not $caught -or $script:InstallExitCode -ne 1 -or $script:portableCalls -ne 1) {
+        throw 'failed recovery did not preserve the installer refusal contract'
+    }
+    if ($ErrorActionPreference -ne 'Stop') { throw 'caller error policy changed' }
+}
+`,
         ].join("\n"),
       },
       {
@@ -1359,6 +1485,9 @@ try {
         "pnpm-source-bootstrap-lifecycle",
         "portable-git-layout",
         "portable-node-tar-fallback",
+        "package-manager-node-command-failures",
+        "package-manager-node-next-manager-success",
+        "package-manager-node-entrypoint-refusal",
       ]) {
         const fixture = fixtures.find((entry) => entry.name === name);
         if (!fixture) {
@@ -1678,10 +1807,30 @@ try {
     expectBatchedPowerShellCase("package-manager-node-validation-failure");
   });
 
+  runIfPowerShell("recovers from package-manager failures and preserves installer refusal", () => {
+    if (process.platform === "win32") {
+      expect(bootstrapShells).toContain("powershell");
+    }
+    for (const name of [
+      "package-manager-node-command-failures",
+      "package-manager-node-next-manager-success",
+      "package-manager-node-entrypoint-refusal",
+    ]) {
+      expectBatchedPowerShellCase(name);
+      for (const engine of bootstrapShells) {
+        if (engine !== powershell) {
+          expectBatchedPowerShellCase(`${name}:${engine}`);
+        }
+      }
+    }
+  });
+
   it("discovers a winget Node install before the machine PATH refreshes", () => {
     const installNodeBody = extractFunctionBody(source, "Install-Node");
+    const packageManagerBody = extractFunctionBody(source, "Invoke-NodePackageManagerInstall");
     const addInstalledNodeBody = extractFunctionBody(source, "Add-InstalledNodeToProcessPath");
-    expect(installNodeBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
+    expect(installNodeBody).toContain("-DiscoverProgramFilesNode");
+    expect(packageManagerBody).toContain("Add-InstalledNodeToProcessPath | Out-Null");
     expect(addInstalledNodeBody).toContain("$env:ProgramW6432");
     expect(addInstalledNodeBody).toContain("$env:ProgramFiles");
     expect(addInstalledNodeBody).toContain('Join-Path $nodeDir "node.exe"');
@@ -1866,6 +2015,7 @@ try {
     expect(depsRootBody).toContain("OpenClaw\\deps");
     expect(portableNodeRootBody).toContain("portable-node");
     expect(portableNodeBody).toContain("Ensure-PortableNodeOnUserPath");
+    expect(portableNodeBody).toContain("Bootstrapping user-local portable Node.js");
     expect(portableNodeBody).toContain(
       "Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot",
     );
