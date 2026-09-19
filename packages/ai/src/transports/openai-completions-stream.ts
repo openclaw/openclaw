@@ -11,6 +11,8 @@ import {
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
   clearPendingCommentaryText,
+  hasVisibleTextBlock,
+  markTextPhaseTerminalBound,
   rememberPendingCommentaryTags,
   tagInterruptedTextPhases,
   tagPendingCommentaryText,
@@ -431,12 +433,12 @@ export async function processCompletionsStream(
     currentTextSource = undefined;
   };
   const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
-    if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
-      output.openclawDelivery = {
-        ...output.openclawDelivery,
-        textPhaseRequiresTerminal: true,
-      };
+    // Reasoning before any visible byte leaves nothing to reclassify; only
+    // reasoning that resumes after text makes that text's phase terminal-bound.
+    if (!reasoningTagTextPartitioner.hasPending() && !hasVisibleTextBlock(output.content)) {
+      return;
     }
+    markTextPhaseTerminalBound(output);
     if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
       reasoningTagTextPartitioner.markStrict();
     }
@@ -541,9 +543,11 @@ export async function processCompletionsStream(
       }
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
-          const routedDeltas = hasReasoningThinking
-            ? reasoningTagTextPartitioner.push(contentDelta.text)
-            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+          // The tag-aware path arms strict holding; reserve it for terminal-bound text.
+          const routedDeltas =
+            hasReasoningThinking && output.openclawDelivery?.textPhaseRequiresTerminal
+              ? reasoningTagTextPartitioner.push(contentDelta.text)
+              : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
           for (const routedDelta of routedDeltas) {
             appendPartitionedVisibleDelta(routedDelta);
           }

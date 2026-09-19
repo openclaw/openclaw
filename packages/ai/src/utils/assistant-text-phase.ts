@@ -113,3 +113,20 @@ export function rememberPendingCommentaryTags(
     target.set(block, signature);
   }
 }
+
+/** True once the message carries any non-blank visible text block. */
+export function hasVisibleTextBlock(content: ReadonlyArray<unknown>): boolean {
+  return content.some((block) => {
+    const record = block as { type?: unknown; text?: unknown } | null;
+    return record?.type === "text" && typeof record.text === "string" && record.text.trim() !== "";
+  });
+}
+
+/** Marks the message's text phases as resolvable only at terminal. */
+export function markTextPhaseTerminalBound(message: {
+  openclawDelivery?: { textPhaseRequiresTerminal?: true };
+}): void {
+  if (!message.openclawDelivery?.textPhaseRequiresTerminal) {
+    message.openclawDelivery = { ...message.openclawDelivery, textPhaseRequiresTerminal: true };
+  }
+}
