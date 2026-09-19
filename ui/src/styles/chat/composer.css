@@ -1412,13 +1412,11 @@
   gap: calc(var(--chat-composer-editor-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
-  /* Extend only the scrollport's transparent bounds for the original remove
-     target and focus ring. The extra padding cancels the overlap, so the chips
-     keep the editor's visible inset without clipping the controls. */
-  width: calc(100% + var(--chat-attachment-hit-slop));
-  max-width: calc(100% + var(--chat-attachment-hit-slop));
+  /* Keep horizontal clipping inside the composer. Reserve remove-target and
+     focus-ring clearance in padding, not in a wider scrollport. */
+  width: 100%;
+  max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  margin-inline-end: calc(-1 * var(--chat-attachment-hit-slop));
   padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
     var(--chat-composer-editor-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)

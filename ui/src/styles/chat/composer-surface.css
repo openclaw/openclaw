@@ -954,9 +954,8 @@
   }
 
   .agent-chat__input:has(.chat-attachments-preview) {
-    /* The rail's overhang must also clear this outer scrollport. */
+    /* The rail's top overhang must also clear this outer scrollport. */
     padding-block-start: var(--chat-attachment-hit-slop);
-    padding-inline-end: var(--chat-attachment-hit-slop);
   }
 
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
