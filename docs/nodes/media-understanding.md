@@ -110,6 +110,10 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
+    `args` is how the attachment reaches the command: nothing appends the staged file path for you. A CLI entry with no `args` runs its command bare, so the attachment is never passed to it; include at least one attachment placeholder.
+
+    Placeholders are substituted literally into each argument, and an unset one becomes an **empty argument** rather than being dropped. `{{Language}}` is only populated when a language is resolved from the request, the entry's `language`, or `tools.media.audio.language`; with none set, `["--language", "{{Language}}"]` runs as `--language ""`. Transcribers that reject an empty language should omit the flag and its value together and rely on autodetection. The same rule applies to `{{Prompt}}` and any other optional placeholder.
+
     CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The `{{Attachment*}}` names replaced `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` in 2026.8.1. The older names remain deprecated compatibility aliases under the `media-legacy-projection` record: its approved `removeAfter` date is 2026-10-01, with removal additionally gated on a clean published-plugin artifact sweep. Migrate before that date - see [Media legacy projection](/plugins/sdk-migration/compatibility-policy#media-legacy-projection).
 
   </Tab>
