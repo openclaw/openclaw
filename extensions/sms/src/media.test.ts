@@ -531,6 +531,9 @@ describe("SMS outbound hosted media", () => {
     { contentType: "image/png; charset=binary", byteLength: 500_001, outcome: "accepts" },
     { contentType: "image/heic", byteLength: 500_001, outcome: "rejects" },
     { contentType: "application/msword", byteLength: 1, outcome: "unsupported" },
+    // Media loading preserves unknown header strings, so prototype member names reach this gate.
+    { contentType: "constructor", byteLength: 1, outcome: "unsupported" },
+    { contentType: "__proto__", byteLength: 1, outcome: "unsupported" },
   ])(
     "$outcome detected $contentType media at $byteLength bytes",
     async ({ contentType, byteLength, outcome }) => {
