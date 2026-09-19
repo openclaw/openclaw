@@ -1,7 +1,6 @@
 /**
  * Top-level CLI-backed agent runner orchestration.
  */
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
@@ -13,10 +12,7 @@ import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-l
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../plugins/before-agent-reply.js";
+import { runBeforeAgentReplyForTurn } from "../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -53,6 +49,7 @@ import {
   buildCliHookAssistantMessage,
   buildCliHookUserMessage,
   finalizeCliContextEngineTurn,
+  prepareCliHandledBeforeAgentReply,
   persistApprovedCliUserTurnTranscript,
   persistCliAssistantTranscript,
   persistCliRunBlock,
@@ -203,7 +200,10 @@ async function runCliAgentInternal(
             }),
         });
   if (hookResult?.handled) {
-    const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
+    const { finalText, payloads } = await prepareCliHandledBeforeAgentReply({
+      runParams: params,
+      reply: hookResult.reply,
+    });
     const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
       agentId: params.agentId,
     });
@@ -212,7 +212,7 @@ async function runCliAgentInternal(
       `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
     );
     return {
-      payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+      payloads,
       meta: {
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {

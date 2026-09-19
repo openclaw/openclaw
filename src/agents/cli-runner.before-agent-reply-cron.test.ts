@@ -1,7 +1,12 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -11,12 +16,18 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { upsertSessionEntry } from "../plugin-sdk/session-store-runtime.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   getOrCreateSessionMcpRuntime,
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
+import { CLAIMED_REPLY_MEDIA_CASES } from "./before-agent-reply.fixture.js";
+import { createRegisteredBeforeAgentReplyFixture } from "./before-agent-reply.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -29,13 +40,6 @@ import { FailoverError } from "./failover-error.js";
 // exercises the hook-gate decision at the runCliAgent entry point — we mock
 // the prepareCliRunContext + executePreparedCliRun seams so no broader CLI
 // runtime needs to load.
-type BeforeAgentReplyResult =
-  | undefined
-  | {
-      handled?: boolean;
-      reply?: { text?: string };
-    };
-
 const {
   hasHooksMock,
   runBeforeAgentReplyMock,
@@ -51,9 +55,7 @@ const {
   markAuthProfileSuccessMock,
 } = vi.hoisted(() => ({
   hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
-  runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
-    async () => undefined,
-  ),
+  runBeforeAgentReplyMock: vi.fn<HookRunner["runBeforeAgentReply"]>(async () => undefined),
   runBeforeAgentRunMock: vi.fn<HookRunner["runBeforeAgentRun"]>(async () => undefined),
   executePreparedCliRunMock: vi.fn<
     (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
@@ -112,6 +114,8 @@ const baseRunParams = {
   timeoutMs: 30_000,
   runId: "test-run-id",
 } as const;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type ProductionRunCliAgent = typeof import("./cli-runner.js").runCliAgent;
 type TestRunCliAgent = (
@@ -201,6 +205,7 @@ afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();
+  return closeOpenClawAgentDatabasesForTest();
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
@@ -726,22 +731,100 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
   });
 
-  it("lets before_agent_reply claim user runs before CLI preparation", async () => {
-    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    runBeforeAgentReplyMock.mockResolvedValue({
-      handled: true,
-      reply: { text: "user turn claimed" },
-    });
+  it.each(CLAIMED_REPLY_MEDIA_CASES)(
+    "persists registered plugin $name once across CLI claim and routed delivery",
+    async ({ reply, transcript }) => {
+      const root = tempDirs.make("openclaw-cli-before-agent-reply-");
+      const sessionTarget = {
+        agentId: baseRunParams.agentId,
+        sessionId: baseRunParams.sessionId,
+        sessionKey: baseRunParams.sessionKey,
+        storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntry({
+        ...sessionTarget,
+        entry: { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+      });
+      const { registry, hookRunner, handler, sendText, sendMedia } =
+        createRegisteredBeforeAgentReplyFixture(
+          setReplyPayloadMetadata(reply, {
+            heartbeatScratchProposal: "preserved plugin metadata",
+          }),
+        );
+      hasHooksMock.mockImplementation(
+        (hookName) => hookName === "before_agent_reply" && hookRunner.hasHooks(hookName),
+      );
+      runBeforeAgentReplyMock.mockImplementation(hookRunner.runBeforeAgentReply);
 
-    const result = await runCliAgent({ ...baseRunParams, trigger: "user" });
+      const result = await runCliAgent({
+        ...baseRunParams,
+        ...sessionTarget,
+        trigger: "user",
+        persistAssistantTranscript: true,
+      });
 
-    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
-    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
-    expect(hookContext).toMatchObject({ trigger: "user" });
-    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]?.text).toBe("user turn claimed");
-  });
+      expect(handler).toHaveBeenCalledTimes(1);
+      const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+      expect(hookContext).toMatchObject({ trigger: "user" });
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+      expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+      const payload = expectDefined(result.payloads?.[0], "expected claimed reply payload");
+      expect(payload).toMatchObject(reply);
+      const beforeDelivery = await loadTranscriptEvents(sessionTarget);
+      const assistantMessages = beforeDelivery.filter(
+        (event) => isRecord(event) && isRecord(event.message) && event.message.role === "assistant",
+      );
+      expect(assistantMessages).toHaveLength(1);
+      expect(assistantMessages).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: transcript }),
+            ]),
+          }),
+        }),
+      );
+      expect(getReplyPayloadMetadata(payload)).toMatchObject({
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: `cli-assistant:${baseRunParams.runId}`,
+        heartbeatScratchProposal: "preserved plugin metadata",
+      });
+      const previousRegistry = getActivePluginRegistry();
+      setActivePluginRegistry(registry);
+      try {
+        const { routeReply } = await import("../auto-reply/reply/route-reply.js");
+        const routed = await routeReply({
+          cfg: { session: { store: sessionTarget.storePath } },
+          channel: "slack",
+          to: "channel:C123",
+          sessionKey: sessionTarget.sessionKey,
+          payload,
+          replyKind: "final",
+          mirror: getReplyPayloadMetadata(payload)?.assistantTranscriptOwned !== true,
+        });
+        expect(routed.ok).toBe(true);
+        const mediaUrls = reply.mediaUrls?.length
+          ? reply.mediaUrls
+          : reply.mediaUrl
+            ? [reply.mediaUrl]
+            : [];
+        if (mediaUrls.length > 0) {
+          expect(sendText).not.toHaveBeenCalled();
+          expect(sendMedia).toHaveBeenCalledTimes(mediaUrls.length);
+          expect(sendMedia.mock.calls.map(([context]) => context.mediaUrl)).toEqual(mediaUrls);
+          expect(sendMedia.mock.calls[0]?.[0].text).toBe(reply.text ?? "");
+        } else {
+          expect(sendMedia).not.toHaveBeenCalled();
+          expect(sendText).toHaveBeenCalledTimes(1);
+          expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: reply.text }));
+        }
+        expect(await loadTranscriptEvents(sessionTarget)).toEqual(beforeDelivery);
+      } finally {
+        setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+      }
+    },
+  );
 
   it("lets before_agent_reply claim heartbeat runs before CLI preparation", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");

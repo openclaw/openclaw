@@ -2,6 +2,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLAIMED_REPLY_MEDIA_CASES } from "../../agents/before-agent-reply.fixture.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -701,39 +702,36 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
-  it("disables routed delivery mirrors for CLI-owned finals", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    mocks.routeReply.mockClear();
-    hookMocks.runner.hasHooks.mockReturnValue(false);
-    installThreadingTestPlugin({ id: "telegram", defaultAccountId: "default" });
+  it.each(CLAIMED_REPLY_MEDIA_CASES)(
+    "disables routed delivery mirrors for CLI-owned $name",
+    async ({ reply: payload }) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      mocks.routeReply.mockClear();
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      installThreadingTestPlugin({ id: "telegram", defaultAccountId: "default" });
 
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:999",
-        AccountId: "default",
-        SessionKey: "agent:main:telegram:group:999",
-      }),
-      cfg: automaticDirectReplyConfig,
-      dispatcher,
-      replyResolver: async () =>
-        setReplyPayloadMetadata(
-          { text: "Persisted routed CLI reply" },
-          { assistantTranscriptOwned: true },
-        ),
-    });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:999",
+          AccountId: "default",
+          SessionKey: "agent:main:telegram:group:999",
+        }),
+        cfg: automaticDirectReplyConfig,
+        dispatcher,
+        replyResolver: async () =>
+          setReplyPayloadMetadata(payload, { assistantTranscriptOwned: true }),
+      });
 
-    expect(result.queuedFinal).toBe(true);
-    expect(mocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: { text: "Persisted routed CLI reply" },
-        mirror: false,
-      }),
-    );
-  });
+      expect(result.queuedFinal).toBe(true);
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({ payload, mirror: false }),
+      );
+    },
+  );
 
   it("uses accepted steered inbound audio for final TTS", async () => {
     setNoAbort();

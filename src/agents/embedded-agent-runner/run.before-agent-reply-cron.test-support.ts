@@ -1,4 +1,5 @@
 // Full-entry coverage for before_agent_reply hook handling before embedded attempts.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -8,7 +9,10 @@ import {
   createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -58,6 +62,134 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
 
   afterEach(async () => {
     await state?.cleanup();
+  });
+
+  it.each(
+    [
+      {
+        name: "persistent user turn",
+        sessionPersistence: undefined,
+        currentInboundEventKind: undefined,
+        persists: true,
+      },
+      {
+        name: "detached user turn",
+        sessionPersistence: "detached" as const,
+        currentInboundEventKind: undefined,
+        persists: false,
+      },
+      {
+        name: "room event",
+        sessionPersistence: undefined,
+        currentInboundEventKind: "room_event" as const,
+        persists: false,
+      },
+    ].flatMap((testCase) =>
+      [
+        { name: "text", reply: { text: "user turn claimed" }, expected: "user turn claimed" },
+        {
+          name: "media only",
+          reply: { mediaUrl: "https://example.com/photo.png?token=redacted" },
+          expected: "photo.png",
+        },
+        {
+          name: "captioned media",
+          reply: { text: "caption", mediaUrl: "https://example.com/photo.png" },
+          expected: "caption\nphoto.png",
+        },
+        {
+          name: "multiple media",
+          reply: {
+            text: "caption",
+            mediaUrls: ["https://example.com/photo.png", "https://example.com/report.pdf"],
+            mediaUrl: "https://example.com/ignored.png",
+          },
+          expected: "caption\nphoto.png, report.pdf",
+        },
+      ].map((mediaCase) =>
+        Object.assign({}, testCase, mediaCase, {
+          name: `${testCase.name} with ${mediaCase.name}`,
+        }),
+      ),
+    ),
+  )("preserves transcript persistence for a hook-claimed $name", async (testCase) => {
+    const session = await createSharedRunIntegrationSession();
+    const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+    const { getReplyPayloadMetadata, setReplyPayloadMetadata } =
+      await import("../../auto-reply/reply-payload.js");
+    const { createRegisteredBeforeAgentReplyFixture } =
+      await import("../before-agent-reply.test-support.js");
+    try {
+      const { hookRunner, handler } = createRegisteredBeforeAgentReplyFixture(
+        setReplyPayloadMetadata({ ...testCase.reply }, { blockSourceText: "plugin-owned source" }),
+      );
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply" && hookRunner.hasHooks(hookName),
+      );
+      mockedGlobalHookRunner.runBeforeAgentReply.mockImplementation(hookRunner.runBeforeAgentReply);
+
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        trigger: "user",
+        sessionPersistence: testCase.sessionPersistence,
+        currentInboundEventKind: testCase.currentInboundEventKind,
+      });
+
+      expect(result.payloads?.[0]).toEqual(testCase.reply);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      const transcript = await loadTranscriptEvents(session.runParams.sessionTarget);
+      if (testCase.persists) {
+        expect(
+          transcript.filter(
+            (event) =>
+              isRecord(event) && isRecord(event.message) && event.message.role === "assistant",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            message: expect.objectContaining({
+              role: "assistant",
+              content: [{ type: "text", text: testCase.expected }],
+            }),
+          }),
+        ]);
+        expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+          assistantTranscriptOwned: true,
+          assistantTranscriptIdempotencyKey: `before-agent-reply:${session.runParams.runId}`,
+          blockSourceText: "plugin-owned source",
+        });
+      } else {
+        expect(transcript).toEqual([]);
+      }
+    } finally {
+      await session.cleanup();
+    }
+  });
+
+  it("does not persist a hook reply after its session writer is replaced", async () => {
+    const session = await createSharedRunIntegrationSession();
+    const { loadTranscriptEvents } = await import("../../config/sessions/session-accessor.js");
+    const { claimAgentSessionWriter } = await import("./run/session-bootstrap.js");
+    try {
+      mockedGlobalHookRunner.hasHooks.mockImplementation(
+        (hookName: string) => hookName === "before_agent_reply",
+      );
+      mockedGlobalHookRunner.runBeforeAgentReply.mockImplementationOnce(async () => {
+        await claimAgentSessionWriter({
+          ...session.runParams,
+          runId: "replacement-writer",
+        });
+        return { handled: true, reply: { text: "stale writer reply" } };
+      });
+
+      await runEmbeddedAgent({ ...session.runParams, trigger: "user" });
+
+      expect(mockedGlobalHookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents(session.runParams.sessionTarget)).toEqual([]);
+    } finally {
+      await session.cleanup();
+    }
   });
 
   it("lets before_agent_reply claim cron runs before the embedded attempt starts", async () => {

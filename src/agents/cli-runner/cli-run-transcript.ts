@@ -1,3 +1,5 @@
+import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -25,6 +27,10 @@ import { buildGenericCliContextEngineHostSupport } from "../../context-engine/ho
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  resolveHandledBeforeAgentReplyTranscriptText,
+} from "../../plugins/before-agent-reply.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -259,6 +265,31 @@ export async function persistCliAssistantTranscript(params: {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
     return { owned: false };
   }
+}
+
+export async function prepareCliHandledBeforeAgentReply(params: {
+  runParams: RunCliAgentParams;
+  reply?: ReplyPayload;
+}): Promise<{ finalText: string; payloads: ReplyPayload[] }> {
+  const finalText = params.reply?.text ?? SILENT_REPLY_TOKEN;
+  const transcript = await persistCliAssistantTranscript({
+    runParams: params.runParams,
+    text: resolveHandledBeforeAgentReplyTranscriptText(params.reply),
+    modelId: params.runParams.model ?? "",
+    stopReason: "stop",
+  });
+  const payloads = buildHandledBeforeAgentReplyPayloads(params.reply);
+  if (transcript.owned) {
+    for (const payload of payloads) {
+      setReplyPayloadMetadata(payload, {
+        assistantTranscriptOwned: true,
+        ...(transcript.idempotencyKey
+          ? { assistantTranscriptIdempotencyKey: transcript.idempotencyKey }
+          : {}),
+      });
+    }
+  }
+  return { finalText, payloads };
 }
 
 async function notifyCliUserMessagePersisted(

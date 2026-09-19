@@ -7,7 +7,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -16,10 +15,7 @@ import {
   getAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import {
-  buildHandledBeforeAgentReplyPayloads,
-  runBeforeAgentReplyForTurn,
-} from "../../plugins/before-agent-reply.js";
+import { runBeforeAgentReplyForTurn } from "../../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -85,6 +81,7 @@ import {
 } from "./run/attempt-stage-timing.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import { buildEmbeddedFailureSuspension } from "./run/failure-suspension.js";
+import { prepareEmbeddedHandledBeforeAgentReply } from "./run/handled-before-agent-reply-transcript.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
@@ -509,8 +506,28 @@ async function runEmbeddedAgentInternal(
                   notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
               });
               if (hookResult?.handled) {
+                const handled = await prepareEmbeddedHandledBeforeAgentReply({
+                  agentId: workspaceResolution.agentId,
+                  config: params.config,
+                  model: modelId,
+                  persist:
+                    params.sessionPersistence !== "detached" &&
+                    params.currentInboundEventKind !== "room_event",
+                  prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+                  provider,
+                  reply: hookResult.reply,
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                  sessionKey: resolvedSessionKey,
+                  sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
+                });
+                if (handled.persistenceWarning) {
+                  log.warn(
+                    `before_agent_reply transcript persistence skipped: runId=${params.runId} sessionId=${redactedSessionId} reason=${handled.persistenceWarning}`,
+                  );
+                }
                 return {
-                  payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+                  payloads: handled.payloads,
                   meta: {
                     durationMs: Date.now() - started,
                     agentMeta: {
@@ -518,8 +535,8 @@ async function runEmbeddedAgentInternal(
                       provider,
                       model: modelId,
                     },
-                    finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                    finalAssistantVisibleText: handled.finalText,
+                    finalAssistantRawText: handled.finalText,
                   },
                 };
               }
