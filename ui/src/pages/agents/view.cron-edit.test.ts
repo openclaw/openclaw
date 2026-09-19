@@ -24,7 +24,7 @@ it.each([true, false])("links agent automations to the shared editor (enabled=%s
     selectedAgentId: "alpha",
     basePath: "/gateway",
   });
-  render(renderAgents({ ...props, cron: { ...props.cron, jobs: [job] } }), container);
+  render(renderAgents({ ...props, cron: { ...props.cron, cronJobs: [job] } }), container);
   const link = [...container.querySelectorAll("a")].find(
     (entry) => entry.textContent?.trim() === "Edit",
   );

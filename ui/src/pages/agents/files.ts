@@ -1,11 +1,15 @@
 // Control UI controller manages agent files gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
+import type {
+  AgentsFilesGetResult,
+  AgentsFilesListResult,
+  AgentsFilesSetResult,
+} from "../../api/types.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
-type AgentFilesState = {
+export type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
@@ -19,6 +23,19 @@ type AgentFilesState = {
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
   agentFileWriteRevisions: Map<string, number>;
+};
+
+export type AgentFilesViewState = Pick<
+  AgentFilesState,
+  | "agentFilesLoading"
+  | "agentFilesError"
+  | "agentFileContents"
+  | "agentFileDrafts"
+  | "agentFileSaving"
+  | "agentFileConflict"
+> & {
+  agentFilesList: AgentsFilesListResult | null;
+  agentFileActive: string | null;
 };
 
 export type RetainedAgentFileDrafts = {
