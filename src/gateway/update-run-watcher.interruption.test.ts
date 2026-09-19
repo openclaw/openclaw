@@ -39,7 +39,7 @@ vi.mock("../infra/package-json.js", () => ({ readPackageVersion: async () => "20
 vi.mock("../infra/update-git-runtime.js", () => ({
   readBuiltGatewayBuildId: async () => observation.installedBuild,
 }));
-vi.mock("../daemon/service.js", () => ({ resolveGatewayService: () => ({}) }));
+
 vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: async () => ({ config: { gateway: { port: 18789 } } }),
   waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
@@ -276,3 +276,75 @@ it.each(["repair", "acknowledgement"])(
     expect(observation.settle).not.toHaveBeenCalled();
   },
 );
+
+it("retries settlement after settle-budget-exceeded when the gateway recovers", async () => {
+  // Regression for ClawSweeper P1 finding: a run with reconcile:settle-budget-exceeded
+  // must remain eligible for automatic reconciliation. The first call fails to settle
+  // (writes settle-budget-exceeded); the second call succeeds after the gateway recovers.
+  const { reconcileInterruptedUpdateRuns } = await import("../infra/update-run-interruption.js");
+  const runId = interruptedRun();
+  let settleAttempt = 0;
+  observation.settle.mockImplementation(async () => {
+    settleAttempt++;
+    if (settleAttempt === 1) {
+      return { ...health(), healthy: false };
+    }
+    return health();
+  });
+
+  // First call: settle fails, writes reconcile:settle-budget-exceeded
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const result1 = await reconcileInterruptedUpdateRuns();
+  expect(result1).toEqual([]);
+  const afterFirst = getUpdateRun(runId);
+  expect(afterFirst?.steps.some((s) => s.step === "reconcile:settle-budget-exceeded")).toBe(true);
+  expect(afterFirst?.status).toBe("running");
+  expect(settleAttempt).toBe(1);
+  warnSpy.mockRestore();
+
+  // Second call: settle succeeds this time — run is still eligible
+  const result2 = await reconcileInterruptedUpdateRuns();
+  expect(settleAttempt).toBe(2);
+  expect(result2).toHaveLength(1);
+  const afterSecond = getUpdateRun(runId);
+  expect(afterSecond?.status).toBe("succeeded");
+  expect(afterSecond?.verification?.versionMatch).toBe(true);
+});
+
+it("does not renew abandonment activity on repeated settle-budget-exceeded", async () => {
+  // Regression for ClawSweeper P2: repeated settle failures must not advance
+  // updatedAtMs/endedAtMs, which feed the 30-min abandonment inactivity window.
+  // The first failure writes settle-budget-exceeded; a second failure 31 min
+  // later must NOT renew activity, so the run can still be abandoned.
+  const { reconcileInterruptedUpdateRuns } = await import("../infra/update-run-interruption.js");
+  const runId = interruptedRun();
+  observation.settle.mockImplementation(async () => ({ ...health(), healthy: false }));
+
+  // First failure: writes settle-budget-exceeded
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await reconcileInterruptedUpdateRuns();
+  const afterFirst = getUpdateRun(runId);
+  const firstActivity = afterFirst!.updatedAtMs;
+  expect(afterFirst?.steps.some((s) => s.step === "reconcile:settle-budget-exceeded")).toBe(true);
+
+  // Advance past the abandonment window
+  vi.setSystemTime(now + 31 * 60_000 + 31 * 60_000 + 1000);
+
+  // Second failure: should NOT write (idempotent), should NOT advance updatedAtMs
+  await reconcileInterruptedUpdateRuns();
+  const afterSecond = getUpdateRun(runId);
+  expect(afterSecond?.updatedAtMs).toBe(firstActivity);
+  const settleSteps = afterSecond!.steps.filter(
+    (s) => s.step === "reconcile:settle-budget-exceeded",
+  );
+  expect(settleSteps).toHaveLength(1);
+
+  // The run should now be abandonable (inactivity window has elapsed)
+  const { reconcileAbandonedUpdateRuns: reconcileAbandoned } =
+    await import("../infra/update-run-ledger.js");
+  const abandoned = reconcileAbandoned();
+  expect(
+    abandoned.some((r) => r.runId === runId && r.status === "failed" && r.reason === "abandoned"),
+  ).toBe(true);
+  warnSpy.mockRestore();
+});

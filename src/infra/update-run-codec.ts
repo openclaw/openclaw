@@ -26,6 +26,7 @@ const RETAINED_STEP_NAMES = [
   "reconcile:abandoned",
   "reconcile:superseded",
   "reconcile:acknowledged",
+  "reconcile:settle-budget-exceeded",
 ];
 const JSON_FIELDS = [
   "origin",

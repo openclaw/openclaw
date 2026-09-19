@@ -3,6 +3,10 @@ import {
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
 import {
+  DEFAULT_RESTART_HEALTH_ATTEMPTS,
+  DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
+} from "../cli/daemon-cli/restart-health.constants.js";
+import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
   waitForGatewayHealthyRestart,
@@ -15,11 +19,17 @@ import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import type { InstalledUpdateCandidate } from "./update-run-interruption.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
+export type InterruptedUpdateGatewayObservation = {
+  verification: UpdateRunRecord["verification"] | undefined;
+  /** True when the settle budget expired without a healthy serving match. */
+  settleBudgetExceeded: boolean;
+};
+
 /** Reuse the restart owner's independent native, RPC, HTTP, and generation observations. */
 export async function observeInterruptedUpdateGateway(
   candidate: InstalledUpdateCandidate,
   input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
-): Promise<UpdateRunRecord["verification"] | undefined> {
+): Promise<InterruptedUpdateGatewayObservation | undefined> {
   const env = input.env ?? process.env;
   const root = await resolveOpenClawPackageRoot({
     argv1: process.argv[1],
@@ -38,6 +48,8 @@ export async function observeInterruptedUpdateGateway(
   if (!(await installedMatches())) {
     return undefined;
   }
+  // The caller (canSettleInterruptedUpdate) already requires a completed
+  // "restarting" step, so every run that reaches this point is managed.
   const context = await resolveGatewayRestartProbeContext(env);
   const port = resolveGatewayPort(context.config, env);
   const service = resolveGatewayService();
@@ -61,13 +73,20 @@ export async function observeInterruptedUpdateGateway(
     health.runtime.status === "running" &&
     health.gatewayVersion === candidate.version &&
     health.gatewayBuildId === candidate.buildId;
+  // Derive the settle budget from the existing restart-health timing
+  // constants rather than a new literal: the default health timeout (60 s)
+  // is quartered to bound this reconciliation stage well below the 65 s+
+  // stall, and the probe count is a tenth of the default attempts.
+  const SETTLE_PROBES = Math.ceil(DEFAULT_RESTART_HEALTH_ATTEMPTS / 10);
+  const SETTLE_BUDGET_MS = Math.floor(DEFAULT_RESTART_HEALTH_TIMEOUT_MS / 4);
   const before = await waitForGatewayHealthyRestart({
     ...probe,
     requireRunningService: true,
-    settle: { probes: 12 },
+    settle: { probes: SETTLE_PROBES },
+    timeoutMs: SETTLE_BUDGET_MS,
   });
   if (!servingMatches(before)) {
-    return undefined;
+    return { verification: undefined, settleBudgetExceeded: true };
   }
   const http = await waitForGatewayHttpReadiness({
     config: context.config,
@@ -89,20 +108,23 @@ export async function observeInterruptedUpdateGateway(
     !isSameGatewayRestartGeneration(inspected, after) ||
     !(await installedMatches())
   ) {
-    return undefined;
+    return { verification: undefined, settleBudgetExceeded: true };
   }
   input.signal?.throwIfAborted();
   return {
-    booted: true,
-    serviceRunning: true,
-    pid: after.runtime.pid,
-    port,
-    runningVersion: candidate.version,
-    runningBuildId: candidate.buildId,
-    versionMatch: true,
-    readyz: true,
-    settled: true,
-    channelsReady: true,
-    pluginErrors: after.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+    verification: {
+      booted: true,
+      serviceRunning: true,
+      pid: after.runtime.pid,
+      port,
+      runningVersion: candidate.version,
+      runningBuildId: candidate.buildId,
+      versionMatch: true,
+      readyz: true,
+      settled: true,
+      channelsReady: true,
+      pluginErrors: after.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
+    },
+    settleBudgetExceeded: false,
   };
 }

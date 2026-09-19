@@ -133,8 +133,55 @@ export async function reconcileInterruptedUpdateRuns(
     return [];
   }
   const { observeInterruptedUpdateGateway } = await import("./update-run-interruption-health.js");
-  const verification = await observeInterruptedUpdateGateway(candidate, { ...input, env });
+  const observation = await observeInterruptedUpdateGateway(candidate, {
+    ...input,
+    env,
+  });
   input.signal?.throwIfAborted();
+  if (!observation) {
+    return [];
+  }
+  const { verification, settleBudgetExceeded } = observation;
+  // When the settle budget expires without a healthy serving match, record the
+  // outcome so it is visible in the run history and warn operators. The run
+  // remains eligible for a future reconciliation attempt — a subsequent update
+  // or service restart may produce a healthy Gateway. Silent expiry is the
+  // failure class this repo treats as the worst.
+  if (!verification && settleBudgetExceeded) {
+    runExistingOpenClawStateWriteTransaction(
+      ({ db }) => {
+        input.signal?.throwIfAborted();
+        const current = readLatestUpdateRun(db);
+        if (
+          !current ||
+          !isDeepStrictEqual(current, expected) ||
+          !canSettleInterruptedUpdate(current)
+        ) {
+          return;
+        }
+        // Record the outcome only on the first expiry; subsequent retries
+        // must not advance updatedAtMs or endedAtMs, because those timestamps
+        // feed the abandonment inactivity window. Renewing them on every
+        // failed probe would keep a dead updater alive indefinitely.
+        if (current.steps.some((step) => step.step === "reconcile:settle-budget-exceeded")) {
+          return;
+        }
+        upsertStep(current, {
+          step: "reconcile:settle-budget-exceeded",
+          status: "completed",
+          endedAtMs: Date.now(),
+          detail: "Settle budget expired without a healthy serving match; will retry.",
+        });
+        persistRun(db, current, options);
+      },
+      options,
+      { schemaSql: updateRunLedgerSchema, operationLabel: "update.run" },
+    );
+    console.warn(
+      "[openclaw] Interrupted update settle probe expired without a healthy gateway; the update remains pending and will be retried.",
+    );
+    return [];
+  }
   if (!verification) {
     return [];
   }
