@@ -12,6 +12,48 @@ public protocol WebSocketTasking: AnyObject {
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
 
+/// Carries the native request owner's completion across transports that retain their own RPC state.
+public final class WebSocketRequestLifetime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private var onFinish: (@Sendable () -> Void)?
+
+    public init() {}
+
+    // periphery:ignore - External transports use this to order send admission with cancellation.
+    /// Enqueue the request while holding the same lock that orders its retirement.
+    /// The actions must only enqueue work; running I/O here would block cancellation.
+    public func performIfActive(
+        _ action: () -> Void,
+        onFinish: @escaping @Sendable () -> Void) -> Bool
+    {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard !self.finished else { return false }
+        action()
+        self.onFinish = onFinish
+        return true
+    }
+
+    public func finish() {
+        self.lock.lock()
+        guard !self.finished else { self.lock.unlock()
+            return
+        }
+        self.finished = true
+        let action = self.onFinish
+        self.onFinish = nil
+        self.lock.unlock()
+        action?()
+    }
+}
+
+// periphery:ignore - Native transports implement caller-owned request lifetime handling.
+public protocol WebSocketRequestSending: WebSocketTasking {
+    // periphery:ignore - The erased request adapter dispatches through this optional transport seam.
+    func sendRequest(_ message: URLSessionWebSocketTask.Message, lifetime: WebSocketRequestLifetime) async throws
+}
+
 private final class WebSocketPingContinuationGate: @unchecked Sendable {
     private let lock = NSLock()
     private var didResume = false
@@ -52,6 +94,17 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
     public func send(_ message: URLSessionWebSocketTask.Message) async throws {
         try await self.task.send(message)
+    }
+
+    public func sendRequest(
+        _ message: URLSessionWebSocketTask.Message,
+        lifetime: WebSocketRequestLifetime) async throws
+    {
+        if let transport = self.task as? any WebSocketRequestSending {
+            try await transport.sendRequest(message, lifetime: lifetime)
+        } else {
+            try await self.task.send(message)
+        }
     }
 
     public func receive() async throws -> URLSessionWebSocketTask.Message {
