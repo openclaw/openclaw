@@ -432,8 +432,9 @@ the hint as a soft reply-language preference. It starts the system instruction
 with a short note: reply in the hinted language, and switch when the caller asks
 for another language. OpenClaw's realtime prompt and your `realtime.instructions`
 follow that note, so a reply language set there (for example "Always reply in
-French") takes precedence. Sessions without a hint, or with an unrecognized one,
-send the instructions unchanged.
+French") usually takes precedence. Both are model guidance rather than hard
+settings, so this precedence is best effort. Sessions without a hint, or with an
+unrecognized one, send the instructions unchanged.
 </Note>
 
 <Note>
