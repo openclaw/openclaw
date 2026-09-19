@@ -447,6 +447,7 @@ it("keeps version and injected instance surfaces independent of the broad runtim
   const descriptors = Object.getOwnPropertyDescriptors(runtime);
   expect(Object.keys(runtime)).toEqual([
     "version",
+    "decisions",
     "gateway",
     "config",
     "agent",

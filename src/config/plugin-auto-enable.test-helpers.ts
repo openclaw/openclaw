@@ -43,6 +43,7 @@ export function makeRegistry(
     contracts?: {
       speechProviders?: string[];
       workerProviders?: string[];
+      decisionProviders?: string[];
       webSearchProviders?: string[];
       webFetchProviders?: string[];
       tools?: string[];

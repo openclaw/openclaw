@@ -2,6 +2,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
+import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
@@ -99,6 +100,7 @@ export type PluginInspectReport = {
   commands: string[];
   cliCommands: string[];
   services: string[];
+  decisions?: ReturnType<typeof inspectDecisionProviders>;
   gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
   mcpServers: Array<{
@@ -564,6 +566,9 @@ function buildPluginInspectRecord(
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
+    decisions: inspectDecisionProviders(getRuntimeConfig(), report).filter(
+      (entry) => entry.pluginId === plugin.id,
+    ),
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods,
     mcpServers,

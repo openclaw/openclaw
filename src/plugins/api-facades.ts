@@ -29,6 +29,7 @@ type PluginApiFacadeSource = Pick<
 
 const identitySensitiveRegistrations = new Set([
   "registerCompactionProvider",
+  "registerDecisionProvider",
   "registerHttpRoute",
   "registerImageGenerationProvider",
   "registerMediaUnderstandingProvider",

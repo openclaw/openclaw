@@ -161,6 +161,12 @@ function closePluginRegistryAdmissions(
           owner.revoked = true;
         }
         if (owner.instance) {
+          for (const entry of registry.decisionProviders) {
+            entry.host.cancelConsumer(record.id);
+            if (entry.pluginId === record.id) {
+              entry.host.retire();
+            }
+          }
           instances.add(owner.instance);
         }
       }

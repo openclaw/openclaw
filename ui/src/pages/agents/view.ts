@@ -14,6 +14,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
+import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
@@ -23,10 +24,10 @@ import {
 } from "../../components/settings-ui.ts";
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
@@ -125,6 +126,7 @@ type AgentsProps = {
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
+  decisionModels: DecisionModelEntry[];
   modelCatalogStatus: PanelRefreshStatus;
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
@@ -146,6 +148,7 @@ type AgentsProps = {
   onIdentityAvatarSelect: (file: File) => void;
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
+  onDecisionModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onModelCatalogOpen: () => void;
   onChannelsRefresh: () => void;
@@ -320,6 +323,7 @@ export function renderAgents(props: AgentsProps) {
                             configSaving: props.config.saving,
                             configDirty: props.config.dirty,
                             modelCatalog: props.modelCatalog,
+                            decisionModels: props.decisionModels,
                             modelCatalogStatus: props.modelCatalogStatus,
                             onConfigReload: props.onConfigReload,
                             onConfigSave: props.onConfigSave,
@@ -327,6 +331,7 @@ export function renderAgents(props: AgentsProps) {
                             onIdentityAvatarSelect: props.onIdentityAvatarSelect,
                             onIdentitySave: props.onIdentitySave,
                             onModelChange: props.onModelChange,
+                            onDecisionModelChange: props.onDecisionModelChange,
                             onModelFallbacksChange: props.onModelFallbacksChange,
                             onModelCatalogOpen: props.onModelCatalogOpen,
                             onSelectPanel: props.onSelectPanel,

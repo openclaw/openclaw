@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
@@ -66,10 +67,38 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   selectedAgentId: string;
 };
 
-export function modelPickers(page: Element): SelectPicker[] {
-  return [
-    ...page.querySelectorAll<SelectPicker>(".model-providers__defaults openclaw-select-picker"),
-  ];
+const modelPickerLabels = {
+  primary: "Model",
+  utility: "Utility Model",
+  fallback: "Fallback Model",
+  decision: "Decision Model",
+};
+
+export function modelPicker(page: Element, role: keyof typeof modelPickerLabels): SelectPicker {
+  const picker = page.querySelector<SelectPicker>(
+    `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
+  );
+  expect(picker, `${role} model picker`).not.toBeNull();
+  return picker!;
+}
+
+export function chatModelPickers(page: Element): SelectPicker[] {
+  return (["primary", "utility", "fallback"] as const).map((role) => modelPicker(page, role));
+}
+
+export async function retryCatalog(page: ModelProvidersPageTestElement): Promise<void> {
+  await page.updateComplete;
+  const retry = page.querySelector<HTMLButtonElement>(".model-providers__catalog-progress button");
+  expect(retry?.textContent?.trim()).toBe("Retry");
+  retry!.click();
+  await page.updateComplete;
+}
+
+export async function drainPageUpdates(page: ModelProvidersPageTestElement): Promise<void> {
+  // Drain every promise continuation before checking that a retired result stayed absent.
+  await setImmediate();
+  await page.updateComplete;
+  await updatePickers(page);
 }
 
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
@@ -90,18 +119,20 @@ export function publishCatalog(
   expect(publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, result)).toBe(true);
 }
 
-export async function openModelPicker(page: HTMLElement, index = 0): Promise<void> {
+export async function openModelPicker(
+  page: HTMLElement,
+  role: keyof typeof modelPickerLabels = "primary",
+): Promise<void> {
   await updatePickers(page);
-  const picker = modelPickers(page)[index];
-  expect(picker).toBeDefined();
-  const trigger = picker!.querySelector<HTMLButtonElement>(".picker-select__trigger");
+  const picker = modelPicker(page, role);
+  const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger");
   expect(trigger).not.toBeNull();
   if (trigger!.getAttribute("aria-expanded") === "true") {
     trigger!.click();
-    await picker!.updateComplete;
+    await picker.updateComplete;
   }
   trigger!.click();
-  await picker!.updateComplete;
+  await picker.updateComplete;
 }
 
 export function createAuthStatus(

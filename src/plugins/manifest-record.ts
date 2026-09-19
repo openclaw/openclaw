@@ -505,6 +505,7 @@ export function buildPluginManifestRecord(params: {
       officialCatalogManifest?.contracts,
     ),
     transcriptSources: params.manifest.transcriptSources,
+    decisionModels: params.manifest.decisionModels,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,

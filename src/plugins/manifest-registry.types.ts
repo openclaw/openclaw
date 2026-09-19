@@ -18,6 +18,7 @@ import type { PluginTrust } from "./plugin-trust.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 export type PluginManifestContractListKey =
+  | "decisionProviders"
   | "speechProviders"
   | "externalAuthProviders"
   | "embeddingProviders"

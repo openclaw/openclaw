@@ -143,6 +143,7 @@ describe("plugin capability summaries", () => {
       webFetchProviders: ["web-fetch"],
       webSearchProviders: ["web-search"],
       workerProviders: ["worker"],
+      decisionProviders: ["decision"],
       usageProviders: ["usage"],
       migrationProviders: ["migration"],
       gatewayMethodDispatch: ["gateway-method"],

@@ -421,6 +421,8 @@ export type DefaultModelSelection = {
   fallbacks: string[];
   /** null = automatic/unset; empty string = explicitly disabled. */
   utilityModel: string | null;
+  /** Unset or null disables decisions globally. */
+  decisionModel?: string | null;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
@@ -521,6 +523,9 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       primary,
       fallbacks,
       utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+      ...(typeof defaults?.decisionModel === "string"
+        ? { decisionModel: defaults.decisionModel }
+        : {}),
     },
   };
 }

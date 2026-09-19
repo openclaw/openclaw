@@ -480,7 +480,7 @@ const enSettings = {
       fallback: "Fallback Model",
       noFallback: "No fallback model",
       selectModel: "Select a model",
-      noModels: "Configure a provider before selecting default models.",
+      noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
       discoverFailed: "More models could not be discovered.",
       retryDiscover: "Retry",

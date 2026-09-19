@@ -59,6 +59,7 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Plugin setup and config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Building channel plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+- [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
 
 ## MCP subprocess runtime
 

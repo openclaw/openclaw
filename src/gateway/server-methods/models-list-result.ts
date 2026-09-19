@@ -19,7 +19,6 @@ import {
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
-import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model-catalog-provider-normalizer.js";
 import {
   createModelCatalogView,
   selectModelCatalogRuntimeEntry,
@@ -60,7 +59,6 @@ import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -70,7 +68,11 @@ import { projectWorkerPlacementAgentRuntime } from "../worker-environments/place
 import { resolveChatAccountSelection } from "./chat-account-selection.js";
 import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
-import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
+import {
+  apiKeyProviderCapabilities,
+  createModelsListProviderFilter,
+  listDecisionModels,
+} from "./models-list-capabilities.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
@@ -79,10 +81,7 @@ import {
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
 
 type ModelsListEntryWithCapabilities = ModelChoice;
-type ApiKeyProviderCapabilities = {
-  providers: ReadonlyMap<string, boolean>;
-  resolveProvider(provider: string): string;
-};
+type ApiKeyProviderCapabilities = ReturnType<typeof apiKeyProviderCapabilities>;
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
   isCurrent: () => boolean;
@@ -247,24 +246,6 @@ function createPublicModelsListProjector(params: {
   };
 }
 
-function apiKeyProviderCapabilities(params: {
-  cfg: OpenClawConfig;
-  metadataSnapshot: PluginMetadataSnapshot;
-  workspaceDir: string;
-}): ApiKeyProviderCapabilities {
-  const { capabilities, resolveProvider } = resolveModelProviderCapabilities({
-    config: params.cfg,
-    metadataSnapshot: params.metadataSnapshot,
-    workspaceDir: params.workspaceDir,
-  });
-  return {
-    providers: new Map(
-      capabilities.map(({ provider, apiKeySupported }) => [provider, apiKeySupported]),
-    ),
-    resolveProvider,
-  };
-}
-
 type ModelsListCatalogSource =
   | {
       kind: "gateway";
@@ -385,6 +366,10 @@ export async function prepareModelsListResult(
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
+  const availableDecisionModels = listDecisionModels({
+    config: cfg,
+    snapshot: metadataSnapshot,
+  });
   const retainedModel =
     params.includeManualSelection && view === "configured" && scope?.sessionEntry
       ? resolveSessionModelRef(cfg, scope.sessionEntry, agentId, {
@@ -457,27 +442,13 @@ export async function prepareModelsListResult(
       ? { ...native, availability: false }
       : native;
   };
-  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(metadataSnapshot, cfg);
-  const providerFilter = params.params.provider
-    ? normalizeProvider(params.params.provider)
-    : undefined;
-  if (providerFilter) {
-    const knownProviders = new Set(
-      [
-        ...metadataSnapshot.owners.providers.keys(),
-        ...metadataSnapshot.owners.modelCatalogProviders.keys(),
-        ...Object.keys(cfg.models?.providers ?? {}),
-        ...catalog.map((entry) => entry.provider),
-      ].map(normalizeProvider),
-    );
-    if (!knownProviders.has(providerFilter)) {
-      throw new Error(
-        "Unknown model catalog provider. Use a provider id from the installed plugins or configured providers.",
-      );
-    }
-  }
-  const matchesProvider = (entry: ModelCatalogEntry) =>
-    !providerFilter || normalizeProvider(entry.provider) === providerFilter;
+  const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
+    config: cfg,
+    metadataSnapshot,
+    catalog,
+    provider: params.params.provider,
+  });
+  const decisionModels = availableDecisionModels.filter(matchesProvider);
   const { routeVariants, providerOutcomes } = projector.snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   const visibilityPolicy = createModelVisibilityPolicy({
@@ -600,6 +571,7 @@ export async function prepareModelsListResult(
           .filter(({ entry }) => matchesProvider(entry))
           .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...outcomeProjection,
+        ...(decisionModels.length ? { decisionModels } : {}),
       }),
     };
   }
@@ -709,6 +681,7 @@ export async function prepareModelsListResult(
           return projected;
         }),
         ...outcomeProjection,
+        ...(decisionModels.length ? { decisionModels } : {}),
       };
     },
   };

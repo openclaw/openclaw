@@ -4862,5 +4862,9 @@
   {
     "source": "FAQ: providers, hardware, and hosting",
     "target": "常见问题：服务商、硬件与托管"
+  },
+  {
+    "source": "Decision models",
+    "target": "决策模型"
   }
 ]

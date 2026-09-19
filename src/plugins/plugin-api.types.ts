@@ -333,6 +333,8 @@ export type OpenClawPluginApi = {
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
+  /** Register one version 1 typed decision provider declared in the manifest. */
+  registerDecisionProvider: (provider: import("../decisions/types.js").DecisionProviderV1) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,

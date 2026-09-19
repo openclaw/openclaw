@@ -355,6 +355,10 @@ export function loadPluginManifest(
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
       configGroups: normalizeConfigGroups(raw.configGroups, configSchema),
       contracts,
+      decisionModels: capabilityNormalizers.normalizeManifestDecisionModels(
+        raw.decisionModels,
+        contracts?.decisionProviders,
+      ),
       transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
         raw.transcriptSources,
         contracts?.transcriptSourceProviders,
