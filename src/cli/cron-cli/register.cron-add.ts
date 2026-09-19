@@ -55,10 +55,11 @@ export function registerCronListCommand(cron: Command) {
       .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
+      .option("--query <text>", "Filter automations by search text")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: { includeDisabled: boolean; agentId?: string } = {
+          const listParams: { includeDisabled: boolean; agentId?: string; query?: string } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
@@ -67,6 +68,10 @@ export function registerCronListCommand(cron: Command) {
           }
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
+          }
+          const query = normalizeOptionalString(opts.query);
+          if (query) {
+            listParams.query = query;
           }
           const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {
