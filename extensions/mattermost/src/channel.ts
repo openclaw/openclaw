@@ -1,10 +1,4 @@
-import {
-  jsonResult,
-  readPositiveIntegerParam,
-  readStringArrayParam,
-  readStringParam,
-  withNormalizedTimestamp,
-} from "openclaw/plugin-sdk/channel-actions";
+import { readStringArrayParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -53,6 +47,7 @@ import {
   normalizeMattermostAllowEntry as normalizeAllowEntry,
   resolveMattermostGatewayAuthBypassPaths,
 } from "./channel-config-shared.js";
+import { handleMattermostReadAction } from "./channel-read-action.js";
 import {
   createMattermostDeliveryProgressReporter,
   toMattermostOutboundResult,
@@ -370,76 +365,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => {
     return action === "react" || action === "read";
   },
-  handleAction: async ({
-    action,
-    params,
-    cfg,
-    accountId,
-    conversationReadOrigin,
-    requesterAccountId,
-    toolContext,
-  }) => {
-    if (action === "read") {
-      const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
-      const mattermostConfig = cfg.channels?.mattermost as MattermostConfig | undefined;
-      const account = resolveMattermostAccount({ cfg, accountId: resolvedAccountId });
-      if (!account.enabled) {
-        throw new Error(`Mattermost account "${resolvedAccountId}" is disabled`);
-      }
-      const messagesEnabled =
-        account.config.actions?.messages ?? mattermostConfig?.actions?.messages ?? false;
-      if (!messagesEnabled) {
-        throw new Error("Mattermost message reads are disabled in config");
-      }
-
-      const rawTarget =
-        readStringParam(params, "to") ??
-        readStringParam(params, "channelId") ??
-        readStringParam(params, "target");
-      if (!rawTarget) {
-        throw new Error("Mattermost read requires target, to, or channelId.");
-      }
-      const normalizedTarget = normalizeMattermostMessagingTarget(rawTarget);
-      const channelId = normalizedTarget?.startsWith("channel:")
-        ? normalizedTarget.slice("channel:".length).trim()
-        : !rawTarget.includes(":")
-          ? rawTarget
-          : "";
-      if (!channelId) {
-        throw new Error("Mattermost read requires a channel target.");
-      }
-
-      const before = readStringParam(params, "before");
-      const after = readStringParam(params, "after");
-      if (before && after) {
-        throw new Error("Mattermost read accepts either before or after, not both.");
-      }
-      const result = await (
-        await loadMattermostChannelRuntime()
-      ).readMattermostMessages({
-        cfg,
-        channelId,
-        limit: readPositiveIntegerParam(params, "limit", {
-          message: "limit must be a positive integer.",
-        }),
-        before,
-        after,
-        accountId: resolvedAccountId,
-        context: {
-          conversationReadOrigin,
-          requesterAccountId,
-          toolContext,
-        },
-      });
-      return jsonResult({
-        ok: true,
-        channelId,
-        messages: result.messages.map((message) =>
-          withNormalizedTimestamp(message as Record<string, unknown>, message.create_at),
-        ),
-        hasMore: result.hasMore,
-      });
+  handleAction: async (ctx) => {
+    if (ctx.action === "read") {
+      return await handleMattermostReadAction(ctx, loadMattermostChannelRuntime);
     }
+    const { action, params, cfg, accountId, conversationReadOrigin } = ctx;
 
     if (action === "react") {
       const resolvedAccountId = accountId ?? resolveDefaultMattermostAccountId(cfg);
