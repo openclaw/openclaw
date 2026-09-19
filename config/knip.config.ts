@@ -185,6 +185,9 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/worktree-provision.mts!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
+  // Maintainer proof harnesses are invoked manually from PR evidence.
+  "scripts/proof-142306-queued-admission-authority.ts!",
+  "scripts/proof-142306-queued-execution-benefit.ts!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",

@@ -34,6 +34,7 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
   createReplySessionEntryHandle,
@@ -300,6 +301,7 @@ export async function admitFollowupTurn(params: {
       sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
     const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
       const refreshedInboundContext =
         params.defaults.opts?.isHeartbeat === true
