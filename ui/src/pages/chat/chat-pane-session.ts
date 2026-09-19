@@ -541,10 +541,14 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const agentId = resolveChatAgentId(state);
     const generation =
       older || preserveHistory ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
+    const refreshGeneration = preserveHistory
+      ? ++this.catalogRefreshGeneration
+      : this.catalogRefreshGeneration;
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) &&
       generation === this.catalogLoadGeneration &&
+      (!preserveHistory || refreshGeneration === this.catalogRefreshGeneration) &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
     if (!older && !preserveHistory) {
@@ -632,7 +636,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           page.nextCursor === requestedOlderCursor ||
           this.olderCursorsSeen.has(page.nextCursor));
       this.catalogMessages = nextMessages;
-      if (!preserveHistory) {
+      if (preserveHistory && refresh?.complete) {
+        this.catalogCursor = undefined;
+      } else if (!preserveHistory) {
         this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
       }
       if (!older) {

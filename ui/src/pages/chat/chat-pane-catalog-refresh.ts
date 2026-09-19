@@ -2,6 +2,9 @@ import type { SessionsCatalogReadResult } from "../../../../packages/gateway-pro
 import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 
+const CATALOG_REFRESH_MAX_PAGES = 20;
+const CATALOG_REFRESH_MAX_MESSAGES = 1_000;
+
 function catalogRefreshIdentity(message: unknown): string | null {
   const messageId = catalogMessageId(message);
   return messageId ? `id:${messageId}` : nativeHistoryMessageIdentity(message);
@@ -50,7 +53,9 @@ export async function loadCatalogRefreshPages(options: {
   read: (cursor: string) => Promise<SessionsCatalogReadResult>;
 }): Promise<{ complete: boolean; messages: unknown[] } | null> {
   let page = options.firstPage;
-  const messages = [...options.firstPageMessages];
+  const firstPageMessages = [...options.firstPageMessages];
+  const messages = [...firstPageMessages];
+  let pagesRead = 1;
   let readOlderPage = false;
   const seenCursors = new Set<string>();
   while (
@@ -58,12 +63,20 @@ export async function loadCatalogRefreshPages(options: {
     page.nextCursor &&
     !seenCursors.has(page.nextCursor)
   ) {
+    if (pagesRead >= CATALOG_REFRESH_MAX_PAGES || messages.length >= CATALOG_REFRESH_MAX_MESSAGES) {
+      return { complete: false, messages: firstPageMessages };
+    }
     seenCursors.add(page.nextCursor);
     page = await options.read(page.nextCursor);
     if (!options.isCurrent()) {
       return null;
     }
-    messages.unshift(...options.project(page));
+    const olderMessages = options.project(page);
+    pagesRead += 1;
+    if (messages.length + olderMessages.length > CATALOG_REFRESH_MAX_MESSAGES) {
+      return { complete: false, messages: firstPageMessages };
+    }
+    messages.unshift(...olderMessages);
     readOlderPage = true;
   }
   return { complete: readOlderPage && !page.nextCursor, messages };

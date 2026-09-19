@@ -14,7 +14,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
-import { reconcileCatalogRefresh } from "./chat-pane-catalog-refresh.ts";
+import { loadCatalogRefreshPages, reconcileCatalogRefresh } from "./chat-pane-catalog-refresh.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
@@ -183,6 +183,85 @@ describe("chat pane catalog session lifecycle", () => {
     },
   );
 
+  it("keeps a newer catalog refresh when an older refresh resolves later", async () => {
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    const listResult: SessionsCatalogListResult = {
+      catalogs: [
+        {
+          id: key.catalogId,
+          label: "Codex",
+          capabilities: { continueSession: false, archive: false },
+          hosts: [
+            {
+              hostId: key.hostId,
+              label: "Gateway",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: key.threadId,
+                  status: "idle",
+                  archived: false,
+                  canContinue: false,
+                  canArchive: false,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const staleRead = createDeferred<SessionsCatalogReadResult>();
+    const currentRead = createDeferred<SessionsCatalogReadResult>();
+    let readCount = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.catalog.list") {
+        return Promise.resolve(listResult);
+      }
+      readCount += 1;
+      if (readCount === 1) {
+        return Promise.resolve({
+          hostId: key.hostId,
+          threadId: key.threadId,
+          items: [{ id: "answer", type: "agentMessage", text: "Initial snapshot" }],
+        } satisfies SessionsCatalogReadResult);
+      }
+      return readCount === 2 ? staleRead.promise : currentRead.promise;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(key, "main");
+
+    await pane.loadCatalogSession(key, false);
+    const staleRefresh = pane.loadCatalogSession(key, false, true);
+    await vi.waitFor(() => expect(readCount).toBe(2));
+    const currentRefresh = pane.loadCatalogSession(key, false, true);
+    await vi.waitFor(() => expect(readCount).toBe(3));
+
+    currentRead.resolve({
+      hostId: key.hostId,
+      threadId: key.threadId,
+      items: [{ id: "answer", type: "agentMessage", text: "Newer snapshot" }],
+    });
+    await expect(currentRefresh).resolves.toBe(true);
+    staleRead.resolve({
+      hostId: key.hostId,
+      threadId: key.threadId,
+      items: [{ id: "answer", type: "agentMessage", text: "Older snapshot" }],
+    });
+    await expect(staleRefresh).resolves.toBe(false);
+
+    expect(
+      pane.catalogMessages.map(
+        (message) => (message as { content: Array<{ text: string }> }).content[0]?.text,
+      ),
+    ).toEqual(["Newer snapshot"]);
+  });
+
   it("keeps the refresh boundary stable across an interior insertion", () => {
     const message = (id: string) => ({ role: "assistant", content: id, messageId: id });
     const current = ["A", "B", "C", "D", "E"].map(message);
@@ -191,6 +270,75 @@ describe("chat pane catalog session lifecycle", () => {
     expect(reconcileCatalogRefresh(current, refreshed, current.length, false)).toEqual(
       ["A", "B", "C", "X", "D", "E", "F"].map(message),
     );
+  });
+
+  it("falls back to the latest page when refresh pagination reaches its page bound", async () => {
+    const firstPageMessages = [{ role: "assistant", content: "Latest", messageId: "latest" }];
+    let pageIndex = 1;
+    const read = vi.fn(async () => {
+      pageIndex += 1;
+      return {
+        hostId: "gateway:local",
+        threadId: "thread-101",
+        items: [{ id: `item-${pageIndex}`, type: "agentMessage", text: `Answer ${pageIndex}` }],
+        nextCursor: `cursor-${pageIndex}`,
+      } satisfies SessionsCatalogReadResult;
+    });
+
+    const result = await loadCatalogRefreshPages({
+      current: [{ role: "assistant", content: "Retained", messageId: "retained" }],
+      firstPage: {
+        hostId: "gateway:local",
+        threadId: "thread-101",
+        items: [],
+        nextCursor: "cursor-1",
+      },
+      firstPageMessages,
+      isCurrent: () => true,
+      project: (page) => page.items,
+      read,
+    });
+
+    expect(read.mock.calls.length).toBeGreaterThan(1);
+    expect(read.mock.calls.length).toBeLessThan(50);
+    expect(result).toEqual({ complete: false, messages: firstPageMessages });
+  });
+
+  it("falls back to the latest page before refresh pagination exceeds its item bound", async () => {
+    const firstPageMessages = [{ role: "assistant", content: "Latest", messageId: "latest" }];
+    const pageSize = 101;
+    let pageIndex = 1;
+    const read = vi.fn(async () => {
+      pageIndex += 1;
+      return {
+        hostId: "gateway:local",
+        threadId: "thread-101",
+        items: Array.from({ length: pageSize }, (_, index) => ({
+          id: `item-${pageIndex}-${index}`,
+          type: "agentMessage" as const,
+          text: `Answer ${pageIndex}-${index}`,
+        })),
+        nextCursor: `cursor-${pageIndex}`,
+      } satisfies SessionsCatalogReadResult;
+    });
+
+    const result = await loadCatalogRefreshPages({
+      current: [{ role: "assistant", content: "Retained", messageId: "retained" }],
+      firstPage: {
+        hostId: "gateway:local",
+        threadId: "thread-101",
+        items: [],
+        nextCursor: "cursor-1",
+      },
+      firstPageMessages,
+      isCurrent: () => true,
+      project: (page) => page.items,
+      read,
+    });
+
+    expect(read.mock.calls.length).toBeGreaterThan(1);
+    expect(read.mock.calls.length).toBeLessThan(19);
+    expect(result).toEqual({ complete: false, messages: firstPageMessages });
   });
 
   it("reads backward until a refreshed latest page overlaps retained history", async () => {
@@ -245,7 +393,7 @@ describe("chat pane catalog session lifecycle", () => {
       }
       const page =
         readCount === 1
-          ? { newest: 50 }
+          ? { newest: 50, nextCursor: "stale-older" }
           : params?.cursor === "refresh-older-2"
             ? { newest: 50 }
             : params?.cursor === "refresh-older-1"
@@ -276,6 +424,7 @@ describe("chat pane catalog session lifecycle", () => {
       "sessions.catalog.read",
       expect.objectContaining({ cursor: "refresh-older-2" }),
     );
+    expect(pane.catalogCursor).toBeUndefined();
 
     await pane.loadCatalogSession(key, false, true);
     expect(pane.catalogMessages.map((message) => catalogMessageId(message))).toEqual([

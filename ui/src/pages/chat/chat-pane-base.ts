@@ -491,6 +491,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected catalogSession: SessionCatalogSession | null = null;
   protected catalogHost: SessionCatalogHost | null = null;
   protected catalogLoadGeneration = 0;
+  protected catalogRefreshGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
   protected historyObserver: IntersectionObserver | null = null;
