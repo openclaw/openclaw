@@ -38,6 +38,7 @@ type OpenAIResponsesEndpointClass =
   | "custom";
 
 type OpenAIResponsesPayloadPolicy = {
+  allowsSafetyIdentifier: boolean;
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
   defaultManagedReasoningEffort: "none" | undefined;
@@ -52,6 +53,7 @@ type OpenAIResponsesPayloadPolicy = {
 };
 
 type OpenAIResponsesPayloadCapabilities = {
+  allowsOpenAISafetyIdentifier: boolean;
   allowsOpenAIServiceTier: boolean;
   allowsResponsesStore: boolean;
   explicitContinuationOptIn: boolean;
@@ -171,6 +173,16 @@ function resolveOpenAIResponsesPayloadCapabilities(
     readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
 
   return {
+    // `safety_identifier` is an OpenAI Platform abuse-monitoring field accepted by
+    // both Responses and Chat Completions on api.openai.com. The ChatGPT/Codex
+    // backend, Azure OpenAI, and OpenAI-compatible proxies are not verified to
+    // accept it, so only the public Platform host gets it.
+    allowsOpenAISafetyIdentifier:
+      isOpenAIProvider &&
+      (api === "openai-responses" ||
+        api === "openclaw-openai-responses-transport" ||
+        api === "openai-completions") &&
+      endpointClass === "openai-public",
     allowsOpenAIServiceTier:
       (provider === "openai" &&
         (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
@@ -330,6 +342,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
   const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
 
   return {
+    allowsSafetyIdentifier: capabilities.allowsOpenAISafetyIdentifier,
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
     // Managed proxies inherit their provider default; explicit none is a separate capability.
