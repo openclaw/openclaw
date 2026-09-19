@@ -660,11 +660,71 @@ describe("createSlackBoltApp", () => {
       expect((app as unknown as FakeApp).args.receiver).toBe(wrappedReceiver);
       const receiverArgs = (receiver as unknown as FakeHTTPReceiver | FakeSocketModeReceiver).args;
       expect(receiverArgs.processEventErrorHandler).toBeTypeOf("function");
+      const logger = { error: vi.fn() };
       await expect(
-        (receiverArgs.processEventErrorHandler as () => Promise<boolean>)(),
+        (
+          receiverArgs.processEventErrorHandler as (args: {
+            logger: typeof logger;
+            error: unknown;
+          }) => Promise<boolean>
+        )({ logger, error: new Error("sensitive request contents") }),
       ).resolves.toBe(false);
+      expect(logger.error.mock.calls).toEqual([["Slack receiver event processing failed"]]);
     },
   );
+
+  it("logs receiver failures without acknowledging or exposing the event and error", async () => {
+    const slackBoltModule = await import("@slack/bolt");
+    const processEvent = vi.fn().mockRejectedValue(
+      Object.assign(new Error("sensitive failure details".repeat(1_000)), {
+        code: "sensitive-error-code",
+        cause: { token: "sensitive-cause" },
+      }),
+    );
+    const { receiver, socketModeLogger } = createSlackBoltApp({
+      interop: resolveSlackBoltInterop({
+        defaultImport: slackBoltModule.default,
+        namespaceImport: slackBoltModule,
+      }),
+      slackMode: "socket",
+      token: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions: {},
+      wrapReceiver: (original) => ({
+        init: () => original.init({ processEvent } as never),
+        start: (...args) => original.start(...args),
+        stop: () => original.stop(),
+      }),
+    });
+    if (!(receiver instanceof slackBoltModule.SocketModeReceiver)) {
+      throw new Error("Expected the real Socket Mode receiver");
+    }
+    const error = vi.spyOn(socketModeLogger, "error").mockImplementation(() => {});
+    const ack = vi.fn().mockResolvedValue(undefined);
+    try {
+      const [receive] = receiver.client.listeners("slack_event");
+      if (!receive) {
+        throw new Error("Expected a registered Socket Mode event listener");
+      }
+      await Promise.resolve(
+        receive({
+          body: {
+            type: "event_callback",
+            event: { type: "message", text: "sensitive message contents" },
+          },
+          retry_num: 1,
+          retry_reason: "sensitive retry details",
+          ack,
+        }),
+      );
+      expect(processEvent).toHaveBeenCalledOnce();
+      expect(error.mock.calls).toEqual([["Slack receiver event processing failed"]]);
+      expect(ack).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
+  });
 
   it("prevents Bolt's constructor-time token verification side effect", () => {
     let eagerAuthTestCalls = 0;
