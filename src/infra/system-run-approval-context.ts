@@ -198,14 +198,21 @@ export function resolveSystemRunApprovalRuntimeContext(params: {
 }): SystemRunApprovalRuntimeContext {
   const normalizedPlan = normalizeSystemRunApprovalPlan(params.plan ?? null);
   if (normalizedPlan) {
+    const sessionKey = normalizedPlan.sessionKey ?? normalizeNonEmptyString(params.sessionKey);
+    // The forwarded plan must carry the same identity as the outer context:
+    // the node rejects approvals whose plan session key does not match it.
+    const plan =
+      sessionKey && sessionKey !== normalizedPlan.sessionKey
+        ? { ...normalizedPlan, sessionKey }
+        : normalizedPlan;
     return {
       ok: true,
-      plan: normalizedPlan,
-      argv: [...normalizedPlan.argv],
-      cwd: normalizedPlan.cwd,
-      agentId: normalizedPlan.agentId,
-      sessionKey: normalizedPlan.sessionKey,
-      commandText: normalizedPlan.commandText,
+      plan,
+      argv: [...plan.argv],
+      cwd: plan.cwd,
+      agentId: plan.agentId,
+      sessionKey,
+      commandText: plan.commandText,
     };
   }
   const command = resolveSystemRunCommandRequest({
