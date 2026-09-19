@@ -8,7 +8,11 @@ import {
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  type LookupFn,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
@@ -60,7 +64,9 @@ const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
-export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
+function parseOllamaHostnameAllowlistTarget(
+  baseUrl: string,
+): { hostname: string; origin: string } | undefined {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return undefined;
@@ -73,13 +79,61 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
     if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
       return undefined;
     }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
+    return { hostname: parsed.hostname, origin: parsed.origin };
   } catch {
     return undefined;
   }
+}
+
+/** Full private-network trust for the configured hostname: used for chat/setup/discovery
+ * fetches, which need to reach ordinary RFC1918/loopback/tailnet-style local Ollama
+ * servers. */
+export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+  const target = parseOllamaHostnameAllowlistTarget(baseUrl);
+  if (!target) {
+    return undefined;
+  }
+  return {
+    hostnameAllowlist: [target.hostname],
+    allowPrivateNetwork: true,
+  };
+}
+
+/**
+ * Narrower trust for the configured hostname: used for embedding fetches, which only
+ * need one additional exemption over the ordinary trusted-hostname policy — the IPv4
+ * "unspecified"/"this network" block (0.0.0.0/8), which is where a container runtime's
+ * synthetic host-gateway hostname (for example Docker's host.docker.internal under
+ * OrbStack) can resolve. Unlike `buildOllamaBaseUrlSsrFPolicy`, this does not set
+ * `allowPrivateNetwork`, so loopback (for a non-loopback-literal hostname), link-local,
+ * and cloud-metadata DNS-rebinding protections stay active — see
+ * `assertAllowedTrustedHostnameResolvedAddressesOrThrow` in src/infra/net/ssrf.ts.
+ * Ordinary RFC1918 addresses are unaffected either way: the trusted-hostname policy
+ * already allows those without either flag.
+ *
+ * Deliberately sets only `allowedOrigins`, not `hostnameAllowlist`: `allowedOrigins` is
+ * re-evaluated per URL inside the redirect loop (`resolveSsrFPolicyForUrl` in
+ * src/infra/net/ssrf.ts) — including the initial request, whose URL always matches its
+ * own origin — and promotes the hostname into that hop's trusted `allowedHostnames` only
+ * when the *exact* configured origin (scheme + host + port) matches, which is what skips
+ * the early literal-hostname/IP check (`assertAllowedHostOrIpOrThrow`) and grants the
+ * `allowUnspecifiedIpv4Range` exemption for the configured host. A static
+ * `hostnameAllowlist`, by contrast, is checked unconditionally on every hop
+ * (`resolveHostnamePolicyChecks`) regardless of origin match, so adding one here would
+ * block a redirect to a different public hostname that the prior origin-only policy
+ * (`ssrfPolicyFromHttpBaseUrlAllowedOrigin`) always allowed to fall through to ordinary
+ * SSRF checks — `allowedOrigins` alone preserves that redirect behavior while still
+ * scoping the private-network exemption to only the configured origin.
+ */
+export function buildOllamaEmbeddingSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+  const target = parseOllamaHostnameAllowlistTarget(baseUrl);
+  if (!target) {
+    return undefined;
+  }
+  return {
+    allowedOrigins: [target.origin],
+    allowUnspecifiedIpv4Range: true,
+  };
 }
 
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
