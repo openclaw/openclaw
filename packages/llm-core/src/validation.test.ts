@@ -207,6 +207,33 @@ describe("validateToolArguments", () => {
     ).toThrow(/Validation failed for tool "decimal-tool"/);
   });
 
+  it("coerces additional properties without changing declared string fields", () => {
+    const tool: Tool = {
+      name: "additional-integers",
+      description: "Keep declared fields separate from additional properties",
+      parameters: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          count: { type: "integer" },
+        },
+        required: ["label", "count"],
+        additionalProperties: { type: "integer" },
+      },
+    };
+    const input = { label: "1e2", count: "1", extra: "2" };
+
+    expect(
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "additional-integers-call",
+        name: tool.name,
+        arguments: input,
+      }),
+    ).toEqual({ label: "1e2", count: 1, extra: 2 });
+    expect(input).toEqual({ label: "1e2", count: "1", extra: "2" });
+  });
+
   it("retains TypeBox-specific record and numeric enum coercion", () => {
     const tool: Tool = {
       name: "typed-record",
