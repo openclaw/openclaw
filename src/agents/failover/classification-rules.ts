@@ -210,6 +210,14 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    // Only quota classifications refine HTTP 429. A generic provider fallback
+    // such as timeout must not erase its billing or rate-limit semantics.
+    if (
+      opts?.preserveProviderSignalClassification &&
+      (messageReason === "billing" || messageReason === "rate_limit")
+    ) {
+      return messageClassification;
+    }
     if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
