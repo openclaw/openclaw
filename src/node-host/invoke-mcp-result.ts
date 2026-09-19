@@ -10,6 +10,29 @@ const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
 
 type McpInvokeContentBlock = Record<string, unknown>;
 
+// Byte measurement is iterative, but the node.invoke transport still
+// serializes the bounded payload with recursive native JSON. A measured-
+// complete value can therefore still overflow the call stack downstream,
+// turning a successful tool call into an MCP_TOOL_ERROR. Verify
+// serializability at acceptance so such values fall back to the truncation
+// marker, matching the pre-iterative-measurement behavior.
+function isJsonTransportSerializable(value: unknown): boolean {
+  try {
+    JSON.stringify(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tryMirrorStructuredContent(value: Record<string, unknown>): string | undefined {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Bounds MCP result content before it crosses node.invoke. */
 export function boundMcpToolResultPayload(result: {
   content: readonly unknown[];
@@ -26,6 +49,7 @@ export function boundMcpToolResultPayload(result: {
   let usedBytes = jsonUtf8BytesOrInfinity({ content: [], ...(isError ? { isError } : {}) });
   let payloadTruncated = false;
   let structuredContent: Record<string, unknown> | undefined;
+  let mirroredStructuredContent: string | undefined;
   if (result.structuredContent) {
     const prefixBytes = Buffer.byteLength(',"structuredContent":');
     const availableBytes = Math.max(
@@ -34,15 +58,18 @@ export function boundMcpToolResultPayload(result: {
     );
     const measured = boundedJsonUtf8Bytes(result.structuredContent, availableBytes);
     if (measured.complete && measured.bytes <= availableBytes) {
-      structuredContent = result.structuredContent;
-      usedBytes += prefixBytes + measured.bytes;
+      const mirrored = tryMirrorStructuredContent(result.structuredContent);
+      if (mirrored !== undefined) {
+        structuredContent = result.structuredContent;
+        mirroredStructuredContent = mirrored;
+        usedBytes += prefixBytes + measured.bytes;
+      } else {
+        payloadTruncated = true;
+      }
     } else {
       payloadTruncated = true;
     }
   }
-  const mirroredStructuredContent = structuredContent
-    ? JSON.stringify(structuredContent, null, 2)
-    : undefined;
   const normalizedBlocks = result.content.filter(
     (block): block is McpInvokeContentBlock =>
       isRecord(block) &&
@@ -98,7 +125,11 @@ export function boundMcpToolResultPayload(result: {
       MCP_INVOKE_PAYLOAD_MAX_BYTES - usedBytes - separatorBytes - reservedMarkerBytes,
     );
     const measured = boundedJsonUtf8Bytes(block, availableBytes);
-    if (!measured.complete || measured.bytes > availableBytes) {
+    if (
+      !measured.complete ||
+      measured.bytes > availableBytes ||
+      !isJsonTransportSerializable(block)
+    ) {
       payloadTruncated = true;
       continue;
     }
