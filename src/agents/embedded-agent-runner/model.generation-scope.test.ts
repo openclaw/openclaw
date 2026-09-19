@@ -159,7 +159,7 @@ describe("model runtime generation scope", () => {
     await expect(resolveGeneration(generation, "openai:missing")).rejects.toMatchObject({
       code: "selected_auth_profile_unavailable",
       reason: "auth",
-      status: 401,
+      status: undefined,
     });
     expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ describe("model runtime generation scope", () => {
     await expect(resolveGeneration(generation, profileId)).rejects.toMatchObject({
       code: "selected_auth_profile_unavailable",
       reason: "auth",
-      status: 401,
+      status: undefined,
     });
     expect(generation.resolveDynamicModel).not.toHaveBeenCalled();
   });

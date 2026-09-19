@@ -2136,7 +2136,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       expect.objectContaining({
         code: "selected_auth_profile_unavailable",
         reason: "auth",
-        status: 401,
+        status: undefined,
       }),
     );
   });

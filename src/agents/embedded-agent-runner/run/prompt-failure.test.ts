@@ -71,6 +71,28 @@ function makeParams(
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("records local profile absence without an HTTP status in the fallback trace", async () => {
+    const code = "selected_auth_profile_unavailable";
+    const message = 'Selected auth profile "openai:work" was not found in OpenClaw.';
+    const params = makeParams({
+      promptError: Object.assign(new Error(message), { code }),
+      failover: {
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      },
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code,
+      message,
+      status: undefined,
+    });
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({ result: "fallback_model", reason: "auth", stage: "prompt" }),
+    ]);
+    expect(params.traceAttempts[0]).not.toHaveProperty("status");
+  });
+
   it.each([false, true])(
     "keeps account-restricted model errors on the model-failure path with fallback=%s",
     async (fallbackConfigured) => {

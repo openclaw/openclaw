@@ -240,6 +240,16 @@ the profile ID and its existing model and session pins. The configured model
 and native credential file stay unchanged. An explicitly isolated agent home
 continues to use the imported OpenClaw profile through its isolated runtime.
 
+Since 2026.9.5, native Codex login no longer supplies the runtime-only
+`openai:default` profile. If that OAuth profile is still declared but absent from
+an agent's canonical credential store, `openclaw doctor --fix`, Doctor lint, and
+Gateway startup warn with the import command above. The warning does not copy
+credentials or block the update. Missing-profile errors identify local store
+absence without reporting a provider HTTP 401; the error records a local lookup
+failure, not a provider rejection.
+For multiple agents, add `--agent <id>` to the login command to select the
+affected agent.
+
 Fresh imports keep account-scoped profile IDs. A matching existing account and
 user reuse their stored profile. Import from another home, missing account/user
 identity, or an existing managed account does not claim the legacy pin. Use the
