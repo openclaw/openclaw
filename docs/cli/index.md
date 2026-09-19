@@ -249,7 +249,7 @@ openclaw [--dev] [--profile <name>] <command>
     okf import
     search
     get
-    apply synthesis|metadata
+    apply synthesis|concept|entity|metadata
     bridge import
     unsafe-local import
     chatgpt import|rollback

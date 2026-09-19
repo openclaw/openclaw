@@ -143,6 +143,266 @@ describe("applyMemoryWikiMutation", () => {
     );
   });
 
+  it("normalizes concept and entity create aliases and requires page fields", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "concept",
+        title: "Alpha Concept",
+        body: "Alpha concept body.",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toMatchObject({ op: "create_concept", title: "Alpha Concept" });
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "entity",
+        title: "Alpha",
+        body: "Alpha entity body.",
+        sourceIds: ["source.alpha"],
+        entityType: " system ",
+        canonicalId: "system.alpha",
+        aliases: ["alpha-svc"],
+        relationships: [{ targetId: "entity.beta", kind: "depends-on", confidence: 0.6 }],
+      }),
+    ).toEqual({
+      op: "create_entity",
+      title: "Alpha",
+      body: "Alpha entity body.",
+      sourceIds: ["source.alpha"],
+      entityType: "system",
+      canonicalId: "system.alpha",
+      aliases: ["alpha-svc"],
+      relationships: [{ targetId: "entity.beta", kind: "depends-on", confidence: 0.6 }],
+    });
+
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "create_concept",
+        title: "Alpha Concept",
+        body: "Alpha concept body.",
+      }),
+    ).toThrow("wiki mutation requires at least one sourceId for create_concept.");
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "create_entity",
+        title: "Alpha",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toThrow("wiki mutation requires body for create_entity.");
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "create_entity",
+        title: "Alpha",
+        body: "Alpha entity body.",
+        sourceIds: ["source.alpha"],
+        relationships: [{ targetId: "entity.beta", confidence: 1.5 }],
+      }),
+    ).toThrow("relationships[0].confidence must be a number between 0 and 1; received 1.5.");
+  });
+
+  it("creates concept pages under concepts/ with concept ids and refreshed indexes", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-concept-" });
+
+    const result = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_concept",
+        title: "Writing as Dataflow",
+        body: "Prose coherence can be checked like a dataflow analysis.",
+        sourceIds: ["source.alpha"],
+        claims: [
+          {
+            text: "Each clause loads a known referent and produces a new one.",
+            status: "candidate",
+            confidence: 0.75,
+            evidence: [{ sourceId: "source.alpha", note: "Mapping table." }],
+          },
+        ],
+        questions: ["Does this hold for dialogue?"],
+        status: "seed",
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.operation).toBe("create_concept");
+    expect(result.pagePath).toBe("concepts/writing-as-dataflow.md");
+    expect(result.pageId).toBe("concept.writing-as-dataflow");
+    expect(result.compile.pageCounts.concept).toBe(1);
+    expect(result.compile.pageCounts.synthesis).toBe(0);
+
+    const parsed = parseWikiMarkdown(
+      await fs.readFile(path.join(rootDir, result.pagePath), "utf8"),
+    );
+    expect(parsed.frontmatter).toMatchObject({
+      pageType: "concept",
+      id: "concept.writing-as-dataflow",
+      title: "Writing as Dataflow",
+      sourceIds: ["source.alpha"],
+      questions: ["Does this hold for dialogue?"],
+      status: "seed",
+    });
+    expect(parsed.frontmatter.claims).toEqual([
+      {
+        text: "Each clause loads a known referent and produces a new one.",
+        status: "candidate",
+        confidence: 0.75,
+        evidence: [{ sourceId: "source.alpha", note: "Mapping table." }],
+      },
+    ]);
+    expect(parsed.body).toContain("## Summary");
+    expect(parsed.body).toContain("Prose coherence can be checked like a dataflow analysis.");
+    expect(parsed.body).toContain("<!-- openclaw:human:start -->");
+    await expect(
+      fs.readFile(path.join(rootDir, "concepts", "index.md"), "utf8"),
+    ).resolves.toContain("[Writing as Dataflow](writing-as-dataflow.md)");
+  });
+
+  it("creates entity pages under entities/ with entity metadata and refreshed indexes", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-entity-" });
+
+    const result = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_entity",
+        title: "Alpha Service",
+        body: "Alpha Service owns production writes.",
+        sourceIds: ["source.alpha"],
+        entityType: "system",
+        canonicalId: "system.alpha",
+        aliases: ["alpha-svc", "alpha-svc", " Alpha "],
+        relationships: [
+          {
+            targetId: "entity.beta-service",
+            targetTitle: "Beta Service",
+            kind: "depends-on",
+            confidence: 0.6,
+          },
+        ],
+        confidence: 0.8,
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.operation).toBe("create_entity");
+    expect(result.pagePath).toBe("entities/alpha-service.md");
+    expect(result.pageId).toBe("entity.alpha-service");
+    expect(result.compile.pageCounts.entity).toBe(1);
+
+    const parsed = parseWikiMarkdown(
+      await fs.readFile(path.join(rootDir, result.pagePath), "utf8"),
+    );
+    expect(parsed.frontmatter).toMatchObject({
+      pageType: "entity",
+      id: "entity.alpha-service",
+      title: "Alpha Service",
+      entityType: "system",
+      canonicalId: "system.alpha",
+      aliases: ["alpha-svc", "Alpha"],
+      sourceIds: ["source.alpha"],
+      confidence: 0.8,
+      status: "active",
+    });
+    expect(parsed.frontmatter.relationships).toEqual([
+      {
+        targetId: "entity.beta-service",
+        targetTitle: "Beta Service",
+        kind: "depends-on",
+        confidence: 0.6,
+      },
+    ]);
+    expect(parsed.body).toContain("Alpha Service owns production writes.");
+    await expect(
+      fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
+    ).resolves.toContain("[Alpha Service](alpha-service.md)");
+  });
+
+  it("preserves entity metadata and human notes when refreshing an entity page", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-entity-refresh-" });
+    const targetPath = path.join(rootDir, "entities", "alpha.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(
+      targetPath,
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha-custom",
+          title: "Alpha",
+          entityType: "person",
+          aliases: ["Al"],
+          sourceIds: ["source.old"],
+        },
+        body: `# Alpha
+
+## Notes
+<!-- openclaw:human:start -->
+keep this note
+<!-- openclaw:human:end -->
+`,
+      }),
+      "utf8",
+    );
+
+    const result = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_entity",
+        title: "Alpha",
+        body: "Refreshed summary.",
+        sourceIds: ["source.new"],
+        canonicalId: "person.alpha",
+      },
+    });
+
+    expect(result.pagePath).toBe("entities/alpha.md");
+    expect(result.pageId).toBe("entity.alpha-custom");
+    const parsed = parseWikiMarkdown(await fs.readFile(targetPath, "utf8"));
+    expect(parsed.frontmatter).toMatchObject({
+      id: "entity.alpha-custom",
+      entityType: "person",
+      canonicalId: "person.alpha",
+      aliases: ["Al"],
+      sourceIds: ["source.new"],
+    });
+    expect(parsed.body).toContain("Refreshed summary.");
+    expect(parsed.body).toContain("keep this note");
+  });
+
+  it("clears entity aliases and relationships when refreshed with explicit empty lists", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-entity-clear-" });
+
+    await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_entity",
+        title: "Alpha",
+        body: "Alpha entity body.",
+        sourceIds: ["source.alpha"],
+        entityType: "system",
+        aliases: ["alpha-svc"],
+        relationships: [{ targetId: "entity.beta", kind: "depends-on", confidence: 0.6 }],
+      },
+    });
+
+    await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_entity",
+        title: "Alpha",
+        body: "Cleared summary.",
+        sourceIds: ["source.alpha"],
+        aliases: [],
+        relationships: [],
+      },
+    });
+
+    const parsed = parseWikiMarkdown(
+      await fs.readFile(path.join(rootDir, "entities", "alpha.md"), "utf8"),
+    );
+    expect(parsed.frontmatter.aliases).toEqual([]);
+    expect(parsed.frontmatter.relationships).toEqual([]);
+    expect(parsed.frontmatter.entityType).toBe("system");
+  });
+
   it("applies a write when an unrelated vault page has malformed frontmatter (#96125)", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-unrelated-invalid-",

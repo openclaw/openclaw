@@ -169,6 +169,15 @@ openclaw wiki apply synthesis "Alpha Summary" \
   --body "Short synthesis body" \
   --source-id source.alpha
 
+openclaw wiki apply concept "Alpha Pattern" \
+  --body "Short concept body" \
+  --source-id source.alpha
+
+openclaw wiki apply entity "Alpha Service" \
+  --body "Short entity body" \
+  --source-id source.alpha \
+  --entity-type system
+
 openclaw wiki apply metadata entity.alpha \
   --source-id source.alpha \
   --status review \
@@ -198,7 +207,7 @@ openclaw wiki search "refund policy" --agent support
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared `memory_search` / `memory_get` flows can reach the wiki when the active memory plugin supports corpus selection.
 
-`wiki_apply` accepts structured `claims` payloads for synthesis and metadata updates, so the wiki can store claim-level evidence instead of only page-level prose.
+`wiki_apply` creates or refreshes synthesis, concept, and entity pages (`create_synthesis`, `create_concept`, `create_entity`) and updates existing page metadata (`update_metadata`). Every operation accepts structured `claims` payloads, so the wiki can store claim-level evidence instead of only page-level prose; `create_entity` also accepts `entityType`, `canonicalId`, `aliases`, and `relationships`.
 
 When `context.includeCompiledDigestPrompt` is enabled, the memory prompt supplement also appends a compact snapshot from the lifecycle-owned in-memory cache. Legacy prompt assembly sees that automatically, and non-legacy context engines can pick it up when they explicitly consume memory prompt supplements via `buildActiveMemoryPromptSection(...)`.
 

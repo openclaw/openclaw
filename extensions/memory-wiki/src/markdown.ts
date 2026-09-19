@@ -331,7 +331,7 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
   return hasAnyValue ? card : undefined;
 }
 
-function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
+export function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
   if (!Array.isArray(value)) {
     return [];
   }
