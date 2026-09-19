@@ -265,6 +265,58 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
   });
 
+  it("grants reconnect grace to a busy account while a validated typed disconnect is current", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        activeRunStartedAt: now - 26 * 60_000,
+        lastStartAt: now - 30 * 60_000,
+        lastDisconnect: { at: now - 4, error: "socket closed" },
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "reconnect-grace" });
+  });
+
+  it("reports a busy account disconnected at the reconnect grace boundary", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        activeRunStartedAt: now - 26 * 60_000,
+        lastStartAt: now - 30 * 60_000,
+        lastDisconnect: { at: now - 120_000, error: "socket closed" },
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("keeps a stale busy heartbeat stuck even when a typed disconnect is current", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 26 * 60_000, {
+        activeRunStartedAt: now - 26 * 60_000,
+        lastStartAt: now - 30 * 60_000,
+        lastDisconnect: { at: now - 4, error: "socket closed" },
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("does not grant busy reconnect grace to a disconnect recorded before the current start", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        activeRunStartedAt: now - 26 * 60_000,
+        lastStartAt: now - 3_000,
+        lastDisconnect: { at: now - 5_000, error: "socket closed" },
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
   it("keeps a connected run healthy past the threshold while its heartbeat stays fresh", () => {
     const now = 30 * 60_000;
     const evaluation = evaluateHealth(

@@ -84,6 +84,24 @@ function resolveObservedChannelTimestamp(value: unknown, now: number): number | 
     : null;
 }
 
+/**
+ * A disconnect is current only when its producer recorded it inside this
+ * account lifecycle; patch-merged timestamps from prior runs grant no grace.
+ */
+function resolveCurrentDisconnectAt(
+  snapshot: ChannelHealthSnapshot,
+  lastStartAt: number | null,
+  now: number,
+): number | null {
+  const lastDisconnectAt =
+    snapshot.lastDisconnect && typeof snapshot.lastDisconnect !== "string"
+      ? resolveObservedChannelTimestamp(snapshot.lastDisconnect.at, now)
+      : null;
+  return lastDisconnectAt != null && (lastStartAt == null || lastDisconnectAt >= lastStartAt)
+    ? lastDisconnectAt
+    : null;
+}
+
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
 const CHANNEL_RECONNECT_GRACE_MS = 120_000;
 // Keep these shared between the background health monitor and on-demand readiness
@@ -170,6 +188,17 @@ export function evaluateChannelHealth(
       if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
       }
+      // Run age is not a disconnect age: while the run heartbeat stays fresh, a
+      // validated typed disconnect owns the down clock, so the transport's own
+      // reconnect grace window applies before a restart aborts otherwise
+      // progressing runs. Without a validated disconnect, run start age remains
+      // the only down-clock proxy and stays stuck.
+      const currentDisconnectAt = resolveCurrentDisconnectAt(snapshot, lastStartAt, policy.now);
+      if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS && currentDisconnectAt != null) {
+        return policy.now - currentDisconnectAt < CHANNEL_RECONNECT_GRACE_MS
+          ? { healthy: true, reason: "reconnect-grace" }
+          : { healthy: false, reason: "disconnected" };
+      }
       return { healthy: false, reason: "stuck" };
     }
   }
@@ -180,16 +209,9 @@ export function evaluateChannelHealth(
     }
   }
   if (snapshot.connected === false) {
-    const lastDisconnectAt =
-      snapshot.lastDisconnect && typeof snapshot.lastDisconnect !== "string"
-        ? resolveObservedChannelTimestamp(snapshot.lastDisconnect.at, policy.now)
-        : null;
-    // A disconnect is current only when its producer recorded it inside this
-    // account lifecycle; patch-merged timestamps from prior runs grant no grace.
-    const disconnectBelongsToLifecycle =
-      lastDisconnectAt != null && (lastStartAt == null || lastDisconnectAt >= lastStartAt);
+    const lastDisconnectAt = resolveCurrentDisconnectAt(snapshot, lastStartAt, policy.now);
     if (
-      disconnectBelongsToLifecycle &&
+      lastDisconnectAt != null &&
       Math.max(0, policy.now - lastDisconnectAt) < CHANNEL_RECONNECT_GRACE_MS
     ) {
       return { healthy: true, reason: "reconnect-grace" };
