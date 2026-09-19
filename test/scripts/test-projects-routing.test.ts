@@ -1055,7 +1055,7 @@ describe("test-projects args", () => {
     expect(plans).toHaveLength(1);
   });
 
-  it("keeps extension production changes on the owning extension lane", () => {
+  it("keeps extension production changes on their owning test lanes", () => {
     const changedPaths = ["extensions/discord/src/monitor/message-handler.ts"];
 
     expect(
@@ -1068,12 +1068,17 @@ describe("test-projects args", () => {
           "extensions/discord/src/channel-actions.contract.test.ts",
           "extensions/discord/src/channel.message-adapter.test.ts",
           "extensions/discord/src/channel.test.ts",
-          "extensions/discord/src/durable-delivery.test.ts",
           "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
           "extensions/discord/src/monitor/message-handler.queue.test.ts",
           "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
           "extensions/discord/src/monitor/provider.test.ts",
         ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.extension-database-workers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/discord/src/durable-delivery.test.ts"],
         watchMode: false,
       },
     ]);

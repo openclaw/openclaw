@@ -34,6 +34,7 @@ import {
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import { executeDeliveryQueuePlatformLeaseCommand } from "../infra/outbound/delivery-queue-platform-lease.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import {
   readApnsRegistrationFromDatabase,
@@ -425,6 +426,12 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (
+    command.type === "deliveryQueue.claimPlatformSend" ||
+    command.type === "deliveryQueue.renewPlatformSendLease"
+  ) {
+    return executeDeliveryQueuePlatformLeaseCommand(command, writeOptions);
+  }
   if (
     command.type === "deviceAuth.store" ||
     command.type === "deviceAuth.storeOrigin" ||

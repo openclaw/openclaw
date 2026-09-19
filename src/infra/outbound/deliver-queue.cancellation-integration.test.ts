@@ -615,7 +615,7 @@ describe("queued cancellation during adapter preparation", () => {
   ] as const)(
     "preserves $result delivery after adapter dispatch has started ($authority, bestEffort: $bestEffort)",
     async ({ result, authority, bestEffort }) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       const stateDir = fixtures.tmpDir();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const adapter = installHeldAdapter();
