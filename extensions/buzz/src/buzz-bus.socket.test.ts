@@ -155,95 +155,121 @@ it("keeps removal denied through stale snapshots and accepts a confirmed rejoin"
   }
 });
 
-it("finishes an admitted room turn after its sender is removed", async () => {
-  const fixture = await createBuzzRelayFixture();
-  const runtime = createPluginRuntimeMock();
-  runtime.state.openKeyedStore = (options) => createPluginStateKeyedStoreForTests("buzz", options);
-  setBuzzRuntime(runtime);
-  const dispatched = createDeferred<void>();
-  const continueTurn = createDeferred<void>();
-  const completed = createDeferred<void>();
-  const cfg = {
-    channels: {
-      buzz: {
+it.each(["sender removal", "room archive"] as const)(
+  "settles an admitted room turn after %s",
+  async (change) => {
+    const fixture = await createBuzzRelayFixture();
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openKeyedStore = (options) =>
+      createPluginStateKeyedStoreForTests("buzz", options);
+    setBuzzRuntime(runtime);
+    const dispatched = createDeferred<void>();
+    const continueTurn = createDeferred<void>();
+    const completed = createDeferred<void>();
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: fixture.relayUrl,
+          privateKey: fixture.botPrivateKey,
+          groupPolicy: "open",
+          groups: { [fixture.roomId]: { requireMention: false } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const account = resolveBuzzAccount({ cfg });
+    vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
+      dispatched.resolve();
+      await continueTurn.promise;
+      await params.delivery.deliver({ text: "admitted room reply" }, { kind: "final" });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.route.sessionKey,
+        dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+      };
+    });
+    let bus: BuzzBus | undefined;
+    try {
+      bus = await startBuzzBus({
+        accountId: account.accountId,
         relayUrl: fixture.relayUrl,
         privateKey: fixture.botPrivateKey,
-        groupPolicy: "open",
-        groups: { [fixture.roomId]: { requireMention: false } },
-      },
-    },
-  } satisfies OpenClawConfig;
-  const account = resolveBuzzAccount({ cfg });
-  vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
-    dispatched.resolve();
-    await continueTurn.promise;
-    await params.delivery.deliver({ text: "admitted room reply" }, { kind: "final" });
-    return {
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      ctxPayload: params.ctxPayload,
-      routeSessionKey: params.route.sessionKey,
-      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
-    };
-  });
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: account.accountId,
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      channelIds: [fixture.roomId],
-      onMessage: async (message, activeBus, signal, assertCurrent) => {
-        await handleBuzzInbound({
-          account,
-          cfg,
-          bus: activeBus,
-          message,
-          signal,
-          assertCurrent,
-          historyMap: new Map(),
-        });
-        completed.resolve();
-      },
-      onMessageError: completed.reject,
-    });
-    const message = fixture.sendMessage("accepted before removal");
-    await dispatched.promise;
-    const initial = fixture.events.find((event) => event.kind === 39002)!;
-    fixture.broadcast(
-      fixture.signRelay({
-        kind: 39002,
-        created_at: initial.created_at + 1,
-        content: "",
-        tags: initial.tags.filter((tag) => tag[0] !== "p" || tag[1] !== fixture.senderPublicKey),
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(
-        bus?.directory
-          .listGroupMembers({ groupId: fixture.roomId })
-          .some((member) => member.id === fixture.senderPublicKey),
-      ).toBe(false),
-    );
-    continueTurn.resolve();
-    await completed.promise;
-    const replies = fixture.events.filter(
-      (event) => event.pubkey === fixture.botPublicKey && event.kind === 9,
-    );
-    expect(replies).toHaveLength(1);
-    expect(replies[0]).toMatchObject({
-      content: "admitted room reply",
-      tags: expect.arrayContaining([
-        ["h", fixture.roomId],
-        ["e", message.id, "", "reply"],
-      ]),
-    });
-  } finally {
-    continueTurn.resolve();
-    await bus?.close();
-    await fixture.close();
-  }
-});
+        channelIds: [fixture.roomId],
+        onMessage: async (message, activeBus, signal, assertCurrent) => {
+          await handleBuzzInbound({
+            account,
+            cfg,
+            bus: activeBus,
+            message,
+            signal,
+            assertCurrent,
+            historyMap: new Map(),
+          });
+          completed.resolve();
+        },
+        onMessageError: completed.reject,
+      });
+      const message = fixture.sendMessage("accepted before removal");
+      await dispatched.promise;
+      const initial = fixture.events.find((event) => event.kind === 39002)!;
+      if (change === "room archive") {
+        fixture.broadcast(
+          fixture.signRelay({
+            kind: 39000,
+            created_at: initial.created_at + 1,
+            content: "",
+            tags: [
+              ["d", fixture.roomId],
+              ["archived", "true"],
+            ],
+          }),
+        );
+        await bus.refreshDirectory();
+      } else {
+        fixture.broadcast(
+          fixture.signRelay({
+            kind: 39002,
+            created_at: initial.created_at + 1,
+            content: "",
+            tags: initial.tags.filter(
+              (tag) => tag[0] !== "p" || tag[1] !== fixture.senderPublicKey,
+            ),
+          }),
+        );
+        await vi.waitFor(() =>
+          expect(
+            bus?.directory
+              .listGroupMembers({ groupId: fixture.roomId })
+              .some((member) => member.id === fixture.senderPublicKey),
+          ).toBe(false),
+        );
+      }
+      continueTurn.resolve();
+      if (change === "room archive") {
+        await expect(completed.promise).rejects.toThrow("archived");
+        expect(fixture.received.filter((event) => event.kind === 9)).toEqual([]);
+        return;
+      }
+      await completed.promise;
+      const replies = fixture.events.filter(
+        (event) => event.pubkey === fixture.botPublicKey && event.kind === 9,
+      );
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({
+        content: "admitted room reply",
+        tags: expect.arrayContaining([
+          ["h", fixture.roomId],
+          ["e", message.id, "", "reply"],
+        ]),
+      });
+    } finally {
+      continueTurn.resolve();
+      await bus?.close();
+      await fixture.close();
+    }
+  },
+);
 
 it("keeps healthy rooms subscribed when a configured room lost the Bot role", async () => {
   const fixture = await createBuzzRelayFixture();

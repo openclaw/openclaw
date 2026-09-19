@@ -491,3 +491,351 @@ it.each(["member", "absent"] as const)(
     }
   },
 );
+
+it("keeps an unrelated in-flight reply alive when another room is archived", async () => {
+  const fixture = await createBuzzRelayFixture();
+  const other = seedSkippedRoom(fixture);
+  fixture.events.splice(
+    fixture.events.findIndex(
+      (event) =>
+        event.kind === 39002 && event.tags.some((tag) => tag[0] === "d" && tag[1] === other.roomId),
+    ),
+    1,
+  );
+  publishBotRole(fixture, other.roomId, "bot", other.createdAt + 1);
+  const fatal: Error[] = [];
+  let turnSignal: AbortSignal | undefined;
+  let releaseReply = () => {};
+  const pendingReply = new Promise<void>((resolve) => {
+    releaseReply = resolve;
+  });
+  let bus: BuzzBus | undefined;
+  try {
+    bus = await startBuzzBus({
+      accountId: randomUUID(),
+      relayUrl: fixture.relayUrl,
+      privateKey: fixture.botPrivateKey,
+      channelIds: [fixture.roomId, other.roomId],
+      onMessage: async (message, activeBus, signal, assertCurrent) => {
+        turnSignal = signal;
+        await pendingReply;
+        assertCurrent();
+        await activeBus.sendText({ channelId: message.channelId, text: "completed reply" });
+      },
+      onFatalError: (error) => fatal.push(error),
+    });
+    fixture.sendMessage("slow question in healthy room");
+    await vi.waitFor(() => expect(turnSignal).toBeDefined());
+    fixture.broadcast(
+      fixture.signRelay({
+        kind: 39000,
+        created_at: other.createdAt + 2,
+        content: "",
+        tags: [
+          ["d", other.roomId],
+          ["archived", "true"],
+        ],
+      }),
+    );
+    fixture.broadcast(
+      fixture.signRelay({
+        kind: 9002,
+        created_at: other.createdAt + 2,
+        content: "",
+        tags: [["h", other.roomId]],
+      }),
+    );
+    await vi.waitFor(() => expect(bus?.directory.isRoomArchived(other.roomId)).toBe(true));
+    expect(turnSignal?.aborted).toBe(false);
+    expect(fatal).toEqual([]);
+    releaseReply();
+    await vi.waitFor(() =>
+      expect(fixture.received).toContainEqual(
+        expect.objectContaining({ content: "completed reply" }),
+      ),
+    );
+    expect(fixture.authenticatedSessions()).toBe(1);
+  } finally {
+    releaseReply();
+    await bus?.close();
+    await fixture.close();
+  }
+});
+
+function publishRoomArchive(
+  fixture: BuzzRelayFixture,
+  roomId: string,
+  archived: boolean,
+  createdAt: number,
+) {
+  fixture.broadcast(
+    fixture.signRelay({
+      kind: 39000,
+      created_at: createdAt,
+      content: "",
+      tags: [
+        ["d", roomId],
+        ["archived", String(archived)],
+      ],
+    }),
+  );
+}
+
+it.each(["roster query", "room EOSE"] as const)(
+  "keeps healthy rooms online when an archive interrupts restoration during %s",
+  async (stage) => {
+    const fixture = await createBuzzRelayFixture();
+    const skipped = seedSkippedRoom(fixture);
+    const messages: string[] = [];
+    const fatal: Error[] = [];
+    let pending: ReturnType<BuzzRelayFixture["pauseNextMembershipQuery"]> | undefined;
+    let bus: BuzzBus | undefined;
+    try {
+      bus = await startBuzzBus({
+        accountId: randomUUID(),
+        relayUrl: fixture.relayUrl,
+        privateKey: fixture.botPrivateKey,
+        channelIds: [fixture.roomId, skipped.roomId],
+        onMessage: async (message) => {
+          messages.push(message.text);
+        },
+        onFatalError: (error) => fatal.push(error),
+      });
+      const healthySubscriptions = roomSubscriptionIds(fixture, fixture.roomId);
+      pending =
+        stage === "roster query"
+          ? fixture.pauseNextMembershipQuery()
+          : fixture.pauseNextRoomHistory();
+      publishBotRole(fixture, skipped.roomId, "bot", skipped.createdAt + 1);
+      notifyBotMembership(fixture, skipped.roomId, 44100, skipped.createdAt + 1);
+      await pending.started;
+
+      publishRoomArchive(fixture, skipped.roomId, true, skipped.createdAt + 2);
+      await bus.refreshDirectory();
+      expect(bus.directory.isRoomArchived(skipped.roomId)).toBe(true);
+      expect(bus.directory.listGroupMembers({ groupId: skipped.roomId })).toEqual([]);
+      pending.release();
+      await bus.sendText({ channelId: fixture.roomId, text: "archived restoration barrier" });
+      fixture.sendMessage("healthy after interrupted restoration");
+      await vi.waitFor(() => expect(messages).toContain("healthy after interrupted restoration"));
+      expect(fatal).toEqual([]);
+      if (stage === "roster query") {
+        expect(roomSubscriptionIds(fixture, skipped.roomId)).toEqual([]);
+      }
+
+      publishRoomArchive(fixture, skipped.roomId, false, skipped.createdAt + 3);
+      await bus.refreshDirectory();
+      fixture.sendMessage("restored after interrupted restoration", undefined, skipped.roomId);
+      await vi.waitFor(() => expect(messages).toContain("restored after interrupted restoration"));
+      expect(roomSubscriptionIds(fixture, fixture.roomId)).toEqual(healthySubscriptions);
+      expect(fixture.authenticatedSessions()).toBe(1);
+      expect(fatal).toEqual([]);
+    } finally {
+      pending?.release();
+      await bus?.close();
+      await fixture.close();
+    }
+  },
+);
+
+it("keeps a pre-archive turn fenced after its room is restored", async () => {
+  const fixture = await createBuzzRelayFixture();
+  const createdAt = Math.floor(Date.now() / 1000);
+  const messages: string[] = [];
+  const fatal: Error[] = [];
+  const messageErrors: Error[] = [];
+  let staleAuthority: (() => void) | undefined;
+  let turnSignal: AbortSignal | undefined;
+  let releaseTurn = () => {};
+  const pendingTurn = new Promise<void>((resolve) => {
+    releaseTurn = resolve;
+  });
+  let bus: BuzzBus | undefined;
+  try {
+    bus = await startBuzzBus({
+      accountId: randomUUID(),
+      relayUrl: fixture.relayUrl,
+      privateKey: fixture.botPrivateKey,
+      channelIds: [fixture.roomId],
+      onMessage: async (message, _bus, signal, assertCurrent) => {
+        if (message.text === "before archive") {
+          staleAuthority = assertCurrent;
+          turnSignal = signal;
+          await pendingTurn;
+        }
+        assertCurrent();
+        messages.push(message.text);
+      },
+      onFatalError: (error) => fatal.push(error),
+      onMessageError: (error) => messageErrors.push(error),
+    });
+    fixture.sendMessage("before archive");
+    await vi.waitFor(() => expect(staleAuthority).toBeDefined());
+    publishRoomArchive(fixture, fixture.roomId, true, createdAt + 1);
+    await bus.refreshDirectory();
+    expect(() => staleAuthority?.()).toThrow("archived");
+    expect(turnSignal?.aborted).toBe(true);
+
+    publishRoomArchive(fixture, fixture.roomId, false, createdAt + 2);
+    await bus.refreshDirectory();
+    expect(() => staleAuthority?.()).toThrow("archived");
+    fixture.sendMessage("new turn after restoration");
+    await vi.waitFor(() => expect(messages).toContain("new turn after restoration"));
+    releaseTurn();
+    await vi.waitFor(() => expect(messageErrors).toHaveLength(1));
+    expect(messages).not.toContain("before archive");
+    expect(fatal).toEqual([]);
+    expect(fixture.authenticatedSessions()).toBe(1);
+  } finally {
+    releaseTurn();
+    await bus?.close();
+    await fixture.close();
+  }
+});
+
+it("preserves a pending sender removal across archive and a lagging restoration roster", async () => {
+  const fixture = await createBuzzRelayFixture();
+  const healthy = seedSkippedRoom(fixture);
+  fixture.events.splice(
+    fixture.events.findIndex(
+      (event) =>
+        event.kind === 39002 &&
+        event.tags.some((tag) => tag[0] === "d" && tag[1] === healthy.roomId),
+    ),
+    1,
+  );
+  publishBotRole(fixture, healthy.roomId, "bot", healthy.createdAt + 1);
+  const messages: string[] = [];
+  const fatal: Error[] = [];
+  const pending: Array<ReturnType<BuzzRelayFixture["pauseNextMembershipQuery"]>> = [];
+  let bus: BuzzBus | undefined;
+  try {
+    bus = await startBuzzBus({
+      accountId: randomUUID(),
+      relayUrl: fixture.relayUrl,
+      privateKey: fixture.botPrivateKey,
+      channelIds: [fixture.roomId, healthy.roomId],
+      onMessage: async (message) => {
+        messages.push(message.text);
+      },
+      onFatalError: (error) => fatal.push(error),
+    });
+    const healthySubscriptions = roomSubscriptionIds(fixture, healthy.roomId);
+    const beforeArchive = fixture.pauseNextMembershipQuery();
+    pending.push(beforeArchive);
+    fixture.broadcast(
+      fixture.signRelay({
+        kind: 40099,
+        created_at: healthy.createdAt + 2,
+        content: JSON.stringify({ type: "member_removed", target: fixture.senderPublicKey }),
+        tags: [["h", fixture.roomId]],
+      }),
+    );
+    await beforeArchive.started;
+    expect(bus.directory.isMember(fixture.roomId, fixture.senderPublicKey)).toBe(false);
+    publishRoomArchive(fixture, fixture.roomId, true, healthy.createdAt + 3);
+    await bus.refreshDirectory();
+    beforeArchive.release();
+    await bus.sendText({ channelId: healthy.roomId, text: "archived removal barrier" });
+
+    const staleRestore = fixture.pauseNextMembershipQuery();
+    pending.push(staleRestore);
+    publishRoomArchive(fixture, fixture.roomId, false, healthy.createdAt + 4);
+    await bus.refreshDirectory();
+    await staleRestore.started;
+    const confirmedRestore = fixture.pauseNextMembershipQuery();
+    pending.push(confirmedRestore);
+    fixture.broadcast(
+      fixture.signRelay({
+        kind: 39002,
+        created_at: healthy.createdAt + 5,
+        content: "",
+        tags: [
+          ["d", fixture.roomId],
+          ["p", fixture.botPublicKey, "", "bot"],
+        ],
+      }),
+    );
+    staleRestore.release();
+    await confirmedRestore.started;
+    // A stale signed roster cannot reopen the room while removal confirmation is pending.
+    expect(roomSubscriptionIds(fixture, fixture.roomId)).toHaveLength(1);
+    expect(bus.directory.isMember(fixture.roomId, fixture.senderPublicKey)).toBe(false);
+    fixture.sendMessage("denied during restoration");
+    confirmedRestore.release();
+    await vi.waitFor(() => expect(roomSubscriptionIds(fixture, fixture.roomId)).toHaveLength(2));
+    fixture.sendMessage("denied after restoration");
+    fixture.sendMessage("healthy after confirmed removal", undefined, healthy.roomId);
+    await vi.waitFor(() => expect(messages).toContain("healthy after confirmed removal"));
+    expect(messages).toEqual(["healthy after confirmed removal"]);
+    expect(bus.directory.isMember(fixture.roomId, fixture.senderPublicKey)).toBe(false);
+    expect(roomSubscriptionIds(fixture, healthy.roomId)).toEqual(healthySubscriptions);
+    expect(fixture.authenticatedSessions()).toBe(1);
+    expect(fatal).toEqual([]);
+  } finally {
+    for (const query of pending) {
+      query.release();
+    }
+    await bus?.close();
+    await fixture.close();
+  }
+});
+
+it("retires an archived room generation while another room is still starting", async () => {
+  const fixture = await createBuzzRelayFixture();
+  const other = seedSkippedRoom(fixture);
+  fixture.events.splice(
+    fixture.events.findIndex(
+      (event) =>
+        event.kind === 39002 && event.tags.some((tag) => tag[0] === "d" && tag[1] === other.roomId),
+    ),
+    1,
+  );
+  publishBotRole(fixture, other.roomId, "bot", other.createdAt + 1);
+  const history = fixture.pauseNextRoomHistory();
+  const fatal: Error[] = [];
+  let turnSignal: AbortSignal | undefined;
+  let staleAuthority: (() => void) | undefined;
+  let activeBus: BuzzBus | undefined;
+  let releaseTurn = () => {};
+  const pendingTurn = new Promise<void>((resolve) => {
+    releaseTurn = resolve;
+  });
+  const starting = startBuzzBus({
+    accountId: randomUUID(),
+    relayUrl: fixture.relayUrl,
+    privateKey: fixture.botPrivateKey,
+    channelIds: [other.roomId, fixture.roomId],
+    onMessage: async (message, bus, signal, assertCurrent) => {
+      activeBus = bus;
+      if (message.text === "turn during startup") {
+        turnSignal = signal;
+        staleAuthority = assertCurrent;
+        await pendingTurn;
+      }
+    },
+    onFatalError: (error) => fatal.push(error),
+  });
+  try {
+    await history.started;
+    await vi.waitFor(() => expect(roomSubscriptionIds(fixture, fixture.roomId)).toHaveLength(1));
+    fixture.sendMessage("turn during startup");
+    await vi.waitFor(() => expect(turnSignal).toBeDefined());
+    publishRoomArchive(fixture, fixture.roomId, true, other.createdAt + 2);
+    await activeBus?.refreshDirectory();
+    expect(turnSignal?.aborted).toBe(true);
+    publishRoomArchive(fixture, fixture.roomId, false, other.createdAt + 3);
+    await activeBus?.refreshDirectory();
+    expect(() => staleAuthority?.()).toThrow("archived");
+    history.release();
+    await starting;
+    expect(() => staleAuthority?.()).toThrow("archived");
+    expect(fatal).toEqual([]);
+    expect(fixture.authenticatedSessions()).toBe(1);
+  } finally {
+    history.release();
+    releaseTurn();
+    await (await starting).close();
+    await fixture.close();
+  }
+});
