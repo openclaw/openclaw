@@ -17,6 +17,7 @@ import {
 } from "./prepared-model-catalog-worker.js";
 import {
   EXTERNAL_AUTH_PATH_ENV,
+  EXTERNAL_AUTH_PROFILE_ID,
   REF_ONLY_API_ENV,
   REF_ONLY_TOKEN_ENV,
   createCatalogFixture,
@@ -209,6 +210,24 @@ describe("Gateway catalog worker pool", () => {
           .map((capture) => capture.filename),
       );
       expect(captures).toEqual(initialCaptures);
+      const filename = [...captures][0]!;
+      const captureRoot = filename.slice(0, filename.indexOf(`${path.sep}openclaw-plugin-build-`));
+      expect(path.basename(captureRoot)).toMatch(/^openclaw-model-catalog-/);
+      const inventory = () => fs.readdirSync(captureRoot).toSorted();
+      const retained = inventory();
+      for (const token of ["B", "C"]) {
+        fs.writeFileSync(fixture.externalAuthPath, token);
+        for (const snapshot of snapshots) {
+          const auth = await loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] });
+          expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
+            access: `v1:${token}`,
+          });
+          await loadCompletedFullCatalog(snapshot, { refresh: true });
+        }
+        expect(inventory()).toEqual(retained);
+      }
+      await closePreparedModelRuntimeSnapshots();
+      expect(fs.existsSync(captureRoot)).toBe(false);
     } finally {
       workerChannel.unsubscribe(recordWorker);
     }

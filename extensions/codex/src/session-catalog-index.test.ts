@@ -318,10 +318,12 @@ describe("resident Codex catalog", () => {
       expect(stat).toHaveBeenCalled();
       expect(readNative).toHaveBeenCalledTimes(2);
       stat.mockClear();
+      await index.upsertThread(existing);
       await vi.advanceTimersByTimeAsync(30_000);
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(3);
       expect(stat).not.toHaveBeenCalled();
+      await index.upsertThread(existing);
       await vi.advanceTimersByTimeAsync(30_000);
       await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
       expect(readNative).toHaveBeenCalledTimes(4);

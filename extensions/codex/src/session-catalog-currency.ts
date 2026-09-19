@@ -1,3 +1,5 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+
 type CurrencyOptions = {
   local: boolean;
   reconcileFiles(): Promise<void>;
@@ -44,24 +46,32 @@ export class CodexCatalogCurrency {
       if (!full && !filesDue && !this.nativeDirty) {
         return;
       }
+      const nativeDue = full || this.nativeDirty;
+      // Consume this trigger even if background admission or reconciliation fails.
+      // New activity during the attempt remains eligible for the next tick.
+      this.nativeDirty = false;
+      if (full) {
+        this.nextNativeAt = startedAt + SAFETY_INTERVAL_MS;
+      }
+      if (filesDue) {
+        this.nextFilesAt = startedAt + SAFETY_INTERVAL_MS;
+      }
       const run = async () => {
         if (filesDue) {
           await this.options.reconcileFiles();
-          this.nextFilesAt = startedAt + SAFETY_INTERVAL_MS;
         }
-        if (full || this.nativeDirty) {
-          // Consume before the read so notifications during it schedule another delta.
-          this.nativeDirty = false;
+        if (nativeDue) {
           await this.options.reconcileNative(full);
-          if (full) {
-            this.nextNativeAt = startedAt + SAFETY_INTERVAL_MS;
-          }
         }
       };
       this.running = (this.options.runBackground ? this.options.runBackground(run) : run())
         .catch((error: unknown) => {
-          this.nativeDirty = true;
-          this.options.report(error);
+          this.options.report(
+            new Error(
+              `Codex catalog reconciliation failed; waiting for new activity or the next safety cycle: ${coerceErrorMessage(error)}`,
+              { cause: error },
+            ),
+          );
         })
         .finally(() => {
           this.running = undefined;

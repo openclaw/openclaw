@@ -116,6 +116,7 @@ export class CodexCatalogIndex {
       },
       upsert: (thread) => this.upsertThread(thread),
       reserveTurnStartOrder: () => this.ordering.reserveEvent(),
+      requestNativeRefresh: () => this.currency.requestNativeRefresh(),
       refresh: (id, readThread, sourceOrder) => this.refreshThread(id, readThread, sourceOrder),
       archive: (id) => this.archive(id),
       remove: (id) => {
@@ -598,7 +599,6 @@ export class CodexCatalogIndex {
     sourceOrder: number | undefined,
   ): Promise<boolean> {
     this.assertCurrent();
-    this.currency.requestNativeRefresh();
     this.observations.mark(id);
     const fields = this.captureFields();
     return this.projections.run(() =>

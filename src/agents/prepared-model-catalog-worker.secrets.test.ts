@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fs from "node:fs";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConfigIoContext } from "../config/io.context.js";
@@ -14,6 +15,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginSourceCaptureDirectory } from "../plugins/plugin-package-metadata-capture.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import {
   createOpenClawTestState,
@@ -26,6 +28,7 @@ import * as modelsConfig from "./models-config.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
+import * as fullCatalog from "./prepared-model-runtime.full-catalog.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 
 // Run the real worker entrypoint without attaching it to Vitest's own worker port.
@@ -82,7 +85,7 @@ describe("serialized catalog credential provenance", () => {
     },
   ])(
     "preserves $owner $label through discovery and the writable plan",
-    async ({ owner, value, loader }) => {
+    async ({ owner, value, loader, label }) => {
       const requests: boolean[] = [];
       const server = createServer((request, response) => {
         requests.push(
@@ -312,11 +315,18 @@ module.exports = {
             return result;
           },
         );
-        const result = await runPreparedModelCatalogWorkerRequest(serialized, {
-          kind: "catalog",
-          syntheticAuth: [],
-        });
+        const captures = state.path("worker-captures");
+        fs.mkdirSync(captures);
+        const request = () =>
+          withPluginSourceCaptureDirectory(captures, () =>
+            runPreparedModelCatalogWorkerRequest(serialized, {
+              kind: "catalog",
+              syntheticAuth: [],
+            }),
+          );
+        const result = await request();
         expect(result.status).toBe("ok");
+        expect(fs.readdirSync(captures)).toEqual([]);
         const runtimeFacts = getConfigResolutionFacts(serialized.input.config);
         const sourceFacts = getConfigResolutionFacts(serialized.sourceConfigForSecrets);
         expect(runtimeFacts === null).toBe(nativeRuntimeFacts === null);
@@ -380,6 +390,16 @@ module.exports = {
         }
         if (alternativeFingerprint !== undefined) {
           expect(serialized.generationFingerprint).not.toBe(alternativeFingerprint);
+        }
+        if (label === "literal bytes") {
+          vi.spyOn(fullCatalog, "prepareFullCatalogFacts").mockRejectedValueOnce(
+            new Error("synthetic catalog construction failure"),
+          );
+          await expect(request()).resolves.toEqual({
+            status: "failed",
+            error: "synthetic catalog construction failure",
+          });
+          expect(fs.readdirSync(captures)).toEqual([]);
         }
       } finally {
         server.closeAllConnections();

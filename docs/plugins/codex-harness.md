@@ -162,15 +162,19 @@ edits and remote deletions or archives, appear at the next successful full safet
 walk. Local file disappearance is checked on the same cycle; native database
 omission alone still cannot delete a local row. Safety cycles start 15 minutes
 apart, subject to timer scheduling, in-flight work, and
-scan/walk duration. Native failures retain pending work for retry under source
-backoff. Successful file scans keep an independent deadline, so native retries
+scan/walk duration. A failed background check records its error and waits for new
+activity or the next safety cycle, subject to source backoff. It does not retry on
+every idle tick. File scans keep an independent deadline, so native failures
 neither repeat the scan nor postpone its next check.
 Notifications and acknowledged catalog actions continue to update rows immediately.
 
 Native lifecycle notifications update affected threads, and successful catalog
 archives immediately hide their rows. Turn starts and completions coalesce
 single-thread metadata refreshes, so a running turn advances recency before it
-finishes. A startup scan and the 15-minute stat-only safety scan discover external rollout changes; no
+finishes. When an observing client closes, queued reads against that client stop;
+an interrupted read records that metadata recovery is deferred to the current
+catalog owner. Observations do not keep retired clients alive. A startup scan and
+the 15-minute stat-only safety scan discover external rollout changes; no
 recursive filesystem watcher retains a directory inventory. The scan streams
 directory entries and retains at most 20,000 file fingerprints while separately
 checking the presence of resident paths. Only changed or
