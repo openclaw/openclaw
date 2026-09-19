@@ -1,4 +1,17 @@
 import { expect } from "vitest";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+
+export function expectCapturedQueueContext(stateDir: string) {
+  return expect.objectContaining({
+    environment: expect.objectContaining({ OPENCLAW_STATE_DIR: stateDir }),
+    admission: expect.objectContaining({
+      databasePath: resolveOpenClawStateSqlitePath({
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    }),
+  });
+}
 
 export function expectRecordFields(
   record: unknown,

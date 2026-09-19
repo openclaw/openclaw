@@ -706,6 +706,12 @@ health work; cached health replies await the count while retaining cached ingres
 pressure. Other outbound queue operations and media custody remain separate
 migration work.
 
+Gateway lifecycle notices retain their original shared-state directory and
+supervisor mode through asynchronous modifying hooks, media staging, and queue
+publication. Immediate delivery, settlement, and retry recovery use that same
+captured context. Startup carries it between its separate enqueue and delivery
+steps; public plugin send arguments cannot select this private context.
+
 Conversation sends, turns, and queue completion retain their logical agent and
 physical store while waiting for agent write admission. Retry validation reads
 existing operations without recreating them; the queue owner records custody

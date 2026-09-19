@@ -6,6 +6,7 @@
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type OutboundDeliveryResult,
@@ -213,6 +214,7 @@ export async function withDurableMessageSendContextCore<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
+  queueContext?: DeliveryQueueStateContext,
 ): Promise<T> {
   let deliveryIntent: OutboundDeliveryIntent | undefined;
   const {
@@ -258,25 +260,28 @@ export async function withDurableMessageSendContextCore<T>(
     send: async (rendered): Promise<DurableMessageBatchSendResult> => {
       const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
       try {
-        const results = await deliverOutboundPayloadsInternal({
-          ...deliveryParams,
-          // Public SDK callers cannot select a private conversation storage target.
-          conversationDeliveryTarget,
-          payloads: rendered.payloads,
-          renderedBatchPlan: rendered.plan,
-          queuePolicy,
-          ...(effectiveSignal ? { abortSignal: effectiveSignal } : {}),
-          onPayloadDeliveryOutcome: (outcome) => {
-            payloadOutcomes.push(outcome);
-            onPayloadDeliveryOutcome?.(outcome);
+        const results = await deliverOutboundPayloadsInternal(
+          {
+            ...deliveryParams,
+            // Public SDK callers cannot select a private conversation storage target.
+            conversationDeliveryTarget,
+            payloads: rendered.payloads,
+            renderedBatchPlan: rendered.plan,
+            queuePolicy,
+            ...(effectiveSignal ? { abortSignal: effectiveSignal } : {}),
+            onPayloadDeliveryOutcome: (outcome) => {
+              payloadOutcomes.push(outcome);
+              onPayloadDeliveryOutcome?.(outcome);
+            },
+            onDeliveryIntent: (intent) => {
+              deliveryIntent = intent;
+              const durableIntent = toDurableMessageIntent(intent, rendered);
+              ctx.intent = durableIntent;
+              onDeliveryIntent?.(durableIntent);
+            },
           },
-          onDeliveryIntent: (intent) => {
-            deliveryIntent = intent;
-            const durableIntent = toDurableMessageIntent(intent, rendered);
-            ctx.intent = durableIntent;
-            onDeliveryIntent?.(durableIntent);
-          },
-        });
+          queueContext,
+        );
         const receipt = createMessageReceiptFromOutboundResults({
           results,
           threadId: params.threadId == null ? undefined : String(params.threadId),
@@ -398,6 +403,7 @@ export async function withDurableMessageSendContextCore<T>(
 export async function sendDurableMessageBatchCore(
   params: DurableMessageSendContextParams,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
+  queueContext?: DeliveryQueueStateContext,
 ): Promise<DurableMessageBatchSendResult> {
   const pendingFinalCompletion = params.deliveryCompletion
     ? undefined
@@ -451,5 +457,6 @@ export async function sendDurableMessageBatchCore(
       return result;
     },
     conversationDeliveryTarget,
+    queueContext,
   );
 }

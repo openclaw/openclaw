@@ -12,6 +12,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
@@ -53,7 +54,6 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
@@ -425,7 +425,8 @@ async function loadRestartSentinelStartupTask(params: {
   deps: CliDeps;
   attempt?: number;
 }): Promise<StartupTask | null> {
-  const queueContext = captureOpenClawStateWorkerContext();
+  const noticeContext = captureDeliveryQueueStateContext();
+  const queueContext = noticeContext.workerContext;
   const sentinel = await readRestartSentinel();
   if (!sentinel) {
     return null;
@@ -641,14 +642,17 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (route && !updateRun?.verification.noticeDelivered) {
-      const queuedNotice = await enqueueRestartSentinelNotice({
-        cfg,
-        ...route,
-        message: noticeMessage,
-        sessionKey: canonicalKey,
-        revision: sentinelRevision,
-        ...(updateRunId ? { deliveryIntentId: `update-run-finished:${updateRunId}` } : {}),
-      });
+      const queuedNotice = await enqueueRestartSentinelNotice(
+        {
+          cfg,
+          ...route,
+          message: noticeMessage,
+          sessionKey: canonicalKey,
+          revision: sentinelRevision,
+          ...(updateRunId ? { deliveryIntentId: `update-run-finished:${updateRunId}` } : {}),
+        },
+        noticeContext,
+      );
       noticeQueueId = queuedNotice.id;
       noticeQueueCreated = queuedNotice.created;
     }
@@ -672,15 +676,18 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (route && noticeQueueId && noticeQueueCreated) {
-      const delivered = await deliverRestartSentinelNotice({
-        deps: params.deps,
-        cfg,
-        sessionKey: canonicalKey,
-        summary,
-        message: noticeMessage,
-        ...route,
-        queueId: noticeQueueId,
-      });
+      const delivered = await deliverRestartSentinelNotice(
+        {
+          deps: params.deps,
+          cfg,
+          sessionKey: canonicalKey,
+          summary,
+          message: noticeMessage,
+          ...route,
+          queueId: noticeQueueId,
+        },
+        noticeContext,
+      );
       if (delivered && updateRunId) {
         recordUpdateRunVerification(updateRunId, { noticeDelivered: true });
       }

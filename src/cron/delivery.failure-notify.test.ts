@@ -77,6 +77,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
         payloads: [{ text: "Automation failed" }],
         bestEffort: false,
       }),
+      undefined,
     );
   });
 

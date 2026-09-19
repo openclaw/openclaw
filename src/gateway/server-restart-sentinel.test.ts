@@ -24,7 +24,6 @@ import {
 import { renderUpdateRunNotice, renderUpdateRunReport } from "../infra/update-run-report.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -34,6 +33,7 @@ import {
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
+  expectCapturedQueueContext,
   expectRecordFields,
   mockCallArg,
   lastMockCallArg,
@@ -638,15 +638,7 @@ let testState: OpenClawTestState;
 let queueContext: OpenClawStateWorkerContext;
 
 function expectQueueContext(stateDir = testState.stateDir) {
-  return expect.objectContaining({
-    environment: expect.objectContaining({ OPENCLAW_STATE_DIR: stateDir }),
-    admission: expect.objectContaining({
-      databasePath: resolveOpenClawStateSqlitePath({
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-      }),
-    }),
-  });
+  return expectCapturedQueueContext(stateDir);
 }
 
 function setNoticeOwner(owner: string) {
@@ -868,6 +860,12 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.reserveDeliveryAttempt).toHaveBeenCalledWith(
       "restart-sentinel-notice:agent:main:main:123",
       45,
+      undefined,
+      undefined,
+      expect.objectContaining({
+        stateDir: testState.stateDir,
+        workerContext: expectQueueContext(),
+      }),
     );
     expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(expect.anything());

@@ -227,6 +227,7 @@ describe("follow-up delivery channel boundary", () => {
         to: "dm:qa-peer",
         replyToId: testCase.expectedReply,
       }),
+      undefined,
     );
   });
 
@@ -258,6 +259,7 @@ describe("follow-up delivery channel boundary", () => {
 
       expect(channelState.deliver).toHaveBeenCalledWith(
         expect.objectContaining({ replyToId: replyToCurrent ? "111.000" : "222.000" }),
+        undefined,
       );
     },
   );
