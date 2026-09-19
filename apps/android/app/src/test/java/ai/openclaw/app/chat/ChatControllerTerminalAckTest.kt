@@ -8,8 +8,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -68,6 +70,81 @@ class ChatControllerTerminalAckTest {
         ),
         finalized,
       )
+    }
+
+  @Test
+  fun notificationSuppressionPreservesTerminalCompletionAndHistoryRefresh() =
+    runTest {
+      for (suppressNotification in listOf(null, false, true)) {
+        val finalized = mutableListOf<String>()
+        var clientRunId: String? = null
+        var historyReady = false
+        var historyRequests = 0
+        val controller =
+          createChatController(
+            cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+            currentDefaultAgentId = { "main" },
+            onAssistantReplyFinalized = { _, _, text -> finalized += text },
+          ) { method, paramsJson ->
+            when (method) {
+              "chat.send" -> {
+                clientRunId =
+                  json
+                    .parseToJsonElement(requireNotNull(paramsJson))
+                    .jsonObject["idempotencyKey"]
+                    ?.jsonPrimitive
+                    ?.content
+                """{"runId":"run-notify","status":"started"}"""
+              }
+
+              "chat.history" -> {
+                historyRequests += 1
+                historyResponse(
+                  "session-notify",
+                  if (historyReady) {
+                    listOf(
+                      ReplayHistoryMessage("user", "status", 1_000, idempotencyKey = "$clientRunId:user"),
+                      ReplayHistoryMessage("assistant", "Authoritative reply", 2_000),
+                    )
+                  } else {
+                    emptyList()
+                  },
+                )
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          }
+        controller.prepareMainSessionKey("agent:main:main")
+        controller.load(controller.sessionKey.value)
+        runCurrent()
+        assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
+        runCurrent()
+        assertEquals(1, controller.pendingRunCount.value)
+        val previousHistoryRequests = historyRequests
+        historyReady = true
+        val terminal =
+          buildJsonObject {
+            val payload = chatTerminalPayload("agent:main:main", "run-notify", seq = 2, assistantText = "Done")
+            json.parseToJsonElement(payload).jsonObject.forEach { (key, value) -> put(key, value) }
+            if (suppressNotification != null) put("suppressNotification", suppressNotification)
+          }.toString()
+
+        controller.handleGatewayEvent("chat", terminal)
+        advanceUntilIdle()
+
+        assertEquals(if (suppressNotification == true) emptyList<String>() else listOf("Done"), finalized)
+        assertEquals(0, controller.pendingRunCount.value)
+        assertTrue(historyRequests > previousHistoryRequests)
+        assertTrue(
+          controller.messages.value.any { message ->
+            message.role == "assistant" && message.content.any { it.text == "Authoritative reply" }
+          },
+        )
+        assertNull(controller.errorText.value)
+      }
     }
 
   @Test

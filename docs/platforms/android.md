@@ -407,6 +407,16 @@ During Talk, the live waveform replaces the microphone and remains tappable to
 end Talk. If a run is also active, a separate, softly tinted Stop button stays at
 the trailing edge to abort that run.
 
+Completed reply footers retain duration and output-token counts when history can
+attribute them to that exact successful reply. Missing or ambiguous timing stays
+unshown rather than attaching the latest run's numbers to an older answer.
+
+Reply alerts identify their agent and session. Viewing a chat silences only that
+chat, not other sessions. An active, focused Control UI view for the same account
+and session can also suppress its Android alert; leaving, disconnecting, or expiry
+restores normal notification eligibility. Message delivery and history refresh
+continue regardless. See [session viewing presence](/gateway/protocol/presence).
+
 Open **Home** from the sidebar's **Pages** menu to chat, or select an existing session from the sidebar:
 
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)

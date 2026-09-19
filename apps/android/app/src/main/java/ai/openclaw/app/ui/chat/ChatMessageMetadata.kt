@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.isForwardedBoundary
 import ai.openclaw.app.chat.isTranscriptOnlyOpenClawAssistant
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme

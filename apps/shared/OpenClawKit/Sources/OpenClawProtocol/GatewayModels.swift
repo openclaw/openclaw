@@ -3971,6 +3971,7 @@ public struct ChatErrorEvent: Codable, Sendable {
 }
 
 public struct ChatFinalEvent: Codable, Sendable {
+    public let suppressnotification: Bool?
     public let runid: String
     public let sessionkey: String
     public let agentid: String?
@@ -3983,6 +3984,7 @@ public struct ChatFinalEvent: Codable, Sendable {
     public let yielded: Bool?
 
     public init(
+        suppressnotification: Bool? = nil,
         runid: String,
         sessionkey: String,
         agentid: String? = nil,
@@ -3994,6 +3996,7 @@ public struct ChatFinalEvent: Codable, Sendable {
         stopreason: String? = nil,
         yielded: Bool? = nil)
     {
+        self.suppressnotification = suppressnotification
         self.runid = runid
         self.sessionkey = sessionkey
         self.agentid = agentid
@@ -4007,6 +4010,7 @@ public struct ChatFinalEvent: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case suppressnotification = "suppressNotification"
         case runid = "runId"
         case sessionkey = "sessionKey"
         case agentid = "agentId"

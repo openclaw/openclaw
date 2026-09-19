@@ -1673,23 +1673,9 @@ private fun ChatMessageList(
       nowElapsedMs = SystemClock.elapsedRealtime(),
       outputTokens = activeRunOutputTokens,
     )
-  val turnRecapResolver = remember { TurnRecapResolver() }
-  val turnRecap =
-    turnRecapResolver.resolve(
-      sessionKey = sessionKey,
-      indicatorVisible = indicatorVisible,
-      row = session,
-      transcript =
-        TurnRecapTranscriptState(
-          sessionKey = transcriptAnchor?.sessionKey,
-          newestItemId = transcriptAnchor?.newestItemId,
-          completedEndedAt = transcriptAnchor?.completedEndedAt,
-          completedNewestItemId = transcriptAnchor?.completedNewestItemId,
-        ),
-    )
   var expandedWorkKeys by remember(sessionKey) { mutableStateOf(emptySet<String>()) }
   val timeline =
-    remember(history, turnRecap, expandedWorkKeys, activeRunCount, activeRunId, pendingToolCalls, subagentActivities, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(history, expandedWorkKeys, activeRunCount, activeRunId, pendingToolCalls, subagentActivities, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       history
         .buildTimeline(
           pendingRunCount = activeRunCount,
@@ -1701,7 +1687,7 @@ private fun ChatMessageList(
           questions = questions,
           expandedWorkKeys = expandedWorkKeys,
           activeRunId = activeRunId,
-        ).withTurnRecap(turnRecap)
+        )
     }
   val readerScroll =
     rememberChatReaderScrollController(
@@ -1709,10 +1695,6 @@ private fun ChatMessageList(
       timeline = timeline,
       historyLoading = historyLoading,
     )
-  DisposableEffect(sessionKey, turnRecapResolver) {
-    onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
-  }
-
   val onJumpToLatest = readerScroll.jumpToLatest.takeIf { readerScroll.showJumpToLatest }
   val density = LocalDensity.current
   val headerTextHeight = minimumChatLineHeight(chatProjectStyle()) + minimumChatLineHeight(chatTitleStyle())
@@ -1764,6 +1746,7 @@ private fun ChatMessageList(
                         live = false,
                         content = visibleContent(item.message).filter { it.toolActivity == null },
                         timestampMs = item.message.timestampMs,
+                        turnRecap = item.turnRecap,
                         metadata = chatMessageMetadata(item.message),
                         onReplyMessage = onReplyMessage,
                         sessionActionsEnabled = sessionActionsEnabled,
@@ -1846,10 +1829,6 @@ private fun ChatMessageList(
                       ChatWorkedSummary(item) {
                         expandedWorkKeys = if (item.expanded) expandedWorkKeys - item.key else expandedWorkKeys + item.key
                       }
-                    }
-
-                    is ChatTimelineItem.TurnRecapSummary -> {
-                      ChatTurnRecapRow(item.recap)
                     }
 
                     is ChatTimelineItem.SystemNotice -> {
@@ -2118,6 +2097,7 @@ internal fun ChatBubble(
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  turnRecap: TurnRecap? = null,
   sourcePreviews: List<ChatSourcePreview> = emptyList(),
   sourcePreviewConfig: GatewaySourcePreviewConfig? = null,
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
@@ -2284,12 +2264,42 @@ internal fun ChatBubble(
         onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
       )
     }
-    timestampMs?.let {
-      ChatMessageTimestamp(
-        timestampMs = it,
+    if (timestampMs != null || turnRecap != null) {
+      ChatMessageFooter(
+        timestampMs = timestampMs,
+        turnRecap = turnRecap.takeIf { normalizedRole == "assistant" && !live },
         metadata = if (normalizedRole == "assistant" && !live) metadata else emptyList(),
         modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
       )
+    }
+  }
+}
+
+@Composable
+private fun ChatMessageFooter(
+  timestampMs: Long?,
+  turnRecap: TurnRecap?,
+  metadata: List<Pair<String, String>>,
+  modifier: Modifier = Modifier,
+) {
+  val duration = turnRecap?.let { formatLocalizedChatDurationCompact(it.runtimeMs.coerceAtLeast(1_000L)) }
+  val tokens = turnRecap?.outputTokens?.let { localizedChatOutputTokens(it) }
+  Row(
+    modifier = modifier,
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(5.dp),
+  ) {
+    timestampMs?.let {
+      ChatMessageTimestamp(
+        timestampMs = it,
+        metadata = metadata,
+      )
+    }
+    listOfNotNull(duration, tokens).forEach { value ->
+      if (timestampMs != null || value != duration) {
+        Text(nativeString("·"), style = ClawTheme.type.caption.copy(fontSize = 11.5.sp), color = ClawTheme.colors.textSubtle)
+      }
+      Text(value, style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp), color = ClawTheme.colors.textSubtle)
     }
   }
 }

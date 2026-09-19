@@ -78,6 +78,44 @@ class RoomChatTranscriptCacheTest {
       }
     }
 
+  @Test
+  fun replyMetricsSurviveCacheReloadAndLiveHistoryRefreshWithoutMovingToNextReply() =
+    runTest {
+      val metrics = ChatReplyMetrics("transcript-one", "canonical-a", 200L, 100L, 42L)
+      val old =
+        message("first", role = "assistant", timestampMs = 190L).copy(
+          entryId = "canonical-a",
+          phase = "final_answer",
+          replyMetrics = metrics,
+        )
+      saveTranscript(listOf(old))
+      val cached = RoomChatTranscriptCache(database).loadTranscript("gateway-a", "main", "main")
+      assertEquals(metrics, cached.single().replyMetrics)
+      assertEquals(null, cached.single().entryId) // Offline cache does not re-enable transcript actions.
+      val next = message("next", role = "assistant", timestampMs = 290L).copy(entryId = "canonical-b")
+      val refreshed =
+        ChatHistory("main", "transcript-one", null, listOf(old.copy(replyMetrics = null), next))
+          .withReplyMetrics(cached)
+      assertEquals(metrics, refreshed.messages.first().replyMetrics)
+      assertEquals(null, refreshed.messages.last().replyMetrics)
+      assertTrue(loadTranscript(gatewayId = "gateway-b").isEmpty())
+    }
+
+  @Test
+  fun forwardedInputCannotRetainMetricsInTheOfflineCache() =
+    runTest {
+      val forwarded =
+        message("forwarded", role = "assistant", timestampMs = 190L).copy(
+          entryId = "steer-input",
+          provenance = ChatMessageProvenance("inter_session", "sessions_send"),
+          replyMetrics = ChatReplyMetrics("transcript-one", "steer-input", 200L, 100L, 42L),
+        )
+      saveTranscript(listOf(forwarded))
+      val cached = loadTranscript().single()
+      assertTrue(cached.isForwardedBoundary())
+      assertEquals(null, cached.replyMetrics)
+    }
+
   @After
   fun tearDown() {
     database.close()

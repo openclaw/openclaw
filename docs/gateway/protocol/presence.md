@@ -136,3 +136,40 @@ otherwise they retain the agent-only request supported by stable `v2026.7.1-2`.
 That older response describes agent-wide availability, not a session's selected
 profile. Retire this negotiation only when the minimum supported Gateway contract
 guarantees session-scoped metadata. Method or event presence alone is insufficient.
+
+## Cross-device reply notifications
+
+Control UI uses `sessions.viewers.set` to declare the sessions it is actively
+viewing. Declarations create a 30-second, connection-owned notification lease.
+A visible, focused Control UI renews it every 10 seconds while user interaction
+is less than two minutes old. Hiding, blurring, or leaving the chat clears the
+viewing declaration; disconnected or unrenewed leases cannot suppress alerts.
+
+For a `chat` event with `state: "final"`, the Gateway may add the optional Boolean
+`suppressNotification: true` to an Android operator recipient's payload. This
+requires another live Control UI connection with the same authenticated profile
+and an unexpired lease for the exact canonical session key. Missing identity,
+unresolved aliases, other sessions, and expired leases retain normal notification
+behavior. The Gateway derives the hint per recipient rather than forwarding a
+producer-supplied value.
+
+Android skips only reply-notification publication when the hint is `true`.
+Terminal processing, chat content, history synchronization, access checks, and
+per-connection event sequencing continue normally. Absent or `false` hints use
+the existing notification behavior; the hint does not override Android's
+notification permissions.
+
+### Android notification presentation
+
+Android suppresses a reply only when its originating Gateway, agent, and session
+match the chat currently visible in the foreground. Replies from other sessions
+can notify while the app is open, including when a non-chat page is visible.
+Notifications identify the configured agent name and originating session title;
+missing names fall back to the agent ID and missing titles to **Chat**. Tapping
+or replying retains the original routing identity, independently of display names.
+The public lockscreen version remains generic and does not expose those labels
+or message content.
+
+Internal Dreaming narration sessions and runs use the canonical
+`dreaming-narrative-` prefix and do not publish chat-reply notifications. This
+does not exclude ordinary scheduled or background-session replies.

@@ -45,6 +45,8 @@ data class ChatMessage(
   val entryId: String? = null,
   val truncated: Boolean = false,
   val isSyntheticDisplay: Boolean = false,
+  /** Locally captured successful-run metrics bound to this canonical transcript entry. */
+  val replyMetrics: ChatReplyMetrics? = null,
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
@@ -69,6 +71,15 @@ data class ChatMessage(
 
   internal fun matchesFullRead(other: ChatMessage): Boolean = canReadFullMessage && other.canReadFullMessage && entryId == other.entryId && content == other.content
 }
+
+@Serializable
+data class ChatReplyMetrics(
+  val sessionId: String,
+  val entryId: String,
+  val endedAt: Long,
+  val runtimeMs: Long,
+  val outputTokens: Long?,
+)
 
 @Serializable
 data class ChatDeliveryMirror(
@@ -625,3 +636,8 @@ data class OutgoingAttachment(
   val base64: String,
   val durationMs: Long? = null,
 )
+
+// Gateway projects sessions_send user inputs as assistant rows; they still start a new turn.
+internal fun ChatMessage.isForwardedBoundary(): Boolean =
+  role.trim().equals("assistant", ignoreCase = true) &&
+    provenance?.kind == "inter_session" && provenance.sourceTool == "sessions_send"

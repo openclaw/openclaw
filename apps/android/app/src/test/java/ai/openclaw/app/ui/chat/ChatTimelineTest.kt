@@ -411,25 +411,26 @@ class ChatTimelineTest {
   }
 
   @Test
-  fun finishedTurnRecapUsesNewestSlotWithoutChangingReaderAnchorRow() {
+  fun replyMetricsRemainOnTheirMessageWithoutMovingReaderAnchors() {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
-    val assistant = textMessage(id = "assistant-1", role = "assistant", text = "done")
+    val assistant =
+      textMessage(id = "assistant-1", role = "assistant", text = "done").copy(
+        replyMetrics =
+          ai.openclaw.app.chat
+            .ChatReplyMetrics("transcript", "entry-1", 3000L, 2000L, 10L),
+      )
+    val nextUser = textMessage(id = "user-2", role = "user", text = "continue")
     val timeline =
-      prepareChatHistory(listOf(user, assistant), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
-        pendingRunCount = 0,
+      prepareChatHistory(listOf(user, assistant, nextUser), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
+        pendingRunCount = 1,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
       )
-
-    val withRecap = timeline.withTurnRecap(TurnRecap(runtimeMs = 2_000L, outputTokens = 10L))
-
-    assertEquals(
-      listOf("turn-recap", "message:assistant-1", "message:user-1"),
-      withRecap.items.map(::chatTimelineItemKey),
-    )
-    assertEquals(0, withRecap.latestContentIndex)
-    assertEquals(2, withRecap.readAnchorIndex)
-    assertEquals("user-1", withRecap.latestUserMessageId)
+    val rows = timeline.items.filterIsInstance<ChatTimelineItem.Message>()
+    assertEquals(listOf("user-2", "assistant-1", "user-1"), rows.map { it.message.id })
+    assertEquals(TurnRecap(2000L, 10L), rows.single { it.message.id == "assistant-1" }.turnRecap)
+    assertEquals(null, rows.first().turnRecap)
+    assertEquals("user-2", timeline.latestUserMessageId)
   }
 
   @Test

@@ -562,6 +562,20 @@ class ChatController internal constructor(
   private val presentedSessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = presentedSessions.asStateFlow()
 
+  // Retain only rows that leave the selected list. Current rows remain authoritative and
+  // must not consume the bounded fallback window for previously viewed agents.
+  private val notificationSessions = linkedMapOf<ChatComposerOwner, ChatSessionEntry>()
+  private var notificationSessionsGatewayId: String? = null
+
+  internal fun notificationSession(owner: ChatComposerOwner): ChatSessionEntry? =
+    synchronized(gatewayScopeApplyLock) {
+      val gatewayId = currentCacheScope()?.gatewayId ?: return@synchronized null
+      if (!owner.routingVerified || owner.gatewayStableId != gatewayId || notificationSessionsGatewayId != gatewayId) return@synchronized null
+      presentedSessions.value.firstOrNull {
+        it.key == owner.sessionKey && (it.ownerAgentId ?: resolveAgentIdFromMainSessionKey(it.key)) == owner.agentId
+      } ?: notificationSessions[owner]
+    }
+
   private fun projectLocalSessionTitles(
     entries: List<ChatSessionEntry>,
     binding: MainSessionBinding?,
@@ -572,13 +586,42 @@ class ChatController internal constructor(
     }
   }
 
-  private fun publishSessions(entries: List<ChatSessionEntry>) {
+  private fun publishSessions(
+    entries: List<ChatSessionEntry>,
+    departingOwner: ChatComposerOwner? = null,
+  ) {
     synchronized(gatewayScopeApplyLock) {
       // Keep rejected device metadata out of raw entries/cache; all native title consumers
       // share a local fallback bound to this gateway and exact session key.
+      val previous = presentedSessions.value
+      val gatewayId = currentCacheScope()?.gatewayId
+      val binding = gatewayId?.let { desiredMainSessions[it] }
       _sessions.value = entries
-      val binding = currentCacheScope()?.let { desiredMainSessions[it.gatewayId] }
       presentedSessions.value = projectLocalSessionTitles(entries, binding)
+      if (notificationSessionsGatewayId != gatewayId) {
+        notificationSessions.clear()
+      } else if (gatewayId != null) {
+        val currentOwners =
+          entries.mapNotNullTo(mutableSetOf()) { entry ->
+            val agentId = entry.ownerAgentId ?: resolveAgentIdFromMainSessionKey(entry.key) ?: return@mapNotNullTo null
+            ChatComposerOwner(gatewayId, agentId, entry.key)
+          }
+        notificationSessions.keys.removeAll(currentOwners)
+        // The just-viewed row can lie outside the drawer's first cache window.
+        val departed =
+          previous.asReversed().sortedBy {
+            departingOwner != null && it.key == departingOwner.sessionKey && it.ownerAgentId == departingOwner.agentId
+          }
+        for (entry in departed) {
+          val agentId = entry.ownerAgentId ?: resolveAgentIdFromMainSessionKey(entry.key) ?: continue
+          val owner = ChatComposerOwner(gatewayId, agentId, entry.key)
+          if (owner in currentOwners) continue
+          notificationSessions.remove(owner)
+          notificationSessions[owner] = entry
+        }
+        while (notificationSessions.size > MAX_CACHED_SESSIONS) notificationSessions.remove(notificationSessions.keys.first())
+      }
+      notificationSessionsGatewayId = gatewayId
     }
   }
 
@@ -1083,6 +1126,8 @@ class ChatController internal constructor(
       clearProgressCard()
       clearSubagentActivities()
       clearLiveHistoryMarker()
+      notificationSessions.clear()
+      notificationSessionsGatewayId = null
       publishSessions(emptyList())
       publishRunPresentation()
       clearQuestions()
@@ -3209,6 +3254,7 @@ class ChatController internal constructor(
       synchronized(gatewayScopeApplyLock) {
         val generation = historyLoadGeneration.incrementAndGet()
         val changed = _sessionKey.value != key || _sessionOwnerAgentId.value != owner
+        val departingOwner = currentChatComposerRoutingOwner()
         if (changed) chatSelectionGeneration.update { it + 1 }
         _sessionKey.value = key
         _sessionOwnerAgentId.value = owner
@@ -3239,6 +3285,7 @@ class ChatController internal constructor(
             activeAgentId = activeAgentId,
             adoptOwnerless = false,
           ),
+          departingOwner = departingOwner,
         )
         applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
         _selectedModelRef.value = null
@@ -4661,6 +4708,20 @@ class ChatController internal constructor(
                 if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
                 throw err
               }
+            // A fresh process can receive live history before its offline transcript was displayed.
+            // Read only the captured owner; the publication gate below revalidates after this await.
+            val cachedMetricsMessages =
+              if (requestCacheScope != null && transcriptCache != null) {
+                try {
+                  transcriptCache.loadTranscript(requestCacheScope.gatewayId, requestAgentId, sessionKey)
+                } catch (err: CancellationException) {
+                  throw err
+                } catch (_: Exception) {
+                  emptyList()
+                }
+              } else {
+                emptyList()
+              }
             historyPublicationMutex.withLock {
               if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
               val previousState =
@@ -4739,7 +4800,8 @@ class ChatController internal constructor(
                         !unresolvedRepliesByRunId.containsKey(it)
                     }.forEach { clearPendingRun(it, publishRunState = false) }
                 }
-                val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+                val annotatedHistory = history.withReplyMetrics(cachedMetricsMessages + _messages.value)
+                val nextMessages = mergeOptimisticMessages(incoming = annotatedHistory.messages, optimistic = optimisticMessagesByRunId.values)
                 _messagesFromCache.value = false
                 _messages.value = nextMessages
                 val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
@@ -4784,7 +4846,7 @@ class ChatController internal constructor(
                   requestCacheScope,
                   requestAgentId,
                   sessionKey,
-                  history.messages,
+                  annotatedHistory.messages,
                   appliedHistoryEntry.takeIf { appliedPurpose == HistoryRefreshPurpose.RestoreSession && history.sessionInfo != null },
                 )
                 HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
@@ -6705,6 +6767,21 @@ class ChatController internal constructor(
       return
     }
     if (eventOwner != visibleOwner) {
+      synchronized(gatewayScopeApplyLock) {
+        val owner = ChatComposerOwner(currentCacheScope()?.gatewayId, eventOwner, eventKey ?: return@synchronized)
+        val previous = notificationSessions[owner] ?: return@synchronized
+        if (entry == null) {
+          // Transcript-only events do not invalidate titles. A metadata invalidation
+          // without a snapshot cannot keep the previous title authoritative.
+          if (isSessionSettingsMutation(payload) || payload["reason"].asStringOrNull() == "chat.title") {
+            notificationSessions.remove(owner)
+          }
+        } else {
+          notificationSessions[owner] =
+            mergeChatSessionEntry(previous, entry.copy(ownerAgentId = eventOwner))
+              .withClearedDisplayFields(parseExplicitSessionClears(eventObject))
+        }
+      }
       if (entry == null && refreshWhenMissing) refreshSessionsForCurrentWindow()
       return
     }
@@ -7057,6 +7134,8 @@ class ChatController internal constructor(
     owner: ChatComposerOwner?,
   ) {
     if (payload["state"].asStringOrNull() != "final") return
+    // This recipient hint silences notifications, not terminal processing or history synchronization.
+    if (payload["suppressNotification"].asBooleanOrNull() == true) return
     val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty) ?: return
     val verifiedOwner = owner?.takeIf { it.routingVerified } ?: return
     val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return
@@ -8214,15 +8293,7 @@ class ChatController internal constructor(
           preserveSessionSettings = preserveSessionSettings,
         )
       }
-    if (clearedFields.isNotEmpty()) {
-      applied =
-        applied.copy(
-          label = if ("label" in clearedFields) null else applied.label,
-          autoLabel = if ("autoLabel" in clearedFields) null else applied.autoLabel,
-          displayName = if ("displayName" in clearedFields) null else applied.displayName,
-          category = if ("category" in clearedFields) null else applied.category,
-        )
-    }
+    applied = applied.withClearedDisplayFields(clearedFields)
     publishSessions(
       if (index >= 0) current.toMutableList().also { it[index] = applied } else listOf(applied) + current,
     )
@@ -8323,6 +8394,7 @@ class ChatController internal constructor(
     cacheScope: ChatCacheScope?,
   ) {
     synchronized(gatewayScopeApplyLock) {
+      notificationSessions.remove(ChatComposerOwner(cacheScope?.gatewayId, ownerAgentId, sessionKey))
       val owner = ChatAgentSessionSelectionOwner(cacheScope?.gatewayId, ownerAgentId)
       if (lastSelectedChatSessionByOwner[owner]?.key == sessionKey) lastSelectedChatSessionByOwner.remove(owner)
     }
@@ -9175,6 +9247,18 @@ private fun mergeChatSessionSettings(
         existing.hasEffectiveFastModeMetadata || settings.hasEffectiveFastModeMetadata
       },
   )
+
+private fun ChatSessionEntry.withClearedDisplayFields(clearedFields: Set<String>): ChatSessionEntry =
+  if (clearedFields.isEmpty()) {
+    this
+  } else {
+    copy(
+      label = if ("label" in clearedFields) null else label,
+      autoLabel = if ("autoLabel" in clearedFields) null else autoLabel,
+      displayName = if ("displayName" in clearedFields) null else displayName,
+      category = if ("category" in clearedFields) null else category,
+    )
+  }
 
 internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,

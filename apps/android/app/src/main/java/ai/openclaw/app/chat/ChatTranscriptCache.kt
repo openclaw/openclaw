@@ -49,6 +49,7 @@ private data class CachedMessagePayload(
   val usage: ChatMessageUsage? = null,
   val cost: ChatMessageCost? = null,
   val isSyntheticDisplay: Boolean = false,
+  val replyMetrics: ChatReplyMetrics? = null,
   val runId: String? = null,
   val steerTargetRunId: String? = null,
   val turnBoundary: Boolean = false,
@@ -364,12 +365,13 @@ class RoomChatTranscriptCache internal constructor(
         usage = payload.usage,
         cost = payload.cost,
         isSyntheticDisplay = payload.isSyntheticDisplay,
+        replyMetrics = payload.replyMetrics,
         runId = payload.runId,
         steerTargetRunId = payload.steerTargetRunId,
         turnBoundary = payload.turnBoundary,
         phase = payload.phase,
         isError = payload.isError,
-      )
+      ).let { message -> if (message.isForwardedBoundary()) message.copy(replyMetrics = null) else message }
     }
   }
 
@@ -478,6 +480,7 @@ class RoomChatTranscriptCache internal constructor(
               usage = message.usage,
               cost = message.cost,
               isSyntheticDisplay = message.isSyntheticDisplay,
+              replyMetrics = message.replyMetrics.takeUnless { message.isForwardedBoundary() },
               runId = message.runId,
               steerTargetRunId = message.steerTargetRunId,
               turnBoundary = message.turnBoundary,

@@ -3,6 +3,7 @@ import {
   hasGatewayClientCap,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 // Gateway WebSocket broadcaster.
@@ -38,6 +39,7 @@ import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constan
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { shouldSuppressAndroidChatNotification } from "./session-viewer-presence.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Pairing scope is for device-pairing handshakes only; chat transcript events
@@ -609,6 +611,7 @@ export function createGatewayBroadcaster(params: {
       try {
         const base = getFrameBase();
         let payloadFragment = base.payloadFragment;
+        let recipientPayload = payload;
         if (presencePayload) {
           // Presence contains session references. Only the connection owner's
           // recipient projection may cross this boundary; never send the raw roster.
@@ -633,7 +636,26 @@ export function createGatewayBroadcaster(params: {
           if (projected === undefined) {
             continue;
           }
+          recipientPayload = projected;
           payloadFragment = serializeFrameField("payload", projected);
+        }
+        const finalChatPayload =
+          event === "chat" && isRecord(recipientPayload) && recipientPayload.state === "final"
+            ? recipientPayload
+            : undefined;
+        if (finalChatPayload) {
+          // Derive this after recipient delivery/projection gates, never from a producer hint.
+          const { suppressNotification: _untrustedHint, ...messagePayload } = finalChatPayload;
+          payloadFragment = serializeFrameField("payload", {
+            ...messagePayload,
+            ...(shouldSuppressAndroidChatNotification(
+              params.clients,
+              c,
+              finalChatPayload.sessionKey,
+            )
+              ? { suppressNotification: true }
+              : {}),
+          });
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =
@@ -641,6 +663,7 @@ export function createGatewayBroadcaster(params: {
         if (
           !presencePayload &&
           !projectSession &&
+          !finalChatPayload &&
           lastFrame !== undefined &&
           lastFrameSequence === nextSeq &&
           lastFrameRecipientProfileId === recipientProfileId
@@ -648,7 +671,7 @@ export function createGatewayBroadcaster(params: {
           frame = lastFrame;
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          if (!presencePayload && !projectSession) {
+          if (!presencePayload && !projectSession && !finalChatPayload) {
             lastFrameSequence = nextSeq;
             lastFrameRecipientProfileId = recipientProfileId;
             lastFrame = frame;
