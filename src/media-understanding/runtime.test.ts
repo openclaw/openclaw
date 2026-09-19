@@ -2,13 +2,11 @@
 // state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
-  extractStructuredWithModel,
   runMediaUnderstandingFile,
   transcribeAudioFile,
 } from "./runtime.js";
@@ -34,15 +32,6 @@ const mocks = vi.hoisted(() => {
     buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
-    extractStructuredWithModelFallback: vi.fn<
-      (req: Record<string, unknown>) => Promise<Record<string, unknown>>
-    >(async () => ({
-      text: '{"ok":true}',
-      parsed: { ok: true },
-      model: "fallback-model",
-      provider: "fallback",
-      contentType: "json" as const,
-    })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     optimizeImageDescriptionInput: vi.fn(
       async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
@@ -77,10 +66,6 @@ vi.mock("./provider-registry.js", () => ({
 
 vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
-}));
-
-vi.mock("./structured-runtime.js", () => ({
-  extractStructuredWithModelFallback: mocks.extractStructuredWithModelFallback,
 }));
 
 vi.mock("../media/media-services.js", () => ({
@@ -751,227 +736,6 @@ describe("media-understanding runtime", () => {
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
     );
-  });
-
-  it("routes structured extraction to a provider by id and model", async () => {
-    const providerRegistry = new Map();
-    const authStore = {} as AuthProfileStore;
-    const extractStructured = vi.fn<NonNullable<MediaUnderstandingProvider["extractStructured"]>>(
-      async () => ({
-        text: '{"ok":true}',
-        parsed: { ok: true },
-        model: "vision-json",
-        provider: "vision-plugin",
-        contentType: "json" as const,
-      }),
-    );
-    mocks.buildMediaUnderstandingRegistry.mockReturnValue(providerRegistry);
-    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin", extractStructured });
-
-    await expect(
-      extractStructuredWithModel({
-        input: [
-          { type: "text", text: "Extract the fact." },
-          {
-            type: "image",
-            buffer: Buffer.from("image-bytes"),
-            fileName: "fact.png",
-            mime: "image/png",
-          },
-        ],
-        instructions: "Return JSON.",
-        provider: "Vision-Plugin",
-        model: "vision-json",
-        profile: "work",
-        preferredProfile: "preferred-work",
-        authStore,
-        timeoutMs: 45_000,
-        cfg: {} as OpenClawConfig,
-        agentDir: "/tmp/agent",
-      }),
-    ).resolves.toEqual({
-      text: '{"ok":true}',
-      parsed: { ok: true },
-      model: "vision-json",
-      provider: "vision-plugin",
-      contentType: "json",
-    });
-
-    expect(mocks.buildMediaUnderstandingRegistry).toHaveBeenCalledWith(undefined, {});
-    expect(mocks.getMediaUnderstandingProvider).toHaveBeenCalledWith(
-      "Vision-Plugin",
-      providerRegistry,
-    );
-    expect(extractStructured).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        input: [
-          { type: "text", text: "Extract the fact." },
-          {
-            type: "image",
-            buffer: Buffer.from("image-bytes"),
-            fileName: "fact.png",
-            mime: "image/png",
-          },
-        ],
-        instructions: "Return JSON.",
-        provider: "Vision-Plugin",
-        model: "vision-json",
-        profile: "work",
-        preferredProfile: "preferred-work",
-        timeoutMs: 45_000,
-        agentDir: "/tmp/agent",
-      }),
-    );
-    expect(extractStructured.mock.calls[0]?.[0].authStore).toBe(authStore);
-    expect(mocks.extractStructuredWithModelFallback).not.toHaveBeenCalled();
-  });
-
-  it("caps explicit structured extraction timeouts before provider execution", async () => {
-    const extractStructured = vi.fn<NonNullable<MediaUnderstandingProvider["extractStructured"]>>(
-      async () => ({
-        text: "{}",
-        parsed: {},
-        model: "vision-json",
-        provider: "vision-plugin",
-        contentType: "json" as const,
-      }),
-    );
-    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin", extractStructured });
-
-    await extractStructuredWithModel({
-      input: [
-        {
-          type: "image",
-          buffer: Buffer.from("image-bytes"),
-          fileName: "fact.png",
-          mime: "image/png",
-        },
-      ],
-      instructions: "Return JSON.",
-      provider: "vision-plugin",
-      model: "vision-json",
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-      cfg: {} as OpenClawConfig,
-    });
-
-    expect(extractStructured).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
-    );
-  });
-
-  it("rejects text-only structured extraction before provider lookup", async () => {
-    await expect(
-      extractStructuredWithModel({
-        input: [{ type: "text", text: "Extract the fact." }],
-        instructions: "Return JSON.",
-        provider: "vision-plugin",
-        model: "vision-json",
-        cfg: {} as OpenClawConfig,
-      }),
-    ).rejects.toThrow("Structured extraction requires at least one image input.");
-
-    expect(mocks.buildMediaUnderstandingRegistry).not.toHaveBeenCalled();
-    expect(mocks.getMediaUnderstandingProvider).not.toHaveBeenCalled();
-  });
-
-  it("falls back to model-backed structured extraction when the provider lacks the hook", async () => {
-    mocks.extractStructuredWithModelFallback.mockClear();
-    const providerRegistry = new Map();
-    const authStore = {} as AuthProfileStore;
-    mocks.buildMediaUnderstandingRegistry.mockReturnValue(providerRegistry);
-    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin" });
-
-    await expect(
-      extractStructuredWithModel({
-        input: [
-          {
-            type: "image",
-            buffer: Buffer.from("image-bytes"),
-            fileName: "fact.png",
-            mime: "image/png",
-          },
-        ],
-        instructions: "Return JSON.",
-        provider: "vision-plugin",
-        model: "vision-json",
-        profile: "work",
-        preferredProfile: "preferred-work",
-        authStore,
-        timeoutMs: 45_000,
-        cfg: {} as OpenClawConfig,
-        agentDir: "/tmp/agent",
-      }),
-    ).resolves.toEqual({
-      text: '{"ok":true}',
-      parsed: { ok: true },
-      model: "fallback-model",
-      provider: "fallback",
-      contentType: "json",
-    });
-
-    expect(mocks.extractStructuredWithModelFallback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        instructions: "Return JSON.",
-        provider: "vision-plugin",
-        model: "vision-json",
-        profile: "work",
-        preferredProfile: "preferred-work",
-        authStore,
-        timeoutMs: 45_000,
-        agentDir: "/tmp/agent",
-      }),
-    );
-  });
-
-  it("falls back when no media-understanding provider is registered at all", async () => {
-    mocks.extractStructuredWithModelFallback.mockClear();
-    mocks.buildMediaUnderstandingRegistry.mockReturnValue(new Map());
-    mocks.getMediaUnderstandingProvider.mockReturnValue(undefined);
-
-    const result = await extractStructuredWithModel({
-      input: [
-        {
-          type: "image",
-          buffer: Buffer.from("image-bytes"),
-          fileName: "fact.png",
-          mime: "image/png",
-        },
-      ],
-      instructions: "Return JSON.",
-      provider: "anthropic",
-      model: "claude-sonnet-5",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    });
-
-    expect(result.contentType).toBe("json");
-    expect(mocks.extractStructuredWithModelFallback).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "anthropic", model: "claude-sonnet-5" }),
-    );
-  });
-
-  it("resolves a default agent dir for the fallback when none is supplied", async () => {
-    mocks.extractStructuredWithModelFallback.mockClear();
-    mocks.getMediaUnderstandingProvider.mockReturnValue(undefined);
-
-    await extractStructuredWithModel({
-      input: [
-        {
-          type: "image",
-          buffer: Buffer.from("image-bytes"),
-          fileName: "fact.png",
-          mime: "image/png",
-        },
-      ],
-      instructions: "Return JSON.",
-      provider: "anthropic",
-      model: "claude-sonnet-5",
-      cfg: {} as OpenClawConfig,
-    });
-
-    const call = mocks.extractStructuredWithModelFallback.mock.calls[0]?.[0];
-    expect(call?.agentDir).toBeTruthy();
   });
 
   it("surfaces the underlying provider failure when media understanding fails", async () => {
