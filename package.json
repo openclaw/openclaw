@@ -27,6 +27,7 @@
       "dist/crabbox-wrapper.js",
       "dist/entry.js",
       "dist/index.js",
+      "dist/mac-node-worker.js",
       "dist/native-hook-relay/entry.js"
     ]
   },
