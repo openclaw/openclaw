@@ -253,9 +253,9 @@ describe("listReactionsMSTeams", () => {
       id: "msg-1",
       body: { content: "Hello" },
       reactions: [
-        { reactionType: "like", user: { id: "u1", displayName: "Alice" } },
-        { reactionType: "like", user: { id: "u2", displayName: "Bob" } },
-        { reactionType: "heart", user: { id: "u1", displayName: "Alice" } },
+        { reactionType: "like", user: { user: { id: "u1", displayName: "Alice" } } },
+        { reactionType: "like", user: { user: { id: "u2", displayName: "Bob" } } },
+        { reactionType: "heart", user: { user: { id: "u1", displayName: "Alice" } } },
       ],
     });
 
@@ -306,11 +306,11 @@ describe("listReactionsMSTeams", () => {
       id: "msg-1",
       body: { content: "Hello" },
       reactions: [
-        { reactionType: "like", user: { id: "u1", displayName: "Alice" } },
-        { reactionType: "like", user: { displayName: "Deleted User" } },
+        { reactionType: "like", user: { user: { id: "u1", displayName: "Alice" } } },
+        { reactionType: "like", user: { user: { displayName: "Deleted User" } } },
         { reactionType: "like", user: undefined },
         { reactionType: "like" },
-        { reactionType: "heart", user: { id: "u2", displayName: "Bob" } },
+        { reactionType: "heart", user: { user: { id: "u2", displayName: "Bob" } } },
       ],
     });
 
@@ -342,7 +342,9 @@ describe("listReactionsMSTeams", () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-2",
       body: { content: "Channel msg" },
-      reactions: [{ reactionType: "surprised", user: { id: "u3", displayName: "Carol" } }],
+      reactions: [
+        { reactionType: "surprised", user: { user: { id: "u3", displayName: "Carol" } } },
+      ],
     });
 
     const result = await listReactionsMSTeams({
