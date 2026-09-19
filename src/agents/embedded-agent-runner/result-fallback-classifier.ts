@@ -175,6 +175,16 @@ function classifyProviderErrorPayloadReason(
   if (!errorText.trim()) {
     return null;
   }
+  // Some provider failures are surfaced as final embedded error payloads rather
+  // than transport exceptions. Preserve xAI's documented statusless token-
+  // generation failure as a retryable upstream error without broadening
+  // fallback to arbitrary provider-authored errors.
+  if (
+    provider === "xai" &&
+    /\binternal error during token generation\b/i.test(errorText)
+  ) {
+    return "server_error";
+  }
   const failoverReason = classifyFailoverReason(errorText, { provider });
   switch (failoverReason) {
     case "auth":
