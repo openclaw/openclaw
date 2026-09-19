@@ -101,6 +101,9 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
     name: entry.name || entry.id,
     reasoning: parseReasoning(entry),
     input: parseModality(entry),
+    ...(Array.isArray(entry.supported_parameters)
+      ? { compat: { supportsTools: entry.supported_parameters.includes("tools") } }
+      : {}),
     cost: {
       input: toPricePerMillion(entry.pricing.prompt, fallbackCost?.input),
       output: toPricePerMillion(entry.pricing.completion, fallbackCost?.output),

@@ -1,5 +1,7 @@
+import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Type } from "typebox";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -411,6 +413,61 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const textModel = requireModelById(models, "some/text-model");
       expect(textModel.input).toEqual(["text"]);
       expect(textModel.reasoning).toBe(false);
+    });
+  });
+
+  it("sends tools only to models whose catalog row advertises tool support", async () => {
+    const legacyModel: Record<string, unknown> = makeGatewayModel({ id: "some/legacy-model" });
+    delete legacyModel.supported_parameters;
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          makeAutoModel(),
+          makeGatewayModel({
+            id: "z-ai/glm-5.2:free",
+            supported_parameters: ["max_tokens", "temperature", "reasoning"],
+          }),
+          makeGatewayModel({ id: "acme/no-parameters", supported_parameters: [] }),
+          legacyModel,
+        ],
+      }),
+    );
+
+    await withFetchPathTest(mockFetch, async () => {
+      const provider = await buildKilocodeProviderWithDiscovery({ discoveryMode: "strict" });
+
+      for (const [id, compat] of [
+        ["z-ai/glm-5.2:free", { supportsTools: false }],
+        ["kilo-auto/balanced", { supportsTools: true }],
+        ["acme/no-parameters", { supportsTools: false }],
+        ["some/legacy-model", undefined],
+      ] as const) {
+        const model = requireModelById(provider.models, id);
+        expect(model.compat, id).toEqual(compat);
+        const request = buildOpenAICompletionsParams(
+          {
+            ...model,
+            input: model.input.filter((kind) => kind === "text" || kind === "image"),
+            provider: "kilocode",
+            api: "openai-completions",
+            baseUrl: provider.baseUrl,
+          },
+          {
+            messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }],
+            tools: [
+              { name: "lookup", description: "Synthetic lookup", parameters: Type.Object({}) },
+            ],
+          },
+          { toolChoice: "required" },
+        );
+        if (compat?.supportsTools === false) {
+          expect(request, id).not.toHaveProperty("tools");
+          expect(request, id).not.toHaveProperty("tool_choice");
+        } else {
+          expect(request.tools, id).toHaveLength(1);
+          expect(request.tool_choice, id).toBe("required");
+        }
+      }
     });
   });
 
