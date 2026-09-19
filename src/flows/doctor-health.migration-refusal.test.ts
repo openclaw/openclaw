@@ -6,6 +6,10 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import * as coordinators from "../infra/state-database-coordinator.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import {
+  collectUpdateDoctorFailureFacts,
+  UpdateDoctorError,
+} from "../infra/update-doctor-result.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { readConfiguredParsedLogTail } from "../logging/log-tail.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -195,7 +199,19 @@ describe("Doctor maintenance admission", () => {
           ),
         ).toEqual([]);
         expect(failure).toBeInstanceOf(Error);
-        expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
+        if (owner === "agent") {
+          expect(failure).toBeInstanceOf(UpdateDoctorError);
+          expect(collectUpdateDoctorFailureFacts(failure)).toEqual([
+            {
+              check: "doctor",
+              code: "agent-database-lease-active",
+              message:
+                "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+            },
+          ]);
+        } else {
+          expect(String(failure)).toMatch(/Stop.*service|stop.*process/);
+        }
         expect(performance.now() - started).toBeLessThan(1_000);
         expect(
           fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : undefined,

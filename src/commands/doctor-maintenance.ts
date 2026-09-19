@@ -15,6 +15,7 @@ import {
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { listUpdateRuns, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -461,7 +462,18 @@ export async function beginDoctorMaintenance(params: {
         assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission);
       } catch (error) {
         if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
-          throw error;
+          const message =
+            "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+          throw new UpdateDoctorError(
+            message,
+            [
+              createUpdateFailureFact(
+                { check: "doctor", code: "agent-database-lease-active", message },
+                env,
+              ),
+            ],
+            { cause: error },
+          );
         }
         // Classify unreadable state under the held owners without opening a writer.
         const { preflightOpenClawDatabaseSchemas } =
