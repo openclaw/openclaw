@@ -710,6 +710,13 @@ health work; cached health replies await the count while retaining cached ingres
 pressure. Other outbound queue operations and media custody remain separate
 migration work.
 
+Pending outbound failure settlement runs in the shared-state worker with the
+captured entry bytes and state context. Its existing exact-row and optional
+claim checks decide settlement before cleanup facts return to the host. Only a
+confirmed failure releases media; a lost worker reply never triggers a replay
+or infers success from an absent row. Unguarded calls still validate terminal
+entries before storage opens, and unmatched guarded claims remain no-ops.
+
 Conversation sends, turns, and queue completion retain their logical agent and
 physical store while waiting for agent write admission. Retry validation reads
 existing operations without recreating them; the queue owner records custody
