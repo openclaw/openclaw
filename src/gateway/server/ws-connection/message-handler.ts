@@ -165,12 +165,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     rateLimitClientIp: browserRateLimitClientIp,
     authRateLimiter,
   } = browserSecurity;
-  const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
+  const runDetachedConnectWork = (
+    run: (signal: AbortSignal) => Promise<void>,
+    onError: (error: unknown) => void,
+  ) => {
     // Connect-triggered mutations outlive hello-ok. Give each tail its own
     // root lease so suspension cannot report ready while one is still active.
     void params.connectionWork
       .track(() =>
-        runWithGatewayIndependentRootWorkAdmission(run, "ws:preauth", params.connectionWork.signal),
+        runWithGatewayIndependentRootWorkAdmission(
+          () => run(params.connectionWork.signal),
+          "ws:preauth",
+          params.connectionWork.signal,
+        ),
       )
       .catch(onError);
   };
