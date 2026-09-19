@@ -1,0 +1,60 @@
+name: PR 147054 focused launcher proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Dispatch selects the branch/ref; never expand untrusted input into checkout.
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run recovery shutdown unit coverage
+        run: >-
+          node scripts/run-vitest.mjs run
+          src/infra/node-runtime-recovery.shutdown.test.ts
+          -t "runtime recovery child shutdown"
+          --reporter verbose
+      - name: Run source entry compile-cache coverage
+        run: node scripts/run-vitest.mjs run src/entry.compile-cache.test.ts --reporter verbose
+      - name: Run real recovery child drain proof
+        run: >-
+          node scripts/run-vitest.mjs run
+          src/infra/node-runtime-recovery.gateway-drain.test.ts
+          --reporter verbose
+      - name: Run packaged launcher shutdown regression
+        run: >-
+          timeout 600s node scripts/run-vitest.mjs run
+          test/openclaw-launcher.e2e.test.ts
+          -t "preserves foreground Gateway shutdown grace with packaged compile cache"
+          --reporter verbose
+      - name: Run real bounded denial and failure proof
+        run: |
+          node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs --mode=generic
+          node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs --mode=failure
+          node scripts/proof/gateway-launcher-drain-shutdown-proof.mjs --mode=stuck
+      - name: Check patch whitespace
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "github.sha must be a full lowercase commit SHA; got: ${TARGET_SHA}" >&2
+            exit 1
+          fi
+          git diff --check "${TARGET_SHA}^" "${TARGET_SHA}"

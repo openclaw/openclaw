@@ -205,6 +205,30 @@ describe("entry compile cache", () => {
   });
 
   it.each(["linux", "win32"] as const)(
+    "keeps foreground Gateway drain in process with inherited compile cache on %s",
+    async (platform) => {
+      await markSourceCheckout();
+      entryFile = path.join(root, "src", "entry.ts");
+      argv = [
+        process.execPath,
+        entryFile,
+        "gateway",
+        "--profile",
+        "fixture",
+        "run",
+        "--port",
+        "18789",
+      ];
+      await withMockedPlatform(platform, async () => {
+        await expect(
+          respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
+        ).resolves.toBe(false);
+        expect(spawn).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each(["linux", "win32"] as const)(
     "keeps foreground Gmail cleanup in process with inherited compile cache on %s",
     async (platform) => {
       await markSourceCheckout();

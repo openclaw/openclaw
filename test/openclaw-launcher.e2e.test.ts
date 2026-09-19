@@ -347,7 +347,7 @@ describe("openclaw launcher", () => {
       });
     });
 
-    it.each(["n\n", "\n", "", "maybe\n", "\u0003"])(
+    it.each(["n\n", "\n", "", "maybe\n", "^C"])(
       "does not install after decline or cancellation: %j",
       async (input) => {
         const fixture = await prepareRecovery();
@@ -1336,6 +1336,38 @@ describe("openclaw launcher", () => {
         }
       }
     },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves foreground Gateway shutdown grace with packaged compile cache",
+    async () => {
+      const child = spawn(
+        process.execPath,
+        [
+          path.resolve("scripts/proof/gateway-launcher-drain-shutdown-proof.mjs"),
+          "--mode=packaged",
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (data: string) => {
+        stdout += data;
+      });
+      child.stderr.setEncoding("utf8").on("data", (data: string) => {
+        stderr += data;
+      });
+      const [code, signal] = await once(child, "exit");
+      expect({ code, signal }, stderr).toEqual({ code: 0, signal: null });
+      expect(JSON.parse(stdout)).toMatchObject({
+        mode: "packaged",
+        compileCache: true,
+        packagedRespawned: true,
+        finalEffect: true,
+        deniedAdmission: 503,
+      });
+    },
+    20_000,
   );
 
   it.runIf(process.platform !== "win32").each([

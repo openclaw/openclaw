@@ -5,6 +5,7 @@ import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
   isTerminalInteractiveRespawnArgv,
@@ -117,7 +118,11 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   const env = params.env ?? process.env;
   const argv = process.argv;
   const platform = process.platform;
-  if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
+  if (
+    isForegroundGatewayRunArgv(argv) ||
+    isForegroundGmailRunArgv(argv) ||
+    shouldKeepNativeHookRelayInProcess(argv, platform)
+  ) {
     return undefined;
   }
   if (!isSourceCheckoutInstallRoot(params.installRoot)) {

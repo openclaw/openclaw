@@ -61,18 +61,179 @@ export const isForegroundGmailRunInvocation = (argv) => {
   return commandPath.join(" ") === "webhooks gmail run";
 };
 
+// Startup cannot import the built CLI. Keep these option roles aligned with
+// src/cli/gateway-run-argv.ts and src/infra/cli-root-options.ts.
+const GATEWAY_RUN_VALUE_FLAGS = new Set([
+  "--port",
+  "--bind",
+  "--token",
+  "--token-file",
+  "--auth",
+  "--password",
+  "--password-file",
+  "--tailscale",
+  "--ws-log",
+  "--raw-stream-path",
+]);
+const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
+  "--tailscale-reset-on-exit",
+  "--allow-unconfigured",
+  "--dev",
+  "--ambient-channels",
+  "--dev-ambient-channels",
+  "--reset",
+  "--update-canary",
+  "--force",
+  "--verbose",
+  "--cli-backend-logs",
+  "--claude-cli-logs",
+  "--compact",
+  "--raw-stream",
+]);
+
+const isForegroundGatewayRunInvocation = (argv) => {
+  const args = argv.slice(2);
+  let sawGateway = false;
+  let sawRun = false;
+  let literal = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg) {
+      return false;
+    }
+    if (!literal && arg === "--") {
+      literal = true;
+      continue;
+    }
+    if (!literal && arg.startsWith("-")) {
+      const equalsIndex = arg.indexOf("=");
+      const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+      if (
+        LAUNCHER_ROOT_BOOLEAN_FLAGS.has(flag) ||
+        (sawGateway && GATEWAY_RUN_BOOLEAN_FLAGS.has(flag))
+      ) {
+        if (equalsIndex !== -1) {
+          return false;
+        }
+      } else if (
+        LAUNCHER_ROOT_VALUE_FLAGS.has(flag) ||
+        (sawGateway && GATEWAY_RUN_VALUE_FLAGS.has(flag))
+      ) {
+        // Commander consumes required values even when empty or flag-looking.
+        // Match command-path parsing; the CLI separately validates option values.
+        const value = equalsIndex === -1 ? args[++index] : arg.slice(equalsIndex + 1);
+        if (value === undefined) {
+          return false;
+        }
+      } else {
+        return false;
+      }
+      continue;
+    }
+    if (!sawGateway) {
+      if (arg !== "gateway") {
+        return false;
+      }
+      sawGateway = true;
+    } else if (arg === "run" && !sawRun) {
+      sawRun = true;
+    } else {
+      return false;
+    }
+  }
+  return sawGateway;
+};
+
+const gatewayRespawnStopMessage = "openclaw.launcher.gateway-stop";
+
+// Windows child.kill() terminates instead of delivering a catchable signal.
+// Only our foreground Gateway children get this private IPC transport; the
+// Gateway's existing signal handlers still own restart intent and shutdown.
+if (
+  process.platform === "win32" &&
+  process.channel &&
+  isForegroundGatewayRunInvocation(process.argv)
+) {
+  let pendingSignal;
+  const hasShutdownListener = (signal) =>
+    process.listeners(signal).some((listener) => listener !== onStartupSigint);
+  const deliver = () => {
+    if (pendingSignal && hasShutdownListener(pendingSignal)) {
+      const signal = pendingSignal;
+      pendingSignal = undefined;
+      if (signal === "SIGINT") {
+        process.off("SIGINT", onStartupSigint);
+      }
+      process.emit(signal);
+    }
+  };
+  const requestStop = (signal) => {
+    pendingSignal ??= signal === "SIGBREAK" ? "SIGINT" : signal;
+    deliver();
+  };
+  // Console Ctrl+C also reaches the child during startup. Keep repeated early
+  // signals pending, but let an installed owner handle the original event once.
+  const onStartupSigint = () => {
+    if (!hasShutdownListener("SIGINT")) {
+      requestStop("SIGINT");
+    }
+  };
+  process.on("SIGINT", onStartupSigint);
+  process.on("message", (message) => {
+    if (
+      message?.type === gatewayRespawnStopMessage &&
+      ["SIGTERM", "SIGINT", "SIGBREAK"].includes(message.signal)
+    ) {
+      requestStop(message.signal);
+    }
+  });
+  // A request can arrive during startup, before the run loop (or a nested
+  // recovery wrapper) installs its handler. newListener runs before insertion.
+  process.on("newListener", (event) => {
+    if (event === "SIGINT" || event === pendingSignal) {
+      process.nextTick(() => {
+        if (hasShutdownListener("SIGINT")) {
+          process.off("SIGINT", onStartupSigint);
+        }
+        deliver();
+      });
+    }
+  });
+  // Console Ctrl+Break reaches every attached Windows child, not only its wrapper.
+  process.on("SIGBREAK", () => requestStop("SIGINT"));
+  process.once("disconnect", () => requestStop("SIGTERM"));
+  // A completed command must not stay alive solely for its launcher's channel.
+  process.channel.unref();
+}
+
 const respawnSignals =
   process.platform === "win32"
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
+// Gateway drain (315s) plus teardown (10s) fits the 330s systemd stop budget.
+// Leave the final two seconds for force/hard exit.
+const gatewayRespawnSignalExitGraceMs = 328_000;
+// Match src/daemon/launchd-plist.ts: reap the child before launchd's 20s
+// deadline kills this wrapper and leaves nobody to enforce its longer timer.
+const launchdGatewayRespawnSignalExitGraceMs = 18_000;
 const respawnSignalForceKillGraceMs = 1_000;
 const respawnSignalHardExitGraceMs = 1_000;
 
 export const runRespawnedChild = (command, args, env) => {
+  const foregroundGateway = isForegroundGatewayRunInvocation(process.argv);
+  const cooperativeWindowsStop = process.platform === "win32" && foregroundGateway;
+  const launchdLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const managedByLaunchd =
+    process.platform === "darwin" && launchdLabel && env.XPC_SERVICE_NAME === launchdLabel;
+  const signalExitGraceMs = foregroundGateway
+    ? managedByLaunchd
+      ? launchdGatewayRespawnSignalExitGraceMs
+      : gatewayRespawnSignalExitGraceMs
+    : respawnSignalExitGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
-    stdio: "inherit",
+    stdio: cooperativeWindowsStop ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
     env,
     windowsHide: !stdioIsTerminal,
   });
@@ -131,13 +292,21 @@ export const runRespawnedChild = (command, args, env) => {
     }
     signalExitTimer = setTimeout(() => {
       requestChildTermination();
-    }, respawnSignalExitGraceMs);
+    }, signalExitGraceMs);
     signalExitTimer.unref?.();
   };
   for (const signal of respawnSignals) {
     const listener = () => {
       try {
-        child.kill(signal);
+        if (cooperativeWindowsStop) {
+          if (child.connected && !firstForwardedSignal) {
+            child.send({ type: gatewayRespawnStopMessage, signal }, () => {
+              // A closed IPC channel must not bypass the bounded stop backstop.
+            });
+          }
+        } else {
+          child.kill(signal);
+        }
       } catch {
         // Best-effort signal forwarding.
       }

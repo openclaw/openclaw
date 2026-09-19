@@ -62,8 +62,7 @@ vi.mock("./windows-encoding.js", async (importOriginal) => ({
   resolveWindowsOemCodePage: () => 437,
 }));
 
-const originalArgv = process.argv;
-const originalExecArgv = process.execArgv;
+const { argv: originalArgv, execArgv: originalExecArgv } = process;
 const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
