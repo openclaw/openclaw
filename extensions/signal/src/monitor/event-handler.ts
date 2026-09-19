@@ -57,6 +57,7 @@ import {
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -138,15 +139,16 @@ function resolveSignalInboundRoute(params: {
   });
 }
 
-function resolveSignalStatusReactionTimestamp(params: {
+function resolveSignalStatusReactionTimestamp(p: {
   timestamp?: number;
   messageId?: string;
 }): number | null {
-  if (typeof params.timestamp === "number") {
-    return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
-  }
-  const parsed = Number(params.messageId);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  // A Signal message id is a positive integer millisecond timestamp; a fractional
+  // timestamp targets a message that cannot exist, and Number() would coerce
+  // "0x10"/"1e3"/"0b101"/"0o17"/"1.5" spellings.
+  const raw =
+    typeof p.timestamp === "number" ? p.timestamp : parseStrictNonNegativeInteger(p.messageId);
+  return raw !== undefined && Number.isSafeInteger(raw) && raw > 0 ? raw : null;
 }
 
 type SignalStatusDispatchResult = {
