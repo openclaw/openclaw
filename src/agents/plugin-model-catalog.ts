@@ -20,6 +20,7 @@ import {
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
+import { withHandedOffPluginModelCatalogs } from "./plugin-model-catalog-handoff.js";
 import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
@@ -76,13 +77,16 @@ function readPersistedPluginModelCatalogEntries(
   return result.found ? result.value : [];
 }
 
-function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
+/** Reads the raw retained catalog rows for one agent directory. */
+export function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
   return readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_CACHE_SCOPE);
 }
 
 /**
  * Reads an exact plugin-catalog generation without migration or repair writes.
  * Lifecycle preparation uses this for configured providers before atomic publication.
+ * Retained local catalogs stay authoritative; a request-owned handoff only fills
+ * plugin ids this agent directory does not retain at all.
  */
 export function loadPersistedPluginModelCatalogsReadOnly(
   agentDir: string,
@@ -91,12 +95,9 @@ export function loadPersistedPluginModelCatalogsReadOnly(
   if (pluginIds?.length === 0) {
     return [];
   }
-  const catalogs = readPersistedPluginModelCatalogs(agentDir);
-  if (!pluginIds) {
-    return catalogs;
-  }
-  const allowed = new Set(pluginIds);
-  return catalogs.filter(({ pluginId }) => allowed.has(pluginId));
+  const allowed = pluginIds ? new Set(pluginIds) : undefined;
+  const catalogs = withHandedOffPluginModelCatalogs(readPersistedPluginModelCatalogs(agentDir));
+  return allowed ? catalogs.filter(({ pluginId }) => allowed.has(pluginId)) : catalogs;
 }
 
 /** Applies Doctor's repair to unchanged persisted catalog bytes. */
