@@ -3,21 +3,11 @@ import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
-import { runNodeHost } from "../../node-host/runner.js";
-import { runNodeHostWorker } from "../../node-host/worker.js";
 import { defaultRuntime } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
 import { addNodeCommandOptions } from "./command-options.js";
-import {
-  runNodeDaemonInstall,
-  runNodeDaemonRestart,
-  runNodeDaemonStart,
-  runNodeDaemonStatus,
-  runNodeDaemonStop,
-  runNodeDaemonUninstall,
-} from "./daemon.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 import { runNodeIdentityShow } from "./identity.js";
 
@@ -40,6 +30,7 @@ export function registerNodeCli(program: Command) {
     .command("worker", { hidden: true })
     .description("Run the private macOS app node-host worker")
     .action(async () => {
+      const { runNodeHostWorker } = await import("../../node-host/worker.js");
       await runNodeHostWorker();
     });
 
@@ -91,6 +82,7 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
+      const { runNodeHost } = await import("../../node-host/runner.js");
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
@@ -116,6 +108,7 @@ export function registerNodeCli(program: Command) {
     .description("Show node host status")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
+      const { runNodeDaemonStatus } = await import("./daemon.js");
       await runNodeDaemonStatus(opts);
     });
 
@@ -145,6 +138,7 @@ export function registerNodeCli(program: Command) {
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (opts, command: Command) => {
+      const { runNodeDaemonInstall } = await import("./daemon.js");
       await runNodeDaemonInstall({
         ...opts,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
@@ -153,10 +147,10 @@ export function registerNodeCli(program: Command) {
     });
 
   for (const [name, action] of [
-    ["uninstall", runNodeDaemonUninstall],
-    ["stop", runNodeDaemonStop],
-    ["start", runNodeDaemonStart],
-    ["restart", runNodeDaemonRestart],
+    ["uninstall", "runNodeDaemonUninstall"],
+    ["stop", "runNodeDaemonStop"],
+    ["start", "runNodeDaemonStart"],
+    ["restart", "runNodeDaemonRestart"],
   ] as const) {
     node
       .command(name)
@@ -165,7 +159,8 @@ export function registerNodeCli(program: Command) {
       )
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
-        await action(opts);
+        const daemon = await import("./daemon.js");
+        await daemon[action](opts);
       });
   }
 }
