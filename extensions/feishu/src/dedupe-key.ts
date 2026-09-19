@@ -73,10 +73,10 @@ function resolveSenderIdentity(event: FeishuMessageDedupeInput): string | undefi
 // Feishu can redeliver the same logical text message with a fresh message_id
 // (retry/reconnect), defeating message_id-based dedupe (#46778). For text we key
 // on a stable retry identity instead: same sender + chat + create_time + content
-// is the same logical message. create_time is the message's own server timestamp
-// and stays fixed across redeliveries, so genuine repeat sends (which get a new
-// create_time) keep distinct keys and are never suppressed. Falls back to
-// message_id when any field is missing so behavior is unchanged then.
+// is the same logical message. Topic identity further discriminates route-distinct
+// topic roots that share sender/chat/create_time/content. create_time is the
+// message's own server timestamp and stays fixed across redeliveries. Falls back
+// to message_id when any field is missing so behavior is unchanged then.
 function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | undefined {
   const createTime = event.message.create_time?.trim();
   const chatId = event.message.chat_id?.trim();
@@ -93,6 +93,10 @@ function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | un
     .update(event.message.content, "utf8")
     .digest("hex")
     .slice(0, 32);
+  const topicId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+  if (topicId) {
+    return JSON.stringify(["text-retry", senderId, chatId, createTime, contentHash, topicId]);
+  }
   return JSON.stringify(["text-retry", senderId, chatId, createTime, contentHash]);
 }
 
