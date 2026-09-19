@@ -13,6 +13,81 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it.each(["chat", "new"].flatMap((route) => [1440, 390].map((width) => ({ route, width }))))(
+    "navigates the root slash menu in visible order on $route at $width px",
+    async ({ route, width }) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, { historyMessages: [] });
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible" });
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await composer.fill("/");
+
+        const picker = page.locator(".slash-menu[role='listbox']");
+        const options = picker.getByRole("option");
+        await expect.poll(() => options.count()).toBeGreaterThan(1);
+        const visibleIds = await options.evaluateAll((elements) =>
+          elements.map((element) => element.id),
+        );
+        const active = picker.locator("[role='option'][aria-selected='true']");
+        const expectActiveOption = async (index: number) => {
+          await expect.poll(() => active.getAttribute("id")).toBe(visibleIds[index]);
+          await expect
+            .poll(() => composer.getAttribute("aria-activedescendant"))
+            .toBe(visibleIds[index]);
+          expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          await expect
+            .poll(() =>
+              active.evaluate((element) => {
+                const viewport = element.closest(".slash-menu__scroll")?.getBoundingClientRect();
+                const option = element.getBoundingClientRect();
+                // Scroll offsets round to device pixels; the row can straddle that boundary.
+                const scrollRounding = 0.5 / window.devicePixelRatio;
+                return Boolean(
+                  viewport &&
+                  option.top >= viewport.top - scrollRounding &&
+                  option.bottom <= viewport.bottom + scrollRounding,
+                );
+              }),
+            )
+            .toBe(true);
+        };
+
+        await expectActiveOption(0);
+        for (let step = 1; step <= visibleIds.length; step += 1) {
+          await composer.press("ArrowDown");
+          await expectActiveOption(step % visibleIds.length);
+        }
+        for (let step = 1; step <= visibleIds.length; step += 1) {
+          await composer.press("ArrowUp");
+          await expectActiveOption((visibleIds.length - step) % visibleIds.length);
+        }
+
+        await composer.press("Escape");
+        await expect.poll(() => picker.count()).toBe(0);
+        expect(await composer.inputValue()).toBe("/");
+        expect(await composer.getAttribute("aria-activedescendant")).toBeNull();
+        expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+        await composer.fill("/");
+        const nameCommand = options.filter({ hasText: "/name" });
+        await nameCommand.hover();
+        const nameIndex = visibleIds.indexOf((await nameCommand.getAttribute("id")) ?? "");
+        expect(nameIndex).toBeGreaterThan(0);
+        await page.mouse.move(0, 0);
+        await composer.press("ArrowUp");
+        await expectActiveOption(nameIndex - 1);
+        await composer.press("ArrowDown");
+        await expectActiveOption(nameIndex);
+        await composer.press("Tab");
+        await expect.poll(() => composer.inputValue()).toBe("/name ");
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      });
+    },
+  );
+
   it.each(["/export-session", "/export"])(
     "shows an empty export result and retains staged attachments for %s",
     async (command) => {

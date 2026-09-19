@@ -211,11 +211,20 @@ export function updateSlashMenu(
       (host.commandFilter?.(command) ?? true) &&
       (!completion.inline || command.source === "skill" || host.canRun(true, command)),
   );
+  let commands = items.filter((command) => command.source !== "skill");
+  if (value === "/") {
+    // Store the displayed category order so keyboard selection and rendering share it.
+    const groups = new Map<SlashCommandCategory, SlashCommandDef[]>();
+    for (const command of commands) {
+      const category = command.category ?? "session";
+      const group = groups.get(category) ?? [];
+      group.push(command);
+      groups.set(category, group);
+    }
+    commands = [...groups.values()].flat();
+  }
   state.slashMenuCompletion = completion;
-  state.slashMenuItems = [
-    ...items.filter((command) => command.source !== "skill"),
-    ...items.filter((command) => command.source === "skill"),
-  ];
+  state.slashMenuItems = [...commands, ...items.filter((command) => command.source === "skill")];
   state.slashMenuOpen = items.length > 0;
   state.slashMenuIndex = 0;
   state.slashMenuMode = "command";
@@ -617,8 +626,7 @@ export function renderSlashMenu(
     [];
   for (const [index, command] of commands.entries()) {
     const category = command.category ?? "session";
-    const group =
-      draft === "/" ? groups.find(([groupCategory]) => groupCategory === category) : groups.at(-1);
+    const group = groups.at(-1);
     if (group?.[0] === category) {
       group[1].push({ command, index });
     } else {
