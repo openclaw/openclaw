@@ -562,8 +562,8 @@ class ChatController internal constructor(
   private val presentedSessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = presentedSessions.asStateFlow()
 
-  // Notification display metadata is separate from the selected agent's session list.
-  // Bound it to the active gateway and the same small window as the existing session cache.
+  // Retain only rows that leave the selected list. Current rows remain authoritative and
+  // must not consume the bounded fallback window for previously viewed agents.
   private val notificationSessions = linkedMapOf<ChatComposerOwner, ChatSessionEntry>()
   private var notificationSessionsGatewayId: String? = null
 
@@ -571,7 +571,9 @@ class ChatController internal constructor(
     synchronized(gatewayScopeApplyLock) {
       val gatewayId = currentCacheScope()?.gatewayId ?: return@synchronized null
       if (!owner.routingVerified || owner.gatewayStableId != gatewayId || notificationSessionsGatewayId != gatewayId) return@synchronized null
-      notificationSessions[owner]
+      presentedSessions.value.firstOrNull {
+        it.key == owner.sessionKey && (it.ownerAgentId ?: resolveAgentIdFromMainSessionKey(it.key)) == owner.agentId
+      } ?: notificationSessions[owner]
     }
 
   private fun projectLocalSessionTitles(
@@ -584,27 +586,42 @@ class ChatController internal constructor(
     }
   }
 
-  private fun publishSessions(entries: List<ChatSessionEntry>) {
+  private fun publishSessions(
+    entries: List<ChatSessionEntry>,
+    departingOwner: ChatComposerOwner? = null,
+  ) {
     synchronized(gatewayScopeApplyLock) {
       // Keep rejected device metadata out of raw entries/cache; all native title consumers
       // share a local fallback bound to this gateway and exact session key.
-      _sessions.value = entries
-      val binding = currentCacheScope()?.let { desiredMainSessions[it.gatewayId] }
-      presentedSessions.value = projectLocalSessionTitles(entries, binding)
+      val previous = presentedSessions.value
       val gatewayId = currentCacheScope()?.gatewayId
+      val binding = gatewayId?.let { desiredMainSessions[it] }
+      _sessions.value = entries
+      presentedSessions.value = projectLocalSessionTitles(entries, binding)
       if (notificationSessionsGatewayId != gatewayId) {
         notificationSessions.clear()
-        notificationSessionsGatewayId = gatewayId
-      }
-      if (gatewayId != null) {
-        for (entry in presentedSessions.value.take(MAX_CACHED_SESSIONS).asReversed()) {
+      } else if (gatewayId != null) {
+        val currentOwners =
+          entries.mapNotNullTo(mutableSetOf()) { entry ->
+            val agentId = entry.ownerAgentId ?: resolveAgentIdFromMainSessionKey(entry.key) ?: return@mapNotNullTo null
+            ChatComposerOwner(gatewayId, agentId, entry.key)
+          }
+        notificationSessions.keys.removeAll(currentOwners)
+        // The just-viewed row can lie outside the drawer's first cache window.
+        val departed =
+          previous.asReversed().sortedBy {
+            departingOwner != null && it.key == departingOwner.sessionKey && it.ownerAgentId == departingOwner.agentId
+          }
+        for (entry in departed) {
           val agentId = entry.ownerAgentId ?: resolveAgentIdFromMainSessionKey(entry.key) ?: continue
           val owner = ChatComposerOwner(gatewayId, agentId, entry.key)
+          if (owner in currentOwners) continue
           notificationSessions.remove(owner)
           notificationSessions[owner] = entry
         }
         while (notificationSessions.size > MAX_CACHED_SESSIONS) notificationSessions.remove(notificationSessions.keys.first())
       }
+      notificationSessionsGatewayId = gatewayId
     }
   }
 
@@ -3237,6 +3254,7 @@ class ChatController internal constructor(
       synchronized(gatewayScopeApplyLock) {
         val generation = historyLoadGeneration.incrementAndGet()
         val changed = _sessionKey.value != key || _sessionOwnerAgentId.value != owner
+        val departingOwner = currentChatComposerRoutingOwner()
         if (changed) chatSelectionGeneration.update { it + 1 }
         _sessionKey.value = key
         _sessionOwnerAgentId.value = owner
@@ -3267,6 +3285,7 @@ class ChatController internal constructor(
             activeAgentId = activeAgentId,
             adoptOwnerless = false,
           ),
+          departingOwner = departingOwner,
         )
         applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
         _selectedModelRef.value = null
@@ -6748,6 +6767,21 @@ class ChatController internal constructor(
       return
     }
     if (eventOwner != visibleOwner) {
+      synchronized(gatewayScopeApplyLock) {
+        val owner = ChatComposerOwner(currentCacheScope()?.gatewayId, eventOwner, eventKey ?: return@synchronized)
+        val previous = notificationSessions[owner] ?: return@synchronized
+        if (entry == null) {
+          // Transcript-only events do not invalidate titles. A metadata invalidation
+          // without a snapshot cannot keep the previous title authoritative.
+          if (isSessionSettingsMutation(payload) || payload["reason"].asStringOrNull() == "chat.title") {
+            notificationSessions.remove(owner)
+          }
+        } else {
+          notificationSessions[owner] =
+            mergeChatSessionEntry(previous, entry.copy(ownerAgentId = eventOwner))
+              .withClearedDisplayFields(parseExplicitSessionClears(eventObject))
+        }
+      }
       if (entry == null && refreshWhenMissing) refreshSessionsForCurrentWindow()
       return
     }
@@ -8259,15 +8293,7 @@ class ChatController internal constructor(
           preserveSessionSettings = preserveSessionSettings,
         )
       }
-    if (clearedFields.isNotEmpty()) {
-      applied =
-        applied.copy(
-          label = if ("label" in clearedFields) null else applied.label,
-          autoLabel = if ("autoLabel" in clearedFields) null else applied.autoLabel,
-          displayName = if ("displayName" in clearedFields) null else applied.displayName,
-          category = if ("category" in clearedFields) null else applied.category,
-        )
-    }
+    applied = applied.withClearedDisplayFields(clearedFields)
     publishSessions(
       if (index >= 0) current.toMutableList().also { it[index] = applied } else listOf(applied) + current,
     )
@@ -9221,6 +9247,18 @@ private fun mergeChatSessionSettings(
         existing.hasEffectiveFastModeMetadata || settings.hasEffectiveFastModeMetadata
       },
   )
+
+private fun ChatSessionEntry.withClearedDisplayFields(clearedFields: Set<String>): ChatSessionEntry =
+  if (clearedFields.isEmpty()) {
+    this
+  } else {
+    copy(
+      label = if ("label" in clearedFields) null else label,
+      autoLabel = if ("autoLabel" in clearedFields) null else autoLabel,
+      displayName = if ("displayName" in clearedFields) null else displayName,
+      category = if ("category" in clearedFields) null else category,
+    )
+  }
 
 internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,

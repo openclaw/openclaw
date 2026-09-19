@@ -1,7 +1,6 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatController
-import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.chatTerminalPayload
 import ai.openclaw.app.gateway.GatewayEndpoint
 import android.Manifest
@@ -510,9 +509,9 @@ class ConversationNotificationsTest {
       ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
       val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
       chat.prepareAndSelectMainSessionKey("agent:reviewer:background")
-      ChatController::class.java.getDeclaredMethod("publishSessions", List::class.java).apply { isAccessible = true }.invoke(
-        chat,
-        listOf(ChatSessionEntry(key = "agent:reviewer:background", updatedAtMs = null, label = "Troubleshooting", ownerAgentId = "reviewer")),
+      chat.handleGatewayEvent(
+        "sessions.changed",
+        """{"session":{"key":"agent:reviewer:background","label":"Troubleshooting"}}""",
       )
       chat.prepareAndSelectMainSessionKey("agent:main:visible")
       assertTrue(chat.sessions.value.none { it.ownerAgentId == "reviewer" })

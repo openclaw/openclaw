@@ -161,6 +161,45 @@ describe("session viewer presence store", () => {
     await flushSync();
   });
 
+  it("does not restore viewing when visibility returns without focus or a blur event", async () => {
+    vi.useFakeTimers();
+    const harness = createGatewayHarness();
+    const store = sessionViewerPresenceForGateway(harness.gateway);
+    const owner = {};
+    store.watch(owner, ["agent:main:visible"]);
+    await flushSync();
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: [],
+    });
+
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("pointermove"));
+    await flushSync();
+    const clearedCount = harness.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.request).toHaveBeenCalledTimes(clearedCount);
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: [],
+    });
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    window.dispatchEvent(new Event("focus"));
+    await flushSync();
+    expect(harness.request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
+      sessionKeys: ["agent:main:visible"],
+    });
+    store.unwatch(owner);
+    await flushSync();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("redeclares aliases against the new client hello", async () => {
     const harness = createGatewayHarness();
     const store = sessionViewerPresenceForGateway(harness.gateway);

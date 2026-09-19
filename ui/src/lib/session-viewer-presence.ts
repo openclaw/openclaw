@@ -85,6 +85,7 @@ function createStore(gateway: ApplicationGateway): SessionViewerPresenceStore {
       focused = true;
       onActivity();
     } else {
+      focused = false;
       lifecycle.sync();
     }
   }

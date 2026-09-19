@@ -293,6 +293,94 @@ class ChatControllerTranscriptCacheTest {
     }
 
   @Test
+  fun notificationMetadataUsesTheWholeCurrentListWithoutEvictingThePreviousAgent() =
+    runTest {
+      val controller =
+        createCachedController(FakeTranscriptCache()) { method, params ->
+          if (method == "sessions.list") {
+            val agent = if (params.orEmpty().contains("\"agentId\":\"reviewer\"")) "reviewer" else "main"
+            val rows =
+              (0 until 100).joinToString(",") { index ->
+                """{"key":"agent:$agent:chat-$index","label":"$agent title $index"}"""
+              }
+            """{"sessions":[$rows]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("agent:reviewer:chat-99")
+      advanceUntilIdle()
+      controller.refreshSessions(limit = 100)
+      advanceUntilIdle()
+      val previous = ChatComposerOwner("gateway-a", "reviewer", "agent:reviewer:chat-0")
+      val tail = ChatComposerOwner("gateway-a", "reviewer", "agent:reviewer:chat-99")
+      assertEquals("reviewer title 99", controller.notificationSession(tail)?.label)
+      controller.switchSession("agent:main:chat-0")
+      advanceUntilIdle()
+      controller.refreshSessions(limit = 100)
+      advanceUntilIdle()
+      assertEquals("main title 99", controller.notificationSession(tail.copy(agentId = "main", sessionKey = "agent:main:chat-99"))?.label)
+      assertEquals("reviewer title 0", controller.notificationSession(previous)?.label)
+      assertTrue(controller.sessions.value.all { it.ownerAgentId == "main" })
+      // Only departed rows consume the existing 50-entry fallback budget.
+      assertEquals("reviewer title 99", controller.notificationSession(tail)?.label)
+      assertEquals("reviewer title 48", controller.notificationSession(previous.copy(sessionKey = "agent:reviewer:chat-48"))?.label)
+      assertEquals(null, controller.notificationSession(previous.copy(sessionKey = "agent:reviewer:chat-49")))
+      assertEquals(null, controller.notificationSession(previous.copy(sessionKey = "agent:reviewer:chat-50")))
+      assertEquals(null, controller.notificationSession(previous.copy(routingVerified = false)))
+    }
+
+  @Test
+  fun notificationMetadataTracksForeignRenameClearInvalidationAndDeletion() =
+    runTest {
+      val controller =
+        createCachedController(FakeTranscriptCache()) { method, params ->
+          if (method == "sessions.list" && params.orEmpty().contains("\"agentId\":\"reviewer\"")) {
+            """{"sessions":[{"key":"agent:reviewer:background","label":"Original","displayName":"Generated"}]}"""
+          } else {
+            emptyChatGatewayResponse(method)
+          }
+        }
+      controller.load("agent:reviewer:background")
+      advanceUntilIdle()
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.switchSession("agent:main:visible")
+      advanceUntilIdle()
+      val owner = ChatComposerOwner("gateway-a", "reviewer", "agent:reviewer:background")
+
+      fun changed(fields: String) {
+        controller.handleGatewayEvent("sessions.changed", """{"session":{"key":"agent:reviewer:background",$fields}}""")
+      }
+      controller.handleGatewayEvent("session.message", """{"agentId":"reviewer","sessionKey":"agent:reviewer:background","message":{"role":"assistant","content":[]}}""")
+      assertEquals("Original", controller.notificationSession(owner)?.label)
+      changed(""""label":"Renamed"""")
+      assertEquals("Renamed", controller.notificationSession(owner)?.label)
+      assertEquals("Generated", controller.notificationSession(owner)?.displayName)
+      changed(""""label":null,"displayName":null""")
+      assertEquals(null, controller.notificationSession(owner)?.label)
+      assertEquals(null, controller.notificationSession(owner)?.displayName)
+      assertTrue(controller.notificationSession(owner) != null)
+      changed(""""label":"Renamed again"""")
+      controller.handleGatewayEvent("sessions.changed", """{"reason":"delete","sessionKey":"agent:reviewer:background"}""")
+      advanceUntilIdle()
+      assertEquals(null, controller.notificationSession(owner))
+      changed(""""label":"Late event"""")
+      assertEquals(null, controller.notificationSession(owner))
+      controller.load("agent:reviewer:background")
+      advanceUntilIdle()
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.switchSession("agent:main:visible")
+      advanceUntilIdle()
+      assertEquals("Original", controller.notificationSession(owner)?.label)
+      controller.handleGatewayEvent("sessions.changed", """{"reason":"patch","agentId":"reviewer","sessionKey":"agent:reviewer:background"}""")
+      advanceUntilIdle()
+      assertEquals(null, controller.notificationSession(owner))
+      assertTrue(controller.sessions.value.none { it.ownerAgentId == "reviewer" })
+    }
+
+  @Test
   fun offlineColdOpenShowsCachedTranscriptAndSessionsAndQueuesSend() =
     runTest {
       for (mainSessionKey in listOf("main", "agent:main:node-offline")) {
