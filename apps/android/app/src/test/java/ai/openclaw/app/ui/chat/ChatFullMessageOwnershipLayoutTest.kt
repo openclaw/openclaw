@@ -1923,7 +1923,9 @@ internal data class FullMessageRead(
   val maxChars: Int? = 1_000_000,
 )
 
-internal class FullMessageGateway : AutoCloseable {
+internal class FullMessageGateway(
+  private val talkConfig: String? = null,
+) : AutoCloseable {
   private val json = Json { ignoreUnknownKeys = true }
   private val server = MockWebServer()
   private val sequence = AtomicInteger()
@@ -2120,6 +2122,14 @@ internal class FullMessageGateway : AutoCloseable {
               // Observe the production Listen request without starting unrelated platform audio.
               speechReads.update { it + params.getValue("text").jsonPrimitive.content }
               return
+            }
+
+            "talk.config" -> {
+              if (talkConfig == null) {
+                reject("INVALID_REQUEST", "Proof Gateway does not implement Talk config")
+                return
+              }
+              json.parseToJsonElement(talkConfig)
             }
 
             "chat.metadata" -> {

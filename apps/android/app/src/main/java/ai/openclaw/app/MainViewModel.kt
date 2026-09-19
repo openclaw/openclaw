@@ -44,6 +44,7 @@ import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
+import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
@@ -1210,6 +1211,16 @@ class MainViewModel private constructor(
         }
       }
     }
+  }
+
+  internal fun captureChatTalkStart(): TalkModeManager.ChatStart? {
+    val runtime = runtimeRef.value ?: return null
+    val owner = currentChatComposerOwner() ?: return null
+    return runtime.captureChatTalkStart(owner, runtime.chatSelectionGeneration.value)
+  }
+
+  internal fun startChatTalk(start: TalkModeManager.ChatStart) {
+    runtimeRef.value?.startChatTalk(start)
   }
 
   fun setTalkModeEnabled(enabled: Boolean) {

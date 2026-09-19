@@ -3342,6 +3342,16 @@ class ChatController internal constructor(
 
   internal suspend fun wasOutboxCommandAdmitted(id: String): Boolean = commandOutbox.wasAdmitted(id)
 
+  /** Claims initial Talk admission under the same lock as chat selection. */
+  internal fun withCurrentComposerOwner(
+    expectedOwner: ChatComposerOwner,
+    selectionGeneration: Long,
+    claim: () -> Boolean,
+  ): Boolean =
+    synchronized(gatewayScopeApplyLock) {
+      chatSelectionGeneration.value == selectionGeneration && isCurrentComposerOwner(expectedOwner) && claim()
+    }
+
   internal fun isCurrentComposerOwner(expectedOwner: ChatComposerOwner): Boolean {
     val cacheScope = currentCacheScope()
     val effectiveSessionKey = normalizeRequestedSessionKey(_sessionKey.value)

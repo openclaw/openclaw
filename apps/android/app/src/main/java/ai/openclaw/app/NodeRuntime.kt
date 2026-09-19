@@ -1724,6 +1724,7 @@ class NodeRuntime private constructor(
         }
       },
       onDisconnected = { message ->
+        if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode) stopActiveVoiceSession()
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
         clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
@@ -4051,6 +4052,35 @@ class NodeRuntime private constructor(
     prefs.setVoiceMicEnabled(false)
   }
 
+  internal fun captureChatTalkStart(
+    owner: ChatComposerOwner,
+    selectionGeneration: Long,
+  ): TalkModeManager.ChatStart? {
+    if (!_isForeground.value || !owner.routingVerified || !chat.isCurrentComposerOwner(owner)) return null
+    val lease = operatorSession.captureRequestLease(owner.gatewayStableId ?: return null) ?: return null
+    val lifecycleEpoch = voiceLifecycleEpoch.get()
+    val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
+    return TalkModeManager
+      .ChatStart(
+        owner = owner,
+        lease = lease,
+        mainAlias = operatorSession.sessionRouting?.mainSessionKey,
+        mainKey = operatorSession.sessionRouting?.mainKey,
+        captureEpoch = ownershipEpoch,
+        withCurrentSelection = { claim ->
+          chat.withCurrentComposerOwner(owner, selectionGeneration) {
+            _isForeground.value && voiceLifecycleEpoch.get() == lifecycleEpoch &&
+              !gatewayConnectionHandoff.value.pending && claim()
+          }
+        },
+      ).takeIf { it.canStart() }
+  }
+
+  internal fun startChatTalk(start: TalkModeManager.ChatStart) {
+    if (!start.claimStart()) return
+    setVoiceCaptureMode(VoiceCaptureMode.TalkMode, chatStart = start, expectedOwnershipEpoch = start.captureEpoch)
+  }
+
   fun setTalkModeEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
@@ -4552,11 +4582,14 @@ class NodeRuntime private constructor(
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
+    chatStart: TalkModeManager.ChatStart? = null,
+    expectedOwnershipEpoch: Long? = null,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
+        if (expectedOwnershipEpoch != null && voiceCaptureOwnershipEpoch.get() != expectedOwnershipEpoch) return
         if (mode != VoiceCaptureMode.Off && (gatewayConnectionHandoff.value.pending || voiceNoteOwnsMic || dictationOwnsMic)) return
         if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
         // Every mode command cancels queued PTT intent; only a real transition replaces the capture owner.
@@ -4638,7 +4671,7 @@ class NodeRuntime private constructor(
         if (voiceCaptureOwnershipEpoch.get() != ownershipEpoch || _voiceCaptureMode.value != startAfterSuppression) return@launch
         when (startAfterSuppression) {
           VoiceCaptureMode.ManualMic -> micCapture.setMicEnabled(true)
-          VoiceCaptureMode.TalkMode -> talkMode.setEnabled(true)
+          VoiceCaptureMode.TalkMode -> talkMode.setEnabled(true, chatStart)
           else -> Unit
         }
       }
