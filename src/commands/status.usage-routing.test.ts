@@ -39,6 +39,7 @@ vi.mock("./status.scan-overview.js", () => ({
         gatewayProbeAuthWarning: scan.gatewayProbeAuthWarning,
         gatewayProbe: scan.gatewayProbe,
         gatewayReachable: scan.gatewayReachable,
+        gatewayProbeDeadlineMs: scan.gatewayProbeDeadlineMs,
         gatewaySelf: scan.gatewaySelf,
       },
       runtimeDegradation: { degradedSecretOwners: [], degradedPlugins: [] },
@@ -230,11 +231,39 @@ describe("status usage routing through Commander", () => {
       expect(mocks.usage).toHaveBeenCalledOnce();
       expect(mocks.usage).toHaveBeenCalledWith({
         config,
-        timeoutMs: 10_000,
+        timeoutMs: 60_000,
         ...(agentId ? { agentId } : {}),
       });
     } else {
       expect(mocks.usage).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    { args: [], timeoutMs: undefined, expected: 38_000 },
+    { args: ["--all"], timeoutMs: undefined, expected: 38_000 },
+    { args: ["--json", "--all"], timeoutMs: undefined, expected: 38_000 },
+    { args: [], timeoutMs: 1234, expected: 1234 },
+    { args: ["--all"], timeoutMs: 1234, expected: 1234 },
+    { args: ["--json", "--all"], timeoutMs: 1234, expected: 1234 },
+  ])("bounds usage after readiness ($args, $timeoutMs)", async ({ args, timeoutMs, expected }) => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(22_000);
+    try {
+      const scan = await mocks.scan();
+      mocks.scan.mockResolvedValue({ ...scan, gatewayProbeDeadlineMs: 60_000 });
+      mocks.usage.mockResolvedValue(summaries.default);
+      const program = new Command();
+      registerStatusHealthSessionsCommands(program);
+      await program.parseAsync(
+        ["status", "--usage", ...args, ...(timeoutMs ? ["--timeout", String(timeoutMs)] : [])],
+        { from: "user" },
+      );
+
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.usage).toHaveBeenCalledExactlyOnceWith({ config, timeoutMs: expected });
+    } finally {
+      clock.mockRestore();
     }
   });
 });

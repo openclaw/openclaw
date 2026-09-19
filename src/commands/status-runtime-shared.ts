@@ -193,7 +193,7 @@ async function resolveStatusRuntimeDetails(params: {
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
   const usage = params.usage
     ? await resolveUsageSummary({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: resolveStatusGatewayProbeTimeoutMs(params),
         config: params.config,
         ...(params.agentId ? { agentId: params.agentId } : {}),
       })

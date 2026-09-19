@@ -159,6 +159,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 - `--usage` prints normalized provider usage windows as `X% left`.
   It also adds usage snapshots to `--all`; `--agent` keeps the same usage-only scope.
+  Usage probes receive the remaining shared probe budget, capped by `--timeout` when set;
+  providers that exceed that bound report `Timeout` in the usage output.
 - In an explicit multi-agent setup, `--usage` reads the auth profiles owned by
   `agents.defaults.systemAgent.agentId` by default. Pass `--agent <id>` to
   inspect another agent; without either owner, OpenClaw does not guess one

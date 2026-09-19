@@ -10,6 +10,7 @@ import {
   resolveStatusServiceSummaries,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
@@ -63,7 +64,10 @@ export async function statusAllCommand(
     if (opts?.usage) {
       const usage = await resolveStatusUsageSummary({
         config: overview.cfg,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs: resolveStatusGatewayProbeTimeoutMs({
+          timeoutMs: opts.timeoutMs,
+          gatewayProbeDeadlineMs: overview.gatewaySnapshot.gatewayProbeDeadlineMs,
+        }),
         ...(opts.agent ? { agentId: opts.agent } : {}),
       });
       lines.push("", ...formatUsageReportLines(usage));
