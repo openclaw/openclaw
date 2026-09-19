@@ -122,7 +122,7 @@ function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions)
 }
 
 function isLikelyUsername(input: string): boolean {
-  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
+  if (/^(?:user:|channel:|discord:|@|<@!?|\d+$)/.test(input)) {
     return false;
   }
   return true;
