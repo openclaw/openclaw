@@ -567,8 +567,12 @@ describe("Codex app-server terminal settlement", () => {
           checkpoint.resolve();
           await Promise.allSettled(checkpointWrites);
         }
-        await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        if (release !== "during grace") {
+          await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce(), fastWait);
+        }
+        // Keep the grace clock fixed while accepted transcript work and cleanup settle.
         const result = await run;
+        expect(settled).toHaveBeenCalledOnce();
         expect(readAttemptTerminal(result)).toMatchObject({
           aborted: termination === "abort",
           timedOut: false,
