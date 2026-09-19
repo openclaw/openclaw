@@ -186,7 +186,13 @@ export function createSessionMaintenanceOwner(params: {
 }
 
 /** Reserve foreground priority before queueing so optional work cannot seize its lane. */
-export async function beginForegroundSessionMaintenance(sessionKey?: string): Promise<() => void> {
+export async function beginForegroundSessionMaintenance(
+  sessionKey?: string,
+  abortSignal?: AbortSignal,
+): Promise<() => void> {
+  if (abortSignal?.aborted) {
+    throw createAbortError("Operation aborted", { cause: abortSignal.reason });
+  }
   const key = sessionKey?.trim();
   if (!key) {
     return () => {};
@@ -214,10 +220,19 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
     recordPhase(key, owner, "foreground_preemption_requested");
     owner.controller.abort(createAbortError("Session maintenance yielded to a foreground turn"));
   }
-  await Promise.all(
-    existing.filter((owner) => owner.running || owner.preemptible).map((owner) => owner.done),
-  );
-  return release;
+  try {
+    await racePromiseWithAbortSignal(
+      Promise.all(
+        existing.filter((owner) => owner.running || owner.preemptible).map((owner) => owner.done),
+      ),
+      abortSignal,
+    );
+    return release;
+  } catch (error) {
+    // Only this waiter's reservation ends. Writers retain their tracked completion.
+    release();
+    throw error;
+  }
 }
 
 /** Read checkpoint shared by foreground and nested maintenance inference. */
