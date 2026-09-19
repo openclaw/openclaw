@@ -163,7 +163,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/appearance`);
           await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
           await page.goto(`${suite.server.baseUrl}chat?session=main`);
-          const main = page.getByRole("textbox", { name: "Chat composer", exact: true });
+          const main = page.getByRole("combobox", { name: "Chat composer", exact: true });
           await main.fill("Keep the first run active");
           await page.getByRole("button", { name: "Send message", exact: true }).click();
           const active = requireRecord((await gateway.waitForRequest("chat.send")).params);

@@ -253,7 +253,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.getByText("The PR is ready to land.", { exact: true }).waitFor();
         await gateway.deferNext("chat.send");
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
+        await page.getByRole("combobox", { name: "Chat composer", exact: true }).fill(prompt);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = (send.params as { idempotencyKey: string }).idempotencyKey;

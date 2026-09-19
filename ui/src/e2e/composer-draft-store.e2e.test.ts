@@ -92,8 +92,8 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByRole("button", { name: "Open split view", exact: true }).click();
         const cells = page.locator(".chat-split-view__cell");
-        const left = cells.nth(0).getByRole("textbox", { name: "Chat composer" });
-        const right = cells.nth(1).getByRole("textbox", { name: "Chat composer" });
+        const left = cells.nth(0).getByRole("combobox", { name: "Chat composer" });
+        const right = cells.nth(1).getByRole("combobox", { name: "Chat composer" });
         await expect.poll(() => left.count()).toBe(1);
         await left.fill("OLDER LEFT DRAFT");
         const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;

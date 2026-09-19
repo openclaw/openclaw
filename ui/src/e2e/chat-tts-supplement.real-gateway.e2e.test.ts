@@ -274,7 +274,7 @@ suite.define(() => {
               });
               await page.goto(url.href);
               await waitForControlUiGatewayReady(page);
-              const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+              const composer = page.getByRole("combobox", { name: "Chat composer", exact: true });
               const send = async (text: string) => {
                 await composer.fill(text);
                 await page.getByRole("button", { name: "Send message", exact: true }).click();

@@ -135,7 +135,7 @@ suite.define(() => {
           });
           await page.goto(url.href);
           await waitForControlUiGatewayReady(page);
-          const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+          const composer = page.getByRole("combobox", { name: "Chat composer", exact: true });
           await composer.waitFor({ state: "visible" });
           await composer.fill("/model thinking-fixture/no-effort");
           await expect
@@ -298,7 +298,7 @@ suite.define(() => {
             });
             await page.goto(url.href);
             await waitForControlUiGatewayReady(page);
-            const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+            const composer = page.getByRole("combobox", { name: "Chat composer", exact: true });
             await composer.waitFor({ state: "visible" });
             await composer.fill("/think");
             await composer.press("Tab");

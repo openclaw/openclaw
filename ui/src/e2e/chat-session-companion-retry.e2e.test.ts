@@ -45,7 +45,7 @@ suite.define(() => {
         const composer =
           entry === "side-composer"
             ? side.getByRole("textbox")
-            : page.getByRole("textbox", { name: "Chat composer", exact: true });
+            : page.getByRole("combobox", { name: "Chat composer", exact: true });
         const send = async (text: string) => {
           await composer.fill(entry === "side-composer" ? text : `${entry} ${text}`);
           await composer.press("Enter");

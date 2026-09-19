@@ -71,7 +71,7 @@ suite.define(() => {
             await typography(main.getByText(questionText, { exact: true })),
           );
           expect(await typography(side.getByRole("textbox"))).toEqual(
-            await typography(page.getByRole("textbox", { name: "Chat composer", exact: true })),
+            await typography(page.getByRole("combobox", { name: "Chat composer", exact: true })),
           );
           await side.getByRole("button", { name: "Copy code", exact: true }).click();
           await expect
