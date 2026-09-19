@@ -487,11 +487,11 @@ function parseAiSnapshotRef(ref: string | undefined): string | null {
  * Build a role snapshot from Playwright's AI snapshot output while preserving Playwright's own
  * aria-ref ids (e.g. ref=e13). This makes the refs self-resolving across calls.
  */
-/** Build a role snapshot and refs from Playwright AI snapshot text. */
 export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
-  options: RoleSnapshotOptions = {},
+  suppliedOptions?: RoleSnapshotOptions,
 ): { snapshot: string; refs: RoleRefMap } {
+  const options = suppliedOptions === undefined ? {} : suppliedOptions;
   const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
@@ -514,7 +514,7 @@ export function buildRoleSnapshotFromAiSnapshot(
     };
   }
 
-  const out: string[] = [];
+  const out: string[] | undefined = suppliedOptions === undefined ? undefined : [];
   for (const line of lines) {
     const depth = getIndentLevel(line);
     if (options.maxDepth !== undefined && depth > options.maxDepth) {
@@ -523,7 +523,7 @@ export function buildRoleSnapshotFromAiSnapshot(
 
     const parsed = parseSnapshotLine(line);
     if (!parsed) {
-      out.push(line);
+      out?.push(line);
       continue;
     }
     const { role } = parsed;
@@ -539,11 +539,13 @@ export function buildRoleSnapshotFromAiSnapshot(
       refs[ref] = { role, ...(name ? { name } : {}) };
     }
 
-    out.push(line);
+    out?.push(line);
   }
 
   return {
-    snapshot: options.compact ? compactTree(out) : out.join("\n") || "(empty)",
+    snapshot: options.compact
+      ? compactTree(out ?? lines)
+      : (out ? out.join("\n") : aiSnapshot) || "(empty)",
     refs,
   };
 }

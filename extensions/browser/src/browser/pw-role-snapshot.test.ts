@@ -390,4 +390,19 @@ describe("pw-role-snapshot", () => {
     expect(res.refs["7"]?.role).toBe("button");
     expect(res.refs["7"]?.name).toBe("Save");
   });
+
+  it.each([
+    {
+      options: {},
+      expected: '\n    - button "Deep" [ref=f1e1]\nraw\r\n- button "Save" [ref=f1e2]\n\n',
+    },
+    { options: { maxDepth: 0 }, expected: '\nraw\r\n- button "Save" [ref=f1e2]\n\n' },
+  ])("preserves raw line boundaries with options $options", ({ options, expected }) => {
+    const result = buildRoleSnapshotFromAiSnapshot(
+      '\n    - button "Deep" [ref=f1e1]\nraw\r\n- button "Save" [ref=f1e2]\n\n',
+      options,
+    );
+    expect(result.snapshot).toBe(expected);
+    expect(Object.keys(result.refs)).toEqual(options.maxDepth === 0 ? ["f1e2"] : ["f1e1", "f1e2"]);
+  });
 });

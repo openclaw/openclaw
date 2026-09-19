@@ -475,6 +475,19 @@ describe("pw-tools-core aria snapshot storage", () => {
     );
   });
 
+  it("still rejects malformed AI names beyond the output budget", async () => {
+    const ariaSnapshot = vi.fn(
+      async () => '- button "Visible" [ref=e1]\n' + String.raw`- button "bad\uZZZZ" [ref=e2]`,
+    );
+    getPageForTargetId.mockResolvedValue(makeAriaSnapshotPage(ariaSnapshot));
+    const mod = await import("./pw-tools-core.snapshot.js");
+
+    await expect(
+      mod.snapshotAiViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", maxChars: 1 }),
+    ).rejects.toBeInstanceOf(SyntaxError);
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
   it("uses the default navigation timeout for non-finite timeouts", async () => {
     const page = { url: vi.fn(() => "http://127.0.0.1:31337/after") };
     getPageForTargetId.mockResolvedValue(page);
