@@ -307,9 +307,14 @@ it.each([true, false])(
     );
     const waiting = resolveSystemdUserTransport(env, undefined, undefined, "admission");
     release();
-    expect(await first).toMatchObject(
-      privateAvailable ? { kind: "private" } : { reason: "systemd-user-bus-unavailable" },
-    );
+    const firstError = await first;
+    if (privateAvailable) {
+      expect(firstError).toMatchObject({ kind: "private" });
+    } else {
+      // Deadline exhaustion is its own diagnosis, not a missing-bus repair hint.
+      expect(firstError).toMatchObject({ reason: "systemd-inspection-deadline-exceeded" });
+      expect((firstError as Error).message).toContain("inspection deadline was exceeded");
+    }
     const selected = await waiting;
     expect(selected).toMatchObject({ kind: "session-bus", address: env.DBUS_SESSION_BUS_ADDRESS });
     expect(await resolveSystemdUserTransport(env)).toBe(selected);

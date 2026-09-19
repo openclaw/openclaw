@@ -86,11 +86,13 @@ export async function createSystemdCommandQuery(
       }
       return values;
     }
-    const callTimeout = Math.max(
-      1,
-      Math.floor((deadlineAt - performance.now()) / remainingCalls--),
-    );
-    const callDeadline = Math.min(deadlineAt, performance.now() + callTimeout);
+    remainingCalls--;
+    // Each call draws on the full remaining shared deadline: required LoadUnit
+    // admission guards legitimately take seconds and must not be cut off at a
+    // per-call fraction while most of the budget remains. The call count and
+    // the shared deadline still bound the whole sequence.
+    const callDeadline = deadlineAt;
+    const callTimeout = Math.max(1, Math.floor(deadlineAt - performance.now()));
     const exec = async (queryArgs: string[], budget: number) => {
       if (scope === "system") {
         assertCurrent?.();

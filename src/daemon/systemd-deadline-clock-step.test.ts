@@ -54,7 +54,6 @@ function expectBudgetShares(timeouts: Array<number | undefined>, minMs: number) 
     expect(timeout).toBeLessThanOrEqual(BUDGET_MS);
   }
 }
-
 describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clock step", () => {
   let root: string;
   let env: Record<string, string>;
@@ -104,12 +103,12 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         timeoutMs: BUDGET_MS,
       });
 
-      // The budget is split across the remaining manager calls (three at most).
+      // Every manager call draws on the full remaining shared budget.
       expectBudgetShares(
         busctl.mock.calls.map((call) => call[2]),
-        BUDGET_MS / 3 - 100,
+        BUDGET_MS - 1_000,
       );
-      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 1_633]);
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([5_000, 4_900]);
     },
   );
 
@@ -141,9 +140,9 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
       expect(busctl).toHaveBeenCalledTimes(3);
       expectBudgetShares(
         busctl.mock.calls.map((call) => call[2]),
-        BUDGET_MS / 3 - 100,
+        BUDGET_MS - 1_000,
       );
-      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 2_450, 4_800]);
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([5_000, 4_900, 4_800]);
     },
   );
 

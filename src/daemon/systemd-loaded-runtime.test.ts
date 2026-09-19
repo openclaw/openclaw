@@ -332,7 +332,7 @@ describe("loaded-only systemd runtime", () => {
       const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 500 });
       expect(runtime.status).toBe("unknown");
       expect(busctl).toHaveBeenCalledTimes(6);
-      expect(busctl.mock.calls.map((call) => call[2])).toEqual([71, 68, 64, 57, 46, 25]);
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([500, 410, 320, 230, 140, 50]);
       expect(systemctl).not.toHaveBeenCalled();
     } finally {
       now.mockRestore();

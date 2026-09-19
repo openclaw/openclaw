@@ -70,7 +70,10 @@ export async function readLoadedSystemdServiceRuntime(
       return values;
     }
     const queryArgs = ["--auto-start=no", "--json=short", ...args];
-    const callTimeout = Math.max(1, Math.floor(remaining / remainingQueries--));
+    remainingQueries--;
+    // Required LoadUnit admission guards draw on the full remaining shared
+    // budget; the call count and total deadline still bound the sequence.
+    const callTimeout = Math.max(1, Math.floor(remaining));
     const result =
       scope === "system"
         ? await execBusctlSystem(queryArgs, callTimeout)

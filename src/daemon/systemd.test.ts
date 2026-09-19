@@ -2241,7 +2241,7 @@ describe("readSystemdServiceExecStart", () => {
     await expect(readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME })).resolves.toBeNull();
   });
 
-  it("fairly reserves the shared deadline across all three manager queries", async () => {
+  it("shares the remaining deadline across all three manager queries", async () => {
     mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
     mockSystemdManagerSnapshot({ programArguments: ["/usr/bin/openclaw", "gateway", "run"] });
     let elapsed = 1_000;
@@ -2256,7 +2256,7 @@ describe("readSystemdServiceExecStart", () => {
 
     await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { timeoutMs: 1_200 });
 
-    expect(execFileMock.mock.calls.map((call) => call[2].timeout)).toEqual([400, 550, 800]);
+    expect(execFileMock.mock.calls.map((call) => call[2].timeout)).toEqual([1200, 1100, 800]);
   });
 
   it.each([false, true])("reports pending manager reload only when it is %s", async (pending) => {

@@ -80,6 +80,13 @@ function assertDoctorMaintenanceInspection(
   );
 }
 
+/** Doctor's restoration re-reads a stopped unit under live custody, including full
+ * LoadUnit admission guards that reread update-run state through fresh SQLite
+ * snapshots. A loaded manager can spend seconds per guard while the user session
+ * bus stays healthy, so restoration gets its own budget; ordinary status reads
+ * elsewhere keep the standard 5 s inspection deadline. */
+const DOCTOR_RESTORATION_INSPECTION_TIMEOUT_MS = 30_000;
+
 export async function beginDoctorMaintenance(params: {
   options: DoctorOptions;
   root: string | null;
@@ -209,6 +216,7 @@ export async function beginDoctorMaintenance(params: {
             env: serviceEnv,
             requireEffective: true,
             requireLoadedCommand: true,
+            timeoutMs: DOCTOR_RESTORATION_INSPECTION_TIMEOUT_MS,
             // A stopped unit may be collected. Reload only its metadata under
             // live custody of the recorded manager, then revalidate the launcher.
             ...(process.platform === "linux" && before.serviceManagerUid !== undefined

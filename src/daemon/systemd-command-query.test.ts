@@ -5,12 +5,19 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const busctl = vi.hoisted(() => vi.fn());
-vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
-vi.mock("./systemd-exec.js", async (original) => ({
-  ...(await original<typeof import("./systemd-exec.js")>()),
-  execBusctlUser: busctl,
-  bindSystemdManagerOwner: vi.fn(),
+const realSystemdExec = vi.hoisted(() => ({
+  execBusctlUser: undefined as typeof import("./systemd-exec.js").execBusctlUser | undefined,
 }));
+vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
+vi.mock("./systemd-exec.js", async (original) => {
+  const actual = await original<typeof import("./systemd-exec.js")>();
+  realSystemdExec.execBusctlUser = actual.execBusctlUser;
+  return {
+    ...actual,
+    execBusctlUser: busctl,
+    bindSystemdManagerOwner: vi.fn(),
+  };
+});
 vi.mock("./systemd-peer-native.js", async (original) => ({
   ...(await original<typeof import("./systemd-peer-native.js")>()),
   openSystemdUserManager: vi.fn(),
@@ -226,9 +233,9 @@ describe("systemd command query legacy compatibility", () => {
   });
 
   it.each([
-    { first: 200, retry: 0, budgets: [1000, 800], ok: true },
-    { first: 1000, retry: 0, budgets: [1000], ok: false },
-    { first: 0, retry: 1000, budgets: [1000, 1000], ok: false },
+    { first: 200, retry: 0, budgets: [3000, 2800], ok: true },
+    { first: 3000, retry: 0, budgets: [3000], ok: false },
+    { first: 0, retry: 3000, budgets: [3000, 3000], ok: false },
   ])("shares the original call deadline: %j", async ({ first, retry, budgets, ok }) => {
     let now = 1000;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -248,6 +255,39 @@ describe("systemd command query legacy compatibility", () => {
       await expect(result).rejects.toThrow();
     }
     expect(busctl.mock.calls.map((call) => call[2])).toEqual(budgets);
+  });
+
+  it("keeps a required LoadUnit admission guard inside the shared deadline", async () => {
+    let now = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const assertCurrent = vi.fn(() => {
+      // A loaded manager spends seconds per full admission snapshot while the
+      // session bus itself stays healthy; guards must fit the shared budget.
+      now += 1_100;
+    });
+    vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
+      if (Array.isArray(args) && args.includes("LoadUnit")) {
+        now += 10;
+        return success('{"type":"o","data":["/unitName"]}');
+      }
+      await systemdManagerVersionProbe(command, args);
+      return versionProbeResult;
+    });
+    busctl.mockImplementation(
+      (...call: Parameters<typeof import("./systemd-exec.js").execBusctlUser>) =>
+        realSystemdExec.execBusctlUser!(...call),
+    );
+    await expect(
+      query({
+        requireLoaded: true,
+        loadForInspection: {
+          managerUid: 1234,
+          assertCurrent,
+          assertReadCurrent: vi.fn(),
+        },
+      }),
+    ).resolves.toEqual([["/unitName"]]);
+    expect(assertCurrent).toHaveBeenCalled();
   });
 
   it("preserves non-activating reads and rejects revoked inspection before retry", async () => {

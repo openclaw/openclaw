@@ -105,6 +105,7 @@ type StoppedUnitState =
   | "changed-command"
   | "restart-failed"
   | "slow-admission"
+  | "slow-loadunit-admission"
   | "competing-during-inspection"
   | "lifecycle-contended"
   | "gateway-lifecycle-contended"
@@ -226,7 +227,9 @@ async function runDoctorFinishForStoppedUnit(
     },
     async () => {
       const boundedInspection =
-        scenario === "slow-admission" || scenario === "competing-during-inspection";
+        scenario === "slow-admission" ||
+        scenario === "slow-loadunit-admission" ||
+        scenario === "competing-during-inspection";
       if (boundedInspection) {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
@@ -583,7 +586,11 @@ async function runDoctorFinishForStoppedUnit(
         vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation(
           (pathname) => {
             const prepared = prepareSnapshot(pathname);
-            if (inspectingRuntime) {
+            if (scenario === "slow-loadunit-admission") {
+              // A loaded manager can spend seconds per full LoadUnit admission
+              // snapshot while the session bus itself stays healthy.
+              inspectionClock += 2_600;
+            } else if (inspectingRuntime) {
               inspectionClock += 100;
             }
             return prepared;
@@ -798,6 +805,14 @@ it("restores the Gateway within the native inspection budget with slow admission
   expect(restartCalls).toBe(1);
   expect(inspectionElapsedMs).toBeGreaterThan(0);
   expect(inspectionElapsedMs).toBeLessThan(5000);
+});
+
+it("restores the Gateway when full LoadUnit admission guards exceed the standard status budget", async () => {
+  const { finishError, restartCalls, logs } =
+    await runDoctorFinishForStoppedUnit("slow-loadunit-admission");
+  expect(finishError).toBeUndefined();
+  expect(restartCalls).toBe(1);
+  expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
 });
 
 it("rechecks update admission after passive native inspection before restoring the Gateway", async () => {
