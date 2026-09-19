@@ -137,6 +137,45 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "reordered duplicates",
+      cached: ["weather", "meme-factory"],
+      next: [" meme-factory ", "weather", "weather"],
+      refresh: false,
+    },
+    { name: "explicit empty filter", cached: [], next: [], refresh: false },
+    { name: "absent filter", cached: undefined, next: undefined, refresh: false },
+    {
+      name: "changed membership",
+      cached: ["weather", "meme-factory"],
+      next: ["weather", "other"],
+      refresh: true,
+    },
+    { name: "absent to empty", cached: undefined, next: [], refresh: true },
+    { name: "empty to absent", cached: [], next: undefined, refresh: true },
+  ])("preserves snapshot reuse semantics for $name", async ({ cached, next, refresh }) => {
+    const snapshot: SkillSnapshot = {
+      ...strippedSnapshot(),
+      resolvedSkills: [],
+      skillFilter: cached,
+    };
+    const result = await resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      existingSnapshot: snapshot,
+      skillFilter: next,
+      watch: false,
+    });
+    expect(result.shouldRefresh).toBe(refresh);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(refresh ? 1 : 0);
+    if (!refresh) {
+      expect(result.snapshot).toBe(snapshot);
+      expect(result.snapshot.prompt).toBe("skills prompt");
+      expect(result.snapshot.skillFilter).toBe(cached);
+    }
+  });
+
   it("rebuilds for a live caller after an abandoned preparation drains", async () => {
     const probe = createDeferred();
     const cancelled = createDeferred();
