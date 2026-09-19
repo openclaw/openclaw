@@ -13,6 +13,7 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { classifyMediaReferenceSource } from "../../media/media-reference.js";
 import {
   decodeUtf8Strict,
   listWorkspacePath,
@@ -88,6 +89,13 @@ function resolveTouchedFilePath(params: {
   filePath: string;
 }): string | undefined {
   if (!params.root) {
+    return undefined;
+  }
+  // A media-store identity such as media://inbound/<id> is not a workspace path. Resolving it
+  // against the root would land inside the root (as <root>/media:/inbound/<id>) and project a
+  // phantom file entry that no workspace route can open. The media store owns those bytes and
+  // serves them through the authenticated assistant-media route, not as a workspace file.
+  if (classifyMediaReferenceSource(params.filePath).isMediaStoreUrl) {
     return undefined;
   }
   const base = params.fileRoot ?? params.root;
