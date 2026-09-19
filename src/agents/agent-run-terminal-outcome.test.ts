@@ -378,6 +378,24 @@ describe("agent run terminal outcome", () => {
     expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
   });
 
+  it("preserves a provider failure when a non-sticky queue timeout arrives later", () => {
+    const providerFailure = buildAgentRunTerminalOutcome({
+      status: "error",
+      error: "provider request failed",
+      stopReason: "error",
+      providerStarted: true,
+      endedAt: 200,
+    });
+    const queueTimeout = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      timeoutPhase: "queue",
+      endedAt: 210,
+    });
+
+    expect(mergeAgentRunTerminalOutcome(providerFailure, queueTimeout)).toBe(providerFailure);
+    expect(mergeAgentRunTerminalOutcome(queueTimeout, providerFailure)).toBe(providerFailure);
+  });
+
   it("keeps the first proven sticky outcome regardless of callback ordering", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",

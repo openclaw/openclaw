@@ -54,5 +54,11 @@ export function mergeAgentRunTerminalOutcome(
       ? current
       : incoming;
   }
+  // Queue and gateway-draining timeouts are non-sticky wait-layer uncertainty.
+  // Preserve a concrete failure if it was observed before or after that
+  // timeout; observation order must not change the reported cause.
+  if (current.reason === "failed" && incoming.reason === "timed_out") {
+    return current;
+  }
   return incoming;
 }
