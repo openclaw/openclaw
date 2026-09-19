@@ -37,6 +37,7 @@ import {
 } from "../runtime-api.js";
 import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import {
   ACPX_PROBE_LEASE_SESSION_KEY,
   hashAcpxProcessCommand,
@@ -50,6 +51,7 @@ import {
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import { AcpxGenerationRegistry } from "./runtime-generations.js";
+import { withManagedToolsMcpSessionEnv } from "./runtime-mcp-env.js";
 import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
@@ -75,6 +77,7 @@ import {
   resolveAcpxSessionResource,
   toAcpxResourceInput,
 } from "./session-owner.js";
+import { AcpxStartupDeadline, type AcpxStartupDeadlineDeps } from "./startup-deadline.js";
 
 type BaseAcpxRuntimeTestOptions = ConstructorParameters<typeof BaseAcpxRuntime>[1];
 type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
@@ -87,16 +90,12 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
 };
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
+  openclawStartupDeadline?: AcpxStartupDeadlineDeps;
 };
 type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
 type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
-type AcpxMcpServers = Extract<NonNullable<AcpRuntimeOptions["mcpServers"]>, unknown[]>;
-type AcpxMcpServer = AcpxMcpServers[number];
 
-const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
-const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
-const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
 type AcpxHandleOperationSnapshot = Readonly<{
   generation: AcpxGeneration;
   record: AcpLoadedSessionRecord;
@@ -465,47 +464,6 @@ function resolveAgentCommand(params: {
   return splitCommandParts(params.agentRegistry.resolve(normalizedAgentName));
 }
 
-function withManagedToolsMcpSessionEnv(params: {
-  pluginToolsEnabled: boolean;
-  openclawToolsEnabled: boolean;
-  mcpServers: AcpxMcpServers;
-  sessionKey: string;
-  agentId?: string;
-}): AcpxMcpServers {
-  const sessionKey = params.sessionKey.trim();
-  if (
-    (!params.pluginToolsEnabled && !params.openclawToolsEnabled) ||
-    !sessionKey ||
-    !params.mcpServers?.length
-  ) {
-    return params.mcpServers;
-  }
-  let changed = false;
-  const nextServers = params.mcpServers.map((server): AcpxMcpServer => {
-    const isManagedPluginTools =
-      params.pluginToolsEnabled && server.name === ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME;
-    const isManagedOpenClawTools =
-      params.openclawToolsEnabled && server.name === ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME;
-    if ((!isManagedPluginTools && !isManagedOpenClawTools) || !("command" in server)) {
-      return server;
-    }
-    changed = true;
-    const env = [
-      ...server.env.filter((entry) => entry.name !== OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV),
-      {
-        name: OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
-        value: sessionKey,
-      },
-    ];
-    return {
-      ...server,
-      env,
-      args: params.agentId ? [...server.args, "--openclaw-agent-id", params.agentId] : server.args,
-    };
-  });
-  return changed ? nextServers : params.mcpServers;
-}
-
 /** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
 export class AcpxRuntime implements CompleteAcpRuntime {
   readonly ownerAwareSessions = 1 as const;
@@ -533,11 +491,16 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly cwd: string;
+  private readonly startupDeadline: AcpxStartupDeadline;
+  private readonly startupTimeoutMs: number;
 
   constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
     this.legacyBareSessionKeys = new Set(options.openclawLegacyBareSessionKeys);
-    const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
+    const { openclawProcessCleanup, openclawStartupDeadline, ...delegateTestOptions } =
+      testOptions ?? {};
     this.processCleanupDeps = openclawProcessCleanup;
+    this.startupDeadline = new AcpxStartupDeadline(openclawStartupDeadline);
+    this.startupTimeoutMs = options.timeoutMs ?? DEFAULT_ACPX_TIMEOUT_SECONDS * 1000;
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
@@ -600,10 +563,14 @@ export class AcpxRuntime implements CompleteAcpRuntime {
             },
             onSpawned: async (process) => {
               await this.recordProcessLaunch(process);
+              this.startupDeadline.noteSpawned(process);
               await options.processLifecycle?.onSpawned?.(process);
             },
             onSpawnFailed: options.processLifecycle?.onSpawnFailed,
-            onExit: options.processLifecycle?.onExit,
+            onExit: (exit) => {
+              this.startupDeadline.noteExited(exit);
+              return options.processLifecycle?.onExit?.(exit);
+            },
           },
         },
         delegateTestOptions as BaseAcpxRuntimeTestOptions,
@@ -1102,9 +1069,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           command: stableLaunchCommand,
           fallbackCode: "ACP_SESSION_INIT_FAILED",
           run: () =>
-            codexModelOverride
-              ? delegate.ensureSession(withAcpxSessionOptions(ensureInput))
-              : ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+            this.startupDeadline.run({
+              sessionKey: ensureInput.sessionKey,
+              agent: ensureInput.agent,
+              command: stableLaunchCommand,
+              timeoutMs: this.startupTimeoutMs,
+              run: () =>
+                codexModelOverride
+                  ? delegate.ensureSession(withAcpxSessionOptions(ensureInput))
+                  : ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+              releaseLate: (late) => delegate.close({ handle: late, reason: "startup-deadline" }),
+            }),
         }),
     });
     return {
