@@ -107,6 +107,182 @@ describe("broadcast serialization failures", () => {
     );
   });
 
+  it.each([
+    ["first", { message: { text: '"🦞"\n\\\ud800', items: [undefined, Symbol("omitted")] } }],
+    ["middle", { sessionKey: "agent:main:chat", message: null, omitted: undefined }],
+    ["last", { sessionKey: "agent:main:chat", omitted: undefined, message: undefined }],
+    ["native property key", { message: { toJSON: (key: string) => ({ key }) } }],
+    ["absent", { sessionKey: "agent:main:chat", ["__proto__"]: { text: "ordinary field" } }],
+  ])("preserves projected envelope bytes with the message %s", (position, source) => {
+    const peers = [makeClient("owner"), makeClient("viewer")];
+    const project = (client: GatewayWsClient) => {
+      const session = { key: "agent:main:chat", sharingRole: client.connId };
+      return position === "last" ? { session, ...source } : { ...source, session };
+    };
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      prepareSessionEventProjection: () => project,
+    });
+    const stateVersion = { presence: 3 };
+    for (const peer of peers) {
+      peer.client.preparedRecipientProfileId = "same-profile";
+    }
+
+    broadcast("session.message", source, { stateVersion });
+
+    for (const peer of peers) {
+      expect(peer.socket.send.mock.calls[0]?.[0]).toBe(
+        JSON.stringify({
+          type: "event",
+          event: "session.message",
+          payload: project(peer.client),
+          seq: 1,
+          stateVersion,
+          recipientProfileId: "same-profile",
+        }),
+      );
+    }
+  });
+
+  it.each(["message", "first recipient", "second recipient", "source toJSON"])(
+    "consumes only delivered sequences when %s cannot serialize",
+    (failure) => {
+      warnSpy.mockClear();
+      const first = makeClient("first");
+      const second = makeClient("second");
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      const source = { message: failure === "message" ? circular : { content: "visible" } };
+      if (failure === "source toJSON") {
+        Object.defineProperty(source, "toJSON", {
+          value: () => {
+            throw new Error("source toJSON failed");
+          },
+        });
+      }
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry([first.client, second.client]),
+        prepareSessionEventProjection: (event) =>
+          event === "session.message"
+            ? (client) => ({
+                ...source,
+                session:
+                  failure === `${client.connId} recipient`
+                    ? circular
+                    : { sharingRole: client.connId },
+              })
+            : undefined,
+      });
+
+      broadcast("session.message", source);
+      expect(first.socket.send).toHaveBeenCalledTimes(failure === "second recipient" ? 1 : 0);
+      expect(second.socket.send).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("broadcast serialization failed for event session.message"),
+      );
+      broadcast("skills.changed", { reason: "recovered" });
+      expect(first.socket.frames.at(-1)).toEqual({
+        event: "skills.changed",
+        seq: failure === "second recipient" ? 2 : 1,
+      });
+      expect(second.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+    },
+  );
+
+  it("preserves projected message delivery through reentrant sends and later broadcasts", () => {
+    const first = makeClient("first");
+    const second = makeClient("second");
+    let message = { content: "outer" };
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([first.client, second.client]),
+      prepareSessionEventProjection: () => {
+        const current = message;
+        return (client) => ({ message: current, session: { sharingRole: client.connId } });
+      },
+    });
+    first.socket.send.mockImplementationOnce(() => {
+      message = { content: "inner" };
+      broadcastToConnIds("session.message", { message }, new Set(["first"]));
+    });
+
+    broadcast("session.message", { message });
+    message = { content: "later" };
+    broadcast("session.message", { message });
+
+    const delivered = (peer: ReturnType<typeof makeClient>) =>
+      peer.socket.send.mock.calls.map(([frame]) => {
+        const parsed = JSON.parse(frame);
+        return [parsed.payload.message.content, parsed.seq, parsed.payload.session.sharingRole];
+      });
+    expect(delivered(first)).toEqual([
+      ["outer", 1, "first"],
+      ["inner", 2, "first"],
+      ["later", 3, "first"],
+    ]);
+    expect(delivered(second)).toEqual([
+      ["outer", 1, "second"],
+      ["later", 2, "second"],
+    ]);
+  });
+
+  it.each(["own accessor", "inherited accessor", "proxy"])(
+    "keeps native source serialization and stateVersion ordering for %s publishers",
+    (publisher) => {
+      for (const throwOnRepeat of [false, true]) {
+        const peer = makeClient("native-hook");
+        const stateVersion = { presence: 1 };
+        const projected = { sessionKey: "agent:main:hook", message: { content: "projected" } };
+        const source = { sessionKey: projected.sessionKey };
+        let read = false;
+        const readToJSON = () => {
+          if (read && throwOnRepeat) {
+            throw new Error("repeated source hook lookup");
+          }
+          read = true;
+          stateVersion.presence = 9;
+          return () => ({ source: "serialized" });
+        };
+        let payload = source;
+        if (publisher === "proxy") {
+          payload = new Proxy(source, {
+            get(target, property, receiver) {
+              return property === "toJSON" ? readToJSON() : Reflect.get(target, property, receiver);
+            },
+            getPrototypeOf() {
+              throw new Error("unexpected source prototype lookup");
+            },
+            has() {
+              throw new Error("unexpected source property lookup");
+            },
+          });
+        } else {
+          const owner = publisher === "own accessor" ? source : {};
+          Object.defineProperty(owner, "toJSON", { get: readToJSON });
+          if (publisher === "inherited accessor") {
+            Object.setPrototypeOf(source, owner);
+          }
+        }
+        const { broadcast } = createGatewayBroadcaster({
+          clients: new GatewayClientRegistry([peer.client]),
+          prepareSessionEventProjection: () => () => projected,
+        });
+
+        broadcast("session.message", payload, { stateVersion });
+
+        expect.soft(peer.socket.send).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify({
+            type: "event",
+            event: "session.message",
+            payload: projected,
+            seq: 1,
+            stateVersion: { presence: 1 },
+          }),
+          expect.any(Function),
+        );
+      }
+    },
+  );
+
   it("keeps reentrant targeted frames separate from an in-progress fanout at the same sequence", () => {
     const first = makeClient("first");
     const second = makeClient("second");
@@ -298,29 +474,32 @@ describe("broadcast serialization failures", () => {
     }
   });
 
-  it("drops the event without consuming seqs when the payload cannot serialize", () => {
-    warnSpy.mockClear();
-    const first = makeClient("first");
-    const second = makeClient("second");
-    const clients = new GatewayClientRegistry([first.client, second.client]);
-    const { broadcast } = createGatewayBroadcaster({ clients });
+  it.each(["skills.changed", "session.message"])(
+    "drops %s without consuming seqs when an unprojected payload cannot serialize",
+    (event) => {
+      warnSpy.mockClear();
+      const first = makeClient("first");
+      const second = makeClient("second");
+      const clients = new GatewayClientRegistry([first.client, second.client]);
+      const { broadcast } = createGatewayBroadcaster({ clients });
 
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-    broadcast("skills.changed", circular);
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      broadcast(event, circular);
 
-    // Neither socket saw the bad frame, and the failure is recorded once.
-    expect(first.socket.send).not.toHaveBeenCalled();
-    expect(second.socket.send).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(String(warnSpy.mock.calls[0]?.[0])).toContain("skills.changed");
+      // Neither socket saw the bad frame, and the failure is recorded once.
+      expect(first.socket.send).not.toHaveBeenCalled();
+      expect(second.socket.send).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]?.[0])).toContain(event);
 
-    // The next good broadcast starts at seq 1 for every client: the dropped
-    // event consumed no seq, so no gap detector fires.
-    broadcast("skills.changed", { reason: "recovered" });
-    expect(first.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
-    expect(second.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
-  });
+      // The next good broadcast starts at seq 1 for every client: the dropped
+      // event consumed no seq, so no gap detector fires.
+      broadcast("skills.changed", { reason: "recovered" });
+      expect(first.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+      expect(second.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+    },
+  );
 
   it("does not inspect agent log summaries for an ineligible outbound broadcast", () => {
     setVerbose(true);
