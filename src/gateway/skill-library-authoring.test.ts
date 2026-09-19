@@ -146,6 +146,32 @@ describe("human personal namespace authority", () => {
       run.close();
     }
   });
+  it("rejects publication through a retained capability after its admission is replaced", async () => {
+    const { bob, request } = setup();
+    const owner = request(bob.id);
+    const capability = prepareGatewaySkillAuthoring(owner, "agent:main:shared", true)!;
+    const runId = "replaced-turn";
+    const run = await admitted(capability, runId);
+    try {
+      // Same runId as the original admission: claimAgentRunDelegatedAuthority
+      // (agent-run-registry.ts) releases the prior claim on a same-id
+      // replacement -- the exact mechanism this fix's error-handling change
+      // relies on to keep the retained skillLibraryAuthoring object provably
+      // unusable, independent of bind()'s own local guard.
+      const replacement = prepareSystemAgentRunAdmission({}, runId, "main", "test");
+      const replacementContext = await replacement.admit("embedded");
+      try {
+        expect(() => capability.bind(replacementContext)).toThrow(/replacement run/);
+        await expect(
+          run.invoke({ action: "create", slug: "after-replacement", content }),
+        ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
+      } finally {
+        replacement.close();
+      }
+    } finally {
+      run.close();
+    }
+  });
   it("preserves supporting bytes on ordinary updates and permits an explicit authorized transfer", async () => {
     const { alice, request } = setup();
     const owner = request(alice.id);
