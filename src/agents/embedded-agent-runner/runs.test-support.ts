@@ -18,7 +18,7 @@ export function createEmbeddedRunHandle(
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
-  // Minimal handle fixture with overrideable lifecycle probes for registry
+  // Minimal handle fixture with overridable lifecycle probes for registry
   // behavior; individual tests supply queue/abort behavior when needed.
   const abort = overrides.abort ?? (() => {});
   return {

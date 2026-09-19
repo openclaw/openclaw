@@ -102,7 +102,7 @@ export class ReefFriendManager {
       this.trust.remove(normalized);
       const results = await Promise.allSettled([
         this.#removePairingApprovalsForPeer(normalized),
-        this.#removeRelayAndRefence(normalized),
+        this.#removeRelayAndReference(normalized),
       ]);
       const failures = results.flatMap((result) =>
         result.status === "rejected"
@@ -327,7 +327,7 @@ export class ReefFriendManager {
     }
   }
 
-  async #removeRelayAndRefence(peer: string): Promise<void> {
+  async #removeRelayAndReference(peer: string): Promise<void> {
     await this.transport.removeFriend(peer);
     // The relay delete linearizes removal. Reapply the tombstone afterwards so
     // a request or pin committed while DELETE was in flight cannot outlive it.

@@ -3,7 +3,7 @@ summary: "The remaining doctor checks and repairs, from Nix mode to plugins, san
 title: "Other checks and repairs"
 read_when:
   - You want to know whether doctor covers a specific check or repair
-  - Doctor reported a check you do not recognise
+  - Doctor reported a check you do not recognize
 ---
 
 These are the remaining checks and repairs `openclaw doctor` performs, beyond the
