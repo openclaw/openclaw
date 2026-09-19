@@ -1,6 +1,7 @@
 // Full-entry coverage for retrying empty errored assistant turns.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -10,6 +11,7 @@ import {
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
+  useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -91,6 +93,52 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
   });
+
+  it.each(["empty", "reasoning-only"] as const)(
+    "resumes an approved exec after %s output without reusing its output range",
+    async (kind) => {
+      useOpenAIPlatformAuthFixture();
+      const continuation = buildExecApprovalContinuationPrompt("Approved output.\n".repeat(6_000));
+      const assistant = makeAssistantMessageFixture({
+        stopReason: "stop",
+        errorMessage: undefined,
+        model: "gpt-5.6-luna",
+        content: kind === "empty" ? [] : [{ type: "thinking", thinking: "Need to reply." }],
+      });
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(
+          makeAttemptResult({
+            assistantTexts: [],
+            lastAssistant: assistant,
+            currentAttemptAssistant: assistant,
+          }),
+        )
+        .mockResolvedValueOnce(successAttempt("openai", "gpt-5.6-luna"));
+
+      const result = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        runId: `run-approved-exec-${kind}`,
+        prompt: continuation.message,
+        transcriptPrompt: continuation.message,
+        execApprovalContinuationPromptRange: continuation.resultRange,
+        execApprovalContinuationTranscriptPromptRange: continuation.resultRange,
+        terminalReplyExpectation: "required",
+        inputProvenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
+      });
+
+      expect(result.meta.error).toBeUndefined();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      const [initial, retry] = mockedRunEmbeddedAttempt.mock.calls.map(([attempt]) => attempt);
+      expect(initial?.prompt).toContain("Approved output.");
+      expect(initial?.prompt.length).toBeLessThan(continuation.message.length);
+      expect(retry?.prompt).toContain("did not produce a user-visible answer");
+      expect(retry?.prompt).not.toContain("Approved output.");
+      expect(retry?.skipPreparedUserTurnMessage).toBe(true);
+      expect(retry?.suppressNextUserMessagePersistence).toBe(true);
+    },
+  );
 
   it("retries server_error when the attempt is otherwise silent and side-effect-free", async () => {
     mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
