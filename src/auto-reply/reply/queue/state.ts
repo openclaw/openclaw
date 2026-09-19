@@ -16,6 +16,12 @@ type FollowupQueueState = {
   draining: boolean;
   /** Exact operational drain generation; recovery may retire only this owner. */
   drainOwner?: object;
+  /** Backoff belongs to this queue instance and is canceled by its abort fence. */
+  retryTimer?: ReturnType<typeof setTimeout>;
+  /** Accepted work is parked after the retry budget; ordinary kicks cannot resume it. */
+  drainSuspended?: boolean;
+  /** Bounds failures that occur before an attempted source can be identified. */
+  drainFailureCount?: number;
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;

@@ -3,7 +3,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { withOptions } from "./directive-handling.shared.js";
+import { formatDirectiveAck, withOptions } from "./directive-handling.shared.js";
 import { resolveQueueSettingsCore } from "./queue/settings.js";
 
 /** Validates `/queue` directives and returns immediate status/error replies. */
@@ -78,4 +78,46 @@ export function maybeHandleQueueDirective(params: {
   }
 
   return undefined;
+}
+
+/** Formats acknowledgements after queue settings have been accepted. */
+export function formatQueueDirectiveAcknowledgements(
+  directives: InlineDirectives,
+  resumedQueuedWork: boolean,
+): string[] {
+  const parts: string[] = [];
+  if (directives.hasQueueDirective && directives.queueMode) {
+    parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
+  } else if (directives.hasQueueDirective && directives.queueReset) {
+    parts.push(formatDirectiveAck("Queue mode reset to default."));
+  }
+  if (directives.hasQueueDirective && typeof directives.debounceMs === "number") {
+    parts.push(formatDirectiveAck(`Queue debounce set to ${directives.debounceMs}ms.`));
+  }
+  if (directives.hasQueueDirective && typeof directives.cap === "number") {
+    parts.push(formatDirectiveAck(`Queue cap set to ${directives.cap}.`));
+  }
+  if (directives.hasQueueDirective && directives.dropPolicy) {
+    parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
+  }
+  if (resumedQueuedWork) {
+    parts.push(formatDirectiveAck("Retained queued messages will retry."));
+  }
+  return parts;
+}
+
+/** Compares the explicit directive result before concurrent persistence can adopt other edits. */
+export function didQueueChange(
+  directives: InlineDirectives,
+  before: SessionEntry,
+  after: SessionEntry,
+): boolean {
+  return (
+    directives.hasQueueDirective &&
+    (directives.queueReset ||
+      before.queueMode !== after.queueMode ||
+      before.queueDebounceMs !== after.queueDebounceMs ||
+      before.queueCap !== after.queueCap ||
+      before.queueDrop !== after.queueDrop)
+  );
 }

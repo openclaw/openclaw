@@ -113,6 +113,21 @@ For options, inline or stored `/queue` options win over config. Then channel-spe
 - Options can be combined: `/queue collect debounce:0.5s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
 
+## Repeated followup failures
+
+Unexpected followup failures use exponential backoff. After seven consecutive
+failures of the same queued work, automatic draining pauses. The queue retains
+its messages and overflow summaries rather than treating an unknown error as
+permission to discard accepted input. Existing cancellation and overflow policies
+still apply.
+
+After resolving the underlying failure, send an authorized standalone `/queue reset`
+(or change a queue setting) to retry retained work with a fresh retry budget.
+`/queue reset` also clears session queue overrides as usual. Bare `/queue`, unchanged
+settings, ordinary messages, and automatic scheduler calls do not resume a paused
+queue. Deferred busy-session waits and reversible Gateway restart fences keep
+their existing recovery behavior.
+
 ## Queued-turn cancellation
 
 While a prompt sits in the followup/collect queue (for example a TUI or
