@@ -926,6 +926,9 @@
 }
 
 .chat-task-feed__tool-group > summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   list-style: none;
   border-radius: var(--radius-sm);
 }

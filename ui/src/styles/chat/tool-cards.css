@@ -1047,6 +1047,7 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
   font: inherit;
   white-space: nowrap;
 }
@@ -1123,12 +1124,6 @@
 
 .chat-work-group .chat-activity-group__label {
   color: inherit;
-}
-
-.chat-activity-group__duration {
-  flex: none;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .chat-group--activity .chat-activity-group__label {

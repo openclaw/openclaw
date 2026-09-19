@@ -155,7 +155,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   `;
 }
 
-/** Completed work keeps its operation summary and elapsed time above the expanded groups. */
+/** Completed work keeps its duration above the nested operation summaries. */
 export function renderWorkGroupSummary(
   item: { key: string; durationMs: number | null; groups: readonly MessageGroup[] },
   opts: {
@@ -169,21 +169,20 @@ export function renderWorkGroupSummary(
   const cards = item.groups.flatMap((group) =>
     group.messages.flatMap(({ message }) => extractToolCardsCached(message)),
   );
-  const label = cards.length
-    ? summarizeToolGroup(
-        item.groups.flatMap((group) =>
-          group.messages.flatMap(({ message }) => readPreparedActivity(message)),
-        ),
-      )
-    : duration
-      ? t("chat.workRun.workedFor", { duration })
-      : t("chat.workRun.worked");
+  const activity = item.groups.flatMap((group) =>
+    group.messages.flatMap(({ message }) => readPreparedActivity(message)),
+  );
+  const workedLabel = duration
+    ? t("chat.workRun.workedFor", { duration })
+    : t("chat.workRun.worked");
+  const fullLabel = cards.length ? summarizeToolGroup(activity, { full: true }) : workedLabel;
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded=${String(opts.expanded)}
+        aria-description=${cards.length && duration ? `${fullLabel}, ${workedLabel}` : fullLabel}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${(event: MouseEvent) => {
@@ -193,17 +192,8 @@ export function renderWorkGroupSummary(
         }}
       >
         <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label" title=${label}>${label}</span>
+          <span class="chat-activity-group__label" title=${fullLabel}>${workedLabel}</span>
         </span>
-        ${
-          cards.length && duration
-            ? html`<span
-                class="chat-activity-group__duration"
-                aria-label=${t("chat.workRun.workedFor", { duration })}
-                >${duration}</span
-              >`
-            : nothing
-        }
         ${opts.expanded ? nothing : renderToolOutcomeSummary(cards)}
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>

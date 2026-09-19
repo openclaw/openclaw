@@ -225,7 +225,11 @@ export function renderTaskActivityFeed(
           ${
             entry.kind === "tools"
               ? html` <details class="chat-task-feed__tool-group">
-                  <summary>${summarizeToolGroup(entry.activity)}</summary>
+                  <summary
+                    title=${summarizeToolGroup(entry.activity, { full: true })}
+                    aria-description=${summarizeToolGroup(entry.activity, { full: true })}
+                    .textContent=${summarizeToolGroup(entry.activity)}
+                  ></summary>
                   <div class="chat-task-feed__calls">${entry.calls.map(renderToolLine)}</div>
                 </details>`
               : entry.kind === "assistant"

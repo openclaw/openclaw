@@ -244,9 +244,14 @@ export function renderActivityGroup(
       }
     }
   }
-  const groupSummaryLabel = runningOperation
+  const compactSummary = summarizeToolGroup(
+    runningOperation ? [runningOperation] : visibleActivity,
+  );
+  const groupSummaryLabel =
+    runningOperation && !compactSummary.endsWith("…") ? `${compactSummary}…` : compactSummary;
+  const fullSummaryLabel = runningOperation
     ? `${runningOperation.title}…`
-    : summarizeToolGroup(visibleActivity);
+    : summarizeToolGroup(visibleActivity, { full: true });
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
@@ -316,6 +321,7 @@ export function renderActivityGroup(
         type="button"
         aria-expanded=${String(activityExpanded)}
         aria-controls=${activityBodyId}
+        aria-description=${fullSummaryLabel}
         @pointerenter=${syncToolDisclosureOverflow}
         @focus=${syncToolDisclosureOverflow}
         @click=${(event: MouseEvent) => {
@@ -326,7 +332,7 @@ export function renderActivityGroup(
       >
         <span class="chat-activity-group__icon">${icons.listTree}</span>
         <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label" title=${groupSummaryLabel}
+          <span class="chat-activity-group__label" title=${fullSummaryLabel}
             >${groupSummaryLabel}</span
           >
         </span>

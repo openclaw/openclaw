@@ -168,19 +168,16 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
-    const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
+    const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     await elapsedLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("Bash");
-    expect.soft(await elapsedLabel.textContent()).toBe("13s");
+    await expect.poll(() => elapsedLabel.textContent()).toBe("Worked for 13s");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.reload();
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await elapsedLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Bash");
-    expect(await elapsedLabel.textContent()).toBe("13s");
+    expect(await elapsedLabel.textContent()).toBe("Worked for 13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });
 

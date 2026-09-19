@@ -208,7 +208,8 @@ describe("task activity feed", () => {
           {
             itemId: "tool:exec-1",
             toolCallId: "exec-1",
-            title: "Exec",
+            name: "exec",
+            title: "Exec run pnpm tsgo --project tsconfig.gateway.json",
             kind: "tool",
             phase: "end",
             status: "completed",
@@ -227,7 +228,8 @@ describe("task activity feed", () => {
           {
             itemId: "tool:exec-2",
             toolCallId: "exec-2",
-            title: "Exec",
+            name: "exec",
+            title: "Exec run pnpm lint:ui:styles",
             kind: "tool",
             phase: "end",
             status: "completed",
@@ -267,6 +269,10 @@ describe("task activity feed", () => {
     const summary = group.querySelector("summary")!;
     expect(summary.textContent).toContain("Exec ×2, Read");
     expect(summary.textContent).not.toContain("--fix");
+    expect(summary.getAttribute("title")).toContain(
+      "Exec run pnpm tsgo --project tsconfig.gateway.json",
+    );
+    expect(summary.getAttribute("aria-description")).toContain("Exec run pnpm lint:ui:styles");
     expect(group.open).toBe(false);
     summary.click();
     expect(group.open).toBe(true);

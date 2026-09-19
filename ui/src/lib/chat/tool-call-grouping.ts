@@ -3,7 +3,9 @@
  * "Ran 13 commands, read 6 files, edited 9 files, created a file".
  */
 
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
   AgentActivityItemSchema,
@@ -12,6 +14,7 @@ import {
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
 import type { ToolCard } from "./chat-types.ts";
+import { resolveToolDisplay } from "./tool-display.ts";
 
 export type ToolCardGroup<Card = ToolCard> = {
   card: Card;
@@ -85,6 +88,27 @@ export function readPreparedActivity(message: unknown): AgentActivityItem[] {
     : [];
 }
 
-export function summarizeToolGroup(items: readonly AgentActivityItem[]): string {
-  return summarizeAgentActivity(items) || t("chat.toolCards.rawDetails");
+export function summarizeToolGroup(
+  items: readonly AgentActivityItem[],
+  options: { full?: boolean } = {},
+): string {
+  // Command-derived titles describe details, not distinct kinds of Exec work.
+  // Keep unknown outcomes verbatim; the producer owns their explanation.
+  const summary =
+    summarizeAgentActivity(
+      options.full
+        ? items
+        : items.map((item) =>
+            item.name?.toLowerCase() === "exec" && item.status
+              ? { ...item, title: resolveToolDisplay({ name: item.name }).title }
+              : item,
+          ),
+    ) || t("chat.toolCards.rawDetails");
+  return options.full
+    ? summary
+    : truncateWithMarker(flattenMarkdownToPlainText(summary), 40, {
+        marker: "…",
+        reserve: 1,
+        trimEnd: true,
+      });
 }
