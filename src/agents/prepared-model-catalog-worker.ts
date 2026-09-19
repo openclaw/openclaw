@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
@@ -81,7 +82,10 @@ type PreparedModelWorkerCommand =
     }>;
 
 export type PreparedModelWorkerRequest = PreparedModelWorkerCommand &
-  Readonly<{ syntheticAuth: PreparedSyntheticAuthFacts }>;
+  Readonly<{
+    syntheticAuth: PreparedSyntheticAuthFacts;
+    clawInstallSchemaVersions: ReturnType<typeof captureClawInstallSchemaVersionFacts>;
+  }>;
 
 export type PreparedModelWorkerResult =
   | Readonly<{
@@ -593,11 +597,15 @@ export function createPreparedModelCatalogWorker(
         () => {
           assertCurrent();
           task.onRecovery = onRecovery;
-          expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, value);
+          const workerRequest = {
+            ...value,
+            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
+          };
+          expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);
           if (shared) {
             shared.validate = validate;
           }
-          return shared ? { value: workerInput, request: value } : value;
+          return shared ? { value: workerInput, request: workerRequest } : workerRequest;
         },
         { timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS, signal: controller.signal },
       );
