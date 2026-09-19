@@ -33,6 +33,7 @@ import {
   type GatewayClientDeviceAuthStorage,
   type MaybePromise,
 } from "./client-device-auth.js";
+import { resolveGatewayClientRequestOptions } from "./client-request-options.js";
 import { readUpgradeErrorBody } from "./client-upgrade-error.js";
 import {
   buildGatewayConnectAuth,
@@ -1343,22 +1344,11 @@ export class GatewayClient {
     params?: unknown,
     opts?: GatewayClientRequestOptions,
   ): Promise<T> {
-    const expectFinal = opts?.expectFinal === true;
-    const timeoutMs =
-      opts?.timeoutMs === null
-        ? null
-        : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-          ? opts.timeoutMs
-          : expectFinal
-            ? null
-            : this.requestTimeoutMs;
-    return this.protocol.request<T>(method, params, {
-      expectFinal,
-      timeoutMs,
-      signal: opts?.signal,
-      onSent: opts?.onSent,
-      onAccepted: opts?.onAccepted,
-    });
+    return this.protocol.request<T>(
+      method,
+      params,
+      resolveGatewayClientRequestOptions(opts, this.requestTimeoutMs),
+    );
   }
 }
 

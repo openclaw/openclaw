@@ -85,6 +85,10 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "gateway.admission":
+        case "gateway.run.owner":
+          // Native owner/admission observations stay with their private collector.
+          return;
         case "diagnostic.gc":
           recordGcDuration(evt, metadata);
           return;

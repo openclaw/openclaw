@@ -10,9 +10,13 @@ import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.typ
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
-import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
+  isAdmittedRunContextObservable,
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
@@ -85,6 +89,61 @@ type GatewayToolCallerSource = {
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
+
+// Observation follows the actual admitted object, never run/session metadata.
+// This index is private, weak, and is not consulted by authorization or routing.
+const admittedGatewayToolCallers = new WeakMap<GatewayToolCallerIdentity, AdmittedRunContext>();
+
+const nativeGatewayObservationOwners = new WeakMap<
+  AdmittedRunContext,
+  GatewayContextResolver | null
+>();
+
+/** Native execution entry records its independent owner once; conflicting recapture stays unknown. */
+export function bindAdmittedGatewayOwnerObservation(
+  admitted: AdmittedRunContext,
+  nativeOwner: GatewayContextResolver | undefined,
+): void {
+  if (!nativeGatewayObservationOwners.has(admitted)) {
+    nativeGatewayObservationOwners.set(admitted, nativeOwner ?? null);
+  } else if (nativeGatewayObservationOwners.get(admitted) !== nativeOwner) {
+    nativeGatewayObservationOwners.set(admitted, null);
+  }
+}
+
+export type GatewayToolCallerOwnerObservation = "match" | "mismatch" | "unobserved";
+
+/** Observe the actual before-tool caller, using projections only as consistency checks. */
+export function observeGatewayToolCallerOwner(context: {
+  agentId?: string;
+  sessionKey?: string;
+  runId?: string;
+  signal?: AbortSignal;
+}): GatewayToolCallerOwnerObservation {
+  const caller = gatewayToolCallerStorage.getStore();
+  const admitted = caller && admittedGatewayToolCallers.get(caller);
+  const nativeGatewayOwner = admitted && nativeGatewayObservationOwners.get(admitted);
+  if (
+    !caller ||
+    !admitted ||
+    !nativeGatewayOwner ||
+    context.signal?.aborted ||
+    caller.operationalRunInstance !== admitted.operationalRunInstance ||
+    context.agentId !== caller.agentId ||
+    context.sessionKey !== caller.sessionKey ||
+    context.runId !== admitted.operationalRunInstance.runId ||
+    !isAdmittedRunContextObservable(admitted)
+  ) {
+    return "unobserved";
+  }
+  const resolver = getGatewayContextResolver(admitted);
+  const owner = resolver && getCanonicalGatewayContextResolver(resolver);
+  const nativeOwner = getCanonicalGatewayContextResolver(nativeGatewayOwner);
+  if (!owner || !nativeOwner) {
+    return "unobserved";
+  }
+  return owner === nativeOwner ? "match" : "mismatch";
+}
 
 // Freeze the admitted instance: a later resolver result is a replacement,
 // which retires this caller's routing authority instead of transferring it.
@@ -159,7 +218,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     return undefined;
   }
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(params.admittedRunContext);
-  return {
+  const identity: GatewayToolCallerIdentity = {
     agentId,
     sessionKey,
     operationalRunInstance: params.admittedRunContext.operationalRunInstance,
@@ -186,6 +245,8 @@ export function createAdmittedGatewayToolCallerIdentity(
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
   };
+  admittedGatewayToolCallers.set(identity, params.admittedRunContext);
+  return identity;
 }
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
@@ -295,44 +356,46 @@ export async function withGatewayToolCallerIdentity<T>(
   const turnSourceThreadId = inheritedOwner?.turnSourceThreadId ?? identity.turnSourceThreadId;
   const gatewayUiCommandTarget =
     inheritedOwner?.gatewayUiCommandTarget ?? identity.gatewayUiCommandTarget;
-  return await gatewayToolCallerStorage.run(
-    {
-      agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
-      sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
-      ...(fullPermission !== undefined ? { fullPermission } : {}),
-      ...(operationalRunInstance ? { operationalRunInstance } : {}),
-      ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
-      ...(approvalAuthority ? { approvalAuthority } : {}),
-      ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
-      ...(identity.approvalOwnerPluginId?.trim()
-        ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
-        : inheritedOwner?.approvalOwnerPluginId
-          ? { approvalOwnerPluginId: inheritedOwner.approvalOwnerPluginId }
-          : {}),
-      ...(signedAgentRuntimeIdentityToken ? { signedAgentRuntimeIdentityToken } : {}),
-      ...(cronSelfManagementJobId ? { cronSelfManagementJobId } : {}),
-      ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
-      ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
-      ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
-      ...(mintCronRequesterGrant ? { mintCronRequesterGrant } : {}),
-      ...(cronManagementGrant ? { cronManagementGrant } : {}),
-      ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
-      ...(executionIdentityToken ? { executionIdentityToken } : {}),
-      ...(receiptAuthority ? { receiptAuthority } : {}),
-      ...(assertToolAllowed ? { assertToolAllowed } : {}),
-      ...(approvalSignals.length ? { approvalSignals } : {}),
-      ...(workerTurnClaim ? { workerTurnClaim } : {}),
-      ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
-      ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
-      ...(gatewayUiCommandTarget ? { gatewayUiCommandTarget } : {}),
-      ...(turnSourceChannel ? { turnSourceChannel } : {}),
-      ...(turnSourceLocal === true ? { turnSourceLocal: true } : {}),
-      ...(turnSourceTo ? { turnSourceTo } : {}),
-      ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
-      ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
-    },
-    run,
-  );
+  const caller: GatewayToolCallerIdentity = {
+    agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
+    sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+    ...(fullPermission !== undefined ? { fullPermission } : {}),
+    ...(operationalRunInstance ? { operationalRunInstance } : {}),
+    ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),
+    ...(approvalAuthority ? { approvalAuthority } : {}),
+    ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),
+    ...(identity.approvalOwnerPluginId?.trim()
+      ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
+      : inheritedOwner?.approvalOwnerPluginId
+        ? { approvalOwnerPluginId: inheritedOwner.approvalOwnerPluginId }
+        : {}),
+    ...(signedAgentRuntimeIdentityToken ? { signedAgentRuntimeIdentityToken } : {}),
+    ...(cronSelfManagementJobId ? { cronSelfManagementJobId } : {}),
+    ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
+    ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
+    ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
+    ...(mintCronRequesterGrant ? { mintCronRequesterGrant } : {}),
+    ...(cronManagementGrant ? { cronManagementGrant } : {}),
+    ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
+    ...(executionIdentityToken ? { executionIdentityToken } : {}),
+    ...(receiptAuthority ? { receiptAuthority } : {}),
+    ...(assertToolAllowed ? { assertToolAllowed } : {}),
+    ...(approvalSignals.length ? { approvalSignals } : {}),
+    ...(workerTurnClaim ? { workerTurnClaim } : {}),
+    ...(workerTurnExecutionIdentityCapability ? { workerTurnExecutionIdentityCapability } : {}),
+    ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
+    ...(gatewayUiCommandTarget ? { gatewayUiCommandTarget } : {}),
+    ...(turnSourceChannel ? { turnSourceChannel } : {}),
+    ...(turnSourceLocal === true ? { turnSourceLocal: true } : {}),
+    ...(turnSourceTo ? { turnSourceTo } : {}),
+    ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
+    ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
+  };
+  const admitted = admittedGatewayToolCallers.get(inheritedOwner ?? identity);
+  if (admitted) {
+    admittedGatewayToolCallers.set(caller, admitted);
+  }
+  return await gatewayToolCallerStorage.run(caller, run);
 }
 
 /** Narrows one host-owned approval call to the exact registered policy/harness owner. */

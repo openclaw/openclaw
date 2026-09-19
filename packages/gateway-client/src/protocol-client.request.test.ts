@@ -93,6 +93,29 @@ afterEach(() => {
 });
 
 describe("GatewayProtocolClient requests", () => {
+  it("carries traceparent on only the selected request without changing method or params", async () => {
+    const { client, connections } = createRequestHarness();
+    try {
+      const connection = connections[0];
+      if (!connection) {
+        throw new Error("missing connection");
+      }
+      const traceparent = "00-" + "1".repeat(32) + "-" + "2".repeat(16) + "-01";
+      const params = { target: { pid: 42, ownerId: "fixture", port: 18789 } };
+      const first = client.request("gateway.restart.request", params, { traceparent });
+      const sent = latestFrame(connection);
+      expect(sent).toMatchObject({ method: "gateway.restart.request", params, traceparent });
+      respond(connection, sent.id, { ok: true });
+      await first;
+      const next = client.request("health", {});
+      const plain = latestFrame(connection);
+      expect(plain).not.toHaveProperty("traceparent");
+      respond(connection, plain.id, {});
+      await next;
+    } finally {
+      client.stop();
+    }
+  });
   it.each([false, true])(
     "retains correlated negative payloads with custom factory=%s",
     async (custom) => {

@@ -100,7 +100,7 @@ const runPreparedChannelTurn: PluginRuntime["channel"]["inbound"]["runPreparedRe
 const runChannelTurn = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
   (runtime) => runtime.runChannelTurn,
-  // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
+  // SAFETY: Forwarding async calls unchanged preserves the raw-event and dispatch-result generics.
 ) as PluginRuntime["channel"]["inbound"]["run"];
 
 export function createRuntimeChannel(options?: {
@@ -113,9 +113,30 @@ export function createRuntimeChannel(options?: {
         ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
         : {}),
     });
+  const runInbound: PluginRuntime["channel"]["inbound"]["run"] = async (params) =>
+    runChannelTurn({
+      ...params,
+      adapter: {
+        ingest: params.adapter.ingest.bind(params.adapter),
+        classify: params.adapter.classify?.bind(params.adapter),
+        preflight: params.adapter.preflight?.bind(params.adapter),
+        onFinalize: params.adapter.onFinalize?.bind(params.adapter),
+        resolveTurn: async (...args) => {
+          const turn = await params.adapter.resolveTurn(...args);
+          // Raw routed plans need the same host dispatcher as direct inbound dispatch.
+          // Explicit dispatchers and prepared/assembled closures retain their caller owner.
+          return options?.dispatchReplyFromConfig &&
+            "route" in turn &&
+            !("runDispatch" in turn) &&
+            !turn.dispatchReplyFromConfig
+            ? { ...turn, dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+            : turn;
+        },
+      },
+    });
   const inboundRuntime = {
     buildContext: buildChannelInboundEventContext,
-    run: runChannelTurn,
+    run: runInbound,
     runPreparedReply: runPreparedChannelTurn,
     dispatch: dispatchInbound,
     dispatchReply: dispatchAssembledChannelTurn,

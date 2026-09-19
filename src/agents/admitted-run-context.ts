@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
+  getAgentRunContextOwnerStatus,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -62,6 +63,21 @@ function bindAdmittedRunDelegatedAuthority(
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   const lease = { authority, foregroundClosed: false, assertSourceCurrent };
   delegatedAuthorityLeases.set(context, lease);
+}
+
+/** Passive diagnostic presence only: never invokes source checks or grants execution authority. */
+export function isAdmittedRunContextObservable(context: AdmittedRunContext): boolean {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || lease.foregroundClosed) {
+    return false;
+  }
+  return (
+    getAgentRunContextOwnerStatus(
+      lease.authority.operationalRunInstance.runId,
+      lease.authority.claimId,
+      lease.authority.lifecycleGeneration,
+    ) !== undefined
+  );
 }
 
 /** Reads the immutable outer-run authority without reviving a closed claim. */

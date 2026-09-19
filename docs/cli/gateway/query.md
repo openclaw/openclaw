@@ -39,6 +39,12 @@ WebSocket opening-handshake timeouts report a Gateway transport error with
 `ETIMEDOUT`, including the target and a status-check hint. JSON error output uses
 `error.type: "gateway_transport_error"`, as for other connection failures.
 
+`gateway call` also accepts `--traceparent <value>` for explicit, request-scoped
+W3C diagnostic correlation. It changes only the optional request envelope field,
+not the method parameters, target, authentication, or wait behavior. Invalid
+explicit values fail before connecting. See
+[trace context](/gateway/opentelemetry/privacy-and-trace-context#explicit-cli-propagation).
+
 ### `gateway health`
 
 ```bash

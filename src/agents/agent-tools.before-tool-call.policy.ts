@@ -55,6 +55,7 @@ import {
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import { emitBeforeToolGatewayOwnerObservation } from "./tools/gateway-owner-observation.js";
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
@@ -373,6 +374,16 @@ export async function runBeforeToolCallHook(args: {
       },
       policyAdjustedToolContext,
       receipt,
+      (context) => {
+        const trace = emitBeforeToolGatewayOwnerObservation({
+          agentId: context.agentId,
+          sessionKey: context.sessionKey,
+          runId: context.runId,
+          trace: context.trace,
+          signal: context.abortSignal,
+        });
+        return trace ? { ...context, gatewayOwnerObservationTrace: trace } : context;
+      },
     );
 
     if (hookResult?.block) {

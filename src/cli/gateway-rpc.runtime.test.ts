@@ -58,6 +58,27 @@ describe("addGatewayClientOptions", () => {
 });
 
 describe("callGatewayFromCliRuntime", () => {
+  it("forwards only explicitly supplied diagnostic correlation without changing request data", async () => {
+    const traceparent = "00-" + "1".repeat(32) + "-" + "2".repeat(16) + "-01";
+    const params = { target: { pid: 42, ownerId: "fixture", port: 18789 } };
+    await callGatewayFromCliRuntime(
+      "gateway.restart.request",
+      { traceparent, json: true, timeout: "10000" },
+      params,
+    );
+    expect(callGatewayMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "gateway.restart.request",
+        params,
+        traceparent,
+        timeoutMs: 10000,
+      }),
+    );
+    await callGatewayFromCliRuntime("health", { json: true }, {});
+    expect(callGatewayMock).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({ traceparent: expect.any(String) }),
+    );
+  });
   beforeEach(() => {
     callGatewayMock.mockClear().mockResolvedValue({ ok: true });
   });

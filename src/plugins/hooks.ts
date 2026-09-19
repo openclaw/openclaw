@@ -26,6 +26,13 @@ import {
 } from "./hook-decision-types.js";
 import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import type {
+  HookEvent,
+  HookContext,
+  HookResult,
+  ClaimingHookName,
+  ModifyingHookPolicy,
+} from "./hook-runner-policy.types.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginHookAfterToolCallEvent,
@@ -169,42 +176,6 @@ function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
   }
   return Object.freeze(value);
 }
-
-type HookEvent<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[0];
-type HookContext<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[1];
-type HookResult<K extends PluginHookName> = Exclude<
-  Awaited<ReturnType<PluginHookHandlerMap[K]>>,
-  void
->;
-type ClaimingHookName = {
-  [K in PluginHookName]: [HookResult<K>] extends [never]
-    ? never
-    : HookResult<K> extends { handled: boolean }
-      ? K
-      : never;
-}[PluginHookName];
-
-type ModifyingHookPolicy<K extends PluginHookName, TResult = HookResult<K>> = {
-  mergeResults?: (
-    accumulated: TResult | undefined,
-    next: TResult,
-    registration: PluginHookRegistration<K>,
-    event: HookEvent<K>,
-  ) => TResult;
-  isolateEventPerHandler?: boolean;
-  eventForHandler?: (event: HookEvent<K>, result: TResult | undefined) => HookEvent<K>;
-  mergeNullResults?: boolean;
-  shouldStop?: (result: TResult) => boolean;
-  terminalLabel?: string;
-  onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
-  includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
-  assertHandlerBoundaryActive?: () => void;
-  onHandlerResult?: (params: {
-    hook: PluginHookRegistration<K>;
-    result: TResult | undefined;
-  }) => void;
-  onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
-};
 
 type PluginTargetedInboundClaimOutcome =
   | {
@@ -888,7 +859,8 @@ export function createHookRunner(
           : ctx;
         let handlerResult: TResult | undefined;
         try {
-          const promise = Promise.resolve(handler(handlerEvent, handlerContext));
+          const currentContext = policy.contextForHandler?.(handlerContext) ?? handlerContext;
+          const promise = Promise.resolve(handler(handlerEvent, currentContext));
           const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
           handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         } finally {
@@ -1283,6 +1255,7 @@ export function createHookRunner(
       assertAuthority: () => boolean | void;
       markOwnerDecision?: () => void;
     }>,
+    contextForHandler?: (context: PluginHookToolContext) => PluginHookToolContext,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
     return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
       "before_tool_call",
@@ -1292,6 +1265,7 @@ export function createHookRunner(
         // A plugin may mutate its local event, but direct writes must not alter
         // the caller's params or the event observed by another plugin.
         isolateEventPerHandler: true,
+        contextForHandler,
         mergeResults: (acc, next, reg) => {
           if (acc?.block === true) {
             return acc;

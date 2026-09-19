@@ -17,6 +17,7 @@ import {
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import { bindAdmittedGatewayOwnerObservation } from "../../agents/tools/gateway-caller-context.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import {
   setChannelSourceTurnId,
@@ -503,10 +504,8 @@ export async function startAgentRunExecution(params: {
                 operationalRunInstance: prepared.operationalRunInstance,
                 onAdmittedRunContext: (admittedRunContext) => {
                   skillLibraryAuthoring?.bind(admittedRunContext);
-                  bindGatewayContextResolver(
-                    admittedRunContext,
-                    params.context.resolveGatewayContext,
-                  );
+                  const nativeGatewayOwner = params.context.resolveGatewayContext;
+                  bindGatewayContextResolver(admittedRunContext, nativeGatewayOwner);
                   const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
                   if (!authority) {
                     throw new Error("agent run delegated authority was not admitted");
@@ -516,6 +515,7 @@ export async function startAgentRunExecution(params: {
                   if (prepared.activeRunAbort.registered) {
                     prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
                   }
+                  bindAdmittedGatewayOwnerObservation(admittedRunContext, nativeGatewayOwner);
                 },
                 internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
                 internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,

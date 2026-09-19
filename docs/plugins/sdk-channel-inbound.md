@@ -114,6 +114,13 @@ await runtime.channel.inbound.run({
 });
 ```
 
+The Gateway-injected `runtime.channel.inbound.run(...)` supplies its owning
+reply dispatcher when `resolveTurn` returns a routed plan without an explicit
+`dispatchReplyFromConfig`. An explicit dispatcher keeps its existing owner.
+Prepared dispatch closures and caller-assembled compatibility turns also retain
+their caller-owned dispatch; the standalone SDK runner does not infer a Gateway
+instance.
+
 Assemble `dispatchChannelInboundReply(...)` inputs for compatibility
 dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from

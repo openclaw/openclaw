@@ -142,7 +142,15 @@ export class GatewayPendingRequests {
       options?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, pending);
       try {
-        sender.send(JSON.stringify({ type: "req", id, method, params }));
+        sender.send(
+          JSON.stringify({
+            type: "req",
+            id,
+            method,
+            params,
+            ...(options?.traceparent !== undefined ? { traceparent: options.traceparent } : {}),
+          }),
+        );
         if (this.pending.get(id) !== pending) {
           return;
         }
