@@ -58,10 +58,16 @@ export async function startBrokerExeca(
       cancelSignal: controller.signal,
     };
     // Execa separates its text and binary option contracts at the encoding discriminant.
-    const subprocess =
+    const start = () =>
       encoding === undefined || encoding === "utf8" || encoding === "utf16le"
         ? execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding })
         : execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding });
+    let subprocess: ReturnType<typeof start>;
+    try {
+      subprocess = start();
+    } catch (error) {
+      throw await adoptAbandonedSpawnError(error);
+    }
     const child = subprocess.nodeChildProcess;
     const stdio = [0, 1, 2].map((fd) => {
       if (fd === 0 && options.input !== undefined) {
@@ -120,6 +126,48 @@ export async function startBrokerExeca(
     }
     throw error;
   }
+}
+
+function isDescriptorSpawnError(error: unknown): error is NodeJS.ErrnoException {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const syscall = "syscall" in error ? error.syscall : undefined;
+  const code = "code" in error ? error.code : undefined;
+  return (
+    typeof syscall === "string" &&
+    syscall.startsWith("spawn") &&
+    (code === "EMFILE" || code === "ENFILE")
+  );
+}
+
+// Node returns a child without stdio when spawn hits EMFILE or ENFILE and emits that error on the
+// next tick. Execa reads the missing stdio first and throws, so the child it abandons has no error
+// listener and its spawn error would end this worker. Claim that error for the caller instead.
+async function adoptAbandonedSpawnError(thrown: unknown): Promise<unknown> {
+  if (!(thrown instanceof TypeError)) {
+    return thrown;
+  }
+  return await new Promise<unknown>((resolve) => {
+    const settle = (error: unknown) => {
+      process.off("uncaughtException", onUncaught);
+      clearImmediate(deadline);
+      resolve(error);
+    };
+    const onUncaught = (error: Error) => {
+      if (isDescriptorSpawnError(error)) {
+        settle(error);
+        return;
+      }
+      // Anything else keeps the default fatal handling once this listener is gone.
+      settle(thrown);
+      process.nextTick(() => {
+        throw error;
+      });
+    };
+    process.on("uncaughtException", onUncaught);
+    const deadline = setImmediate(() => settle(thrown));
+  });
 }
 
 function serializeResult(result: Awaited<ReturnType<typeof execa>>): BrokerExecaResult {
