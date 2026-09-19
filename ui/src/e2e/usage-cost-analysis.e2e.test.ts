@@ -395,14 +395,24 @@ suite.define(() => {
     );
   });
 
-  it("does not show the provider usage warning for a valid empty response", async () => {
+  it.each([
+    { width: 320, locale: "en" },
+    { width: 390, locale: "en" },
+    { width: 320, locale: "de" },
+    { width: 390, locale: "de" },
+    { width: 1440, locale: "en" },
+  ])("keeps empty usage guidance readable at $width px in $locale", async ({ width, locale }) => {
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
-        viewport: { height: 1_000, width: 1_440 },
+        viewport: { height: 1_000, width },
+        reducedMotion: "reduce",
       },
       async ({ page }) => {
+        await page.addInitScript((value) => {
+          localStorage.setItem("openclaw.i18n.locale", value);
+        }, locale);
         const gateway = await installMockGateway(page, {
           methodResponses: {
             ...emptyUsageResponses(),
@@ -420,13 +430,37 @@ suite.define(() => {
           .not.toContain(
             "Provider usage is unavailable; the last request failed. Refresh to retry.",
           );
+        const hint = page.locator(".settings-section__header .usage-query-hint");
+        await hint.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const bounds = await hint.evaluate((element) => {
+          const panel = element.closest("main")!;
+          const panelBounds = panel.getBoundingClientRect();
+          const heading = element
+            .closest(".settings-section__header")!
+            .querySelector("h2")!
+            .getBoundingClientRect();
+          const text = document.createRange();
+          text.selectNodeContents(element);
+          const lines = Array.from(text.getClientRects());
+          return {
+            left: Math.min(...lines.map((line) => line.left)),
+            right: Math.max(...lines.map((line) => line.right)),
+            panelLeft: panelBounds.left,
+            panelRight: panelBounds.left + panel.clientWidth,
+            headingRight: heading.right,
+          };
+        });
+        expect(bounds.left).toBeGreaterThanOrEqual(bounds.panelLeft);
+        expect(bounds.left).toBeGreaterThanOrEqual(bounds.headingRight);
+        expect(bounds.right).toBeLessThanOrEqual(bounds.panelRight);
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "provider-usage-outcomes"), { recursive: true });
           await page.locator(".usage-page").screenshot({
             animations: "disabled",
             path: path.join(
               path.join(suite.artifactDir, "provider-usage-outcomes"),
-              "usage-status-empty.png",
+              `usage-status-empty-${width}-${locale}.png`,
             ),
           });
         }
