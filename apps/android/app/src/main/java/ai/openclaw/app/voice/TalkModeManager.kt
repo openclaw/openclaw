@@ -916,7 +916,9 @@ class TalkModeManager internal constructor(
     val pending = pendingRunId
     val knownRun = pending == runId || hasRunCompletion(runId)
     if (!knownRun) {
-      if (ttsOnAllResponses && state == "final") {
+      // A live realtime relay owns speech, including gateway-run consult answers;
+      // local TTS would repeat them on a media stream the mic's AEC does not cancel.
+      if (ttsOnAllResponses && state == "final" && realtimeSessionId == null) {
         val text = extractTextFromChatEventMessage(message)
         if (!text.isNullOrBlank()) {
           playTtsForText(text)

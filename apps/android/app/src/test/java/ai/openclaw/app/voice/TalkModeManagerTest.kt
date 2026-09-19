@@ -485,6 +485,21 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeRelayOwnsSpeechForGatewayRunConsultFinals() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    installRealtimeSession(manager, "relay-1")
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "talk-realtime-relay-consult:relay-1:call-1", text = "It is 12:38 PM."))
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-typed", text = "typed reply"))
+    assertEquals(0L, playbackGeneration(manager).get())
+
+    installRealtimeSession(manager, null)
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-after", text = "speak this"))
+    assertEquals(1L, playbackGeneration(manager).get())
+  }
+
+  @Test
   fun nonPendingUserFinalDoesNotUseAllResponseTts() {
     val manager = createManager()
 
