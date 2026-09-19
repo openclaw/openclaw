@@ -125,6 +125,45 @@ You can point a native Tailscale Serve or Funnel route at the ordinary Gateway l
 
 This compatibility path does not grant managed Tailscale semantics. `gateway.auth.allowTailscale` cannot provide tokenless auth. OpenClaw does not call `tailscale whois`. It does not own or clean up the external route. Without an explicitly trusted source and a valid non-loopback forwarded client address, Gateway-authenticated routes fail with `proxy_attribution_required`. If the proxy connects over loopback, adding `127.0.0.1` to `trustedProxies` explicitly trusts same-host processes to supply proxy attribution. Keep token or password auth enabled unless every process on the host belongs to the same trust boundary.
 
+## Diagnose mobile pairing through Tailscale
+
+Before generating another QR or setup code, run the focused preflight:
+
+```bash
+openclaw doctor --lint --only core/doctor/tailscale-pairing --json
+```
+
+The check is observational. It reads the configured pairing URL and current
+Serve status, checks the exact listener, port, path, and local target, and
+reports managed and externally managed routes separately. A matching external
+Serve route remains valid while `gateway.tailscale.mode` is `off`; OpenClaw
+does not need to own that route. When the external proxy reaches the ordinary
+Gateway listener over loopback, the report checks that only the immediate
+loopback proxy is trusted through `gateway.trustedProxies`.
+
+Choose one owner for the published endpoint. If an explicit device-pair
+`publicUrl` selects an external route while managed Serve or Funnel is also
+enabled, the preflight reports the separate managed listener claim. Keep
+`gateway.tailscale.mode=off` for the external arrangement, or remove the
+explicit URL and use the managed endpoint.
+
+Runtime findings distinguish these stages:
+
+- **Configuration:** the published URL matches the observed Serve handler and
+  local Gateway target.
+- **HTTP liveness:** the exact published `/healthz` endpoint returns the
+  Gateway liveness contract. A generic HTTP 200 does not pass this stage.
+- **Gateway reachability:** a correlated Gateway WebSocket response was
+  observed. An attribution error here overrides a successful health response.
+- **Authentication:** the no-detail probe reports authenticated readiness only
+  when the Gateway returns identity or scope evidence. The diagnostic does not
+  create a pairing request or use stored device credentials.
+
+The host cannot inspect whether Tailscale is enabled on the Android device, so
+host-side success still requires a real connection test from the phone. The
+preflight never adopts, replaces, or clears a Serve route and never edits
+Gateway configuration.
+
 ## Notes
 
 - Tailscale Serve/Funnel requires the `tailscale` CLI installed and logged in.
