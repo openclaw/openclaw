@@ -7,7 +7,6 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
@@ -445,7 +444,7 @@ export function renderRecentSession(params: {
       @keydown=${openMenuFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
+        href=${host.sidebarSessionHref(session)}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}

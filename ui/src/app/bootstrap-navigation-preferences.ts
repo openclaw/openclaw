@@ -6,10 +6,9 @@ import { patchSettings, type UiSettings } from "./settings.ts";
 
 export function createApplicationNavigationPreferences(
   initialSettings: UiSettings,
-  navCollapsed: boolean,
 ): ApplicationNavigationPreferences {
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
-    navCollapsed,
+    navCollapsed: false,
     navWidth: initialSettings.navWidth,
     sidebarEntries: initialSettings.sidebarEntries,
     pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],

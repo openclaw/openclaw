@@ -10,7 +10,6 @@ import type {
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -576,7 +575,7 @@ function renderCatalogSessionRow(
       @keydown=${openMenuFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(href)}
+        href=${href}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
         @click=${(event: MouseEvent) => {

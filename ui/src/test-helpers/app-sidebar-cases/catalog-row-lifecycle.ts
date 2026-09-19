@@ -39,9 +39,7 @@ describe("AppSidebar catalog row lifecycle", () => {
       expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toContain(
         expected,
       );
-      expect(row?.querySelector("a")?.getAttribute("href")).toBe(
-        "/dashboard/main/adopted-title?nav=collapsed",
-      );
+      expect(row?.querySelector("a")?.getAttribute("href")).toBe("/dashboard/main/adopted-title");
     },
   );
   it("uses catalog colors only until the live session owns the row", async () => {

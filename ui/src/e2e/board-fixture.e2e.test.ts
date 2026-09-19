@@ -356,7 +356,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.push(request.url());
         }
       });
-      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator`);
       for (const reload of [false, true]) {
         if (reload) {
           avatarRequests.length = 0;
