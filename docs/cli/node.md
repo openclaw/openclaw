@@ -388,7 +388,9 @@ it contains the device keypair and auth tokens.
 - `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is unset
 - [Exec approvals](/tools/exec-approvals)
-- `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
+- From the Gateway, inspect with `openclaw approvals get --node <id|name|ip>` or
+  replace with `openclaw approvals set --node <id|name|ip> --file <path>`; see the
+  [Approvals CLI](/cli/approvals).
 
 For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
 before prompting. The later approved `system.run` forward reuses that stored
