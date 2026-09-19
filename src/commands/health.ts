@@ -18,10 +18,6 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { resolveHealthAccountContext } from "../gateway/health/account-context.js";
-import {
-  buildHealthAgentSummaries,
-  resolveHealthAgentOrder as resolveAgentOrder,
-} from "../gateway/health/collector.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { info } from "../globals.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
@@ -242,7 +238,9 @@ export async function healthCommand(
         message: details.message,
       });
     }
-    const localAgents = resolveAgentOrder(cfg);
+    const { buildHealthAgentSummaries, resolveHealthAgentOrder } =
+      await import("../gateway/health/collector.js");
+    const localAgents = resolveHealthAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const resolvedAgents =
