@@ -141,7 +141,7 @@ export async function prepareAgentCatalogSource(
         ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
       });
       return {
-        modelsJsonContents: source.modelsJsonContents,
+        modelsJsonContents: source.modelsJsonContents ?? captureModelsJsonContents(input),
         pluginCatalogs: source.pluginCatalogs,
         providerOutcomes: resultOutcomes(),
       };
@@ -155,7 +155,7 @@ export async function prepareAgentCatalogSource(
     // Capture immediately after the serialized write. Another owner may share this directory and
     // publish a different workspace generation before full-catalog parsing begins.
     return {
-      modelsJsonContents: captureModelsJsonContents(input.agentDir),
+      modelsJsonContents: captureModelsJsonContents(input),
       pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
       providerOutcomes: resultOutcomes(),
     };

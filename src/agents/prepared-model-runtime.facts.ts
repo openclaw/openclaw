@@ -547,7 +547,7 @@ export async function prepareWorkspaceBuildGroup(
   }
 }
 
-export function captureModelsJsonContents(agentDir: string): string | null {
+function readModelsJsonContents(agentDir: string): string | null {
   try {
     return fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
   } catch (error) {
@@ -556,6 +556,15 @@ export function captureModelsJsonContents(agentDir: string): string | null {
     }
     throw error;
   }
+}
+
+export function captureModelsJsonContents(
+  input: Pick<PreparedModelRuntimeInput, "agentDir" | "fallbackAgentDir">,
+): string | null {
+  const localContents = readModelsJsonContents(input.agentDir);
+  return localContents !== null || !input.fallbackAgentDir
+    ? localContents
+    : readModelsJsonContents(input.fallbackAgentDir);
 }
 export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
   sha256Base64Url(stableStringify(value));
@@ -601,7 +610,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   for (const facts of params.agentFacts) {
     await nextTurn();
     params.assertCurrent?.(facts.input);
-    const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
+    const modelsJsonContents = captureModelsJsonContents(facts.input);
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Root files remain authored inventory even when static preparation returned an empty result.
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(

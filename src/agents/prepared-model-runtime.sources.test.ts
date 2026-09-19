@@ -12,6 +12,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
+  captureModelsJsonContents,
   prepareConfiguredRuntimeFactsBatch,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
@@ -19,6 +20,7 @@ import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { normalizePreparedModelRuntimeInput } from "./prepared-model-runtime.owner.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -268,6 +270,59 @@ describe("prepared catalog source composition", () => {
     expect(
       result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "configured-only"),
     ).toBeUndefined();
+  });
+
+  it("reads the isolated system-agent catalog when a secondary catalog is missing", async () => {
+    const { facts, generation, modelsJsonContents } = fixture();
+    const stateDir = tempDirs.make("openclaw-prepared-system-catalog-");
+    const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
+    fs.mkdirSync(systemAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(systemAgentDir, "models.json"), modelsJsonContents);
+    const input = normalizePreparedModelRuntimeInput({
+      ...facts.input,
+      agentId: "ops",
+      agentDir: secondaryAgentDir,
+      config: {
+        ...facts.input.config,
+        agents: { defaults: { systemAgent: { agentId: "main" } } },
+      },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const secondaryFacts = { ...facts, input };
+
+    const result = await prepareConfiguredRuntimeFactsBatch({
+      agentFacts: [secondaryFacts],
+      pluginGeneration: generation,
+    });
+
+    expect(
+      result.catalogs.get(input)?.templateModelRegistry.find(providerId, "authored-only"),
+    ).toMatchObject({ id: "authored-only" });
+    expect(fs.existsSync(path.join(secondaryAgentDir, "models.json"))).toBe(false);
+  });
+
+  it("keeps an existing secondary catalog authoritative", () => {
+    const { facts, modelsJsonContents } = fixture();
+    const stateDir = tempDirs.make("openclaw-prepared-local-catalog-");
+    const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
+    fs.mkdirSync(systemAgentDir, { recursive: true });
+    fs.mkdirSync(secondaryAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(systemAgentDir, "models.json"), modelsJsonContents);
+    fs.writeFileSync(path.join(secondaryAgentDir, "models.json"), "{ malformed");
+    const input = normalizePreparedModelRuntimeInput({
+      ...facts.input,
+      agentId: "ops",
+      agentDir: secondaryAgentDir,
+      config: {
+        ...facts.input.config,
+        agents: { defaults: { systemAgent: { agentId: "main" } } },
+      },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(captureModelsJsonContents(input)).toBe("{ malformed");
   });
 
   it.each(["same", "static route", "credentials", "metadata"] as const)(
