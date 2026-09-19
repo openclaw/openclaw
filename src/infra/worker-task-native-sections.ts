@@ -18,6 +18,34 @@ export function createWorkerNativeSectionState(): WorkerNativeSectionState {
 export function cancelWorkerNativeSections(state: WorkerNativeSectionState): void {
   // Close admission atomically: a worker cannot enter after retirement observes no sections.
   Atomics.or(state, 0, CANCELLED);
+  Atomics.notify(state, 0);
+}
+
+export function observeWorkerTaskCancellation(
+  state: WorkerNativeSectionState,
+  isActive: () => boolean,
+  onCancelled: () => void,
+): () => Promise<void> {
+  let observing = true;
+  const settled = (async () => {
+    for (;;) {
+      if (!observing || !isActive()) {
+        return;
+      }
+      const observed = Atomics.load(state, 0);
+      if ((observed & CANCELLED) !== 0) {
+        onCancelled();
+        return;
+      }
+      await Atomics.waitAsync(state, 0, observed).value;
+    }
+  })();
+  return () => {
+    observing = false;
+    // Normal task completion must also wake and join its otherwise indefinite wait.
+    Atomics.notify(state, 0);
+    return settled;
+  };
 }
 
 export function waitForWorkerNativeSections(
