@@ -290,4 +290,42 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       0,
     );
   });
+
+  it("wraps long model labels in dropdown options instead of forcing single-line truncation", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(390, 844);
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;right:12px;top:32px;width:120px";
+    document.body.append(host);
+    render(
+      renderModelPicker({
+        label: "Model",
+        value: "deepseek/deepseek-r1-0528",
+        options: [
+          {
+            value: "deepseek/deepseek-r1-0528",
+            label: "DeepSeek: DeepSeek-R1-0528",
+            provider: "deepseek",
+          },
+          {
+            value: "deepseek/deepseek-r1-distill",
+            label: "DeepSeek: DeepSeek-R1-Distill",
+            provider: "deepseek",
+          },
+        ],
+        onChange: vi.fn(),
+      }),
+      host,
+    );
+    const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+    await picker.updateComplete;
+    await page
+      .getByRole("button", { name: "Model: DeepSeek: DeepSeek-R1-0528", exact: true })
+      .click();
+    for (const label of picker.querySelectorAll<HTMLElement>(
+      "[role=option] .picker-select__label",
+    )) {
+      expect(getComputedStyle(label).whiteSpace).toBe("normal");
+    }
+  });
 });
