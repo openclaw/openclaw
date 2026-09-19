@@ -61,6 +61,25 @@ export function renderComposerMenu(options: {
   </div>`;
 }
 
+const lastHoverByMenu = new WeakMap<HTMLElement, { x: number; y: number }>();
+
+function isStationaryMenuHover(event: MouseEvent): boolean {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const menu = target.closest(".slash-menu");
+  if (!(menu instanceof HTMLElement)) {
+    return false;
+  }
+  const last = lastHoverByMenu.get(menu);
+  if (last && last.x === event.clientX && last.y === event.clientY) {
+    return true;
+  }
+  lastHoverByMenu.set(menu, { x: event.clientX, y: event.clientY });
+  return false;
+}
+
 export function renderComposerMenuOption(options: {
   id: string;
   active: boolean;
@@ -79,11 +98,11 @@ export function renderComposerMenuOption(options: {
     aria-selected=${options.active}
     @mousedown=${options.preserveFocus === false ? nothing : (event: MouseEvent) => event.preventDefault()}
     @click=${options.select}
-    @pointermove=${(event: PointerEvent) => {
-      if (!options.active && event.pointerType !== "touch") {
-        options.hover();
-      }
-    }}
+<    @pointermove=${(event: PointerEvent) => {
+    if (!options.active && event.pointerType !== "touch" && !isStationaryMenuHover(event)) {
+      options.hover();
+    }
+  }}
   >
     <span class="slash-menu-icon" aria-hidden=${options.iconHidden ? "true" : nothing}
       >${options.icon}</span
