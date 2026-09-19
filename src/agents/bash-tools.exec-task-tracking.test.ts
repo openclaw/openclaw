@@ -4,6 +4,7 @@ import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
 const taskRuntime = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
   finalizeTaskRunByRunId: vi.fn(),
+  recordTaskRunProgressByRunId: vi.fn(),
 }));
 
 vi.mock("../tasks/detached-task-runtime.js", () => taskRuntime);
@@ -17,6 +18,7 @@ describe("background exec task tracking", () => {
   beforeEach(() => {
     taskRuntime.createRunningTaskRun.mockReset();
     taskRuntime.finalizeTaskRunByRunId.mockReset();
+    taskRuntime.recordTaskRunProgressByRunId.mockReset();
   });
 
   it.each([
@@ -76,6 +78,49 @@ describe("background exec task tracking", () => {
       });
     },
   );
+
+  it("heartbeats a live detached exec and stops heartbeating after finalization", () => {
+    vi.useFakeTimers();
+    try {
+      taskRuntime.createRunningTaskRun.mockReturnValue({ taskId: "task-1" });
+      vi.setSystemTime(1_000);
+
+      const handle = createBackgroundExecTask({
+        processSessionId: "quiet-run",
+        command: "sleep 3600",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        startedAt: 100,
+      });
+      expect(handle).not.toBeNull();
+
+      vi.advanceTimersByTime(60_000);
+      expect(taskRuntime.recordTaskRunProgressByRunId).toHaveBeenCalledTimes(1);
+      expect(taskRuntime.recordTaskRunProgressByRunId).toHaveBeenLastCalledWith({
+        runId: "exec:quiet-run",
+        runtime: "cli",
+        sessionKey: "agent:main:main",
+        lastEventAt: 61_000,
+        progressSummary: "Command running",
+      });
+
+      finalizeBackgroundExecTask({
+        handle,
+        outcome: {
+          status: "completed",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 60_000,
+          aggregated: "",
+          timedOut: false,
+        },
+      });
+      vi.advanceTimersByTime(120_000);
+      expect(taskRuntime.recordTaskRunProgressByRunId).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it.each([
     {

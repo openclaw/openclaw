@@ -4,10 +4,19 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
-import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
+import {
+  createRunningTaskRun,
+  finalizeTaskRunByRunId,
+  recordTaskRunProgressByRunId,
+} from "../tasks/detached-task-runtime.js";
 import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
 
 const log = createSubsystemLogger("agents/bash-exec-task-tracking");
+
+// Keep detached exec liveness comfortably inside the 30-minute task-audit window.
+// The timer is unref'd so it cannot keep the Gateway alive during shutdown.
+const BACKGROUND_EXEC_TASK_HEARTBEAT_MS = 60_000;
+const backgroundExecTaskHeartbeats = new WeakMap<BackgroundExecTaskHandle, NodeJS.Timeout>();
 
 export type BackgroundExecTaskHandle = {
   taskId: string;
@@ -58,7 +67,27 @@ export function createBackgroundExecTask(params: {
     if (!task) {
       return null;
     }
-    return { taskId: task.taskId, runId, sessionKey };
+    const handle = { taskId: task.taskId, runId, sessionKey };
+    const heartbeat = setInterval(() => {
+      try {
+        recordTaskRunProgressByRunId({
+          runId,
+          runtime: "cli",
+          sessionKey,
+          lastEventAt: Date.now(),
+          progressSummary: "Command running",
+        });
+      } catch (error) {
+        log.warn("Failed to heartbeat background exec task", {
+          taskId: task.taskId,
+          runId,
+          error,
+        });
+      }
+    }, BACKGROUND_EXEC_TASK_HEARTBEAT_MS);
+    heartbeat.unref?.();
+    backgroundExecTaskHeartbeats.set(handle, heartbeat);
+    return handle;
   } catch (error) {
     log.warn("Failed to register background exec task", {
       processSessionId: params.processSessionId,
@@ -74,6 +103,11 @@ export function finalizeBackgroundExecTask(params: {
 }): void {
   if (!params.handle) {
     return;
+  }
+  const heartbeat = backgroundExecTaskHeartbeats.get(params.handle);
+  if (heartbeat) {
+    clearInterval(heartbeat);
+    backgroundExecTaskHeartbeats.delete(params.handle);
   }
   const endedAt = Date.now();
   const status =
