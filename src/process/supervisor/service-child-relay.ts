@@ -6,14 +6,15 @@ import {
   resolveRuntimeProcessEntrypointUrl,
 } from "../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import type {
   ServiceChildControlMessage,
   ServiceChildRelayMessage,
   ServiceChildStart,
 } from "./service-child-protocol.js";
+import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
 
-type StdioEntry = "ignore" | "inherit" | "ipc" | number;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
@@ -21,17 +22,6 @@ if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
     "serviceChildGroupAnchor",
     new URL("./service-child-group-anchor.mjs", import.meta.url),
   );
-}
-
-function reserveIpcFd(stdio: StdioEntry[]): void {
-  let fd = 3;
-  while (stdio[fd] !== undefined && stdio[fd] !== "ignore") {
-    fd += 1;
-  }
-  while (stdio.length <= fd) {
-    stdio.push("ignore");
-  }
-  stdio[fd] = "ipc";
 }
 
 function runServiceChildRelay(): void {
@@ -165,31 +155,14 @@ function runServiceChildRelay(): void {
       return;
     }
     const anchorUrl = resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
-    const stdio: StdioEntry[] = ["inherit", "inherit", "inherit"];
-    while (stdio.length <= start.controlFd) {
-      stdio.push("ignore");
-    }
-    stdio[start.controlFd] = start.controlFd;
-    if (start.lineageFd !== undefined) {
-      while (stdio.length <= start.lineageFd) {
-        stdio.push("ignore");
-      }
-      stdio[start.lineageFd] = start.lineageFd;
-    }
+    const stdio: SpawnStdioEntry[] = ["inherit", "inherit", "inherit"];
     parentLineageFds = start.parentLineageFds ?? [];
-    for (const parentFd of parentLineageFds) {
-      while (stdio.length <= parentFd) {
-        stdio.push("ignore");
+    for (const fd of [start.controlFd, start.lineageFd, ...parentLineageFds, start.secretFd]) {
+      if (fd !== undefined) {
+        setStdioEntry(stdio, fd, fd);
       }
-      stdio[parentFd] = parentFd;
     }
-    if (start.secretFd !== undefined) {
-      while (stdio.length <= start.secretFd) {
-        stdio.push("ignore");
-      }
-      stdio[start.secretFd] = start.secretFd;
-    }
-    reserveIpcFd(stdio);
+    reserveStdioEntry(stdio, "ipc");
     try {
       anchor = spawn(process.execPath, resolveRuntimeWorkerArgv(anchorUrl), {
         stdio,

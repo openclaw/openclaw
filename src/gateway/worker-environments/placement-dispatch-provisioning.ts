@@ -17,7 +17,7 @@ export function isPendingProvisioningEnvironment(
 }
 
 export function requireProvisionedEnvironment(
-  environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
+  environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>,
   expectedEnvironmentId: string,
   executionMode: WorkerPlacementDispatchRequest["executionMode"],
   environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,

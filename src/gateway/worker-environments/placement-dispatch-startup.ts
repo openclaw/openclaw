@@ -123,7 +123,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   };
   const requireNodePlacementEligibility = async (
     request: WorkerPlacementDispatchRequest,
-    environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
+    environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>,
     admittedNode?: NodeWorkerSupervisorNodeProof,
   ): Promise<WorkerNodePlacementAdmission | undefined> => {
     const deviceId = environment.nodeDeviceId;
@@ -258,7 +258,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   const continueProvisionedDispatch = async (params: {
     request: WorkerPlacementDispatchRequest;
     placement: WorkerDispatchPlacement;
-    environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>;
+    environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>;
     expectedEnvironmentId: string;
     workspace: WorkerSessionWorkspace;
     onTransition?: (placement: WorkerDispatchPlacement) => void;

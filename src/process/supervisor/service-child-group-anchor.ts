@@ -5,6 +5,7 @@ import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
 import {
@@ -14,43 +15,29 @@ import {
   type ServiceChildControlMessage,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
+import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
-type StdioEntry = "ignore" | "inherit" | "pipe" | "ipc" | number;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 function commandStdio(start: ServiceChildStart): {
-  stdio: StdioEntry[];
+  stdio: SpawnStdioEntry[];
   lineageFd: number;
   inheritedLineageFds: number[];
 } {
-  const stdio: StdioEntry[] = [start.stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
+  const stdio: SpawnStdioEntry[] = [
+    start.stdinMode === "inherit" ? "inherit" : "pipe",
+    "pipe",
+    "pipe",
+  ];
   if (start.secretFd !== undefined) {
-    while (stdio.length <= start.secretFd) {
-      stdio.push("ignore");
-    }
-    stdio[start.secretFd] = start.secretFd;
+    setStdioEntry(stdio, start.secretFd, start.secretFd);
   }
-  let lineageFd = 3;
-  while (stdio[lineageFd] !== undefined && stdio[lineageFd] !== "ignore") {
-    lineageFd += 1;
-  }
-  while (stdio.length <= lineageFd) {
-    stdio.push("ignore");
-  }
-  stdio[lineageFd] = start.lineageFd ?? "pipe";
-  const inheritedLineageFds = [lineageFd];
-  for (const inheritedFd of start.parentLineageFds ?? []) {
-    let parentLineageFd = 3;
-    while (stdio[parentLineageFd] !== undefined && stdio[parentLineageFd] !== "ignore") {
-      parentLineageFd += 1;
-    }
-    while (stdio.length <= parentLineageFd) {
-      stdio.push("ignore");
-    }
-    stdio[parentLineageFd] = inheritedFd;
-    inheritedLineageFds.push(parentLineageFd);
-  }
+  const lineageFd = reserveStdioEntry(stdio, start.lineageFd ?? "pipe");
+  const inheritedLineageFds = [
+    lineageFd,
+    ...(start.parentLineageFds ?? []).map((fd) => reserveStdioEntry(stdio, fd)),
+  ];
   if (start.ownedWorker) {
     stdio.push("ipc");
   }

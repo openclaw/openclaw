@@ -224,33 +224,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       reportPlacementTransition(onTransition, placement);
       const environment = prepared
         ? prepared.environment
-        : request.inheritedProfile
-          ? await environments.createFromProfileSnapshot(
-              {
-                profileId: request.profileId,
-                providerId: request.inheritedProfile.providerId,
-                profileSnapshot: request.inheritedProfile.profileSnapshot,
-              },
-              idempotencyKey,
-              request.machineClass,
-              request.executionMode,
-              projectPath,
-              signal,
-              request.os,
-              request.runSetupScript,
-              preparedIntent,
-            )
-          : await environments.create(
-              request.profileId,
-              idempotencyKey,
-              request.machineClass,
-              request.executionMode,
-              projectPath,
-              signal,
-              request.os,
-              request.runSetupScript,
-              preparedIntent,
-            );
+        : await environments.createWithRequest({
+            profileId: request.profileId,
+            idempotencyKey,
+            machineClass: request.machineClass,
+            executionMode: request.executionMode,
+            projectPath,
+            signal,
+            os: request.os,
+            runSetupScript: request.runSetupScript,
+            admittedIntent: preparedIntent,
+            inheritedProfile: request.inheritedProfile,
+          });
       return await startup.continueProvisionedDispatch({
         request,
         placement,

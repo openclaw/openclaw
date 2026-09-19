@@ -461,7 +461,7 @@ describe("worker launch descriptor", () => {
       { security: null, ask: "off" },
       { security: "deny", ask: false },
       { host: "gateway", security: "full", ask: "off", unexpected: true },
-      ...[null, false, {}, ["head"], ["/usr/bin/head"]].map((safeBins) => ({
+      ...[undefined, null, false, {}, ["head"], ["/usr/bin/head"]].map((safeBins) => ({
         host: "gateway",
         security: "allowlist",
         ask: "off",
@@ -507,6 +507,49 @@ describe("worker launch descriptor", () => {
           expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
         }
       }
+    }
+  });
+
+  it("preserves omitted optional authority fields and rejects inherited grants", () => {
+    const descriptor = launchDescriptor();
+    const allowedToolNames = ["read"];
+    const exec = { host: "node", security: "full", ask: "off" };
+    for (const [authority, expected] of [
+      [{ allowedToolNames, exec: undefined }, { allowedToolNames }],
+      [
+        { allowedToolNames, exec: { ...exec, node: undefined, safeBins: [] } },
+        { allowedToolNames, exec: { ...exec, safeBins: [] } },
+      ],
+      [
+        {
+          allowedToolNames,
+          exec: Object.assign(Object.create({ node: undefined }), { ...exec, host: "gateway" }),
+        },
+        { allowedToolNames, exec: { ...exec, host: "gateway" } },
+      ],
+    ]) {
+      expect(
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, toolAuthority: authority },
+        }).assignment.toolAuthority,
+      ).toStrictEqual(expected);
+    }
+    for (const toolAuthority of [
+      Object.assign(Object.create({ exec }), { allowedToolNames }),
+      { allowedToolNames, exec: Object.assign(Object.create({ node: "other" }), exec) },
+      { allowedToolNames, exec: Object.assign(Object.create({ safeBins: [] }), exec) },
+      ...["gateway", "sandbox"].map((host) => ({
+        allowedToolNames,
+        exec: Object.assign(Object.create({ node: "other" }), { ...exec, host }),
+      })),
+    ]) {
+      expect(() =>
+        parseWorkerLaunchDescriptor({
+          ...descriptor,
+          assignment: { ...descriptor.assignment, toolAuthority },
+        }),
+      ).toThrow("invalid worker launch descriptor");
     }
   });
 

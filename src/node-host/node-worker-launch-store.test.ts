@@ -286,6 +286,42 @@ function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
   return { planHash, supervisor };
 }
 
+describe("node worker terminal ownership", () => {
+  it.each(["finish", "cancel"] as const)(
+    "keeps the physical reservation when %s comes from a stale process owner",
+    (operation) => {
+      const { database, store } = fixture();
+      insertLaunch({ database, launchId: "owned-launch", state: "running" });
+      const running = store.get("owned-launch")!;
+      const finish = (ownership: Pick<typeof running, "supervisor" | "worker">) =>
+        operation === "cancel"
+          ? store.finishCancelled({ expected: running, ...ownership })
+          : store.finish({
+              launchId: running.launchId,
+              planHash: running.planHash,
+              ...ownership,
+              state: "failed",
+              errorText: "worker failed",
+            });
+
+      for (const field of ["supervisor", "worker"] as const) {
+        for (const identityField of ["pid", "startTime"] as const) {
+          const stale = {
+            ...running[field]!,
+            [identityField]: running[field]![identityField] + 1,
+          };
+          expect(finish({ ...running, [field]: stale })).toEqual(running);
+        }
+      }
+      expect(finish({ ...running, worker: null })).toEqual(running);
+      expect(store.get(running.launchId)).toEqual(running);
+      expect(store.nonterminalCount()).toBe(1);
+      expect(finish(running)?.state).toBe(operation === "cancel" ? "cancelled" : "failed");
+      expect(store.nonterminalCount()).toBe(0);
+    },
+  );
+});
+
 describe("node worker launch store container identity", () => {
   function hasContainerIdentityTable(database: ReturnType<typeof fixture>["database"]): boolean {
     return Boolean(

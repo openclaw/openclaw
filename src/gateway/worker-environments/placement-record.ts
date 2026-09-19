@@ -112,7 +112,7 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;
 type LocalClaimablePlacementRecordBase = PlacementRecordBase<PersistedLocalTurnClaim | null>;
 
-export type EmptyWorkerPlacementMetadata = {
+type EmptyWorkerPlacementMetadata = {
   environmentId: null;
   activeOwnerEpoch: null;
   workspaceBaseManifestRef: null;
@@ -164,7 +164,7 @@ type StartingPlacementMetadata = {
   terminalAtMs: null;
 };
 
-export type OwnedWorkerPlacementMetadata = {
+type OwnedWorkerPlacementMetadata = {
   environmentId: string;
   activeOwnerEpoch: number;
   workspaceBaseManifestRef: string;
@@ -368,41 +368,7 @@ export function nextGeneration(generation: number): number {
   return next;
 }
 
-export function localTurnClaimForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "local" | "requested" | "failed",
-): PersistedLocalTurnClaim | null {
-  if (turnClaim?.owner === "worker") {
-    throw new Error(`Worker turn claim cannot survive placement ${state}`);
-  }
-  return turnClaim;
-}
-
-export function activeTurnClaimForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "active" | "draining",
-  executionMode: WorkerPlacementExecutionMode,
-): PersistedTurnClaim | null {
-  if (
-    (turnClaim?.owner === "local" && executionMode !== "remote-exec") ||
-    (turnClaim?.owner === "worker" && executionMode !== "worker-turn")
-  ) {
-    throw new Error(`Turn claim owner does not match ${executionMode} placement ${state}`);
-  }
-  return turnClaim;
-}
-
-export function unclaimedTurnForState(
-  turnClaim: PersistedTurnClaim | null,
-  state: "provisioning" | "syncing" | "starting" | "reconciling" | "reclaimed",
-): null {
-  if (turnClaim !== null) {
-    throw new Error(`Turn claim cannot survive placement ${state}`);
-  }
-  return null;
-}
-
-export function assertRecordShape(record: {
+type PlacementRecordShape = {
   state: WorkerSessionPlacementState;
   executionMode: WorkerPlacementExecutionMode;
   environmentId: string | null;
@@ -416,7 +382,18 @@ export function assertRecordShape(record: {
   terminalReason: string | null;
   terminalAtMs: number | null;
   turnClaim: PersistedTurnClaim | null;
-}): void {
+};
+
+type ValidatedPlacementRecordShape = {
+  [State in WorkerSessionPlacementState]: Pick<
+    Extract<WorkerSessionPlacementRecord, { state: State }>,
+    keyof PlacementRecordShape
+  >;
+}[WorkerSessionPlacementState];
+
+export function assertRecordShape(
+  record: PlacementRecordShape,
+): asserts record is ValidatedPlacementRecordShape {
   const terminal = record.state === "reclaimed" || record.state === "failed";
   if (terminal) {
     normalizeTimestamp(record.terminalAtMs, "terminal timestamp");
