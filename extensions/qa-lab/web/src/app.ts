@@ -261,6 +261,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       tc: state.snapshot?.threads.length ?? 0,
       ec: ev?.length ?? 0,
       lc: ev?.at(-1)?.cursor ?? -1,
+      cu: state.bootstrap?.controlUiUrl ?? null,
       rs: state.bootstrap?.runner.status,
       ra: state.bootstrap?.runner.startedAt,
       rf: state.bootstrap?.runner.finishedAt,
