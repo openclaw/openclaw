@@ -148,6 +148,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-device-pairing.worker.test.ts",
   "src/commands/doctor-device-pairing.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
+  "src/commands/doctor-lint.crabbox.test.ts",
   "src/fleet/doctor.runtime.test.ts",
   "src/fleet/registry.test.ts",
   "src/fleet/registry-read.test.ts",

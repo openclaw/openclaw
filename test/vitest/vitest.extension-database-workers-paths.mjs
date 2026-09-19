@@ -96,6 +96,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.vision-tools.test.ts",
   "extensions/copilot/src/tool-bridge.test.ts",
   "extensions/crabbox/doctor-contract-api.test.ts",
+  "extensions/crabbox/src/doctor.test.ts",
   "extensions/crabbox/index.test.ts",
   "extensions/crabbox/src/crabbox-gateway-methods.test.ts",
   "extensions/crabbox/src/crabbox-worker-node-enrollment.test.ts",
