@@ -18,7 +18,10 @@ import {
 } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { isIntermediateAssistantTranscriptMessage } from "../embedded-agent-runner/message-visibility.js";
-import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
+import {
+  persistClaimedCliAssistantReply,
+  persistCliAssistantTranscript,
+} from "./cli-run-transcript.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -170,3 +173,75 @@ it.each([
     }
   },
 );
+
+it("records a claimed reply in the session transcript", async () => {
+  const root = tempDirs.make("openclaw-cli-claimed-transcript-");
+  const target = {
+    agentId: "main",
+    sessionId: "cli-claimed-session",
+    sessionKey: "agent:main:cli-claimed",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+
+  await persistClaimedCliAssistantReply({
+    runParams: {
+      ...target,
+      sessionFile: `sqlite://agents/main/${target.sessionId}`,
+      workspaceDir: root,
+      prompt: "cron hook claim",
+      provider: "codex-cli",
+      model: "gpt-5.5",
+      runId: "cli-claimed-run",
+      timeoutMs: 1_000,
+      persistAssistantTranscript: true,
+    },
+    text: "  claimed reply  ",
+  });
+
+  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toMatchObject({
+    content: [{ type: "text", text: "claimed reply" }],
+    stopReason: "stop",
+  });
+});
+
+it("records nothing for a silent claim", async () => {
+  const root = tempDirs.make("openclaw-cli-silent-claim-transcript-");
+  const target = {
+    agentId: "main",
+    sessionId: "cli-silent-claim-session",
+    sessionKey: "agent:main:cli-silent-claim",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+
+  await persistClaimedCliAssistantReply({
+    runParams: {
+      ...target,
+      sessionFile: `sqlite://agents/main/${target.sessionId}`,
+      workspaceDir: root,
+      prompt: "cron hook silent claim",
+      provider: "codex-cli",
+      model: "gpt-5.5",
+      runId: "cli-silent-claim-run",
+      timeoutMs: 1_000,
+      persistAssistantTranscript: true,
+    },
+    text: "   ",
+  });
+
+  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+  expect(messages).toHaveLength(0);
+});

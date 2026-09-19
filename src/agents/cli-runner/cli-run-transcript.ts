@@ -147,6 +147,28 @@ export async function persistApprovedCliUserTurnTranscript(
   return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
 }
 
+/**
+ * Persists the reply a before_agent_reply claim owns as this turn's transcript answer.
+ * The synthetic turn never reaches the CLI attempt that normally records the answer, so
+ * without this the reply stays visible in chat but absent from the session transcript
+ * (#149985). Silent claims carry no reply text and record nothing.
+ */
+export async function persistClaimedCliAssistantReply(params: {
+  runParams: RunCliAgentParams;
+  text: string | undefined;
+}): Promise<{ owned: boolean; idempotencyKey?: string } | undefined> {
+  const text = params.text?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return await persistCliAssistantTranscript({
+    runParams: params.runParams,
+    text,
+    modelId: params.runParams.model ?? "",
+    stopReason: "stop",
+  });
+}
+
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;

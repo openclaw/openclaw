@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -41,6 +42,7 @@ const {
   runBeforeAgentReplyMock,
   runBeforeAgentRunMock,
   executePreparedCliRunMock,
+  persistClaimedCliAssistantReplyMock,
   prepareCliRunContextMock,
   closeCliSessionMock,
   closeMcpLoopbackServerMock,
@@ -58,6 +60,12 @@ const {
   executePreparedCliRunMock: vi.fn<
     (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
   >(async () => ({ text: "" })),
+  persistClaimedCliAssistantReplyMock: vi.fn<
+    (params: {
+      runParams: unknown;
+      text: string | undefined;
+    }) => Promise<{ owned: boolean; idempotencyKey?: string } | undefined>
+  >(async () => undefined),
   prepareCliRunContextMock: vi.fn(),
   closeCliSessionMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
@@ -80,6 +88,10 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({
   prepareCliRunContext: prepareCliRunContextMock,
 }));
 
+vi.mock("./cli-runner/cli-run-transcript.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./cli-runner/cli-run-transcript.js")>();
+  return { ...actual, persistClaimedCliAssistantReply: persistClaimedCliAssistantReplyMock };
+});
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executePreparedCliRunMock,
 }));
@@ -675,6 +687,66 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     expect(prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
+  it("persists the claimed reply into the session transcript", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "claimed cron reply" },
+    });
+    persistClaimedCliAssistantReplyMock.mockClear();
+
+    const result = await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
+
+    expect(persistClaimedCliAssistantReplyMock).toHaveBeenCalledTimes(1);
+    expect(persistClaimedCliAssistantReplyMock.mock.calls[0]?.[0]).toMatchObject({
+      text: "claimed cron reply",
+    });
+    expect(result.meta.finalAssistantVisibleText).toBe("claimed cron reply");
+  });
+
+  it("attaches the transcript write receipt to the claimed payloads", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({
+      handled: true,
+      reply: { text: "claimed reply" },
+    });
+    persistClaimedCliAssistantReplyMock.mockResolvedValue({
+      owned: true,
+      idempotencyKey: "cli-assistant:run-claim",
+    });
+
+    try {
+      const result = await runCliAgent({
+        ...baseRunParams,
+        trigger: "cron",
+        jobId: "cron-job-123",
+      });
+
+      const payload = result.payloads?.[0] as object | undefined;
+      expect(payload).toMatchObject({ text: "claimed reply" });
+      expect(getReplyPayloadMetadata(payload!)).toMatchObject({
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "cli-assistant:run-claim",
+      });
+    } finally {
+      persistClaimedCliAssistantReplyMock.mockResolvedValue(undefined);
+    }
+  });
+
+  it("does not persist a silent claim", async () => {
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
+    persistClaimedCliAssistantReplyMock.mockClear();
+
+    await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
+
+    // A silent claim carries no reply text; the transcript owner records nothing for it.
+    expect(persistClaimedCliAssistantReplyMock).toHaveBeenCalledWith({
+      runParams: expect.anything(),
+      text: undefined,
+    });
   });
 
   it("re-arms setup progress when a cron hook does not claim", async () => {
