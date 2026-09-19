@@ -3,23 +3,25 @@ import { expect, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AsyncArgsMock<TArgs extends unknown[]> = Mock<(...args: TArgs) => Promise<unknown>>;
+
+type DiscordSendModule = typeof import("./send.js");
 
 type DiscordOutboundHoisted = {
   sendMessageDiscordMock: AsyncUnknownMock;
   sendDiscordComponentMessageMock: AsyncUnknownMock;
-  sendPollDiscordMock: AsyncUnknownMock;
+  sendPollDiscordMock: AsyncArgsMock<Parameters<DiscordSendModule["sendPollDiscord"]>>;
   sendWebhookMessageDiscordMock: AsyncUnknownMock;
   sendVoiceMessageDiscordMock: AsyncUnknownMock;
   getThreadBindingManagerMock: UnknownMock;
 };
 
-type DiscordSendModule = typeof import("./send.js");
 type DiscordSendComponentsModule = typeof import("./send.components.js");
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(
-  mock: (...args: unknown[]) => unknown,
+  mock: (...args: TArgs) => unknown,
   ...args: TArgs
 ): TResult {
   return mock(...args) as TResult;

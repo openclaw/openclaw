@@ -29,6 +29,7 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./deliver-handoff.js";
+import { normalizeChannelMessageSendResult } from "./deliver-types.js";
 import type {
   MessageActionGateway,
   MessageActionResult,
@@ -496,6 +497,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
         gatewayOwnedDelivery: input.gatewayOwnedDelivery,
         onPlatformSendDispatch: input.onPlatformSendDispatch,
         assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
+        ...(input.onDeliveryResult ? { onDeliveryResult: input.onDeliveryResult } : {}),
       },
       silent: silent ?? undefined,
     },
@@ -659,6 +661,13 @@ export async function executeMessagePlugin(
       onPlatformSendDispatch: input.onPlatformSendDispatch,
       skipQueue: input.skipQueue,
       dryRun,
+      ...(input.onDeliveryResult
+        ? {
+            onDeliveryResult: async (result) => {
+              await input.onDeliveryResult?.(normalizeChannelMessageSendResult(channel, result));
+            },
+          }
+        : {}),
     });
   } catch (error) {
     const partialDelivery = input.messageActionAuthorization?.scheduled

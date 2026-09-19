@@ -373,6 +373,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     conversationReadOrigin,
     reply,
     assertDirectAdapterHandoff,
+    onDeliveryResult,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -393,6 +394,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
       ...(reply ? { reply } : {}),
       ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
+      ...(onDeliveryResult ? { onDeliveryResult } : {}),
     });
   },
 };

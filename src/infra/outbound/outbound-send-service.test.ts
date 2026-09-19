@@ -10,6 +10,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { createPollDeliveryFixture } from "./outbound-send-service.poll-delivery.test-support.js";
 
 const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
 const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
@@ -1172,23 +1173,17 @@ describe("executeSendAction", () => {
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendPoll.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      durationSeconds: null,
-      durationHours: null,
-      via: "gateway",
-    });
+    const delivery = createPollDeliveryFixture();
+    mocks.sendPoll.mockImplementation(delivery.sendPoll);
 
     await executePollAction({
       ctx: createContext({
         accountId: "acc-1",
+        onSendAccepted: delivery.onSendAccepted,
         input: {
           sessionKey: "agent:main:demo-outbound:channel:123",
           inboundEventKind: "room_event",
+          onDeliveryResult: delivery.onDeliveryResult,
         },
       }),
       resolveCorePoll: () => ({
@@ -1217,6 +1212,8 @@ describe("executeSendAction", () => {
       sessionKey: "agent:main:demo-outbound:channel:123",
       inboundEventKind: "room_event",
     });
+    expect(delivery.order).toEqual(["route", "receipt"]);
+    expect(delivery.onDeliveryResult).toHaveBeenCalledWith(delivery.evidence);
   });
 
   it("skips plugin dispatch during dry-run polls and forwards durationHours + silent", async () => {

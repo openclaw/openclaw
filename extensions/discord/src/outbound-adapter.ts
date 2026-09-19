@@ -55,8 +55,13 @@ const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
 );
 
 type DiscordOutboundMessageContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+type DiscordDeliveryContext = Pick<
+  DiscordOutboundMessageContext,
+  "onPlatformSendDispatch" | "assertDirectAdapterHandoff" | "onDeliveryResult"
+>;
+type DiscordPollContext = Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0];
 
-function resolveDiscordDeliveryOptions(params: DiscordOutboundMessageContext) {
+function resolveDiscordDeliveryOptions(params: DiscordDeliveryContext) {
   return {
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
@@ -66,6 +71,23 @@ function resolveDiscordDeliveryOptions(params: DiscordOutboundMessageContext) {
             attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
           )
       : undefined,
+  };
+}
+
+function resolveDiscordPollDeliveryOptions(
+  params: Pick<
+    DiscordPollContext,
+    "onPlatformSendDispatch" | "assertDirectAdapterHandoff" | "onDeliveryResult"
+  >,
+  onAcknowledgedDelivery: () => void,
+) {
+  return {
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
+    onDeliveryResult: async (result: DiscordSendResult) => {
+      onAcknowledgedDelivery();
+      await params.onDeliveryResult?.(toDiscordOutboundDeliveryResult(result));
+    },
   };
 }
 
@@ -244,11 +266,25 @@ export const discordOutbound: ChannelOutboundAdapter = {
       inboundEventKind,
       onPlatformSendDispatch,
       assertDirectAdapterHandoff,
+      onDeliveryResult,
     }) => {
       if (!createDiscordActionGate({ cfg, accountId })("polls")) {
         throw new Error("Discord polls are disabled.");
       }
       const outboundTo = resolveDiscordOutboundTarget({ to, threadId });
+      let acknowledgedDelivery = false;
+      const notifyAcknowledgedDelivery = () => {
+        if (acknowledgedDelivery) {
+          return;
+        }
+        acknowledgedDelivery = true;
+        discordInboundEventDelivery.notify({
+          sessionKey,
+          inboundEventKind,
+          to: outboundTo,
+          accountId,
+        });
+      };
       const result = await (
         await loadDiscordSendRuntime()
       ).sendPollDiscord(outboundTo, poll, {
@@ -257,15 +293,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
         threadId: threadId ?? undefined,
         silent: silent ?? undefined,
         cfg,
-        onPlatformSendDispatch,
-        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
+        ...resolveDiscordPollDeliveryOptions(
+          {
+            onPlatformSendDispatch,
+            assertDirectAdapterHandoff,
+            onDeliveryResult,
+          },
+          notifyAcknowledgedDelivery,
+        ),
       });
-      discordInboundEventDelivery.notify({
-        sessionKey,
-        inboundEventKind,
-        to: outboundTo,
-        accountId,
-      });
+      notifyAcknowledgedDelivery();
       return result;
     },
   }),

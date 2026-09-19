@@ -173,11 +173,12 @@ describe("discord channel message adapter", () => {
       expect(hoisted.sendPollDiscordMock).toHaveBeenLastCalledWith(
         "channel:123456",
         { question: "Ship?", options: ["Yes", "No"] },
-        {
+        expect.objectContaining({
           accountId: "default",
           silent: true,
           cfg: {},
-        },
+          onDeliveryResult: expect.any(Function),
+        }),
       );
       expect(result.receipt.parts[0]?.kind).toBe("poll");
     };
