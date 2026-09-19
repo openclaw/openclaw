@@ -94,7 +94,6 @@ type BrowserTabLike = {
   urlUnavailableReason?: unknown;
   type?: unknown;
   targetId?: unknown;
-  wsUrl?: unknown;
 };
 
 function formatAgentTab(tab: unknown): Record<string, unknown> {
@@ -125,7 +124,6 @@ function formatAgentTab(tab: unknown): Record<string, unknown> {
       : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
-    ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
   };
 }
 
