@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { isMissingPathError } from "../infra/errors.js";
+import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
+import type { ConfigWriteAuditResult } from "./io.audit.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { ConfigWriteOptions, NormalizedConfigIoDeps } from "./io.types.js";
@@ -445,7 +447,41 @@ export function resolveConfigWriteBlockingReasons(
   );
 }
 
-export function formatConfigArtifactTimestamp(ts: string): string {
+/** Reject a blocked write: persist the rejected payload, audit, and throw. */
+export async function rejectConfigWriteForBlockingReasons(params: {
+  deps: NormalizedConfigIoDeps;
+  configPath: string;
+  json: string;
+  blockingReasons: string[];
+  allowDestructiveWrite: boolean | undefined;
+  assertConfigPathForWrite: (() => void) | undefined;
+  appendWriteAudit: (result: ConfigWriteAuditResult, error?: unknown) => Promise<void>;
+}): Promise<void> {
+  const { deps, configPath, json, blockingReasons } = params;
+  if (blockingReasons.length === 0 || params.allowDestructiveWrite === true) {
+    return;
+  }
+  const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
+  // Only the completed exclusive create proves this payload is available for inspection.
+  params.assertConfigPathForWrite?.();
+  const rejectedSave = await deps.fs.promises
+    .writeFile(rejectedPath, json, { encoding: "utf-8", mode: 0o600, flag: "wx" })
+    .then(ok, err);
+  const saveDetail = rejectedSave.ok
+    ? `Rejected payload saved to ${rejectedPath}.`
+    : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
+  const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
+  const error = Object.assign(new Error(message), {
+    code: "CONFIG_WRITE_REJECTED",
+    ...(rejectedSave.ok ? { rejectedPath } : {}),
+    reasons: blockingReasons,
+  });
+  deps.logger.warn(message);
+  await params.appendWriteAudit("rejected", error);
+  throw error;
+}
+
+function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 

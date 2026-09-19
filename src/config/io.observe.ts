@@ -1,4 +1,5 @@
 import type fs from "node:fs";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
@@ -163,6 +164,59 @@ export async function observeConfigSnapshot(
       return;
     }
     throw error;
+  }
+}
+
+/**
+ * Advance the last-known-good baseline after the config owner accepts a write.
+ * Accepted writes include formatting normalization that shrinks raw bytes and
+ * intentionally permitted size drops (`allowConfigSizeDrop`); the writer
+ * validated and committed them, so their result becomes the new promotion
+ * baseline. Stub-shaped results (missing meta, missing gateway mode,
+ * update-channel-only root) keep the older baseline so external truncations
+ * stay rejected by promotion and observation. Best-effort: health metadata
+ * failures never fail the accepted write.
+ */
+export function advanceConfigHealthBaselineForAcceptedWrite(
+  deps: NormalizedConfigIoDeps,
+  params: {
+    configPath: string;
+    raw: string;
+    parsed: unknown;
+    resolved?: unknown;
+  },
+): void {
+  try {
+    const healthState = readConfigHealthStateFromStore(deps);
+    const entry = readConfigHealthEntry(healthState, params.configPath);
+    if (!entry.lastKnownGood) {
+      return;
+    }
+    const stat = deps.fs.statSync(params.configPath, { throwIfNoEntry: false }) ?? null;
+    const current = createConfigHealthFingerprint({
+      raw: params.raw,
+      parsed: params.parsed,
+      resolved: params.resolved,
+      stat,
+    });
+    const suspicious = resolveConfigObserveSuspiciousReasons({
+      bytes: current.bytes,
+      hasMeta: current.hasMeta,
+      gatewayMode: current.gatewayMode,
+      parsed: params.parsed,
+      lastKnownGood: entry.lastKnownGood,
+    });
+    if (suspicious.some((reason) => !reason.startsWith("size-drop-vs-last-good:"))) {
+      return;
+    }
+    patchConfigHealthEntryToStore(deps, params.configPath, {
+      lastKnownGood: current,
+      lastObservedSuspiciousSignature: null,
+    });
+  } catch (error) {
+    deps.logger.warn(
+      `Config last-known-good baseline advance failed: ${formatErrorMessage(error)}`,
+    );
   }
 }
 

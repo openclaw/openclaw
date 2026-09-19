@@ -196,7 +196,13 @@ describe("config factory writer boundary", () => {
         nextConfig: { ...config, gateway: { ...config.gateway, port: 19002 } },
       }),
     });
-    expect(health()).toEqual(beforeHealth);
+    // The accepted mutation write advances the last-known-good baseline (the
+    // config owner accepted it, so its result becomes the promotion baseline)
+    // while the anomaly marker stays cleared; the remaining observation facts
+    // only refresh on the next observed read below.
+    const afterWrite = health();
+    expect(afterWrite?.last_known_good_json).not.toBe(beforeHealth?.last_known_good_json);
+    expect(afterWrite?.last_observed_suspicious_signature).toBeNull();
     expect(audit()).toContainEqual(
       expect.objectContaining({ event: "config.write", configPath, result: "rename" }),
     );

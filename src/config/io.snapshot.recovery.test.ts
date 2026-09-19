@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import JSON5 from "json5";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -18,9 +20,14 @@ import {
   readConfigHealthStateFromStore,
 } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
+import {
+  promoteConfigSnapshotToLastKnownGoodCore,
+  recoverConfigFromLastKnownGoodCore,
+} from "./io.observe-recovery.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
+import type { ConfigFileSnapshot } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -395,5 +402,276 @@ describe("prepared config recovery", () => {
     expect(
       fs.readdirSync(root).filter((name) => name.startsWith("openclaw.json.clobbered.")),
     ).toHaveLength(1);
+  });
+});
+
+// Covers last-known-good promotion admission for suspicious snapshots (#152509).
+type ObserveRecoveryDeps = Parameters<typeof promoteConfigSnapshotToLastKnownGoodCore>[0]["deps"];
+
+const approveRecoveryCandidate = <T extends { raw: string; parsed: unknown }>(candidate: T) => ({
+  ok: true as const,
+  candidate,
+});
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
+
+describe("config observe recovery promotion", () => {
+  async function makeSnapshot(configPath: string, config: Record<string, unknown>) {
+    const raw = `${JSON.stringify(config, null, 2)}\n`;
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, raw, "utf-8");
+    return {
+      path: configPath,
+      exists: true,
+      raw,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      valid: true,
+      runtimeConfig: config,
+      config,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    } satisfies ConfigFileSnapshot;
+  }
+
+  function makeDeps(home: string, warn = vi.fn()) {
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    return {
+      deps: {
+        fs,
+        json5: JSON5,
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn },
+      } as unknown as ObserveRecoveryDeps,
+      configPath,
+      warn,
+    };
+  }
+
+  it("refuses to promote a suspicious snapshot over last-known-good", async () => {
+    const home = tempDirs.make("openclaw-config-lgg-promotion-");
+    const { deps, configPath, warn } = makeDeps(home);
+    const healthyConfig = {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      update: { channel: "beta" },
+      gateway: {
+        mode: "local" as const,
+        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
+      },
+    };
+    const healthy = await makeSnapshot(configPath, healthyConfig);
+
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
+    ).resolves.toBe(true);
+    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
+      healthy.raw,
+    );
+
+    const truncated = await makeSnapshot(configPath, { gateway: { mode: "local", port: 19187 } });
+
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: truncated,
+        logger: deps.logger,
+      }),
+    ).resolves.toBe(false);
+    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+      "Config last-known-good promotion skipped",
+    );
+    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+      "size-drop-vs-last-good",
+    );
+    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+      "missing-meta-vs-last-good",
+    );
+    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
+      healthy.raw,
+    );
+
+    const brokenRaw = "{ gateway: { mode: 123 } }\n";
+    await fsp.writeFile(configPath, brokenRaw, "utf-8");
+    const restored = await recoverConfigFromLastKnownGoodCore({
+      deps,
+      snapshot: {
+        ...truncated,
+        raw: brokenRaw,
+        parsed: { gateway: { mode: 123 } },
+        valid: false,
+        issues: [{ path: "gateway.mode", message: "Expected string" }],
+      },
+      reason: "test-suspicious-promotion",
+      prepareCandidate: approveRecoveryCandidate,
+    });
+
+    expect(restored).toBe(true);
+    await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(healthy.raw);
+  });
+
+  it("promotes a non-suspicious snapshot whose shape matches the baseline", async () => {
+    const home = tempDirs.make("openclaw-config-lgg-promotion-");
+    const { deps, configPath, warn } = makeDeps(home);
+    const healthy = await makeSnapshot(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      update: { channel: "beta" },
+      gateway: { mode: "local" as const },
+    });
+
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: deps.logger }),
+    ).resolves.toBe(true);
+
+    const edited = await makeSnapshot(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      update: { channel: "beta" },
+      gateway: { mode: "local" as const, port: 19187 },
+    });
+
+    await expect(
+      promoteConfigSnapshotToLastKnownGoodCore({
+        deps,
+        snapshot: edited,
+        logger: deps.logger,
+      }),
+    ).resolves.toBe(true);
+    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
+      "Config last-known-good promotion skipped",
+    );
+    await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
+      edited.raw,
+    );
+  });
+});
+
+describe("last-known-good promotion after accepted writes", () => {
+  function acceptedWriteFixture() {
+    const root = tempDirs.make("openclaw-config-lgg-accepted-write-");
+    const configPath = path.join(root, ".openclaw", "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const env = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      VITEST: "true",
+    } as NodeJS.ProcessEnv;
+    const io = createConfigIO({
+      env,
+      configPath,
+      homedir: () => root,
+      observe: false,
+      logger: { warn: vi.fn(), error: vi.fn() },
+    });
+    return { configPath, io };
+  }
+
+  function seedConfig(configPath: string, config: Record<string, unknown>): string {
+    const raw = `${JSON.stringify(config, null, 2)}\n`;
+    fs.writeFileSync(configPath, raw, "utf8");
+    return raw;
+  }
+
+  it("advances last-known-good after an accepted intentional size-drop write", async () => {
+    const { configPath, io } = acceptedWriteFixture();
+    const lastGoodPath = `${configPath}.last-good`;
+    seedConfig(configPath, {
+      meta: { lastTouchedVersion: "2026.4.22" },
+      gateway: { mode: "local" as const },
+      channels: {
+        telegram: {
+          enabled: true,
+          allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+        },
+      },
+    });
+
+    const healthySnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(healthySnapshot)).resolves.toBe(true);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(healthySnapshot.raw);
+
+    const acceptedWrite = await io.writeConfigFile(
+      { meta: { lastTouchedVersion: "2026.4.22" }, gateway: { mode: "local" } },
+      { allowConfigSizeDrop: true, baseSnapshot: healthySnapshot },
+    );
+    expect(acceptedWrite.persistedConfig.gateway).toEqual({ mode: "local" });
+
+    const reducedSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(reducedSnapshot)).resolves.toBe(true);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
+
+    seedConfig(configPath, { gateway: { mode: "local", port: 19187 } });
+    const truncatedSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
+  });
+
+  it("promotes an accepted formatting normalization over the verbose baseline", async () => {
+    const { configPath, io } = acceptedWriteFixture();
+    const lastGoodPath = `${configPath}.last-good`;
+    const original = {
+      meta: { lastTouchedVersion: "2026.4.23" },
+      gateway: { mode: "local" },
+      channels: {
+        telegram: {
+          enabled: true,
+          allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+        },
+      },
+    };
+    // Verbose PowerShell formatting (BOM + 12-space indent): canonical writes
+    // shrink raw bytes by more than half through serialization alone.
+    const powerShellRaw = `\uFEFF${JSON.stringify(original, null, 12)}\n`;
+    fs.writeFileSync(configPath, powerShellRaw, "utf8");
+
+    const verboseSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(verboseSnapshot)).resolves.toBe(true);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(powerShellRaw);
+
+    // An ordinary accepted edit without allowConfigSizeDrop: the writer's
+    // canonicalized size baseline records no drop, so the raw-byte shrink comes
+    // purely from formatting normalization.
+    await io.writeConfigFile(
+      { ...original, gateway: { mode: "local", port: 18789 } },
+      { baseSnapshot: verboseSnapshot },
+    );
+    const canonicalRaw = fs.readFileSync(configPath, "utf8");
+    expect(Buffer.byteLength(powerShellRaw, "utf8")).toBeGreaterThan(
+      Buffer.byteLength(canonicalRaw, "utf8") * 2,
+    );
+
+    // The accepted write advanced the last-known-good baseline, so the next
+    // startup promotes the edited canonical config instead of freezing the
+    // verbose one as the recovery target.
+    const editedSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(editedSnapshot)).resolves.toBe(true);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
+
+    // An external truncation afterwards never advances the baseline: promotion
+    // keeps refusing it, and recovery restores the edited canonical config.
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+      "utf8",
+    );
+    const truncatedSnapshot = await io.readConfigFileSnapshot();
+    await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
+    expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(canonicalRaw);
+
+    fs.writeFileSync(configPath, "{ gateway: { mode: 123 } }\n", "utf8");
+    const brokenSnapshot = await io.readConfigFileSnapshot();
+    await expect(
+      io.recoverConfigFromLastKnownGood({
+        snapshot: brokenSnapshot,
+        reason: "test-formatting-baseline",
+      }),
+    ).resolves.toBe(true);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(canonicalRaw);
   });
 });
