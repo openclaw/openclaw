@@ -37,6 +37,12 @@ export type SecretsPlanTarget = {
    */
   agentId?: string;
   /**
+   * Explicit auth-profile store owner. `"shared"` routes the target to the
+   * canonical shared state database, `"agent"` to the selected agent database.
+   * Omitted preserves legacy agent-database behavior; any other value is rejected.
+   */
+  authProfileStore?: string;
+  /**
    * For provider targets, used to scrub auth-profile/static residues.
    */
   providerId?: string;
@@ -48,10 +54,31 @@ export type SecretsPlanTarget = {
   authProfileProvider?: string;
 };
 
+/**
+ * Plan protocol revision accepted by every released reader: all targets write
+ * agent-local auth stores. Plans at this revision stay readable by older
+ * installations.
+ */
+export const SECRETS_PLAN_PROTOCOL_VERSION = 1;
+
+/**
+ * Protocol revision for plans that carry at least one shared-store target
+ * (`authProfileStore: "shared"`). Released readers only accept revision 1 and
+ * ignore `authProfileStore`, so they would apply such a target to the agent
+ * database and report success while leaving the shared store untouched.
+ * Emitting revision 2 makes an older installation reject the file instead.
+ */
+export const SECRETS_PLAN_SHARED_PROTOCOL_VERSION = 2;
+
+/** Accepted secrets apply plan protocol revisions. */
+export type SecretsPlanProtocolVersion =
+  | typeof SECRETS_PLAN_PROTOCOL_VERSION
+  | typeof SECRETS_PLAN_SHARED_PROTOCOL_VERSION;
+
 /** Serialized plan produced by `openclaw secrets configure` or supplied manually. */
 export type SecretsApplyPlan = {
   version: 1;
-  protocolVersion: 1;
+  protocolVersion: SecretsPlanProtocolVersion;
   generatedAt: string;
   generatedBy: "openclaw secrets configure" | "manual";
   providerUpserts?: Record<string, SecretProviderConfig>;
@@ -126,9 +153,16 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     return false;
   }
   const typed = value as Partial<SecretsApplyPlan>;
-  if (typed.version !== 1 || typed.protocolVersion !== 1 || !Array.isArray(typed.targets)) {
+  const protocolVersion = typed.protocolVersion;
+  if (
+    typed.version !== 1 ||
+    (protocolVersion !== SECRETS_PLAN_PROTOCOL_VERSION &&
+      protocolVersion !== SECRETS_PLAN_SHARED_PROTOCOL_VERSION) ||
+    !Array.isArray(typed.targets)
+  ) {
     return false;
   }
+  let usesSharedStore = false;
   for (const target of typed.targets) {
     if (!target || typeof target !== "object") {
       return false;
@@ -163,6 +197,13 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     ) {
       return false;
     }
+    if (
+      candidate.authProfileStore !== undefined &&
+      candidate.authProfileStore !== "agent" &&
+      candidate.authProfileStore !== "shared"
+    ) {
+      return false;
+    }
     if (resolved.entry.configFile === "auth-profile-store") {
       if (typeof candidate.agentId !== "string" || candidate.agentId.trim().length === 0) {
         return false;
@@ -174,7 +215,17 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       ) {
         return false;
       }
+      if (candidate.authProfileStore === "shared") {
+        usesSharedStore = true;
+      }
     }
+  }
+  // The protocol revision is the compatibility guard for shared ownership: an older
+  // reader accepts revision 1 and ignores `authProfileStore`, so a shared target must
+  // not be encodable there. Revision 2 in turn may only appear when a shared target
+  // is actually present, which keeps agent-local plans readable by older readers.
+  if (usesSharedStore !== (protocolVersion === SECRETS_PLAN_SHARED_PROTOCOL_VERSION)) {
+    return false;
   }
   if (typed.providerUpserts !== undefined) {
     if (!isObjectRecord(typed.providerUpserts)) {
