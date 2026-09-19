@@ -1779,6 +1779,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/security-sensitive-guard-script.test.ts",
         "test/scripts/security-review-script.test.ts",
         "test/scripts/security-review-event.test.ts",
+        // Last because its owner sits at the end of the guard-shared mapping entry, and
+        // the resolver concatenates matches in table order.
+        "test/scripts/guard-shared-api-retry.test.ts",
       ],
     );
 

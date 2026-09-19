@@ -2772,7 +2772,17 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "security-review-rollout",
     ],
   ],
-  [/^scripts\/github\/guard-shared\.mjs$/u, ["security-review-script", "security-review-event"]],
+  // The shared helper's own retry behaviour is covered by neither the guard suites nor the
+  // security-review ones, so name its test here too or a change to the status set runs
+  // nothing that asserts it.
+  [
+    /^scripts\/github\/guard-shared\.mjs$/u,
+    [
+      "security-review-script",
+      "security-review-event",
+      "test/scripts/guard-shared-api-retry.test.ts",
+    ],
+  ],
   [/^scripts\/plugin-clawhub-release-check\.ts$/u, ["release-wrapper-scripts"]],
   [
     /^scripts\/generate-runtime-sidecar-paths-baseline\.ts$/u,
