@@ -109,13 +109,9 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
     );
   }
 
-  private changeAttachments(
-    current: ChatAttachment[],
-    next: ChatAttachment[],
-    retained: ChatAttachment[] = [],
-  ) {
+  private changeAttachments(current: ChatAttachment[], next: ChatAttachment[]) {
     this.props.onAttachmentsChange?.(next);
-    releaseDisplacedChatAttachmentPayloads(current, [next, retained]);
+    releaseDisplacedChatAttachmentPayloads(current, [next]);
     this.props.onRequestUpdate?.();
   }
 
@@ -181,77 +177,18 @@ class ChatCommentController extends OpenClawLightDomContentsElement {
 
   private clearComments() {
     this.retireEditor();
-    const signal = this.props.readSignal;
-    const sessionKey = this.sessionKey;
-    const gatewayScope = this.props.gatewayScope;
-    const removed = currentChatComments(this.props, sessionKey);
+    const removed = currentChatComments(this.props, this.sessionKey);
     if (removed.length === 0) {
       return;
     }
     const ids = new Set(removed.map((item) => item.id));
     const current = this.currentAttachments();
-    const positions = current.flatMap((item, index) => (ids.has(item.id) ? [{ item, index }] : []));
     this.changeAttachments(
       current,
       current.filter((item) => !ids.has(item.id)),
-      removed,
     );
     this.focusComposer();
-
-    // The shared toast owns the bounded Undo lifetime, including replacement and teardown.
-    let settled = false;
-    const finalize = () => {
-      if (!settled) {
-        settled = true;
-        releaseDisplacedChatAttachmentPayloads(removed, [this.currentAttachments()]);
-      }
-    };
-    const presented = showToast({
-      message: t("chat.messages.annotationsRemoved"),
-      actionLabel: t("common.undo"),
-      onAction: () => {
-        if (settled) {
-          return;
-        }
-        if (
-          !this.canChange(signal) ||
-          this.sessionKey !== sessionKey ||
-          this.props.gatewayScope !== gatewayScope
-        ) {
-          finalize();
-          return;
-        }
-        settled = true;
-        const latest = this.currentAttachments();
-        const restored = [...latest];
-        for (const { item, index } of positions) {
-          if (!restored.some((attachment) => attachment.id === item.id)) {
-            restored.splice(Math.min(index, restored.length), 0, item);
-          }
-        }
-        this.changeAttachments(latest, restored);
-        this.focusFrame = requestAnimationFrame(() => {
-          this.focusFrame = undefined;
-          if (
-            this.canChange(signal) &&
-            this.sessionKey === sessionKey &&
-            this.props.gatewayScope === gatewayScope
-          ) {
-            focusWithoutTooltip(
-              this.root?.querySelector<HTMLElement>(".chat-selection-annotations__trigger"),
-            );
-          }
-        });
-      },
-      onDismiss: (reason) => {
-        if (reason !== "action") {
-          finalize();
-        }
-      },
-    });
-    if (!presented) {
-      finalize();
-    }
+    showToast({ message: t("chat.messages.annotationsRemoved") });
   }
 
   private deleteComment(id: string, preview: HTMLElement | null = null) {

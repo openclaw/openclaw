@@ -207,21 +207,9 @@ suite.define(() => {
           .toBe(true);
         expect(await composer.inputValue()).toBe("Preserve the draft.");
         const toast = page.getByRole("status").filter({ hasText: "Comments removed" });
-        await toast.getByRole("button", { name: "Undo", exact: true }).click();
-        await expect.poll(() => chip.textContent()).toContain("1 comment");
-        await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        await trigger.press("Enter");
-        await preview.waitFor({ state: "visible" });
-        expect(await preview.textContent()).toContain("Second note");
-        expect(await preview.textContent()).not.toContain("First note");
-        await clear.click();
-        await chip.waitFor({ state: "detached" });
-        await expect
-          .poll(() => composer.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        expect(await composer.inputValue()).toBe("Preserve the draft.");
+        await toast.waitFor({ state: "visible" });
+        await page.screenshot({ path: `${suite.artifactDir}/comments-cleared.png` });
+        expect(await toast.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         expect((request.params as { attachments?: unknown[] }).attachments ?? []).toHaveLength(0);
