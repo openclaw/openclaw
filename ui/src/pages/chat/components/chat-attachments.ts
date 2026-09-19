@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { isMobileNavLayout } from "../../../app/mobile-nav-layout.ts";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
@@ -411,20 +412,23 @@ export function renderChatAttachmentMenuTrigger(
 }
 
 export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
-  return html`
-    <wa-dropdown-item class="agent-chat__attach-menu-option" value="camera">
-      <span slot="icon" aria-hidden="true">${icons.camera}</span>
-      <span>${t("chat.composer.takePhoto")}</span>
-    </wa-dropdown-item>
-    <wa-dropdown-item class="agent-chat__attach-menu-option" value="photo">
-      <span slot="icon" aria-hidden="true">${icons.image}</span>
-      <span>${t("chat.composer.attachPhoto")}</span>
-    </wa-dropdown-item>
-    <wa-dropdown-item class="agent-chat__attach-menu-option" value="file">
-      <span slot="icon" aria-hidden="true">${fileIcon}</span>
-      <span>${t("chat.composer.attachFileOption")}</span>
-    </wa-dropdown-item>
-  `;
+  // The compact layout leaves source selection to the existing generic native input.
+  const compact = isMobileNavLayout();
+  const options = compact
+    ? [{ value: "file", icon: fileIcon, label: t("chat.composer.attach") }]
+    : [
+        { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
+        { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
+        { value: "file", icon: fileIcon, label: t("chat.composer.attachFileOption") },
+      ];
+  return options.map(
+    ({ value, icon, label }) => html`
+      <wa-dropdown-item class="agent-chat__attach-menu-option" value=${value}>
+        <span slot="icon" aria-hidden="true">${icon}</span>
+        <span>${label}</span>
+      </wa-dropdown-item>
+    `,
+  );
 }
 
 function removeBrowserAnnotationAttachment(
