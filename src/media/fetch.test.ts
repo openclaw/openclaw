@@ -649,6 +649,91 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("retries 429 rate-limit responses when retry is enabled", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("rate limited", { status: 429, statusText: "Too Many Requests" }),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const result = await readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(result.buffer.toString()).toBe("ok");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors the Retry-After delay before retrying a 429 response", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "5" },
+          }),
+        )
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+
+      // The 429 must not be retried until the origin's Retry-After delay elapses.
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a caller-provided retryAfterMs callback for unheaded retries", async () => {
+    vi.useFakeTimers();
+    try {
+      // No Retry-After header on the 503, so the built-in parser returns nothing.
+      // The caller's explicit 10s pacing must still be honored instead of being
+      // replaced by the generic (zero in this config) backoff.
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+        .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+      const retryAfterMs = vi.fn(() => 10_000);
+
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0, retryAfterMs },
+      });
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(retryAfterMs).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ buffer: Buffer.from("ok") });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries transient response body read failures when retry is enabled", async () => {
     const transientError = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     const fetchImpl = vi
