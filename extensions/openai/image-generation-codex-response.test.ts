@@ -101,6 +101,8 @@ describe("Codex image response diagnostics", () => {
             {
               type: "image_generation_call",
               result: image.toString("base64"),
+              size: "941x1672",
+              quality: "medium",
               status: null,
               revised_prompt: null,
               content: null,
@@ -111,7 +113,12 @@ describe("Codex image response diagnostics", () => {
       },
     ]);
     expect(result.images).toEqual([
-      { buffer: image, mimeType: "image/png", fileName: "image-1.png" },
+      {
+        buffer: image,
+        mimeType: "image/png",
+        fileName: "image-1.png",
+        metadata: { size: "941x1672", quality: "medium" },
+      },
     ]);
     expect(result.metadata).toMatchObject({ usage: { total_tokens: 1 } });
   });

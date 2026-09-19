@@ -19,6 +19,8 @@ const contentSchema = z.object({
 const itemSchema = contentSchema.extend({
   result: z.string().nullish(),
   revised_prompt: z.string().nullish(),
+  size: z.string().nullish(),
+  quality: z.string().nullish(),
   status: z.string().nullish(),
   content: z.array(contentSchema).nullish(),
 });
@@ -185,16 +187,23 @@ function toCodexImage(
   if (typeof entry.result !== "string" || entry.result.length === 0) {
     return null;
   }
+  const metadata =
+    entry.size != null || entry.quality != null
+      ? {
+          ...(entry.size != null ? { size: entry.size } : {}),
+          ...(entry.quality != null ? { quality: entry.quality } : {}),
+        }
+      : undefined;
   return Object.assign(
     {
       buffer: decodeCodexImagePayload(entry.result),
       mimeType: output.mimeType,
       fileName: `image-${index + 1}.${output.extension}`,
+      ...(metadata ? { metadata } : {}),
     },
     entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
   );
 }
-
 export async function readCodexImageGenerationResponse(
   response: Response,
   params: { model: string; mimeType: string; extension: string },
