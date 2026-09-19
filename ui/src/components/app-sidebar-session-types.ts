@@ -46,12 +46,6 @@ export type SidebarSessionAttention =
   | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
   | { kind: "error"; reason: string; childLabel?: string };
 
-/** Client-owned attention that can name a session before its row is loaded. */
-export type SidebarKnownSessionAttention = {
-  sessionKey: string;
-  attention: Extract<SidebarSessionAttention, { kind: "question" } | { kind: "approval" }>;
-};
-
 export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
 
 function sidebarSessionAttentionPriority(attention: SidebarSessionAttention): number {
@@ -161,17 +155,12 @@ export type SidebarRecentSession = {
   attention: SidebarSessionAttention;
   /** Own attention remains distinct from the collapsed-tree projection. */
   ownAttention?: SidebarSessionAttention;
-  childAttention?: readonly SidebarSessionAttention[];
   unreadChildCount?: number;
   queuedChildCount?: number;
   /** Hidden run state remains visible when persistent children are expanded. */
   subagentSummary?: Pick<
     SidebarRecentSession,
-    | "childAttention"
-    | "unreadChildCount"
-    | "queuedChildCount"
-    | "runningChildCount"
-    | "failedChildCount"
+    "attention" | "unreadChildCount" | "queuedChildCount" | "runningChildCount" | "failedChildCount"
   >;
   agentStatusNote?: string;
   observerDigest?: Pick<

@@ -47,7 +47,6 @@ import {
   findSidebarMainSessionRow,
   findProjectedSidebarSession,
   resolveActiveSidebarAgent,
-  resolveSidebarHomeAttention,
   resolveLatestSidebarAgentSession,
   resolveSidebarAgentResumeKey,
   resolveSidebarMainSessionKey,
@@ -252,6 +251,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   }
 
   protected override willUpdate(changedProperties: PropertyValues<this>) {
+    this.resolveSessionAttention = this.attention.createResolver();
     if (this.emptyGroups.reconcile() && this.sidebarMenus.sessionSortMenuPosition) {
       this.sidebarMenus.closeSessionSortMenu();
     }
@@ -336,7 +336,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       loadingChildSessionKeys: this.sessionData.loadingChildSessionKeys,
       outboxAttentionCountForSessionKey: this.outboxAttentionCountForSession,
       hasSessionDraft: (sessionKey) => this.hasSessionDraft(sessionKey),
-      resolveAttention: (row) => this.attention.resolveSessionAttention(row),
+      resolveAttention: this.resolveSessionAttention,
       resolveAgentStatusNote: (row) => this.attention.resolveSessionAgentStatus(row)?.note,
     });
     if (this.groupedSessionSource) {
@@ -692,7 +692,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       agentIds: roster?.agentIds ?? [selected],
       result: roster?.result,
       compareSessions: createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
-      knownSessionAttention: this.attention.knownSessionAttention(),
+      resolveAttention: this.resolveSessionAttention,
     });
     return this.applySessionOwnerFilter(projected, this.selectedAgentSessionResult()?.owners);
   }
@@ -716,9 +716,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
   }
 
-  resolveHomeSessionAttention(sessionKey: string, row: GatewaySessionRow | null) {
-    return resolveSidebarHomeAttention(this.attention, sessionKey, row);
-  }
+  resolveSessionAttention = this.attention.createResolver();
 
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession {
     const { rows, childSessionRowsByParent } = projectSidebarArchiveVisibility({
@@ -731,18 +729,15 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const navigation = this.getSessionNavigationState();
     // Home consumes the same descendant fold without adding a second main row.
     return projectSessionTree({
-      roots: [row],
+      roots: [{ ...row, agentId }],
       mainSessionKeys: new Set([row.key, this.selectedAgentMainSessionKey(agentId)]),
       rowsByKey: collectSidebarSessionRowsByKey({
         rows,
         childRowsByParent: childSessionRowsByParent,
       }),
       loadingChildKeys: this.sessionData.loadingChildSessionKeys,
-      knownSessionAttention: this.attention.knownSessionAttention(),
-      toSidebarSession: (session, isChild) => ({
-        ...navigation.toSidebarSession(session, isChild),
-        ...(!isChild ? { attention: this.resolveHomeSessionAttention(row.key, row) } : {}),
-      }),
+      resolveAttention: this.resolveSessionAttention,
+      toSidebarSession: navigation.toSidebarSession,
     })[0]!;
   }
 

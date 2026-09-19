@@ -5,6 +5,7 @@ import { isBrowserPanelSurfaceAvailable } from "../../app/panel-availability.ts"
 import {
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
+  type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
@@ -19,6 +20,7 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
@@ -38,6 +40,7 @@ import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.t
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   refreshChatModelAuthStatus,
   refreshPageChat,
@@ -63,6 +66,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   private gatewayConnectionLifecycle?: ReturnType<typeof createGatewayConnectionLifecycle>;
   private outboxRecoveryReady = false;
   private sidebarLayoutSource?: { client: ApplicationGatewaySnapshot["client"]; ready: boolean };
+  private questionProjection: { prompts: QuestionPrompt[]; revisions: number[] } = {
+    prompts: [],
+    revisions: [],
+  };
   // Capability identity matters because a replacement restarts its canonical revision at zero.
   private canonicalSessionList?: {
     sessions: ApplicationContext["sessions"];
@@ -272,6 +279,40 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       return false;
     }
     return reconcileWaitingApprovalsFromSnapshot(state, queue);
+  }
+
+  protected projectConversationAttention(state: ChatPageHost, agentId: string, visible: boolean) {
+    const matchesConversation = (request: {
+      sessionKey?: string | null;
+      agentId?: string | null;
+    }) =>
+      uiConversationMatches(state, state.sessionKey, request.sessionKey, request.agentId, agentId);
+    const questions = visible ? this.questionPrompts.filter(matchesConversation) : [];
+    // Question records mutate in place; their revisions own transcript-cache invalidation.
+    if (
+      questions.length !== this.questionProjection.prompts.length ||
+      questions.some(
+        (prompt, index) =>
+          prompt !== this.questionProjection.prompts[index] ||
+          prompt.revision !== this.questionProjection.revisions[index],
+      )
+    ) {
+      this.questionProjection = {
+        prompts: questions,
+        revisions: questions.map((prompt) => prompt.revision),
+      };
+    }
+    return {
+      gatewayQuestionPrompts: this.questionProjection.prompts,
+      // Session replay already owns the parent's presentation scope for delegated approvals.
+      inlineApproval: visible
+        ? (state.chatSessionApprovalQueue?.[0] ??
+          this.context.overlays?.snapshot?.approvalQueue?.find((approval) =>
+            matchesConversation(approval.request),
+          ) ??
+          null)
+        : null,
+    };
   }
 
   protected applyApplicationConfig(config: ApplicationContext["config"]["current"]) {

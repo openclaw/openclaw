@@ -1,4 +1,3 @@
-import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
@@ -10,10 +9,7 @@ export function resolveComposerQuestionPanel(
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
-        props.disabledBanner?.kind !== "composer-replacement" &&
-        prompt.status === "pending" &&
-        prompt.sessionKey !== undefined &&
-        areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey),
+        props.disabledBanner?.kind !== "composer-replacement" && prompt.status === "pending",
     ) ?? [];
   let gatewayQuestionIndex = gatewayQuestionPrompts.findIndex(
     (prompt) => prompt.id === state.activeGatewayQuestionId,

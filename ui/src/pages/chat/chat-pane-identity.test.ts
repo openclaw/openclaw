@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -240,7 +241,7 @@ describe("chat pane approval requester identity", () => {
       derivedTitle: "Presentation session derived title",
     } satisfies GatewaySessionRow;
     const source = {
-      key: "agent:main:dashboard:11111111-2222-4333-8444-555555555555",
+      key: "agent:research:dashboard:11111111-2222-4333-8444-555555555555",
       kind: "direct",
       updatedAt: 1,
     } satisfies GatewaySessionRow;
@@ -296,7 +297,7 @@ describe("chat pane approval requester identity", () => {
               severity: "warning",
               pluginId: "test-plugin",
               toolName: null,
-              agentId: "main",
+              agentId: "research",
               allowedDecisions: ["allow-once", "deny"],
             },
           },
@@ -438,7 +439,7 @@ function createGlobalFeaturePane(
     };
     gateway.emitTestEvent({ type: "event", event: "progressCard.changed", payload, seq: 1 });
   };
-  return { pane, select, emit };
+  return { pane, select, emit, context };
 }
 
 function globalProgressCard(agentId: string, revision = 1): ProgressCard {
@@ -452,6 +453,125 @@ function globalProgressCard(agentId: string, revision = 1): ProgressCard {
 }
 
 describe("global chat pane feature ownership", () => {
+  it.each([
+    ["global", "research"],
+    ["main", "research"],
+    ["agent:research:main", undefined],
+  ] as const)(
+    "scopes question cards, terminal summaries and inline approvals for %s/%s",
+    async (sessionKey, agentId) => {
+      const { pane, select, context } = createGlobalFeaturePane(() => ({}), []);
+      const now = Date.now();
+      const approval = (
+        id: string,
+        target: { sessionKey?: string; agentId?: string },
+      ): ExecApprovalRequest => ({
+        id,
+        kind: "exec",
+        request: { command: id, ...target },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      });
+      Object.assign(context, {
+        overlays: {
+          snapshot: {
+            approvalQueue: [
+              approval("unscoped", {}),
+              approval("research-oldest", { sessionKey, agentId }),
+              approval("research-newest", { sessionKey, agentId }),
+              approval("other-session", { sessionKey: "agent:research:other" }),
+            ],
+            approvalCanGrant: true,
+            approvalBusy: false,
+            approvalErrors: new Map(),
+          },
+          decideApproval: vi.fn(),
+          subscribe: () => () => undefined,
+        },
+      });
+      for (const [id, target] of [
+        ["research-question", { sessionKey, agentId }],
+        ["unscoped-question", {}],
+        ["other-session-question", { sessionKey: "agent:research:other" }],
+      ] as const) {
+        pane.receiveQuestionEvent({
+          event: "question.requested",
+          payload: {
+            id,
+            ...target,
+            createdAtMs: now,
+            expiresAtMs: now + 60_000,
+            status: "pending",
+            questions: [{ questionId: "review", header: "Research", question: id, options: [] }],
+          },
+        });
+      }
+      const container = document.body.appendChild(document.createElement("div"));
+      const draw = async () => {
+        await pane.updateComplete;
+        render(renderChat(pane.chatProps!), container);
+        await (
+          container.querySelector("openclaw-chat-question-panel") as
+            | (HTMLElement & {
+                updateComplete?: Promise<unknown>;
+              })
+            | null
+        )?.updateComplete;
+      };
+      const expectStableQuestions = async () => {
+        const previous = pane.chatProps?.gatewayQuestionPrompts;
+        pane.requestUpdate();
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
+      };
+      try {
+        select("main");
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toEqual([]);
+        expect(container.querySelector(".chat-question-panel, .chat-inline-approval")).toBeNull();
+        await expectStableQuestions();
+
+        select("research");
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts?.map((prompt) => prompt.id)).toEqual([
+          "research-question",
+        ]);
+        expect(container.querySelector(".chat-question-panel")?.textContent).toContain(
+          "research-question",
+        );
+        expect(
+          container
+            .querySelector(".chat-inline-approval [data-approval-id]")
+            ?.getAttribute("data-approval-id"),
+        ).toBe("research-oldest");
+        await expectStableQuestions();
+        const pendingQuestions = pane.chatProps?.gatewayQuestionPrompts;
+        pane.receiveQuestionEvent({
+          event: "question.resolved",
+          payload: { id: "other-session-question", status: "expired" },
+        });
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(pendingQuestions);
+        pane.receiveQuestionEvent({
+          event: "question.resolved",
+          payload: { id: "research-question", status: "cancelled" },
+        });
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
+        expect(container.querySelector(".chat-question-panel")).toBeNull();
+        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
+        await expectStableQuestions();
+
+        select("main");
+        await draw();
+        expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
+      } finally {
+        render(html``, container);
+        container.remove();
+      }
+    },
+  );
+
   it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {

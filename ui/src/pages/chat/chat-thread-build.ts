@@ -27,7 +27,6 @@ import {
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
@@ -595,11 +594,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (const prompt of props.questionPrompts ?? []) {
     // Pending questions live in the composer dock. Their terminal summaries are
     // timestamped transient projections, so keep their historical placement.
-    if (
-      prompt.status === "pending" ||
-      !prompt.sessionKey ||
-      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
-    ) {
+    if (prompt.status === "pending") {
       continue;
     }
     const questionItem: ChatItem = {

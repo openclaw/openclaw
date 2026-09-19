@@ -24,6 +24,10 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  disposeQuestionPromptState,
+  handleQuestionPromptEvent,
+} from "../../app/question-prompt.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
@@ -587,6 +591,15 @@ export function offlineDeviceSession(): GatewaySessionRow & { placement: ActiveP
 
 class RenderTestChatPane extends ChatPane {
   chatProps: ChatProps | undefined;
+
+  constructor() {
+    super();
+    onTestFinished(() => disposeQuestionPromptState(this.questionPromptState));
+  }
+
+  receiveQuestionEvent(event: Pick<GatewayEventFrame, "event" | "payload">) {
+    handleQuestionPromptEvent(this.questionPromptState, event);
+  }
 
   initialize(context: ApplicationContext) {
     this.context = context;

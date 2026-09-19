@@ -51,7 +51,6 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      | "approvalBadgeSnapshot"
       | "presenceInstanceId"
       | "presencePayload"
       | "sessionResultsByAgent"

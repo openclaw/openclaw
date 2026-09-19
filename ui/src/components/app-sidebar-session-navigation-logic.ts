@@ -44,34 +44,14 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
-  summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionAttentionController } from "./session-attention-controller.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
-
-export function resolveSidebarHomeAttention(
-  attention: SessionAttentionController,
-  sessionKey: string,
-  row: GatewaySessionRow | null,
-) {
-  const known = summarizeSidebarSessionAttention(
-    attention
-      .knownSessionAttention()
-      .filter((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey))
-      .map((entry) => entry.attention),
-  );
-  return known.kind !== "none"
-    ? known
-    : row
-      ? attention.resolveSessionAttention(row)
-      : SIDEBAR_SESSION_NO_ATTENTION;
-}
 
 type SidebarSessionSortOptions = {
   sortMode: SidebarSessionSortMode;

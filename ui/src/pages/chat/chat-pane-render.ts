@@ -1,6 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -132,9 +131,6 @@ export class ChatPane extends ChatPaneLayoutRender {
     const currentAgentId = resolveChatAgentId(state);
     const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
-    const inlineApproval =
-      findInlineApproval(state.chatSessionApprovalQueue ?? [], state.sessionKey) ??
-      findInlineApproval(overlays?.snapshot?.approvalQueue ?? [], state.sessionKey);
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     );
@@ -368,6 +364,11 @@ export class ChatPane extends ChatPaneLayoutRender {
     const mentionsUnsupported = Boolean(
       catalogKey || suggestionViewer || selectedSession?.incognito || !selfProfileId,
     );
+    const { gatewayQuestionPrompts, inlineApproval } = this.projectConversationAttention(
+      state,
+      currentAgentId,
+      !catalogKey && !sessionParticipationBlocked,
+    );
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
@@ -413,10 +414,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.transcript.cancelScroll();
       },
       onDismissProgressCard,
-      gatewayQuestionPrompts:
-        catalogKey || sessionParticipationBlocked
-          ? this.emptyTranscriptItems
-          : this.questionPrompts,
+      gatewayQuestionPrompts,
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
@@ -493,7 +491,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       error: state.lastError,
       diskSpace: placementComposer.diskSpace,
       runError: catalogKey ? null : (state.chatRunError ?? placementComposer.runError),
-      inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
+      inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
       approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,

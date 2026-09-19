@@ -23,7 +23,6 @@ import {
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type {
-  SidebarKnownSessionAttention,
   SidebarRecentSession,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
@@ -50,7 +49,7 @@ export function projectSidebarAgentSessionRows({
   agentIds,
   result,
   compareSessions,
-  knownSessionAttention,
+  resolveAttention,
 }: {
   host: AgentSessionRowsHost;
   navigationState: SidebarSessionNavigationState;
@@ -58,7 +57,7 @@ export function projectSidebarAgentSessionRows({
   agentIds: readonly string[];
   result?: SessionsListResult | null;
   compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
-  knownSessionAttention: readonly SidebarKnownSessionAttention[];
+  resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarRecentSession[] {
   const grouped = result !== undefined;
   const defaultAgentId = resolveUiDefaultAgentId({
@@ -278,7 +277,7 @@ export function projectSidebarAgentSessionRows({
     ),
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
-    knownSessionAttention,
+    resolveAttention,
     toSidebarSession: navigationState.toSidebarSession,
   });
   if (

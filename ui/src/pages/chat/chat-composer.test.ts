@@ -1028,19 +1028,6 @@ describe("renderChatComposer status", () => {
     expect(panel.props.model.requestPosition).toEqual({ current: 2, total: 2 });
   });
 
-  it("keeps unscoped and other-session gateway questions out of the composer", () => {
-    const unscopedPrompt = questionPrompt("question-1", "Unscoped prompt");
-    unscopedPrompt.sessionKey = undefined;
-    const otherSessionPrompt = questionPrompt("question-2", "Other prompt");
-    otherSessionPrompt.sessionKey = "agent:other:main";
-
-    const view = renderComposer({
-      sessionKey: "queue-test",
-      gatewayQuestionPrompts: [unscopedPrompt, otherSessionPrompt],
-    });
-
-    expect(view.container.querySelector("openclaw-chat-question-panel")).toBeNull();
-  });
   it("floats a fresh interrupted status above the composer", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let view = renderComposer({
