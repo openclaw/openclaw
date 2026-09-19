@@ -1,7 +1,7 @@
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";

@@ -141,10 +141,40 @@ function createFixture(options: { manifestOwner?: boolean } = {}) {
         ...overrides,
       }),
     );
-  return { cfg, defaults, custom, store, entry, inventory, select };
+  return { cfg, defaults, custom, store, entry, inventory, registry, select };
 }
 
 describe("command selection with configured model facts", () => {
+  it("preserves an explicit CLI route across resumed command turns and a later API selection", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["custom-cli/child", "custom/child"] };
+    const select = () => fixture.select({ pluginsEnabled: false, requestedThinkLevel: "off" });
+    fixture.registry.cliBackends.push({
+      pluginId: "custom",
+      source: "fixture",
+      backend: {
+        id: "custom-cli",
+        modelProvider: "custom",
+        config: { command: "custom-cli" },
+      },
+    });
+    fixture.inventory.mockReturnValue([catalogEntry("custom-cli", "child")]);
+    fixture.store[sessionKey] = {
+      sessionId: "configured-child",
+      updatedAt: 1,
+      providerOverride: "custom-cli",
+      modelOverride: "child",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+    };
+
+    expect(await select()).toMatchObject({ provider: "custom-cli", model: "child" });
+    fixture.entry().cliSessionBindings = { "custom-cli": { sessionId: "native-command-session" } };
+    expect(await select()).toMatchObject({ provider: "custom-cli", model: "child" });
+    fixture.entry().providerOverride = "custom";
+    expect(await select()).toMatchObject({ provider: "custom", model: "child" });
+  });
+
   it("retains a resolved self-origin child outside manual policy without manifest inventory", async () => {
     const fixture = createFixture();
     const before = structuredClone({ cfg: fixture.cfg, store: fixture.store });

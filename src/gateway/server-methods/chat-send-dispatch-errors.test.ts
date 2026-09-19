@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
@@ -25,6 +26,9 @@ import {
   createChatSendDispatchErrorLifecycle,
   handleChatSendSetupError,
 } from "./chat-send-dispatch-errors.js";
+
+const policyMessage =
+  "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
 
 describe("handleChatSendSetupError", () => {
   it("returns typed projection setup failures to the client retry owner without a terminal broadcast", async () => {
@@ -79,15 +83,37 @@ describe("handleChatSendSetupError", () => {
 
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
-    { settlement: "fallback", missingProfile: false },
-    { settlement: "restart-safe", missingProfile: false },
-    { settlement: "fallback", missingProfile: true },
-    { settlement: "restart-safe", missingProfile: true },
-    { settlement: "fallback", missingProfile: false, sessionChanged: true },
-    { settlement: "restart-safe", missingProfile: false, sessionChanged: true },
+    { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
+    {
+      settlement: "restart-safe",
+      missingProfile: false,
+      policyFailure: false,
+      sessionChanged: false,
+    },
+    { settlement: "fallback", missingProfile: true, policyFailure: false, sessionChanged: false },
+    {
+      settlement: "restart-safe",
+      missingProfile: true,
+      policyFailure: false,
+      sessionChanged: false,
+    },
+    { settlement: "fallback", missingProfile: false, policyFailure: true, sessionChanged: false },
+    {
+      settlement: "restart-safe",
+      missingProfile: false,
+      policyFailure: true,
+      sessionChanged: false,
+    },
+    { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: true },
+    {
+      settlement: "restart-safe",
+      missingProfile: false,
+      policyFailure: false,
+      sessionChanged: true,
+    },
   ])(
-    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, session changed: $sessionChanged)",
-    async ({ settlement, missingProfile, sessionChanged }) => {
+    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
+    async ({ settlement, missingProfile, policyFailure, sessionChanged }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const target = {
           agentId: "main",
@@ -198,7 +224,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
                 provider: "openai",
                 modelId: "fixture-model",
               })
-            : new Error("Cloud worker unavailable");
+            : policyFailure
+              ? new AgentHarnessPreflightError("private-policy-diagnostic", {
+                  userMessage: policyMessage,
+                })
+              : new Error("Cloud worker unavailable");
         await lifecycle.handleError(failure);
         expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
@@ -249,6 +279,16 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           );
           expect(loadSessionEntry(target)?.lastRunError).toMatch(/^Your message didn't run/);
           expect(JSON.stringify(messages)).toContain(recovery);
+        }
+        if (policyFailure) {
+          expect(loadSessionEntry(target)?.lastRunError).toBe(policyMessage);
+          expect(JSON.stringify(messages)).toContain(policyMessage);
+          expect(JSON.stringify(messages)).not.toContain("private-policy-diagnostic");
+          expect(broadcast).toHaveBeenLastCalledWith(
+            "chat",
+            expect.objectContaining({ errorMessage: policyMessage }),
+            expect.anything(),
+          );
         }
         if (restartSafe) {
           expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);

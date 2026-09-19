@@ -34,6 +34,7 @@ import {
 } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { registerSessionSandboxMutationTests } from "./sessions-mutations.sandbox.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type {
   GatewayClient,
@@ -110,6 +111,8 @@ async function invoke(params: {
   }
   return { authorization, requestContext, responses };
 }
+
+registerSessionSandboxMutationTests({ client, context });
 
 describe("sessions.patch", () => {
   it("saves and reads dashboard defaults through the agent tool without connected clients", async () => {

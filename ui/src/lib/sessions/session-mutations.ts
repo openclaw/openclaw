@@ -433,6 +433,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
           return null;
         }
       }
+      if (options.canDispatch?.() === false) {
+        settleOptimisticPatch(false);
+        return null;
+      }
       startOptimisticPatch();
       if (Object.hasOwn(patchParams, "permissionMode")) {
         permissionProjection = host.claimPermissionProjection(
@@ -660,6 +664,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
+  const dispose = () => {
+    pendingCreatedModelOverrides.clear();
+    pendingModelPatches.clear();
+    optimisticCategories.clear();
+    optimisticPins.clear();
+    optimisticUnread.clear();
+    archiveState.clearAll();
+    preparedWorkSessionKeys.clear();
+  };
+
   return {
     create,
     createResult,
@@ -725,27 +739,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
     },
     retireConnection() {
-      pendingCreatedModelOverrides.clear();
-      pendingModelPatches.clear();
       // Row intents live inside `result`, which the replacement connection
       // rehydrates wholesale; only the model-override side map outlives that
       // replacement, so it is the one that needs an explicit rollback below.
-      optimisticCategories.clear();
-      optimisticPins.clear();
-      optimisticUnread.clear();
-      archiveState.clearAll();
-      preparedWorkSessionKeys.clear();
+      dispose();
       const state = host.readState();
       host.publish({ ...state, modelOverrides: {} });
     },
-    dispose() {
-      pendingCreatedModelOverrides.clear();
-      pendingModelPatches.clear();
-      optimisticCategories.clear();
-      optimisticPins.clear();
-      optimisticUnread.clear();
-      archiveState.clearAll();
-      preparedWorkSessionKeys.clear();
-    },
+    dispose,
   };
 }

@@ -11,7 +11,10 @@ import {
   getPreparedModelRuntimeAuthStore,
   setPreparedModelRuntimeAuthStore,
 } from "../../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -37,15 +40,17 @@ const replacementCfg = {
 } as OpenClawConfig;
 
 beforeEach(() => {
-  vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
-    (params) => {
+  vi.spyOn(preparedCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot").mockImplementation(
+    async (params) => {
       if (!params?.config) {
         throw new Error("A catalog read must retain its config");
       }
       const preset = catalogMocks.getPreparedOwner(params);
       const modelCatalog = preset?.modelCatalog ?? catalogMocks.readSnapshot(params);
       if (!modelCatalog) {
-        return undefined;
+        throw new PreparedModelRuntimeOwnerNotPublishedError(
+          "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+        );
       }
       const owner: PreparedModelRuntimeSnapshot = {
         catalogOwner: {
@@ -75,7 +80,7 @@ beforeEach(() => {
       };
       const retainedAuth = preset ? getPreparedModelRuntimeAuthStore(preset) : undefined;
       setPreparedModelRuntimeAuthStore(owner, retainedAuth ?? catalogMocks.authStore);
-      return owner;
+      return preparedCatalog.materializePreparedModelCatalogOwner(owner);
     },
   );
 });
@@ -364,8 +369,10 @@ describe("/models browse catalog recovery", () => {
   );
 
   it("returns visible not-ready guidance from the public models command", async () => {
-    vi.mocked(preparedCatalog.getPublishedPreparedModelCatalogOwnerSnapshot).mockReturnValueOnce(
-      undefined,
+    vi.mocked(preparedCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot).mockRejectedValueOnce(
+      new PreparedModelRuntimeOwnerNotPublishedError(
+        "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
+      ),
     );
     await expect(
       resolveModelsCommandReply({ cfg: staleCfg, commandBodyNormalized: "/models" }),

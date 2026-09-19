@@ -16,7 +16,7 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
   installGatewaySessionsTestResources,
@@ -591,24 +591,6 @@ export async function directSessionReq<TPayload = unknown>(
 }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const loadGatewayModelCatalog =
-    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
-    (async () => agentDiscoveryMock.models);
-  const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
-    (opts?.context
-      ?.loadGatewayModelCatalogSnapshot as GatewayRequestContext["loadGatewayModelCatalogSnapshot"]) ??
-    (async (request) => {
-      const entries = await loadGatewayModelCatalog(request);
-      return {
-        entries,
-        routeVariants: entries,
-        agentId: request?.agentId ?? "main",
-        agentDir: "/tmp/session-catalog-agent",
-        workspaceDir: "/tmp/session-catalog-workspace",
-        config: getRuntimeConfig(),
-        catalogComplete: true,
-      };
-    });
   let result:
     | {
         ok: boolean;
@@ -620,22 +602,19 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
-  const contextFields = {
-    ...createDirectChatContext(),
+  const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
-    loadGatewayModelCatalog,
-    loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog: async () => {
-      const catalog = await loadGatewayModelCatalogSnapshot();
+      const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     },
     getRuntimeConfig,
     ...opts?.context,
-  };
+  });
   const contextKey = opts?.context ?? defaultDirectContext;
   const context = directContexts.get(contextKey) ?? createDirectChatContext();
   Object.assign(context, contextFields);

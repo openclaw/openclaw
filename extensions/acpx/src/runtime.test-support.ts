@@ -1,6 +1,11 @@
+import type {
+  AcpxRuntime as UpstreamRuntime,
+  AcpSessionRecord,
+  AcpSessionStore,
+} from "acpx/runtime";
 import { vi } from "vitest";
 import type { AcpRuntime } from "../runtime-api.js";
-import { AcpxRuntime, type AcpSessionRecord, type AcpSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 import { resolveAcpxSessionResource } from "./session-owner.js";
 
 export type TestSessionStore = {
@@ -23,7 +28,7 @@ export function makeRuntime(
     close: AcpRuntime["close"];
     ensureSession: AcpRuntime["ensureSession"];
     startTurn: NonNullable<AcpRuntime["startTurn"]>;
-    getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
+    getCapabilities: UpstreamRuntime["getCapabilities"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setMode: NonNullable<AcpRuntime["setMode"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -62,7 +67,7 @@ export function makeRuntime(
           close: AcpRuntime["close"];
           ensureSession: AcpRuntime["ensureSession"];
           startTurn: NonNullable<AcpRuntime["startTurn"]>;
-          getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
+          getCapabilities: UpstreamRuntime["getCapabilities"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setMode: NonNullable<AcpRuntime["setMode"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;

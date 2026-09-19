@@ -38,6 +38,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionResetBoundaryRequest } from "../../config/sessions/session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -360,23 +361,6 @@ export function resolveReplySessionPreprocessingState(
   };
 }
 
-/** Initializes or reuses the reply session state for one inbound turn. */
-type SessionModelOverrideSelection = Pick<
-  SessionEntry,
-  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelOverrideRouteResolution"
->;
-
-function selectSessionModelOverride(
-  entry: Partial<SessionModelOverrideSelection>,
-): SessionModelOverrideSelection {
-  return {
-    modelOverride: entry.modelOverride,
-    providerOverride: entry.providerOverride,
-    modelOverrideSource: entry.modelOverrideSource,
-    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
-  };
-}
-
 function resolveReplySessionRolloverState(
   entry: SessionEntry,
   sessionKey: string,
@@ -419,10 +403,14 @@ function resolveReplySessionRolloverState(
     createdVia: entry.createdVia,
     createdActor: entry.createdActor,
     createdAt: entry.createdAt,
+    // Chat preferences survive rollover; native-runtime consent belongs to the old incarnation.
+    permissionMode: entry.permissionMode,
+    sandboxMode: entry.sandboxMode,
     ...(entry.sandbox === "required" ? { sandbox: "required" } : {}),
   };
 }
 
+/** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
   prepareChannelParticipantObservation(params.ctx);
   return await runWithSessionInitConflictRetry(

@@ -36,6 +36,7 @@ import {
   pickerMenu,
   resetModelSearch,
   syncChatModelSearch,
+  toggleModelProviderGroup,
   updateModelSearch,
 } from "./chat-model-picker-search.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
@@ -383,10 +384,29 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                       data-chat-model-provider=${provider}
                                       title=${authLabel ?? nothing}
                                     >
-                                      ${renderChatModelProviderIcon(provider)}
-                                      <span class="chat-controls__provider-label"
-                                        >${providerDisplayLabel(provider)}</span
+                                      <button
+                                        class="chat-controls__provider-toggle"
+                                        type="button"
+                                        data-chat-model-group-toggle
+                                        data-chat-model-provider-toggle
+                                        aria-expanded="false"
+                                        aria-label=${`${t("chat.modelControls.providerModels", {
+                                          provider: providerDisplayLabel(provider),
+                                        })} (${options.length})`}
+                                        ?disabled=${params.disabled}
+                                        @click=${toggleModelProviderGroup}
                                       >
+                                        ${renderChatModelProviderIcon(provider)}
+                                        <span class="chat-controls__provider-label"
+                                          >${providerDisplayLabel(provider)}</span
+                                        >
+                                        <span>${options.length}</span>
+                                        <span
+                                          class="chat-controls__inline-select-chevron"
+                                          aria-hidden="true"
+                                          >${icons.chevronDown}</span
+                                        >
+                                      </button>
                                       ${showAuth ? html`<span class="chat-controls__auth-meta" data-auth-kind=${auth.kind}><span aria-hidden="true">${auth.kind === "subscription" ? icons.circleUser : auth.kind === "api" ? icons.key : icons.alertTriangle}</span><span class="chat-controls__auth-meta-label">${authLabel}</span></span>` : nothing}
                                       ${
                                         params.onModelSetup

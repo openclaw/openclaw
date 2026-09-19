@@ -78,6 +78,19 @@ a remote OpenClaw worker or move its agent loop. Memory search and maintenance,
 skills, attachments, and host provisioning require separate integration and
 verification before removing workspace synchronization.
 
+### Host-only execution
+
+A harness that launches an unsandboxed local application declares
+`executionEnvironment: "host-only"`. Core rejects sandbox-required, sandboxed,
+workspace-only, and unsupported session-permission contexts before native
+preparation and invocation. The harness does not implement a second sandbox
+policy or silently reinterpret a working directory as confinement.
+
+The Control UI may offer an administrator an explicit per-chat recovery action
+for optional sandboxing. The Gateway owns that mutation and revalidates the
+original session and permission state; the capability declaration never grants
+permission to remove a required sandbox or other configured restrictions.
+
 ### Native tool-policy enforcement
 
 Set `conversationToolPolicySupport: "exact"` only when `runAttempt` enforces every
@@ -112,6 +125,11 @@ OpenClaw then visibly rejects explicitly restricted turns before invoking the
 harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
+
+For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
+`userMessage`. Core renders this owner-authored public copy across chat surfaces
+without a verbose setting or generic retry/reset advice. Keep technical context
+in the error's `message` and `cause`; omit `userMessage` for diagnostic failures.
 
 ### Harness-owned auth bootstrap
 

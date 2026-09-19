@@ -51,16 +51,24 @@ export function resolveModelRuntimeDirective(params: {
 
 /** Applies a validated runtime choice without disturbing existing pins when no choice was given. */
 export function applyModelRuntimeDirective(
-  entry: Pick<SessionEntry, "agentRuntimeOverride">,
+  entry: Pick<SessionEntry, "agentRuntimeOverride" | "nativeRuntimeConsent">,
   resolution: ModelRuntimeDirectiveResolution,
 ): { updated: boolean } {
   if (resolution.kind === "clear") {
-    const updated = entry.agentRuntimeOverride !== undefined;
+    const updated =
+      entry.agentRuntimeOverride !== undefined || entry.nativeRuntimeConsent !== undefined;
     delete entry.agentRuntimeOverride;
+    delete entry.nativeRuntimeConsent;
     return { updated };
   }
   if (resolution.kind === "set") {
-    const updated = entry.agentRuntimeOverride !== resolution.runtime;
+    const updated =
+      entry.agentRuntimeOverride !== resolution.runtime ||
+      (entry.nativeRuntimeConsent !== undefined &&
+        entry.nativeRuntimeConsent !== resolution.runtime);
+    if (updated) {
+      delete entry.nativeRuntimeConsent;
+    }
     entry.agentRuntimeOverride = resolution.runtime;
     return { updated };
   }

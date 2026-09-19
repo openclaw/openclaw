@@ -25,9 +25,9 @@ import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-queue-reconnect.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import {
-  flushChatQueueAfterIdleSessionReconciliation,
   refreshCurrentChatSessionList,
   retireChatModelSelectionOwnership,
 } from "./chat-session.ts";

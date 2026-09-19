@@ -77,6 +77,7 @@ test("catalog reload releases the agent writer while preserving same-session ord
         { sessionId: sessionKey, updatedAt: 1 },
       );
     }
+    await import("../../agents/prepared-model-catalog.js");
     const entered = createDeferredCore();
     const replacement = markPreparedModelRuntimeSnapshotsStale("catalog reload", {
       waitForReplacement: true,

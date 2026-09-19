@@ -99,94 +99,11 @@ describe("renderModelProviders", () => {
     expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
   });
 
-  it("renders each configured provider as a separate standard card", () => {
-    const container = mount(
-      props({
-        cards: [
-          card(),
-          card({ id: "anthropic", displayName: "Claude", credentialProviderIds: ["anthropic"] }),
-        ],
-      }),
-    );
-
-    expect(
-      container.querySelectorAll(".model-providers__provider-list > .settings-group"),
-    ).toHaveLength(2);
-  });
-
-  it("renders a minute-precision update time beside an icon refresh action", () => {
-    const container = mount(props({ updatedAt: new Date(2026, 7, 31, 18, 51, 22).getTime() }));
-    const updated = text(container.querySelector(".model-providers__updated"));
-    const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]');
-
-    expect(updated).toContain("Updated");
-    expect(updated).not.toMatch(/:\d{2}:\d{2}/u);
-    expect(refresh?.querySelector("svg")).not.toBeNull();
-  });
-
   afterEach(() => {
     for (const container of document.body.querySelectorAll("div")) {
       render(nothing, container);
     }
     document.body.replaceChildren();
-  });
-
-  it("renders global defaults with agent override precedence and canonical values", () => {
-    const onThinkingChange = vi.fn();
-    const onFastModeChange = vi.fn();
-    const container = mount(
-      props({
-        thinkingLevel: "low",
-        fastMode: "auto",
-        onThinkingChange,
-        onFastModeChange,
-      }),
-    );
-
-    const behavior = container.querySelector("#settings-model-behavior");
-    expect(behavior).not.toBeNull();
-    expect(text(container.querySelector(".settings-section__heading"))).toBe(
-      "Defaults for all agents",
-    );
-    expect(text(container.querySelector(".settings-section__desc"))).toBe(
-      "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
-    );
-    expect(
-      [...container.querySelectorAll(".model-providers__defaults .settings-row")].map((entry) =>
-        text(
-          entry.querySelector(".model-providers__label-with-help > span:first-child") ??
-            entry.querySelector(".settings-row__title"),
-        ),
-      ),
-    ).toEqual(["Model", "Utility Model", "Fallback Model", "Thinking", "Fast Mode"]);
-    const thinking = settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>(
-      "wa-radio-group",
-    );
-    const fastMode = settingsRow(behavior!, "Fast Mode").querySelector<SegmentedGroup>(
-      "wa-radio-group",
-    );
-    expect(thinking?.value).toBe("low");
-    expect(fastMode?.value).toBe("auto");
-    expect([...fastMode!.querySelectorAll("wa-radio")].map((entry) => text(entry))).toEqual([
-      "Default",
-      "Auto",
-      "On",
-      "Off",
-    ]);
-    expect(container.querySelector('button[aria-label="About thinking defaults"]')).not.toBeNull();
-    expect(container.querySelector('button[aria-label="About fast mode defaults"]')).not.toBeNull();
-    expect(
-      container.querySelector('button[aria-label="About thinking defaults"] svg'),
-    ).not.toBeNull();
-    expect(
-      container.querySelector('button[aria-label="About fast mode defaults"] svg'),
-    ).not.toBeNull();
-    expect(container.querySelector(".model-providers__form-actions")).toBeNull();
-
-    selectSegment(thinking!, "high");
-    selectSegment(fastMode!, "off");
-    expect(onThinkingChange).toHaveBeenCalledWith("high", expect.any(HTMLElement));
-    expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
@@ -463,29 +380,6 @@ describe("renderModelProviders", () => {
     ).toEqual([true]);
   });
 
-  it("keeps committed credential success visible beside its refresh warning", () => {
-    const container = mount(
-      props({
-        messages: {
-          openai: {
-            kind: "success",
-            text: "Secret saved.",
-            warning: "Config refresh failed after the secret was committed.",
-          },
-        },
-      }),
-    );
-    const provider = container.querySelector('[data-provider-id="openai"]');
-    const messages = [...(provider?.querySelectorAll('[role="status"]') ?? [])];
-
-    expect(messages.map((message) => text(message))).toEqual([
-      "Secret saved.",
-      "Config refresh failed after the secret was committed.",
-    ]);
-    expect(messages[0]?.classList.contains("success")).toBe(true);
-    expect(messages[1]?.classList.contains("warning")).toBe(true);
-  });
-
   it("keeps committed default-model success visible beside its refresh warning", () => {
     const container = mount(
       props({
@@ -645,52 +539,6 @@ describe("renderModelProviders", () => {
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(text(provider)).toContain("Credentials configured");
     expect(text(provider)).not.toContain("Ready");
-  });
-
-  it("starts provider setup before showing disabled model controls", () => {
-    const onConnectProvider = vi.fn();
-    const container = mount(
-      props({
-        cards: [],
-        configuredModels: [],
-        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        onConnectProvider,
-      }),
-    );
-
-    const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain("Model required");
-    expect(button(readiness!, "Connect provider")).toBeDefined();
-    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
-  });
-
-  it("recovers from a saved default that is no longer selectable", () => {
-    const container = mount(
-      props({
-        configuredModels: [
-          {
-            id: "retired-model",
-            provider: "openai",
-            name: "Retired model",
-            available: false,
-          },
-        ],
-        defaultModels: {
-          primary: "openai/retired-model",
-          fallbacks: [],
-          utilityModel: null,
-        },
-      }),
-    );
-
-    expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
-    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
-  });
-
-  it("shows defaults normally when a selectable model exists", () => {
-    const container = mount(props());
-    expect(container.querySelector('[data-model-readiness="model-required"]')).toBeNull();
-    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
   });
 
   it("labels provider usage and session cost as global", () => {

@@ -302,20 +302,26 @@ export function listConfiguredOwnerInputs(
   config: OpenClawConfig,
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
+  preservedWorkspaceByAgentDir?: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
   return listAgentIds(config)
     .filter((agentId) => !readAgentDatabaseAdmissionRefusal(agentId))
     .map((agentId) => {
-      const preserveWorkspaceDirOnRefresh = agentId === compatibilityAgentId && defaultWorkspaceDir;
+      const agentDir = resolveAgentDir(config, agentId);
+      const launchWorkspaceDir =
+        preservedWorkspaceByAgentDir?.get(agentId)?.get(agentDir) ??
+        (agentId === compatibilityAgentId ? defaultWorkspaceDir : undefined);
+      const preserveWorkspaceDirOnRefresh =
+        launchWorkspaceDir && !resolveAgentEntry(config, agentId)?.workspace?.trim();
       const input: PreparedModelRuntimeInput = {
         agentId,
-        agentDir: resolveAgentDir(config, agentId),
+        agentDir,
         config,
         inheritedAuthDir,
         workspaceDir: preserveWorkspaceDirOnRefresh
-          ? defaultWorkspaceDir
+          ? launchWorkspaceDir
           : resolveAgentWorkspaceDir(config, agentId),
         runtimePluginSelections: resolveConfiguredRuntimePluginSelections(config, agentId),
       };

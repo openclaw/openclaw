@@ -1,5 +1,4 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -258,15 +257,6 @@ test.each<SelectionCase>([
       },
     });
     setActivePluginRegistry(registry);
-    if (fixture.cli) {
-      expect(
-        resolveCliRuntimeCanonicalProvider({
-          runtime: "demo-cli",
-          config: cfg,
-          includeSetupRegistry: true,
-        }),
-      ).toBe("custom");
-    }
     const provider = fixture.provider ?? (fixture.cli ? "demo-cli" : "custom");
     const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
     applyModelOverrideToSessionEntry({
@@ -343,7 +333,7 @@ test.each<SelectionCase>([
           preparedModelCatalog,
         });
         expect(selection).toMatchObject({
-          provider: "custom",
+          provider: fixture.cli ? "demo-cli" : "custom",
           model: fixture.expected,
           resetModelOverride: fixture.disallowed === true && !fixture.inherited,
         });

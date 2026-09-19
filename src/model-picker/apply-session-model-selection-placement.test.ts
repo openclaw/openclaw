@@ -20,8 +20,11 @@ const runtimeChoiceMocks = vi.hoisted(() => ({
 
 // Runtime eligibility belongs to its owner; exercise its commit guard here.
 vi.mock("../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
     kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
     validate: runtimeChoiceMocks.validate,
   })),
 }));

@@ -495,6 +495,21 @@ const enSettings = {
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
     },
+    installedAgents: {
+      title: "Installed agents",
+      description: "Coding apps on the computer that runs OpenClaw. Sign in through each app.",
+      status: {
+        installed: "Installed",
+        missing: "Not detected",
+        unverified: "Not verified",
+      },
+      unverifiedHint: "OpenClaw could not check the launch command set for this app.",
+      toggle: "Use {name}",
+      check: "Check again",
+      checking: "Checking…",
+      empty: "No supported coding apps are available.",
+      note: "Update installed agents from Control UI",
+    },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
       adminRequired: "Browsing only. Model changes require operator.admin access.",

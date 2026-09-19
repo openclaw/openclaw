@@ -1619,7 +1619,7 @@ describe("EmbeddedTuiBackend", () => {
     publication.reject(new Error("catalog publication failed"));
     await failure;
     expect(withPreparedModelCatalogOwnerMock).not.toHaveBeenCalled();
-    await backend.stop();
+    await expect(backend.stop()).rejects.toThrow("catalog publication failed");
   });
 
   it.each(selectedGlobalSessionCases)(

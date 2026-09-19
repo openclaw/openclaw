@@ -210,6 +210,11 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
       : nothing
   }
   ${
+    active.pluginDetail
+      ? html`<pre class="exec-approval-command mono" dir="ltr">${active.pluginDetail}</pre>`
+      : nothing
+  }
+  ${
     variant === "modal" && active.request.sessionKey
       ? renderDetails(
           html`${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}`,

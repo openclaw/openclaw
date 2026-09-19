@@ -70,7 +70,9 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   }
   if (
     !params.validateModelRuntime ||
-    (params.patch.model === undefined && params.patch.agentRuntime === undefined) ||
+    (params.patch.model === undefined &&
+      params.patch.agentRuntime === undefined &&
+      params.patch.nativeRuntimeConsent === undefined) ||
     !params.entry?.sessionId
   ) {
     return undefined;

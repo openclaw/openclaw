@@ -52,9 +52,11 @@ credentials are reported as stored evidence; the active login remains
 unverified during detection. Stored credentials do not
 receive verified-subscription priority over environment API keys.
 
-Pi and OpenCode CLIs may also be reported for context when they cannot serve as
-the reusable inference route for guided setup. Gemini CLI and Antigravity are
-not offered as detected setup routes.
+In the Control UI, Model Setup can also select models from installed native
+agents through the shared model picker. **Use** saves that model and its runtime
+without running the setup test; authentication and tools stay with the native
+agent. Provider **Test & use** still requires a verified tool-free reply.
+Gemini CLI and Antigravity are not offered as detected setup routes.
 
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway

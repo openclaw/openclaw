@@ -355,10 +355,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }) === ownerKey({ ...input, loadRuntimePlugins: false, runtimePluginSelections: undefined })
         ? configuredOwner
         : owner;
-    snapshot = capturePreparedModelRuntimeCatalog(
-      snapshot,
-      catalogOwner.snapshot?.readPublishedModels?.(),
-    );
+    snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
       return {

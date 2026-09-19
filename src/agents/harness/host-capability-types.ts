@@ -78,6 +78,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
     title: string;
     description: string;
+    /** Full action evidence for authenticated reviewer surfaces, not channel messages. */
+    detail?: string;
     severity: "info" | "warning";
     toolName: string;
     toolCallId?: string;

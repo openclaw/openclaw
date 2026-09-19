@@ -20,6 +20,17 @@ type PersistenceResult =
   | { status: "model-selection-locked"; entry: SessionEntry }
   | { status: "lifecycle-invalidated"; error: string; entry?: SessionEntry };
 
+// Runtime eligibility belongs to the published-owner tests; these cases exercise its consumers.
+vi.mock("../../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
+    validate: () => undefined,
+  })),
+}));
+
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));

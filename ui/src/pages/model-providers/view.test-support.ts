@@ -1,4 +1,4 @@
-import { render } from "lit";
+import { nothing, render } from "lit";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -62,6 +62,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
+    installedAgents: nothing,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
     onCloseKeyEditor: () => undefined,

@@ -4,6 +4,12 @@ import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
+  openChatModelPicker,
+  revealChatModelOption,
+  selectChatModel,
+  selectChatModelOption,
+} from "../test-helpers/select-picker-e2e.ts";
+import {
   MOVED_WORKSPACE,
   NEW_SESSION_MODEL_CATALOG,
   PICKED,
@@ -244,15 +250,13 @@ suite.define(() => {
       expect(
         await page.locator('.new-session-page__triggers [data-chat-model-select="true"]').count(),
       ).toBe(0);
-      await modelSelect.click();
+      await openChatModelPicker(page);
       const pickerOpen = () =>
         modelSelect.evaluate(
           (element) => element.closest("details")?.hasAttribute("open") ?? false,
         );
-      const modelMenu = page.locator(".chat-controls__model-menu");
-      await expect.poll(() => modelMenu.isVisible()).toBe(true);
       const modelTriggerBox = await modelSelect.boundingBox();
-      const modelMenuBox = await modelMenu.boundingBox();
+      const modelMenuBox = await page.locator(".chat-controls__model-menu").boundingBox();
       expect(modelTriggerBox).not.toBeNull();
       expect(modelMenuBox).not.toBeNull();
       expect(modelMenuBox?.x ?? 0).toBeLessThanOrEqual(modelTriggerBox?.x ?? 0);
@@ -260,7 +264,9 @@ suite.define(() => {
         await page.evaluate(() => window.innerWidth),
       );
       await expect.poll(pickerOpen).toBe(true);
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       // Model selection commits immediately and closes the model popover.
       await expect.poll(pickerOpen).toBe(false);
       await expect
@@ -297,6 +303,9 @@ suite.define(() => {
       await expect
         .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await revealChatModelOption(firstModel);
+      await revealChatModelOption(secondModel);
+      await modelSelect.focus();
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
       // Finish the picker's opening scale before recording its baseline. The top
@@ -431,9 +440,7 @@ suite.define(() => {
       });
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("xhigh");
 
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModel(page, "openai/gpt-5.6-sol");
       await effortSelect.click();
 
       await expect
@@ -486,8 +493,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModel(page, "anthropic/claude-sonnet-4-6");
       const effortSelect = page.locator('[data-chat-thinking-select="true"]');
       await effortSelect.click();
       const thinkingSlider = page.locator('[data-chat-thinking-slider="true"]');
@@ -714,9 +720,7 @@ suite.define(() => {
 
         await gateway.deferNext("users.prefs.set");
         const newSession = page.locator("openclaw-new-session-page");
-        const modelSelect = newSession.locator('[data-chat-model-select="true"]');
-        await modelSelect.click();
-        await newSession.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+        await selectChatModel(newSession, "openai/gpt-5.5");
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBe(2);
@@ -803,8 +807,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const newSession = page.locator("openclaw-new-session-page");
       const modelSelect = newSession.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModel(newSession, "anthropic/claude-sonnet-4-6");
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
@@ -893,8 +896,7 @@ suite.define(() => {
       );
 
       const newSession = page.locator("openclaw-new-session-page");
-      await newSession.locator('[data-chat-model-select="true"]').click();
-      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModel(newSession, "anthropic/claude-sonnet-4-6");
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
         workspace: MOVED_WORKSPACE,

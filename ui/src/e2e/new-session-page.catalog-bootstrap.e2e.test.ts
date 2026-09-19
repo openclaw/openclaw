@@ -4,6 +4,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -97,6 +98,7 @@ suite.define(() => {
         const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
         await trigger.click();
         const currentRow = page.locator('[data-chat-model-option="fixture/current"]');
+        await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect((await gateway.getRequests("models.list")).length - requestsBeforeOpen).toBe(0);
         expect(await page.locator("[data-chat-model-catalog-state]").textContent()).toContain(
@@ -114,6 +116,7 @@ suite.define(() => {
         });
         await trigger.click();
         await trigger.click();
+        await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect(await page.locator('[data-chat-model-option="fixture/older"]').count()).toBe(0);
         expect((await gateway.getRequests("models.list")).length - requestsBeforeOpen).toBe(0);
@@ -149,6 +152,7 @@ suite.define(() => {
       const trigger = page.locator("[data-chat-model-select]");
       await trigger.click();
       const currentRow = page.locator('[data-chat-model-option="fixture/current"]');
+      await revealChatModelOption(currentRow);
       await expect.poll(() => currentRow.isVisible()).toBe(true);
       const count = (await gateway.getRequests("models.list")).length;
       await gateway.emitGatewayEvent("models.snapshot", {
@@ -158,6 +162,7 @@ suite.define(() => {
       });
       await trigger.click();
       await trigger.click();
+      await revealChatModelOption(currentRow);
       await expect.poll(() => currentRow.isVisible()).toBe(true);
       expect(await page.locator('[data-chat-model-option="fixture/older"]').count()).toBe(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(count);

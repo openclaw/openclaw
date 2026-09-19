@@ -133,6 +133,11 @@ OpenClaw release:
         when their authenticated session and execution policy
         match. If that process ends or the gateway restarts, the next turn
         resumes the persisted Claude Code session.
+
+        An explicit Claude CLI model selection stays on that runtime across resumed
+        turns. If the executable cannot run, the selection fails instead of switching
+        to direct Anthropic API access. Selecting an API route or forwarding an API
+        key through an explicit account selection remains a separate billing choice.
       </Step>
       <Step title="Verify the model is available">
         ```bash

@@ -1,21 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AcpxRuntime as BaseAcpxRuntime } from "acpx/runtime";
+import {
+  AcpxRuntime as BaseAcpxRuntime,
+  createAgentRegistry,
+  createFileSessionStore,
+} from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
-import { AcpxRuntime, createAgentRegistry, createFileSessionStore } from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
-const peer = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
 it.each([
   "session",
   "bridge",
+  "catalog",
   "openclaw-direct",
   ...(process.platform === "win32" ? [] : ["env-bridge"]),
 ])("scopes MCP at the real ACP boundary across reconnect (%s)", async (scenario) => {
   const bridge = scenario === "bridge" || scenario === "env-bridge";
+  const catalog = scenario === "catalog";
   const agent = scenario === "openclaw-direct" ? "openclaw" : "fixture";
   await withOpenClawTestState({ label: "acpx-mcp-process" }, async (state) => {
     const directory = path.join(state.root, "peer");
@@ -23,7 +29,7 @@ it.each([
     const wrapper = path.join(state.root, "openclaw.mjs");
     await fs.writeFile(
       wrapper,
-      `process.argv.splice(2, 1); await import(${JSON.stringify(new URL("../test/fixtures/owner-agent.mjs", import.meta.url).href)});`,
+      `process.argv.splice(2, 1); await import(${JSON.stringify(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url).href)});`,
     );
     const directCommand = [process.execPath, peer, directory];
     const bridgeCommand = [process.execPath, wrapper, "acp", directory];
@@ -59,7 +65,8 @@ it.each([
           sessionKey: "shared",
           agentId,
           agent,
-          mode: "persistent",
+          mode: catalog ? "oneshot" : "persistent",
+          bridgeSession: catalog ? null : undefined,
         });
         handles.push(handle);
       }
@@ -83,7 +90,7 @@ it.each([
         const results = await Promise.all(handles.map(prompt));
         for (const [index, result] of results.entries()) {
           expect(reconnected ? result.loadedMcpServers : result.mcpServers).toEqual(
-            bridge
+            bridge || catalog
               ? []
               : servers.map((server) =>
                   server.name === "user-server"

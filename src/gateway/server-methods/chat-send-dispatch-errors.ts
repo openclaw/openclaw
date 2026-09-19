@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
@@ -49,7 +50,11 @@ function formatChatSendError(error: unknown): string {
       `\n\n${String(error)}`
     );
   }
-  return renderFailoverCodeUserCopy(describeFailoverError(error).code) ?? String(error);
+  return (
+    renderAgentHarnessPreflightUserMessage(error) ??
+    renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
+    String(error)
+  );
 }
 
 /** Finalize a chat.send that throws before detached dispatch owns cleanup. */

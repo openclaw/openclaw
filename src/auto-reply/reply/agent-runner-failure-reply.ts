@@ -9,7 +9,10 @@ import {
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
-import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import {
+  renderAgentHarnessPreflightUserMessage,
+  renderUserFacingText,
+} from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
   describeFailoverError,
@@ -261,6 +264,13 @@ export function buildExternalRunFailureReply(
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
   if (isAgentHarnessPreflightError(error)) {
+    const userMessage = renderAgentHarnessPreflightUserMessage(error);
+    if (userMessage !== undefined) {
+      return {
+        text: userMessage,
+        isGenericRunnerFailure: false,
+      };
+    }
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
       text: options?.isHeartbeat
@@ -460,10 +470,16 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
 }): ReplyPayload | undefined {
-  // Direct preflight diagnostics are not provider failures; preserve their
-  // identity for the caller's generic settlement and disclosure policy.
+  // Preflight diagnostics are not provider failures. Only explicit public copy
+  // can bypass the caller's diagnostic disclosure policy.
   if (isAgentHarnessPreflightError(params.err)) {
-    return undefined;
+    const reply = buildExternalRunFailureReply({
+      message: params.err.message,
+      error: params.err,
+    });
+    return reply.isGenericRunnerFailure
+      ? undefined
+      : markAgentRunFailureReplyPayload({ text: reply.text });
   }
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);

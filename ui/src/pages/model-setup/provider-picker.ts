@@ -1,4 +1,4 @@
-import { html, nothing, type ReactiveElement } from "lit";
+import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
   SystemAgentSetupActivateParams,
@@ -7,17 +7,7 @@ import type {
 import { icons } from "../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.ts";
-
-export async function focusManualProviderInput(host: ReactiveElement): Promise<void> {
-  await host.updateComplete;
-  const input = host.renderRoot.querySelector<HTMLInputElement>(
-    '.model-setup__manual input[type="password"]',
-  );
-  input?.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
-  input?.focus();
-}
 
 type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
 

@@ -23,7 +23,7 @@ import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model
 import {
   createModelCatalogView,
   selectModelCatalogRuntimeEntry,
-  loadPreparedModelCatalogView,
+  prepareModelCatalogView,
 } from "../../agents/model-catalog-view.js";
 import {
   resolveLogicalModelCatalogEntryState,
@@ -359,7 +359,7 @@ export async function prepareModelsListResult(
   ) {
     return { read: () => ({ models: [] }), isCurrent: () => true };
   }
-  let snapshot =
+  const snapshot =
     publishedOwner?.modelCatalog ??
     (usedPreloadedCatalog ? preloadedCatalog.snapshot : ownerSnapshot);
   if (!snapshot) {
@@ -391,8 +391,7 @@ export async function prepareModelsListResult(
           allowPluginNormalization: false,
         })
       : undefined;
-  const preparedCatalog = await loadPreparedModelCatalogView({
-    kind: "prepared",
+  const preparedCatalog = prepareModelCatalogView({
     cfg,
     agentId,
     agentDir: sourceOwner?.agentDir,
@@ -404,17 +403,7 @@ export async function prepareModelsListResult(
     pluginRegistry: preparedPluginRegistry,
     isCurrent,
     observationConfig: preparedProjectionOwner?.observationConfig,
-    refreshNative: refresh && source.kind !== "gateway" && params.preloadedOnly !== true,
-    ...(source.kind === "gateway"
-      ? {
-          onError: (error: unknown) =>
-            source.context.logGateway.debug(
-              `models.list continuing without harness catalog: ${String(error)}`,
-            ),
-        }
-      : {}),
   });
-  snapshot = preparedCatalog.snapshot;
   const { defaultModel } = preparedCatalog;
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;

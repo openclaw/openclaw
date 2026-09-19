@@ -1,4 +1,5 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -610,11 +611,12 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
         providerForAuthProfileValidation = err.provider;
         if (sessionEntry) {
           sessionEntry = { ...sessionEntry };
-          if (err.agentRuntimeOverride) {
-            sessionEntry.agentRuntimeOverride = err.agentRuntimeOverride;
-          } else {
-            delete sessionEntry.agentRuntimeOverride;
-          }
+          applyModelRuntimeDirective(
+            sessionEntry,
+            err.agentRuntimeOverride
+              ? { kind: "set", runtime: err.agentRuntimeOverride }
+              : { kind: "clear" },
+          );
           sessionEntry.authProfileOverride = err.authProfileId;
           sessionEntry.authProfileOverrideSource = err.authProfileId
             ? err.authProfileIdSource

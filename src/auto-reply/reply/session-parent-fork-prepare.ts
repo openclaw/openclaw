@@ -95,12 +95,12 @@ export async function prepareReplySessionParentFork(params: {
     `forking from parent session: parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +
       `parentTokens=${decision.parentTokens ?? "unknown"}`,
   );
-  // The fork replaces this thread's transcript identity; recovery state from
-  // the preseed row must not govern a later interruption of the fork.
+  // A fork replaces the incarnation; its prior recovery state and native grant must not carry over.
   const forkedEntry: InternalSessionEntry = {
     ...params.sessionEntry,
     ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
+    nativeRuntimeConsent: undefined,
     lifecycleRunId: undefined,
     lastRunId: undefined,
     forkSource: {

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -127,7 +128,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').click();
+      await selectChatModelOption(page.locator('[data-chat-model-option="openai/gpt-5.6-sol"]'));
       await expect.poll(() => modelSelect.textContent()).toContain("GPT-5.6 Sol");
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
@@ -150,7 +151,9 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-opus-4-6"]'),
+      );
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
@@ -162,7 +165,9 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+      );
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isEnabled()).toBe(true);

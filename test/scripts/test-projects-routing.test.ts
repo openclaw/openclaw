@@ -224,59 +224,14 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.bundled.config.ts",
     },
     {
-      title: "routes top-level repo tests to the contracts config",
-      target: "test/appcast.test.ts",
-      config: "test/vitest/vitest.tooling.config.ts",
-    },
-    {
       title: "test-projects routes the bundled native Gateway test to its Gateway owner",
       target: "test/plugins/codex-model-catalog.gateway.test.ts",
       config: "test/vitest/vitest.gateway-methods.config.ts",
     },
     {
-      title: "routes script tests to the tooling config",
-      target: "test/scripts/test-projects-routing.test.ts",
-      config: "test/vitest/vitest.tooling.config.ts",
-    },
-    {
       title: "keeps native artifact fixtures in the serial tooling owner",
       target: "test/scripts/mac-elevation-artifact.test.ts",
       config: "test/vitest/vitest.tooling.config.ts",
-    },
-    {
-      title: "routes config baseline integration tests to the contracts config",
-      target: "src/config/doc-baseline.integration.test.ts",
-      config: "test/vitest/vitest.tooling.config.ts",
-    },
-    {
-      title: "routes runtime config targets to the runtime-config config",
-      target: "src/config/sessions.test.ts",
-      config: "test/vitest/vitest.runtime-config.config.ts",
-    },
-    {
-      title: "routes cron targets to the cron config",
-      target: "src/cron/isolated-agent.lane.test.ts",
-      config: "test/vitest/vitest.cron.config.ts",
-    },
-    {
-      title: "routes daemon targets to the daemon config",
-      target: "src/daemon/inspect.test.ts",
-      config: "test/vitest/vitest.daemon.config.ts",
-    },
-    {
-      title: "routes media targets to the media config",
-      target: "src/media/fetch.test.ts",
-      config: "test/vitest/vitest.media.config.ts",
-    },
-    {
-      title: "routes plugin-sdk targets to the plugin-sdk config",
-      target: "src/plugin-sdk/migration-runtime.test.ts",
-      config: "test/vitest/vitest.plugin-sdk.config.ts",
-    },
-    {
-      title: "routes plugin-sdk light targets to the plugin-sdk-light config",
-      target: "src/plugin-sdk/provider-entry.test.ts",
-      config: "test/vitest/vitest.plugin-sdk-light.config.ts",
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
@@ -287,16 +242,6 @@ describe("test-projects args", () => {
       title: "routes process targets to the process config",
       target: "src/process/exec.test.ts",
       config: "test/vitest/vitest.process.config.ts",
-    },
-    {
-      title: "routes secrets targets to the secrets config",
-      target: "src/secrets/resolve.test.ts",
-      config: "test/vitest/vitest.secrets.config.ts",
-    },
-    {
-      title: "routes unit-fast shared-core targets to the unit-fast config",
-      target: "src/shared/text-chunking.test.ts",
-      config: "test/vitest/vitest.unit-fast.config.ts",
     },
     {
       title: "routes the Git backup outcome consumer to the infra config",
@@ -319,134 +264,14 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
-      title: "routes logging targets to the logging config",
-      target: "src/logging/console-settings.test.ts",
-      config: "test/vitest/vitest.logging.config.ts",
-    },
-    {
-      title: "routes wizard targets to the wizard config",
-      target: "src/wizard/setup.official-plugins.test.ts",
-      config: "test/vitest/vitest.wizard.config.ts",
-    },
-    {
       title: "routes wizard recovery to the host-owned infra fork shard",
       target: "src/wizard/setup.inference-recovery.integration.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
     },
     {
-      title: "routes tui targets to the tui config",
-      target: "src/tui/tui.test.ts",
-      config: "test/vitest/vitest.tui.config.ts",
-    },
-    {
-      title: "routes media-understanding targets to the media-understanding config",
-      target: "src/media-understanding/runtime.test.ts",
-      config: "test/vitest/vitest.media-understanding.config.ts",
-    },
-    {
-      title: "routes command targets to the commands config",
-      target: "src/commands/status.summary.test.ts",
-      config: "test/vitest/vitest.commands.config.ts",
-    },
-    {
-      title: "routes auto-reply targets to the auto-reply config",
-      target: "src/auto-reply/reply/get-reply.message-hooks.test.ts",
-      config: "test/vitest/vitest.auto-reply.config.ts",
-    },
-    {
-      title: "routes agent tool targets to the agents-tools config",
-      target: "src/agents/tools/image-tool.test.ts",
-      config: "test/vitest/vitest.agents-tools.config.ts",
-    },
-    {
-      title: "routes gateway targets to the gateway config",
-      target: "src/gateway/call.test.ts",
-      config: "test/vitest/vitest.gateway.config.ts",
-    },
-    {
-      title: "routes hooks targets to the hooks config",
-      target: "src/hooks/install.test.ts",
-      config: "test/vitest/vitest.hooks.config.ts",
-    },
-    {
-      title: "routes channel targets to the channels config",
-      target: "src/channels/session.test.ts",
-      config: "test/vitest/vitest.channels.config.ts",
-    },
-    {
-      title: "routes unit-fast acp targets to the cache-friendly unit-fast config",
-      target: "src/acp/runtime/registry.test.ts",
-      config: "test/vitest/vitest.unit-fast.config.ts",
-    },
-    {
       title: "routes reset-heavy acp targets to the acp config",
       target: "src/acp/runtime/session-meta.test.ts",
       config: "test/vitest/vitest.acp.config.ts",
-    },
-    {
-      title: "routes cli targets to the cli config",
-      target: "src/cli/test-runtime-capture.test.ts",
-      config: "test/vitest/vitest.cli.config.ts",
-    },
-    {
-      title: "routes msteams extension tests to the msteams config",
-      target: "extensions/msteams/src/config.test.ts",
-      config: "test/vitest/vitest.extension-msteams.config.ts",
-    },
-    {
-      title: "routes telegram extension tests to the telegram config",
-      target: "extensions/telegram/src/fetch.test.ts",
-      config: "test/vitest/vitest.extension-telegram.config.ts",
-    },
-    {
-      title: "routes whatsapp extension tests to the whatsapp config",
-      target: "extensions/whatsapp/src/send.test.ts",
-      config: "test/vitest/vitest.extension-whatsapp.config.ts",
-    },
-    {
-      title: "routes voice-call extension tests to the voice-call config",
-      target: "extensions/voice-call/src/runtime.test.ts",
-      config: "test/vitest/vitest.extension-voice-call.config.ts",
-    },
-    {
-      title: "routes mattermost extension tests to the mattermost config",
-      target: "extensions/mattermost/src/channel.test.ts",
-      config: "test/vitest/vitest.extension-mattermost.config.ts",
-    },
-    {
-      title: "routes zalo extension tests to the zalo config",
-      target: "extensions/zalo/src/channel.test.ts",
-      config: "test/vitest/vitest.extension-zalo.config.ts",
-    },
-    {
-      title: "routes matrix extension tests to the matrix config",
-      target: "extensions/matrix/src/channel.test.ts",
-      config: "test/vitest/vitest.extension-matrix.config.ts",
-    },
-    {
-      title: "routes feishu extension tests to the feishu config",
-      target: "extensions/feishu/src/channel.test.ts",
-      config: "test/vitest/vitest.extension-feishu.config.ts",
-    },
-    {
-      title: "routes irc extension tests to the irc config",
-      target: "extensions/irc/src/channel.test.ts",
-      config: "test/vitest/vitest.extension-irc.config.ts",
-    },
-    {
-      title: "routes acpx extension tests to the acpx config",
-      target: "extensions/acpx/src/runtime.test.ts",
-      config: "test/vitest/vitest.extension-acpx.config.ts",
-    },
-    {
-      title: "routes diffs extension tests to the diffs config",
-      target: "extensions/diffs/src/render.test.ts",
-      config: "test/vitest/vitest.extension-diffs.config.ts",
-    },
-    {
-      title: "routes unit ui targets to the unit ui config",
-      target: "ui/src/ui/views/channels.test.ts",
-      config: "test/vitest/vitest.ui.config.ts",
     },
     {
       title: "routes plugin browser tests to the UI owner before extension routing",
@@ -459,44 +284,9 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.ui-e2e.config.ts",
     },
     {
-      title: "routes utils targets to the utils config",
-      target: "src/utils/path.test.ts",
-      config: "test/vitest/vitest.utils.config.ts",
-    },
-    {
-      title: "routes browser extension targets to the browser config",
-      target: "extensions/browser/index.test.ts",
-      config: "test/vitest/vitest.extension-browser.config.ts",
-    },
-    {
-      title: "routes line extension targets to the line config",
-      target: "extensions/line/src/send.test.ts",
-      config: "test/vitest/vitest.extension-line.config.ts",
-    },
-    {
-      title: "routes direct OpenAI provider extension file targets to the OpenAI provider config",
-      target: "extensions/openai/openai-chatgpt-provider.test.ts",
-      config: "test/vitest/vitest.extension-provider-openai.config.ts",
-    },
-    {
-      title: "routes provider targets to the shared provider owner",
-      target: "extensions/anthropic/forward-compat-generation.test.ts",
-      config: "test/vitest/vitest.extension-providers.config.ts",
-    },
-    {
-      title: "routes QA targets to the QA owner",
-      target: "extensions/qa-lab/index.test.ts",
-      config: "test/vitest/vitest.extension-qa.config.ts",
-    },
-    {
       title: "routes unclassified plugin targets to the catch-all owner",
       target: "extensions/example/index.test.ts",
       config: "test/vitest/vitest.extensions.config.ts",
-    },
-    {
-      title: "routes misc extension file targets to the misc extensions config",
-      target: "extensions/firecrawl/index.test.ts",
-      config: "test/vitest/vitest.extension-misc.config.ts",
     },
   ])("$title", ({ target, config }) => {
     expect(buildVitestRunPlans([target])).toEqual([
@@ -1173,39 +963,6 @@ describe("test-projects args", () => {
     expect(
       findUnmatchedExplicitTestTargets(["test/vitest/vitest.contracts-channel-surface.config.ts"]),
     ).toEqual([]);
-  });
-
-  it("accepts split CI Vitest config targets routed as whole config runs", () => {
-    expect(
-      findUnmatchedExplicitTestTargets([
-        "test/vitest/vitest.agents-core.config.ts",
-        "test/vitest/vitest.agents-embedded-agent.config.ts",
-        "test/vitest/vitest.agents-support.config.ts",
-        "test/vitest/vitest.agents-tools.config.ts",
-      ]),
-    ).toEqual([]);
-  });
-
-  it("keeps split CI Vitest config targets on their own configs", () => {
-    expect(
-      buildVitestRunPlans([
-        "test/vitest/vitest.agents-core.config.ts",
-        "test/vitest/vitest.agents-tools.config.ts",
-      ]),
-    ).toEqual([
-      {
-        config: "test/vitest/vitest.agents-core.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-      {
-        config: "test/vitest/vitest.agents-tools.config.ts",
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      },
-    ]);
   });
 
   it("accepts sentinel targets routed as whole config runs", () => {

@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import partialConfig from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
 import type { ModelCatalogResult } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Partial provider refresh controls" });
@@ -119,6 +120,7 @@ suite.define(() => {
           await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
           await model.click();
           const available = composer.locator('[data-chat-model-option="openai/gpt-5.4"]');
+          await revealChatModelOption(available);
           await expect.poll(() => available.isVisible()).toBe(true);
           expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
           await page.screenshot({
@@ -134,6 +136,7 @@ suite.define(() => {
           await expect.poll(() => effort.isVisible()).toBe(true);
           await effort.click();
           const slider = composer.locator("[data-chat-thinking-slider]");
+          await slider.waitFor({ state: "visible" });
           await expect
             .poll(() => slider.getAttribute("data-chat-thinking-values"))
             .toBe(levels.map(({ id }) => id).join(","));

@@ -495,8 +495,8 @@ importers:
         specifier: 5.0.0
         version: 5.0.0(@vitest/browser@5.0.0)(vitest@5.0.0)
       acpx:
-        specifier: 0.16.0
-        version: 0.16.0
+        specifier: 0.17.0
+        version: 0.17.0
       apache-arrow:
         specifier: 21.2.0
         version: 21.2.0
@@ -635,8 +635,8 @@ importers:
         specifier: 1.10.0
         version: 1.10.0
       acpx:
-        specifier: 0.16.0
-        version: 0.16.0
+        specifier: 0.17.0
+        version: 0.17.0
       smol-toml:
         specifier: 1.8.0
         version: 1.8.0
@@ -6111,8 +6111,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.16.0:
-    resolution: {integrity: sha512-HvCmlNc9JHUbAZfnk/m46RXV6WNLBM6zGZYWsHpcFaHFT4tShFbsb8qoh7J+nGc8aAYDqHiJEZggCRGIeXYUvQ==}
+  acpx@0.17.0:
+    resolution: {integrity: sha512-Acg98gvOH+3PZsFvZD5m/0uE0ayNRQYcIy/nZ4S0yK/9Ovjw+jKIfYh3V7cnz1ShCxCBZK3EhkJND/fe9IjRXA==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -13454,7 +13454,7 @@ snapshots:
 
   acorn@8.18.0: {}
 
-  acpx@0.16.0:
+  acpx@0.17.0:
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.6.2)
       '@openclaw/fs-safe': 0.10.0

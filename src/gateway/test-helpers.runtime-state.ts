@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -40,16 +41,7 @@ type GatewayTestHoistedState = {
   agentDiscoveryMock: {
     enabled: boolean;
     discoverCalls: number;
-    models: Array<{
-      id: string;
-      name?: string;
-      provider: string;
-      contextWindow?: number;
-      contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
-      contextWindowDefault?: string;
-      reasoning?: boolean;
-      input?: string[];
-    }>;
+    models: Array<Omit<ModelCatalogEntry, "name"> & { name?: string }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;
   agentCommand: Mock<AgentCommandFn>;

@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -121,7 +122,7 @@ suite.define(() => {
         ).toBe("sample-cloud");
         await page.keyboard.press("Escape");
         await root.locator('.new-session-page__composer [data-chat-model-select="true"]').click();
-        await root.locator('[data-chat-model-option="fixture/one"]').click();
+        await selectChatModelOption(root.locator('[data-chat-model-option="fixture/one"]'));
         expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
         await root.locator("#new-session-where-trigger").click();
         expect(
@@ -129,7 +130,7 @@ suite.define(() => {
         ).toBe(false);
         await page.keyboard.press("Escape");
         await root.locator('.new-session-page__composer [data-chat-model-select="true"]').click();
-        await root.locator('[data-chat-model-option="fixture/two"]').click();
+        await selectChatModelOption(root.locator('[data-chat-model-option="fixture/two"]'));
         await root.locator("#new-session-where-trigger").click();
         await expect
           .poll(() => root.getByRole("button", { name: "sample-cloud", exact: true }).isDisabled())
@@ -520,7 +521,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-fable-5"]').click();
+      await selectChatModelOption(
+        page.locator('[data-chat-model-option="anthropic/claude-fable-5"]'),
+      );
       await modelSelect.click();
 
       const contextWindowToggle = page.locator('[data-chat-context-window-toggle="200k"]');

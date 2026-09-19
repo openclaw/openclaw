@@ -66,6 +66,31 @@ normalized by OpenClaw before startup. Other harnesses need ACP `models` plus
 `session/set_model` support; if a harness exposes neither that ACP capability
 nor its own startup model flag, OpenClaw/acpx cannot force a model selection.
 
+<a id="tool-profiles-for-native-chat-runtimes" />
+
+## Permissions for native chat runtimes
+
+When a native runtime cannot enforce the chat's optional OpenClaw tool, sandbox,
+or workspace restrictions, the Control UI offers **Continue for this chat** to
+an administrator. The same confirmation applies when selecting the runtime or
+sending a message with an existing selection.
+
+Confirming selects **Full access**, turns off optional sandboxing for that chat,
+and records consent for the exact native runtime. The native agent then uses its
+own permissions on the Gateway host. OpenClaw does not claim to enforce its
+optional tool restrictions inside that agent. Other chats and global settings
+stay unchanged, and tools hosted by OpenClaw retain their existing policy.
+
+Declining changes nothing. After a refused send, confirmation saves the permissions
+and retries that message once, including a chat's first message.
+Selection-only confirmation does not send the draft. Consent is not inherited by
+another chat and is cleared when the session resets or the selected runtime changes.
+Older hosts that do not recognize consent retain their previous restriction checks.
+
+Required sandboxes, required workspace boundaries, and incompatible remote
+execution placement cannot be waived by this confirmation. A restricted user
+must ask an administrator or choose a compatible runtime.
+
 ## Required config
 
 Core ACP baseline:

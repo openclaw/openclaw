@@ -10,8 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  # Reviewed ACPX runtime release; remove after 2026-09-23T13:34:53Z.
-  - acpx@0.16.0
+  # Reviewed ACPX runtime release; remove after 2026-09-24T08:58:53Z.
+  - acpx@0.17.0
   # Published ACPX runtime dependency; remove after 2026-09-20T08:36Z.
   - "@openclaw/fs-safe@0.10.0"
   - "@openclaw/fs-safe-darwin-arm64@0.10.0"

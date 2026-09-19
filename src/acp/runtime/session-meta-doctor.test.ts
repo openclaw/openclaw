@@ -123,9 +123,7 @@ it.each(["global", "shared-project"])(
           overrides: {
             fixture: [
               process.execPath,
-              fileURLToPath(
-                new URL("../../../extensions/acpx/test/fixtures/owner-agent.mjs", import.meta.url),
-              ),
+              fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
               peer,
             ].join(" "),
           },

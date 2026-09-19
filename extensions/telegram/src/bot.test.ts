@@ -9,7 +9,10 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createNonExitingRuntimeEnv,
+  mockPublishedModelRuntimeForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   listSessionEntries,
@@ -30,6 +33,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { registerTelegramModelPickerCases } from "./bot.model-picker.test-support.js";
 import {
   createReplyPhotoMessage,
   createTelegramCallbackContext,
@@ -2738,6 +2742,46 @@ describe("createTelegramBot", () => {
             authProfileOverrideCompactionCount: 2,
           },
         });
+        const modelCatalog = [
+          { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },
+          {
+            provider: "openai",
+            id: "gpt-4.1",
+            name: "GPT-4.1",
+            reasoning: false,
+            api: "openai-responses" as const,
+            baseUrl: "https://api.openai.com/v1",
+          },
+          { provider: "openai", id: "gpt-5", name: "GPT-5", reasoning: true },
+          {
+            provider: "anthropic",
+            id: "claude-sonnet-4-5",
+            name: "Claude Sonnet",
+            reasoning: true,
+          },
+        ];
+        if (!outcomeText) {
+          await mockPublishedModelRuntimeForTest({
+            config,
+            isCurrent: () => true,
+            facts: { modelCatalog: { entries: modelCatalog, routeVariants: modelCatalog } },
+            paths: {
+              agentDir: telegramTestState.agentDir(),
+              workspaceDir: telegramTestState.workspaceDir,
+            },
+            authStore: {
+              version: 1,
+              profiles: {
+                "team:prod": { type: "api_key", provider: "openai", key: "synthetic-openai" },
+                "anthropic:fixture": {
+                  type: "api_key",
+                  provider: "anthropic",
+                  key: "synthetic-anthropic",
+                },
+              },
+            },
+          });
+        }
         vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockResolvedValueOnce({
           byProvider: new Map([
             ["openai", new Set(["gpt-4o", "gpt-4.1", "gpt-5"])],
@@ -2746,17 +2790,7 @@ describe("createTelegramBot", () => {
           providers: ["anthropic", "openai"],
           resolvedDefault: { provider: defaultProvider, model: defaultModel },
           modelNames: new Map(),
-          modelCatalog: [
-            { provider: "openai", id: "gpt-4o", name: "GPT-4o", reasoning: false },
-            { provider: "openai", id: "gpt-4.1", name: "GPT-4.1", reasoning: false },
-            { provider: "openai", id: "gpt-5", name: "GPT-5", reasoning: true },
-            {
-              provider: "anthropic",
-              id: "claude-sonnet-4-5",
-              name: "Claude Sonnet",
-              reasoning: true,
-            },
-          ],
+          modelCatalog,
         });
 
         loadConfig.mockReturnValue(config);
@@ -2786,126 +2820,16 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("renders model callback lists with configured display names", async () => {
-    const storePath = createTelegramTestStorePath("model-display-names");
-    const buildModelsProviderDataMock = vi.mocked(telegramBotDepsForTest.buildModelsProviderData);
-    buildModelsProviderDataMock.mockResolvedValueOnce({
-      byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
-      providers: ["openai"],
-      resolvedDefault: { provider: "openai", model: "gpt-5" },
-      modelCatalog: [],
-      modelNames: new Map<string, string>([
-        ["openai/gpt-4.1", "GPT 4.1 Bridge"],
-        ["openai/gpt-5", "GPT Five Bridge"],
-      ]),
-    });
-
-    const config = makeModelPickerConfig(storePath, {
-      defaultModel: "openai/gpt-5",
-      omitModels: true,
-    });
-
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: "cbq-model-display-names-1",
-        data: "mdl_list_openai_1",
-        message: { message_id: 23 },
-      }),
-    );
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(firstEditMessageTextArg(2)).toContain(
-      "Selecting a model also applies its configured runtime.",
-    );
-    const params = firstEditMessageTextArg(3);
-    const inlineKeyboard = (
-      params as {
-        reply_markup?: {
-          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
-        };
-      }
-    ).reply_markup?.inline_keyboard;
-
-    expect(inlineKeyboard).toStrictEqual([
-      [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
-      [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
-      [{ text: "<< Back", callback_data: "mdl_back" }],
-    ]);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
-  });
-
-  it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
-    const storePath = createTelegramTestStorePath("model-html");
-    const config = makeModelPickerConfig(storePath, {
-      models: {
-        "anthropic/claude-opus-4-6": {},
-        "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
-      },
-    });
-    const route = resolveTelegramConversationRoute({
-      cfg: config,
-      accountId: "default",
-      chatId: 1234,
-      isGroup: false,
-      threadSpec: { scope: "none" },
-      senderId: 9,
-    }).route;
-    const sessionKey = resolveTelegramConversationBaseSessionKey({
-      cfg: config,
-      route,
-      chatId: 1234,
-      isGroup: false,
-      senderId: 9,
-    });
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "model-html",
-        updatedAt: 1,
-        agentRuntimeOverride: "openclaw",
-      },
-    });
-
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = getTelegramCallbackHandlerForTests();
-
-    await callbackHandler(
-      createTelegramCallbackContext({
-        id: "cbq-model-html-1",
-        data: "mdl_sel_openai/gpt-5.4",
-        message: { message_id: 17 },
-      }),
-    );
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const editCall = mockCall(editMessageTextSpy, 0, "edit message text");
-    expect(editCall[0]).toBe(1234);
-    expect(editCall[1]).toBe(17);
-    expect(editCall[2]).toBe(
-      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b> from configured policy. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
-    );
-    expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
-
-    const entry = readOnlySessionEntry(storePath);
-    expect(entry?.providerOverride).toBe("openai");
-    expect(entry?.modelOverride).toBe("gpt-5.4");
-    expect(entry?.modelOverrideSource).toBe("user");
-    expect(entry?.agentRuntimeOverride).toBeUndefined();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
+  registerTelegramModelPickerCases({
+    createTelegramTestStorePath,
+    makeModelPickerConfig,
+    loadConfig,
+    createTelegramBot: (options) => createTelegramBot(options),
+    getTelegramCallbackHandlerForTests,
+    getTelegramTestState: () => telegramTestState,
+    readOnlySessionEntry,
+    firstEditMessageTextArg,
+    harness: { telegramBotDepsForTest, replySpy, editMessageTextSpy, answerCallbackQuerySpy },
   });
 
   it("keeps hot-reloaded model pins on the next assembled turn", async () => {
@@ -2940,7 +2864,7 @@ describe("createTelegramBot", () => {
       },
     } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    // Fresh config: default changed and GPT-5.6 Luna was added after startup.
+    // Fresh config: default changed and GPT-4.1 was added after startup.
     const freshConfig = {
       ...startupConfig,
       agents: {
@@ -2948,13 +2872,44 @@ describe("createTelegramBot", () => {
           model: "anthropic/claude-opus-4-6",
           models: {
             "openai/gpt-5.4": {},
-            "openai/gpt-5.6-luna": {},
+            "openai/gpt-4.1": {},
             "anthropic/claude-opus-4-6": {},
           },
         },
       },
     };
     const authorizationConfig = { ...freshConfig };
+    const modelCatalog = [
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+      {
+        provider: "openai",
+        id: "gpt-4.1",
+        name: "GPT-4.1",
+        api: "openai-responses" as const,
+        baseUrl: "https://api.openai.com/v1",
+      },
+      { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+    ];
+    await mockPublishedModelRuntimeForTest({
+      config: freshConfig,
+      isCurrent: () => true,
+      facts: { modelCatalog: { entries: modelCatalog, routeVariants: modelCatalog } },
+      paths: {
+        agentDir: telegramTestState.agentDir(),
+        workspaceDir: telegramTestState.workspaceDir,
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:fixture": { type: "api_key", provider: "openai", key: "synthetic-openai" },
+          "anthropic:fixture": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "synthetic-anthropic",
+          },
+        },
+      },
+    });
 
     // Bot created with startup config; loadConfig now returns fresh config
     loadConfig.mockReturnValue(freshConfig);
@@ -2985,15 +2940,15 @@ describe("createTelegramBot", () => {
     await callbackHandler(
       createTelegramCallbackContext({
         id: "cbq-model-fresh-cfg-2",
-        data: "mdl_sel_openai/gpt-5.6-luna",
+        data: "mdl_sel_openai/gpt-4.1",
         message: { date: 1_736_380_801, message_id: 21 },
       }),
     );
 
-    const lunaEntry = readOnlySessionEntry(storePath);
-    expect(lunaEntry?.providerOverride).toBe("openai");
-    expect(lunaEntry?.modelOverride).toBe("gpt-5.6-luna");
-    expect(lunaEntry?.modelOverrideSource).toBe("user");
+    const addedModelEntry = readOnlySessionEntry(storePath);
+    expect(addedModelEntry?.providerOverride).toBe("openai");
+    expect(addedModelEntry?.modelOverride).toBe("gpt-4.1");
+    expect(addedModelEntry?.modelOverrideSource).toBe("user");
 
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     replySpy.mockClear();
@@ -3052,7 +3007,7 @@ describe("createTelegramBot", () => {
 
     const afterTurn = readOnlySessionEntry(storePath);
     expect(afterTurn?.providerOverride).toBe("openai");
-    expect(afterTurn?.modelOverride).toBe("gpt-5.6-luna");
+    expect(afterTurn?.modelOverride).toBe("gpt-4.1");
     expect(afterTurn?.modelOverrideSource).toBe("user");
   });
 

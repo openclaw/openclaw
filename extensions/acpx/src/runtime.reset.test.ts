@@ -1,7 +1,7 @@
 import { AcpxRuntime as BaseAcpxRuntime } from "acpx/runtime";
+import type { AcpSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpSessionStore } from "./runtime.js";
 import { type TestSessionStore, makeRuntime, makeManagedRuntime } from "./runtime.test-support.js";
 
 describe("AcpxRuntime reset generation custody", () => {

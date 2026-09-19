@@ -2233,14 +2233,20 @@ export const en: TranslationMap & {
       testingButton: "Testing…",
     },
     nativeDiscovery: {},
+    nativeModels: {
+      title: "Use an installed agent",
+      body: "Choose a model from an installed agent. It keeps its own sign-in and tools. Use saves your choice without running the setup test.",
+      choose: "Choose a model",
+      use: "Use",
+      saving: "Saving…",
+      loading: "Checking installed agents…",
+      empty:
+        "No models are available from installed agents. Sign in through your agent, then open the picker again.",
+      signIn: "Sign in through the installed agent, then check again.",
+    },
     empty: {
       title: "Recommended installs",
-      intro: "No existing AI access was detected. Install one of these tools, then check again.",
-    },
-    unavailable: {
-      title: "Found, but needs attention",
-      signIn: "Set up & verify {provider}",
-      useApiKey: "Use API key",
+      intro: "Install an assistant or local model service, then check again.",
     },
     signIn: {
       title: "Set up and verify a model",
@@ -4078,6 +4084,26 @@ export const en: TranslationMap & {
       closeVideoPreview: "Close video preview",
     },
     modelControls: {},
+    nativeRuntimeRecovery: {
+      title: "Use {runtime}’s native permissions?",
+      confirm: "Continue for this chat",
+      confirmMessage:
+        "{runtime} will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. Only this chat is changed; other chats and global configuration stay unchanged. OpenClaw-hosted tools keep their own policy checks.",
+      retryMessage: "Continue will retry the message you just sent.",
+      chooseAnother: "Choose another model to keep this chat’s current execution restrictions.",
+      failed: "Could not change this chat’s execution permissions: {error}",
+      refreshFailed:
+        "The model and permissions were saved, but refreshing this chat failed: {error}",
+      reasons: {
+        "sandbox-required": "{runtime} cannot run because this chat requires a sandbox.",
+        sandbox: "{runtime} uses native tools that cannot run inside the OpenClaw sandbox.",
+        "workspace-only":
+          "{runtime} cannot enforce this chat’s OpenClaw workspace-only restriction.",
+        "permission-mode": "{runtime} cannot enforce this chat’s current execution permissions.",
+        "tool-policy": "{runtime} cannot enforce this chat’s OpenClaw native tool restrictions.",
+        "remote-execution": "{runtime} cannot use this chat’s remote execution target.",
+      },
+    },
     permissionControls: {
       label: "Execution permissions",
       help: "Choose what available tools may do in this session. This does not change the tool profile.",

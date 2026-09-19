@@ -366,7 +366,7 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
-  it("reads prepared native rows without discovering a harness catalog", async () => {
+  it("reads prepared native rows without discovering a harness catalog", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -378,12 +378,10 @@ describe("prepared native catalog readiness", () => {
     const registry = nativeRegistry(() => ({ accountType: "apiKey", authMode: "oauth" }));
     const loadModelCatalog = vi.fn(async () => [nativeEntry]);
     registry.agentHarnesses[0]!.harness.loadModelCatalog = loadModelCatalog;
-    const result = await loadPreparedModelCatalogView({
-      kind: "prepared",
+    const result = prepareModelCatalogView({
       ...facts(cfg),
       snapshot: snapshot([nativeEntry]),
       pluginRegistry: registry,
-      refreshNative: false,
     });
     expect(result.catalog).toEqual([nativeEntry]);
     expect(loadModelCatalog).not.toHaveBeenCalled();

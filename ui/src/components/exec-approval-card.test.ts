@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import { parseApprovalRequestedEvent, type ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { renderExecApprovalCard } from "./exec-approval-card.ts";
 
@@ -99,6 +99,37 @@ describe("exec approval card", () => {
     expect(card?.querySelector(".exec-approval-details")).toBeNull();
     expect(card?.textContent).not.toContain("agent:main:session-1");
   });
+
+  it.each(["inline", "modal"] as const)(
+    "shows the full plugin request detail as plain text in the %s card",
+    (variant) => {
+      const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;
+      const request = parseApprovalRequestedEvent("plugin.approval.requested", {
+        id: "plugin-detail",
+        request: {
+          title: "Review command",
+          description: "Run the test suite",
+          detail,
+        },
+        createdAtMs: 1,
+        expiresAtMs: 61_000,
+      });
+      expect(request).not.toBeNull();
+      if (!request) {
+        throw new Error("Plugin approval event was not parsed");
+      }
+
+      const card = renderCard(request, variant);
+      const previews = Array.from(card?.querySelectorAll("pre") ?? []);
+
+      expect(previews.map((preview) => preview.textContent)).toEqual([
+        "Run the test suite",
+        detail,
+      ]);
+      expect(previews[1]?.closest("details")).toBeNull();
+      expect(card?.querySelector("script")).toBeNull();
+    },
+  );
 
   it("labels an approval projected from a child session", () => {
     const card = renderCard(approval({ sourceSessionKey: "agent:main:cloud-child" }), "inline");

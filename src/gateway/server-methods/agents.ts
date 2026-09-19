@@ -51,8 +51,8 @@ import {
 } from "../../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import {
+  buildIdentityMarkdownForWrite,
   createAgentIdentityConfig,
-  mergeIdentityMarkdownContent,
   normalizeIdentityForFile,
   sanitizeAgentIdentityLine,
 } from "../../agents/identity-file.js";
@@ -96,9 +96,12 @@ import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-r
 import { resolveUserPath } from "../../utils.js";
 import {
   AgentConfigPreconditionError,
+  AgentModelSelectionError,
   deleteAgentConfigEntry,
   isConfiguredAgent,
+  isImplicitAgentModelUpdate,
   updateAgentConfigEntry,
+  validateAgentModelSelectionUpdate,
 } from "./agents-config-mutations.js";
 import { createAgentFileHandlers } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
@@ -573,35 +576,6 @@ async function readWorkspaceFileContent(
   }
 }
 
-async function buildIdentityMarkdownForWrite(params: {
-  workspaceDir: string;
-  identity: IdentityConfig;
-  fallbackWorkspaceDir?: string;
-  preferFallbackWorkspaceContent?: boolean;
-}): Promise<string> {
-  let baseContent: string | undefined;
-  if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
-    // Workspace moves may create a blank identity file; merge into the previous user-edited file.
-    baseContent = await readWorkspaceFileContent(
-      params.fallbackWorkspaceDir,
-      DEFAULT_IDENTITY_FILENAME,
-    );
-    if (baseContent === undefined) {
-      baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
-    }
-  } else {
-    baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
-    if (baseContent === undefined && params.fallbackWorkspaceDir) {
-      baseContent = await readWorkspaceFileContent(
-        params.fallbackWorkspaceDir,
-        DEFAULT_IDENTITY_FILENAME,
-      );
-    }
-  }
-
-  return mergeIdentityMarkdownContent(baseContent, params.identity);
-}
-
 async function buildIdentityMarkdownOrRespondUnsafe(params: {
   respond: RespondFn;
   workspaceDir: string;
@@ -610,7 +584,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
   preferFallbackWorkspaceContent?: boolean;
 }): Promise<string | null> {
   try {
-    return await buildIdentityMarkdownForWrite(params);
+    return await buildIdentityMarkdownForWrite({ ...params, readWorkspaceFileContent });
   } catch (err) {
     if (err instanceof FsSafeError) {
       respondWorkspaceFileUnsafe(params.respond, DEFAULT_IDENTITY_FILENAME);
@@ -662,11 +636,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentId = normalized.value;
-    if (!isConfiguredAgent(cfg, agentId)) {
-      respondAgentNotFound(respond, agentId);
-      return;
-    }
-
     const workspaceDir =
       typeof params.workspace === "string" && params.workspace.trim()
         ? resolveUserPath(params.workspace.trim())
@@ -691,9 +660,20 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ...(safeName ? { name: safeName } : {}),
       ...(workspaceDir ? { workspace: workspaceDir } : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(params.agentRuntime ? { agentRuntime: params.agentRuntime } : {}),
       ...(identity ? { identity } : {}),
     };
-    const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
+    const selectionError = validateAgentModelSelectionUpdate(params);
+    if (selectionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectionError));
+      return;
+    }
+    const configured = isConfiguredAgent(cfg, agentId);
+    if (!configured && !isImplicitAgentModelUpdate(cfg, agentConfigUpdate)) {
+      respondAgentNotFound(respond, agentId);
+      return;
+    }
+    const nextConfig = configured ? applyAgentConfig(cfg, agentConfigUpdate) : cfg;
 
     let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
@@ -756,6 +736,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentNotFound(respond, agentId);
+        return;
+      }
+      if (error instanceof AgentModelSelectionError) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
         return;
       }
       throw error;

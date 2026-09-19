@@ -177,20 +177,13 @@ async function buildPreparedModelsProviderDataWithContext(
   options: ModelsBrowseOptions,
   agentDir?: string,
 ): Promise<PreparedModelsProviderData> {
-  const owner = preparedModelCatalog.getPublishedPreparedModelCatalogOwnerSnapshot({
+  const published = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
     config: cfg,
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+    readOnly: false,
   });
-  if (!owner) {
-    throw new PreparedModelRuntimeOwnerNotPublishedError(
-      "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
-    );
-  }
-  // Browse uses the completed generation and its paired auth. Selection and turn-path
-  // capability discovery remain with their own runtime owners.
-  const published = preparedModelCatalog.materializePreparedModelCatalogOwner(owner);
   return projectPreparedModelsProviderData(published.config, agentId, options, published);
 }
 

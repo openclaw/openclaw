@@ -6471,15 +6471,21 @@ describe("createTelegramBot", () => {
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
-    const callbackHandler = getOnHandler("callback_query");
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
-      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, getOnHandler("callback_query"));
 
-    const applySessionModelSelectionSpy = vi.spyOn(
-      modelSessionRuntime,
-      "applySessionModelSelection",
-    );
-    applySessionModelSelectionSpy.mockRejectedValueOnce(new Error("session store boom"));
+    const applySessionModelSelectionSpy = vi
+      .spyOn(modelSessionRuntime, "applySessionModelSelection")
+      .mockRejectedValueOnce(new Error("session store boom"))
+      .mockResolvedValueOnce({
+        status: "applied",
+        provider: "openai",
+        model: "gpt-5.4",
+        effectiveModelRef: "openai/gpt-5.4",
+        agentRuntime: "openclaw",
+        changed: true,
+        contextTokens: 128_000,
+      });
 
     const ctx = makeCallbackRetryContext({
       updateId: 890,
@@ -6491,20 +6497,14 @@ describe("createTelegramBot", () => {
     try {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
+      expect(applySessionModelSelectionSpy).toHaveBeenCalledTimes(2);
     } finally {
       applySessionModelSelectionSpy.mockRestore();
     }
 
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
-    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
-      "Session-only model selection. Runtime set to <b>codex</b> from configured policy.",
-    );
-    expect(
-      editMessageTextSpy.mock.calls.some((call) =>
-        (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
-      ),
-    ).toBe(false);
+    expect(editMessageTextSpy.mock.calls.map((call) => call[2])).toEqual([
+      "✅ Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b>. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.",
+    ]);
   });
 
   it("shows a permanent rejection when model selection is locked", async () => {

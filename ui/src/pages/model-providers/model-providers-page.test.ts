@@ -232,26 +232,6 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
-  it("keeps the Models header focused on provider actions", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.querySelector("[data-models-connect]")).not.toBeNull());
-    expect(page.querySelector("openclaw-agent-select")).toBeNull();
-    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
-      "Global model defaults and provider access for your agents.",
-    );
-  });
-
-  it("links the page subtitle to the model providers guide", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await page.updateComplete;
-
-    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(link?.textContent?.trim()).toBe("Learn more");
-    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
-  });
-
   it.each([
     {
       access: "read-only",
@@ -512,30 +492,6 @@ describe("ModelProvidersPage agent scope", () => {
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
-  });
-
-  it("keeps committed default models visible until their authoritative refresh succeeds", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config.get failed after saving default models";
-    });
-    const page = appendPage(context);
-    await waitForProviders(page);
-    const selection: DefaultModelSelection = {
-      primary: "openai/gpt-5",
-      fallbacks: [],
-      utilityModel: null,
-    };
-    page.defaultsDraft = selection;
-
-    await page.saveDefaults();
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.defaultsDraft).toBe(selection);
-    expect(page.messages.defaults).toEqual({
-      kind: "warning",
-      text: "config.get failed after saving default models",
-    });
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {

@@ -91,29 +91,14 @@ export function listConfiguredRefreshInputs(
       workspacesByDir.set(agentDir, workspaceDir);
     }
   }
-  return withAgentRosterFactsBatch(config, () => {
-    const inputs: PreparedModelRuntimeInput[] = [];
-    for (const rawInput of listConfiguredOwnerInputs(
+  return withAgentRosterFactsBatch(config, () =>
+    listConfiguredOwnerInputs(
       config,
       options.defaultWorkspaceDir,
       options.allowGatewaySubagentBinding,
-    )) {
-      const input = normalizePreparedModelRuntimeInput(rawInput);
-      const preservedWorkspaceDir = input.agentId
-        ? preservedWorkspaceByAgentDir.get(input.agentId)?.get(input.agentDir)
-        : undefined;
-      inputs.push(
-        preservedWorkspaceDir
-          ? {
-              ...input,
-              workspaceDir: preservedWorkspaceDir,
-              preserveWorkspaceDirOnRefresh: true,
-            }
-          : input,
-      );
-    }
-    return inputs;
-  });
+      preservedWorkspaceByAgentDir,
+    ).map(normalizePreparedModelRuntimeInput),
+  );
 }
 
 /** Invalidates scoped owners and optionally advances retained owners to a new config stamp. */

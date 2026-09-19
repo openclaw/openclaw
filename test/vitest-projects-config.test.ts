@@ -8,7 +8,10 @@ import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
-import { auditFullSuiteTestFileOwnership } from "./vitest-projects-config.test-support.js";
+import {
+  auditFullSuiteTestFileOwnership,
+  listVitestConfigTestFiles,
+} from "./vitest-projects-config.test-support.js";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
 import { createAgentsEmbeddedIncompleteTurnVitestConfig } from "./vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
 import { createAgentsEmbeddedOverflowCompactionVitestConfig } from "./vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
@@ -398,6 +401,65 @@ describe("projects vitest config", () => {
         }
       });
     }
+  });
+
+  it("focuses a discovered test from each leaf through its actual execution config", async () => {
+    const configs = new Set(fullSuiteVitestShards.flatMap((shard) => shard.projects));
+    let includeId = 0;
+    for (const config of configs) {
+      const [file] = (await listVitestConfigTestFiles(config)).toSorted();
+      if (!file) {
+        continue;
+      }
+      const matches: string[] = [];
+      for (const plan of buildVitestRunPlans([file])) {
+        const includeFile = plan.includePatterns
+          ? patternFiles.writePatternFile(`focused-${includeId++}.json`, plan.includePatterns)
+          : undefined;
+        matches.push(...(await listVitestConfigTestFiles(plan.config, includeFile)));
+      }
+      expect(matches, file).toEqual([file]);
+    }
+  });
+
+  it("covers the extension aggregate exactly once with bounded process lifetimes", async () => {
+    const expected = await listVitestConfigTestFiles(
+      "test/vitest/vitest.full-extensions.config.ts",
+    );
+    const configFiles = new Map<string, string[]>();
+    const matches: string[] = [];
+    const processLimits = [
+      ["test/vitest/vitest.extension-codex.config.ts", "extensions/codex/", 12],
+      ["test/vitest/vitest.extension-matrix.config.ts", "extensions/matrix/", 40],
+      ["test/vitest/vitest.extension-telegram.config.ts", "extensions/telegram/", 1],
+    ] as const;
+    for (const plan of buildVitestRunPlans(["extensions"])) {
+      let files = configFiles.get(plan.config);
+      if (!files) {
+        files = await listVitestConfigTestFiles(plan.config);
+        configFiles.set(plan.config, files);
+      }
+      const selected = files.filter(
+        (file) =>
+          !plan.includePatterns ||
+          plan.includePatterns.some((pattern) => path.matchesGlob(file, pattern)),
+      );
+      for (const [boundedConfig, root, limit] of processLimits) {
+        const inheritedWorkerLimit =
+          plan.config === "test/vitest/vitest.extension-database-workers.config.ts" &&
+          selected.some((file) => file.startsWith(root));
+        if (plan.config === boundedConfig || inheritedWorkerLimit) {
+          expect(
+            selected.every((file) => file.startsWith(root)),
+            plan.config,
+          ).toBe(true);
+          expect(selected.length, plan.config).toBeLessThanOrEqual(limit);
+        }
+      }
+      matches.push(...selected);
+    }
+    expect(matches.toSorted()).toEqual(expected.toSorted());
+    expect(new Set(matches).size).toBe(matches.length);
   });
 
   it("keeps all embedded harnesses under their canonical embedded owner", () => {

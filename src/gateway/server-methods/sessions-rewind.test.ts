@@ -46,6 +46,7 @@ import {
   appendTranscriptMessage,
   listSessionEntriesCore,
   loadSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -581,6 +582,10 @@ describe("session message-cut methods", () => {
   );
 
   it("returns editor text for rewind and a new key for fork", async () => {
+    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+      sandboxMode: "off",
+      nativeRuntimeConsent: "native-fixture",
+    }));
     const profileId = "profile-fork-creator";
     const fork = await invoke("sessions.fork", "user-entry", {
       connect: { scopes: ["operator.write"] },
@@ -607,6 +612,8 @@ describe("session message-cut methods", () => {
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
     const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
+    expect(forkEntry).not.toHaveProperty("sandboxMode");
+    expect(forkEntry).not.toHaveProperty("nativeRuntimeConsent");
     expect(forkEntry).toMatchObject({
       createdVia: "operator",
       createdActor: { type: "human", id: profileId },
@@ -633,6 +640,7 @@ describe("session message-cut methods", () => {
       undefined,
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
+    expect(loadSessionEntry({ agentId: "main", sessionKey })?.sandboxMode).toBe("off");
   });
 
   it.each([

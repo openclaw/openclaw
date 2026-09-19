@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionRoutingContract,
@@ -11,6 +16,7 @@ import { buildSessionCreationStamp } from "../../config/sessions/session-entry-p
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
@@ -34,6 +40,7 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 // Admission's writer barrier owns preparation. Keep the seed in memory until the
@@ -263,3 +270,62 @@ export type PreparedChatSendSession = Extract<
   ReturnType<typeof prepareChatSendSession>,
   { ok: true }
 >["value"];
+
+/** Refuse before send admission so confirmation can retain the unsent composer. */
+export async function prepareChatSendNativeRuntimeRestriction(params: {
+  request: NormalizedChatSendRequest;
+  session: PreparedChatSendSession;
+  client: GatewayRequestHandlerOptions["client"];
+  assertCurrent?: () => void;
+}): Promise<ErrorShape | undefined> {
+  const { request, session, client } = params;
+  const { entry, cfg, agentId, sessionKey, resolvedSessionModel } = session;
+  if (
+    !entry ||
+    request.turnKind !== "main" ||
+    request.stopCommand ||
+    (!request.suppressCommandInterpretation && resolveTextCommand(request.inboundMessage, cfg))
+  ) {
+    return undefined;
+  }
+  const runtime = resolveEffectiveAgentRuntime({
+    cfg,
+    agentId,
+    sessionKey,
+    sessionEntry: entry,
+    provider: resolvedSessionModel.provider,
+    modelId: resolvedSessionModel.model,
+  });
+  if (runtime === "openclaw") {
+    return undefined;
+  }
+  let harness = getRegisteredAgentHarness(runtime)?.harness;
+  if (!harness) {
+    await ensureSelectedAgentHarnessPlugin({
+      config: cfg,
+      agentId,
+      sessionKey,
+      workspaceDir: entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId),
+      provider: resolvedSessionModel.provider,
+      modelId: resolvedSessionModel.model,
+      agentHarnessRuntimeOverride: runtime,
+      pluginRegistry: requireActivePluginRegistry(),
+    });
+    params.assertCurrent?.();
+    harness = getRegisteredAgentHarness(runtime)?.harness;
+  }
+  if (!harness || harness.executionEnvironment !== "host-only") {
+    return undefined;
+  }
+  return resolveSessionNativeRuntimeRestriction({
+    cfg,
+    agentId,
+    sessionKey,
+    entry,
+    persistedEntry: entry,
+    harness,
+    provider: resolvedSessionModel.provider,
+    modelId: resolvedSessionModel.model,
+    callerCanConsent: hasGatewayAdminScope(client),
+  });
+}

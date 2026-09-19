@@ -163,6 +163,7 @@ export function renderChatModelPickerOption(params: {
       params.entry.provider,
     ).toLocaleLowerCase()}
     role="option"
+    hidden
     aria-selected=${selected ? "true" : "false"}
     title=${accessibleStatus || nothing}
     aria-label=${[

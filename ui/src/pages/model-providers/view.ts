@@ -89,6 +89,7 @@ type ModelProvidersViewProps = {
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
+  installedAgents: TemplateResult | typeof nothing;
   onRefresh: () => void;
   onOpenKeyEditor: (provider: string) => void;
   onCloseKeyEditor: () => void;
@@ -582,6 +583,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
+    ${props.installedAgents}
     ${renderSettingsSection(
       {
         title: t("modelProviders.accessTitle"),
@@ -616,7 +618,14 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           </openclaw-tooltip>
         `,
       },
-      props.loading ? renderSettingsGroup(renderSettingsLoadingSkeleton()) : providerRows,
+      props.loading
+        ? renderSettingsGroup(renderSettingsLoadingSkeleton())
+        : props.cards.length === 0 &&
+            props.installedAgents !== nothing &&
+            !props.error &&
+            !props.providerUsageFailed
+          ? nothing
+          : providerRows,
     )}
     ${
       props.providerUsageStalled

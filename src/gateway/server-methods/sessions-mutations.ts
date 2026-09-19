@@ -63,7 +63,9 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       if (
-        params.patch.permissionMode === "full" &&
+        (params.patch.permissionMode === "full" ||
+          params.patch.sandboxMode !== undefined ||
+          params.patch.nativeRuntimeConsent !== undefined) &&
         client !== null &&
         !scopes.includes(ADMIN_SCOPE)
       ) {
@@ -118,7 +120,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         return;
       }
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (params.permissionMode === "full" && client !== null && !scopes.includes(ADMIN_SCOPE)) {
+      if (
+        (params.permissionMode === "full" ||
+          params.sandboxMode !== undefined ||
+          params.nativeRuntimeConsent !== undefined) &&
+        client !== null &&
+        !scopes.includes(ADMIN_SCOPE)
+      ) {
         respond(
           false,
           undefined,

@@ -37,7 +37,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
       overrides: {
         fixture: [
           process.execPath,
-          fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url)),
+          fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
           peer,
         ].join(" "),
       },

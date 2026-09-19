@@ -2288,7 +2288,7 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "5.0.0",
-    "acpx": "0.16.0",
+    "acpx": "0.17.0",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "esbuild": "0.28.2",

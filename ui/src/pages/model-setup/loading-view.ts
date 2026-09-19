@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { renderNativeModelSetupLoading } from "./native-model-setup.ts";
 
 registerModelSetupEnglish();
 
@@ -14,7 +15,7 @@ function renderLoadingSection(params: {
   return html`
     <section class=${`settings-section ${params.className ?? ""}`.trim()}>
       <div class="settings-section__header"><h2>${params.title}</h2></div>
-      ${params.intro ? html`<p class="muted">${params.intro}</p>` : nothing}
+      ${params.intro ? html`<p class="muted model-setup__loading-intro">${params.intro}</p>` : nothing}
       <div class="model-setup__rows">
         ${Array.from(
           { length: params.rows ?? 1 },
@@ -56,6 +57,7 @@ export function renderModelSetupLoading(modelConfigured: boolean) {
               })
             : nothing
         }
+        ${renderNativeModelSetupLoading()}
         ${renderLoadingSection({
           title: t("modelSetup.candidates.title"),
           className: "model-setup__loading-section--candidates",

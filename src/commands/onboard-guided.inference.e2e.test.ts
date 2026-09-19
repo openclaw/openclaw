@@ -154,7 +154,6 @@ describe("guided onboarding inference composition", () => {
                   randomInt: () => 0,
                 },
               }),
-            probeLocalCommand,
             resolveManifestProviderAuthChoices: () => [],
           });
           return result;

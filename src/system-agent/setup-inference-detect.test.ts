@@ -90,7 +90,6 @@ function detectWithProvider(
       resolveManifestProviderAuthChoices: () => options.choices ?? [choice],
       resolvePluginProviders: () => [provider],
       detectInferenceBackends: async () => nativeCandidates,
-      probeLocalCommand: async (command) => ({ command, found: false }),
     },
     "main",
   );

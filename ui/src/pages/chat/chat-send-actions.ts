@@ -158,8 +158,12 @@ export function moveQueuedChatMessage(
   return "moved";
 }
 
-export async function retryQueuedChatMessage(host: ChatHost, id: string) {
-  if (isInitialChatHistoryUnavailable(host)) {
+export async function retryQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  canDispatch?: () => boolean,
+) {
+  if (isInitialChatHistoryUnavailable(host) || (canDispatch && !canDispatch())) {
     return;
   }
   const item = host.chatQueue.find((entry) => entry.id === id);
@@ -206,6 +210,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
         await deliverChatQueueItem(host, retry, {
           routingSessionKey: retry.sessionKey ?? host.sessionKey,
           storageMode: "memory",
+          canDispatch,
         });
         return;
       }
@@ -235,6 +240,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     explicitAdmission
       ? {
           routingSessionKey: host.sessionKey,
+          canDispatch,
           ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),
         }
       : undefined,

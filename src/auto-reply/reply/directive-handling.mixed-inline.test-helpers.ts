@@ -68,7 +68,6 @@ export async function applyMixedDirectives(params: {
     resolveThinkingCatalog: async () => allowedModels,
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel ?? (async () => "off"),
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
   };
   const typing = {
     onReplyStart: async () => {},

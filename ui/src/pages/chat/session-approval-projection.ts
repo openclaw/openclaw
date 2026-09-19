@@ -62,6 +62,7 @@ function projectPendingApproval(
       kind: "plugin",
       pluginTitle: presentation.title,
       pluginDescription: presentation.description,
+      pluginDetail: presentation.detail,
       pluginSeverity: presentation.severity,
       pluginId: presentation.pluginId ?? null,
     };

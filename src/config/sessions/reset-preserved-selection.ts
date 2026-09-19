@@ -9,6 +9,7 @@ type ResetPreservedSelectionState = Pick<
   | "modelOverride"
   | "modelOverrideSource"
   | "modelOverrideRouteResolution"
+  | "agentRuntimeOverride"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -41,6 +42,9 @@ export function resolveResetPreservedSelection(params: {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
     preserved.modelOverrideSource = "user";
+    if (entry.agentRuntimeOverride !== undefined) {
+      preserved.agentRuntimeOverride = entry.agentRuntimeOverride;
+    }
     if (entry.modelOverrideRouteResolution) {
       preserved.modelOverrideRouteResolution = entry.modelOverrideRouteResolution;
     }

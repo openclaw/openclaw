@@ -59,6 +59,8 @@ export type QueuedChatStorageMode = "durable" | "memory";
 export type QueuedChatSendOptions = {
   /** Fresh selected-session sends may let the Gateway resolve its effective active-run mode. */
   allowActiveRunSend?: boolean;
+  /** Confirmation-triggered sends retain their UI owner across preparation waits. */
+  canDispatch?: () => boolean;
   /** Exact submit-time leaf; restored drains omit it so intervening advances park the draft. */
   expectedLeafEntryId?: string | null;
   pendingSettings?: Promise<boolean>;

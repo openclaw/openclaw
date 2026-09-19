@@ -392,11 +392,11 @@ export function prepareAgentRuntimeAuth(
         },
       )
     : null;
-  // OpenAI native account discovery is harness-owned synthetic auth, not a
-  // bearer credential for an OpenClaw request route.
+  // A setup hint does not supply a credential for a harness-owned login.
   const directPlanningEvidence =
     directPlanningCandidate?.kind === "setup-provider" &&
-    authProfileSelectionProvider.trim().toLowerCase() === "openai"
+    (params.harnessAuthBootstrap === "harness" ||
+      authProfileSelectionProvider.trim().toLowerCase() === "openai")
       ? null
       : directPlanningCandidate;
   const directPlanningMode = directPlanningEvidence

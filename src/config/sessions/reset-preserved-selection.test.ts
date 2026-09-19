@@ -10,11 +10,13 @@ describe("resolveResetPreservedSelection", () => {
           updatedAt: 1,
           providerOverride: "anthropic",
           modelOverride: "sonnet",
+          agentRuntimeOverride: "native-runtime",
         },
       }),
     ).toEqual({
       providerOverride: "anthropic",
       modelOverride: "sonnet",
+      agentRuntimeOverride: "native-runtime",
       modelOverrideSource: "user",
     });
   });
@@ -29,11 +31,13 @@ describe("resolveResetPreservedSelection", () => {
           modelOverride: "claude-sonnet-4-6",
           modelOverrideSource: "user",
           modelOverrideRouteResolution: "resolved",
+          agentRuntimeOverride: "native-runtime",
         },
       }),
     ).toMatchObject({
       modelOverride: "claude-sonnet-4-6",
       modelOverrideRouteResolution: "resolved",
+      agentRuntimeOverride: "native-runtime",
     });
   });
 
@@ -67,6 +71,10 @@ describe("resolveResetPreservedSelection", () => {
       resolveResetPreservedSelection({
         entry: {
           sessionId: "legacy-auto",
+          providerOverride: "provider-a",
+          modelOverride: "model",
+          modelOverrideSource: "auto",
+          agentRuntimeOverride: "native-runtime",
           updatedAt: 1,
           authProfileOverride: "openai:fallback",
           authProfileOverrideCompactionCount: 0,

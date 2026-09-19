@@ -769,6 +769,7 @@ describe("agent harness host capability", () => {
       expect(payload).toMatchObject({
         mcpTool: { server: "docs", tool: "write_note" },
         toolCallId: "item-1",
+        detail: "Full review evidence",
       });
       expect(payload).not.toHaveProperty("isMcpToolApprovalActive");
       expect(takeMcpToolApprovalBinding({ ...scope, agentId: "other" })).toBeUndefined();
@@ -779,6 +780,7 @@ describe("agent harness host capability", () => {
     await host.capabilities.requestApproval({
       title: "MCP approval",
       description: "Write a note",
+      detail: "Full review evidence",
       severity: "warning",
       toolName: "codex_mcp_tool_approval",
       toolCallId: "item-1",

@@ -25,7 +25,8 @@
     ]
   },
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onAgentHarnesses": ["acp-opencode", "acp-qwen", "acp-pi", "acp-kilocode"]
   },
   "enabledByDefault": true,
   "name": "ACPX Runtime",
@@ -36,7 +37,7 @@
       "id": "agent-runtime",
       "title": "Agent runtime",
       "order": 10,
-      "properties": ["cwd", "stateDir", "probeAgent", "agents", "timeoutSeconds"]
+      "properties": ["cwd", "stateDir", "probeAgent", "agents", "timeoutSeconds", "nativeAgents"]
     },
     {
       "id": "permissions",
@@ -126,6 +127,16 @@
           "required": ["command"]
         }
       },
+      "nativeAgents": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "opencode": { "type": "boolean" },
+          "qwen": { "type": "boolean" },
+          "pi": { "type": "boolean" },
+          "kilocode": { "type": "boolean" }
+        }
+      },
       "agents": {
         "type": "object",
         "additionalProperties": {
@@ -191,6 +202,10 @@
       "label": "MCP Servers",
       "help": "Named MCP server definitions to inject into embedded ACP session bootstrap. Each entry needs a command and can include args and env.",
       "advanced": true
+    },
+    "nativeAgents": {
+      "label": "Native agents",
+      "help": "Choose which installed agents can be used for new chat turns. Missing flags are enabled. Running turns and classic ACP sessions are unchanged."
     },
     "agents": {
       "label": "Agent Commands",

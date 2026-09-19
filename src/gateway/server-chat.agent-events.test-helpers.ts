@@ -3,6 +3,7 @@ import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.
 import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
 type AgentEventHandler = (event: AgentEventPayload) => void;
 
@@ -92,14 +93,29 @@ export function createDirectChatContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
   const config = {};
+  const getRuntimeConfig = overrides.getRuntimeConfig ?? (() => config);
+  const loadGatewayModelCatalog =
+    overrides.loadGatewayModelCatalog ??
+    vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () =>
+      agentDiscoveryMock.models.map((model) =>
+        Object.assign({}, model, { name: model.name ?? model.id }),
+      ),
+    );
   return {
-    loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
-    loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
-      agentId: "main",
-      agentDir: "/tmp/chat-model-catalog-agent",
-      config,
-      entries: [],
-      routeVariants: [],
+    loadGatewayModelCatalog,
+    loadGatewayModelCatalogSnapshot: vi.fn<
+      GatewayRequestContext["loadGatewayModelCatalogSnapshot"]
+    >(async (request) => {
+      const entries = await loadGatewayModelCatalog(request);
+      return {
+        agentId: request?.agentId ?? "main",
+        agentDir: "/tmp/chat-model-catalog-agent",
+        workspaceDir: "/tmp/chat-model-catalog-workspace",
+        config: getRuntimeConfig(),
+        entries,
+        routeVariants: entries,
+        catalogComplete: true,
+      };
     }),
     logGateway: {
       info: vi.fn(),
@@ -118,7 +134,7 @@ export function createDirectChatContext(
     getSessionEventSubscriberConnIds: () => new Set(),
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
-    getRuntimeConfig: () => config,
+    getRuntimeConfig,
     readChatMetadata: vi.fn(async () => {
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),

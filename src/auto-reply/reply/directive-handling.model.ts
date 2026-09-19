@@ -5,18 +5,17 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
-import {
-  isModelKeyAllowedBySet,
-  parseConfiguredModelVisibilityEntries,
-} from "../../agents/model-selection-shared.js";
+import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
   modelKey,
   normalizeProviderId,
-  resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
+import {
+  createModelVisibilityPolicy,
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+} from "../../agents/model-visibility-policy.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
@@ -33,148 +32,38 @@ import type { ThinkLevel } from "./directives.js";
 
 type ModelPickerCatalogEntry = { provider: string; id: string; name?: string };
 
-function pushUniqueCatalogEntry(params: {
-  keys: Set<string>;
-  out: ModelPickerCatalogEntry[];
-  provider: string;
-  id: string;
-  name?: string;
-  fallbackNameToId: boolean;
-}) {
-  const provider = normalizeProviderId(params.provider);
-  const id = normalizeOptionalString(params.id) ?? "";
-  if (!provider || !id) {
-    return;
-  }
-  const key = modelKey(provider, id);
-  if (params.keys.has(key)) {
-    return;
-  }
-  params.keys.add(key);
-  params.out.push({
-    provider,
-    id,
-    name: params.fallbackNameToId ? (params.name ?? id) : params.name,
-  });
-}
-
 function buildModelPickerCatalog(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
   agentId: string;
   aliasIndex: ModelAliasIndex;
-  policyAliasIndex: ModelAliasIndex;
-  allowedModelKeys: ReadonlySet<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
 }): ModelPickerCatalogEntry[] {
-  const configuredProjection = resolveConfiguredModelEntries({
+  const configured = resolveConfiguredModelEntries({
+    ...params,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  });
+  const catalog = dedupeModelCatalogEntries([
+    ...params.allowedModelCatalog.flatMap((entry) => {
+      const id = normalizeOptionalString(entry.id);
+      const provider = normalizeProviderId(entry.provider);
+      return id && provider ? [{ provider, id, name: entry.name ?? id }] : [];
+    }),
+    ...configured.entries.map(({ ref }) => ({
+      provider: ref.provider,
+      id: ref.model,
+      name: ref.model,
+    })),
+  ]);
+  return createModelVisibilityPolicy({
     cfg: params.cfg,
     agentId: params.agentId,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    aliasIndex: params.aliasIndex,
+    defaultModel: configured.defaultRef,
+    catalog,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  });
-  const resolvedDefault = configuredProjection.defaultRef;
-  const configuredCatalog = configuredProjection.entries.map((entry) => ({
-    provider: entry.ref.provider,
-    id: entry.ref.model,
-    name: entry.ref.model,
-  }));
-
-  const keys = new Set<string>();
-  const out: ModelPickerCatalogEntry[] = [];
-
-  const push = (entry: ModelPickerCatalogEntry) => {
-    pushUniqueCatalogEntry({
-      keys,
-      out,
-      provider: entry.provider,
-      id: entry.id ?? "",
-      name: entry.name,
-      fallbackNameToId: false,
-    });
-  };
-
-  const visibility = parseConfiguredModelVisibilityEntries({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (!visibility.hasEntries) {
-    for (const entry of params.allowedModelCatalog) {
-      push({
-        provider: entry.provider,
-        id: entry.id ?? "",
-        name: entry.name,
-      });
-    }
-    for (const entry of configuredCatalog) {
-      push(entry);
-    }
-    return out;
-  }
-
-  // Expand wildcard policy entries through the same discovered-catalog path as
-  // the main model selection policy.
-  for (const entry of params.allowedModelCatalog.filter((candidate) =>
-    isModelKeyAllowedBySet(
-      params.allowedModelKeys,
-      modelKey(candidate.provider, candidate.id ?? ""),
-    ),
-  )) {
-    push({
-      provider: entry.provider,
-      id: entry.id ?? "",
-      name: entry.name,
-    });
-  }
-
-  // Merge exact policy refs that the catalog doesn't know about.
-  for (const raw of visibility.exactModelRefs) {
-    const resolved = resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.policyAliasIndex,
-      ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    });
-    if (!resolved) {
-      continue;
-    }
-    const catalogEntry = params.allowedModelCatalog.find(
-      (entry) =>
-        modelKey(entry.provider, entry.id ?? "") ===
-        modelKey(resolved.ref.provider, resolved.ref.model),
-    );
-    push(
-      catalogEntry
-        ? { provider: catalogEntry.provider, id: catalogEntry.id ?? "", name: catalogEntry.name }
-        : {
-            provider: resolved.ref.provider,
-            id: resolved.ref.model,
-            name: resolved.ref.model,
-          },
-    );
-  }
-
-  // A restricted picker must not reintroduce a default rejected by the active policy.
-  if (
-    resolvedDefault.model &&
-    isModelKeyAllowedBySet(
-      params.allowedModelKeys,
-      modelKey(resolvedDefault.provider, resolvedDefault.model),
-    )
-  ) {
-    push({
-      provider: resolvedDefault.provider,
-      id: resolvedDefault.model,
-      name: resolvedDefault.model,
-    });
-  }
-
-  return out;
+  }).allowedCatalog;
 }
 
 function filterMissingAuthNestedProviderDuplicates(params: {
@@ -227,8 +116,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
-  policyAliasIndex?: ModelAliasIndex;
-  allowedModelKeys: ReadonlySet<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   currentThinkLevel: ThinkLevel;
   thinkingCatalog?: ThinkingCatalogEntry[];
@@ -372,8 +259,6 @@ export async function maybeHandleModelDirectiveInfo(params: {
     defaultModel: params.defaultModel,
     agentId: params.activeAgentId,
     aliasIndex: params.aliasIndex,
-    policyAliasIndex: params.policyAliasIndex ?? params.aliasIndex,
-    allowedModelKeys: params.allowedModelKeys,
     allowedModelCatalog: params.allowedModelCatalog,
   });
   const formatPath = (value: string) => shortenHomePath(value);

@@ -29,6 +29,7 @@ export type ExecApprovalRequest = {
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
   pluginDescription?: string | null;
+  pluginDetail?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
   proposalHash?: string | null;
@@ -253,6 +254,7 @@ function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | n
     },
     pluginTitle: title,
     pluginDescription: description,
+    pluginDetail: typeof request.detail === "string" ? request.detail : null,
     pluginSeverity: severity,
     pluginId,
     createdAtMs,

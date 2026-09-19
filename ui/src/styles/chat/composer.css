@@ -2302,6 +2302,40 @@ html[dir="rtl"] .chat-attachment-loading > span {
   font-weight: 700;
 }
 
+.chat-controls__provider-heading[data-chat-model-provider] {
+  padding-block: 0;
+}
+
+.chat-controls__provider-toggle {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+  min-height: 32px;
+  flex: 1;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.chat-controls__provider-toggle:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-controls__provider-toggle .chat-controls__inline-select-chevron {
+  transform: rotate(0deg);
+}
+
+.chat-controls__provider-toggle[aria-expanded="true"] .chat-controls__inline-select-chevron {
+  transform: rotate(180deg);
+}
+
 .chat-controls__auth-meta {
   display: inline-flex;
   align-items: center;
@@ -3259,6 +3293,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 @media (max-width: 640px) {
+  .chat-controls__provider-toggle {
+    min-height: 44px;
+  }
+
   .agent-chat__composer-meta .chat-controls__permission-trigger {
     width: 44px;
     justify-content: center;

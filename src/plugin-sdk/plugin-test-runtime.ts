@@ -72,6 +72,7 @@ export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
 export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
+export { mockPublishedModelRuntimeForTest } from "./test-helpers/published-model-runtime.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,

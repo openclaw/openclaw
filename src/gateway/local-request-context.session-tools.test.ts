@@ -1,7 +1,8 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
@@ -117,6 +118,14 @@ describe("built-in session tool role authority", () => {
   it.each(["live", "missing", "retired"] as const)(
     "visible forks preserve an active first turn only with live requester authority (%s)",
     async (lifetime) => {
+      const runtimeChoice = vi
+        .spyOn(modelRuntimeChoice, "preparePublishedModelRuntimeChoice")
+        .mockImplementation(async ({ runtimeId, preferredRuntimeId }) => ({
+          kind: "ready",
+          runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
+          validate: () => undefined,
+        }));
+      onTestFinished(() => runtimeChoice.mockRestore());
       await withSessionToolsFixture(async (cfg) => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
