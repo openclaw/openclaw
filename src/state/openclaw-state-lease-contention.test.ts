@@ -56,7 +56,7 @@ describe.each([undefined, "existing"] as const)(
               const rejected = expect(operation).rejects.toMatchObject({
                 code:
                   ending === "timeout"
-                    ? "OPENCLAW_STATE_LEASE_TIMEOUT"
+                    ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
                     : "OPENCLAW_STATE_LEASE_ABORTED",
               });
               if (ending === "abort") {

@@ -170,10 +170,10 @@ export function acquireGatewayOwnerLease(params: {
           STARTUP_MIGRATION_LEASE_TTL_MS,
           payloadJson,
         );
-        if (acquired === undefined) {
+        if (acquired.kind === "held") {
           throw new Error("Another Gateway owner lease is still active for this state directory");
         }
-        return acquired;
+        return acquired.expiresAt;
       }),
     { env, path: databasePath },
   );

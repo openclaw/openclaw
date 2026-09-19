@@ -6,6 +6,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { resolveManagedGitHubProfileDir } from "../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -196,6 +197,21 @@ export async function callPersonalPublicationRpc(
     isWebchatConnect: () => false,
   });
   return respond.mock.calls[0]!;
+}
+
+export function restartPersonalPublicationFixture(
+  fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+) {
+  const previous = fixture.placements;
+  resetGatewayWorkAdmission();
+  fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+  fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
+  fixture.placements.clearLocalTurnClaimsAfterRestart();
+  expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
+    previous.workspaceResultInstanceId(),
+  );
+  fixture.coordinator = createTestGitHubPublicationCoordinator({ placements: fixture.placements });
+  fixture.action = preparePersonalGitHubSessionAction(fixture, { sessionKey: SESSION_KEY });
 }
 
 export async function createForeignPublicationSession(otherOwner: string, incognito = false) {

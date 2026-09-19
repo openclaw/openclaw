@@ -66,13 +66,13 @@ vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
   };
 });
 vi.mock("../state/openclaw-state-lease-storage.js", () => ({
+  acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => path.resolve("/synthetic-state/lease.sqlite"),
   readLeaseDatabase: (_database: unknown, run: () => unknown) => run(),
   withLeaseWriteTransaction: (_database: unknown, _label: string, run: () => unknown) => run(),
 }));
 vi.mock("../state/openclaw-state-lease-store.js", () => ({
-  acquireOpenClawStateLeaseInTransaction: () => fixture.expiresAt,
   readOpenClawStateLeaseExpiry: () =>
     Date.now() < fixture.expiresAt ? fixture.expiresAt : undefined,
   renewOpenClawStateLeaseInTransaction: () => {

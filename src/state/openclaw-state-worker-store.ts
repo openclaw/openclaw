@@ -560,6 +560,11 @@ export function runOpenClawStateWorkerOperation<T>(
   operation: (scope: DomainScope) => Promise<T>,
   options?: OperationOptions & { existingOnly?: false },
 ): Promise<T>;
+export function runOpenClawStateWorkerOperation<T>(
+  context: OpenClawStateWorkerContext,
+  operation: (scope: DomainScope) => Promise<T>,
+  options: OperationOptions & { existingOnly: boolean },
+): Promise<T | undefined>;
 export async function runOpenClawStateWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: (scope: DomainScope) => Promise<T>,

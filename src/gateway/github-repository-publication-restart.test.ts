@@ -1,16 +1,16 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import * as backoff from "../infra/backoff.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount,
+  restartPersonalPublicationFixture,
 } from "./github-personal-publication.test-support.js";
 import {
+  SESSION_ID,
   SESSION_KEY,
-  createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
@@ -19,24 +19,41 @@ import {
   createRepositoryPublicationFixture,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
+// Prepare the real reset entry point before timing its lifecycle operation.
+import "./session-reset-service.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
-
-// Cold reset imports are fixture preparation, outside the publication behavior's test budget.
-await import("./session-reset-service.js");
+const repositoryFixture = () => createRepositoryPublicationFixture(checkpoint);
 
 describe("repository checkpoint GitHub publication", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
+  it("fences publication reservations when the Gateway owner restarts", async () => {
+    await repositoryFixture();
+    const person = await createPersonalPublicationFixture();
+    const previous = person.placements;
+    await expect(
+      previous.withWorkspaceExclusion(SESSION_ID, async (assertOwned) => {
+        restartPersonalPublicationFixture(person);
+        expect(assertOwned).toThrow("was aborted");
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+    await expect(previous.withWorkspaceExclusion(SESSION_ID, async () => {})).rejects.toMatchObject(
+      { code: "OPENCLAW_STATE_LEASE_ABORTED" },
+    );
+    await person.placements.withWorkspaceExclusion(SESSION_ID, async (assertOwned) =>
+      assertOwned(),
+    );
+  });
 
-  it.each(["turn", "reset", "move", "maintenance write", "brief maintenance write"] as const)(
+  it.each(["turn", "reset", "move", "held", "store-busy"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
-      const f = await createRepositoryPublicationFixture(checkpoint);
+      const f = await repositoryFixture();
       const person = await createPersonalPublicationFixture();
       f.runtime.accountId = personalPublicationAccount.accountId;
       f.runtime.interruptPush = true;
@@ -49,16 +66,18 @@ describe("repository checkpoint GitHub publication", () => {
           account: personalPublicationAccount,
         },
       };
-      const first = (
-        await callPersonalPublicationRpc(person, "sessions.github.publish", request)
-      )[1];
+      const firstReply = await callPersonalPublicationRpc(
+        person,
+        "sessions.github.publish",
+        request,
+      );
+      expect(firstReply[0], JSON.stringify(firstReply[2])).toBe(true);
+      const first = firstReply[1];
       expect(first.status).toBe("needs_confirmation");
       const original = readRepositoryGitHubPublication(first.requestId)!;
       expect(original.pushed_head_commit).toBeNull();
       await f.capture("later unselected change\n", "later");
-      person.coordinator = createTestGitHubPublicationCoordinator({
-        placements: person.placements,
-      });
+      restartPersonalPublicationFixture(person);
       const pending = person.coordinator.personalStatus(
         person.action,
         person.action,
@@ -105,80 +124,63 @@ describe("repository checkpoint GitHub publication", () => {
           confirmation: null,
         });
       }
-      const confirmation = {
+      const database = openOpenClawStateDatabase();
+      const holder = { owner: "previous-publication-owner", epoch: Date.now() };
+      let writer: DatabaseSync | undefined;
+      if (boundary === "held") {
+        database.db
+          .prepare(
+            "INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+          )
+          .run(
+            "session-workspace-action",
+            SESSION_ID,
+            holder.owner,
+            holder.epoch + 60000,
+            holder.epoch,
+            holder.epoch,
+            holder.epoch,
+          );
+      } else if (boundary === "store-busy") {
+        expect(
+          database.db
+            .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+            .all("session-workspace-action", SESSION_ID),
+        ).toEqual([]);
+        writer = new DatabaseSync(database.path);
+        writer.exec("BEGIN IMMEDIATE");
+      }
+      const confirmed = await callPersonalPublicationRpc(person, "sessions.github.confirm", {
         sessionKey: SESSION_KEY,
         requestId: first.requestId,
         generation: person.generation,
         account: personalPublicationAccount,
         requestDigest: pending.confirmation!.requestDigest,
-      };
-      if (boundary === "maintenance write" || boundary === "brief maintenance write") {
-        const database = openOpenClawStateDatabase();
-        const maintenance = new DatabaseSync(database.path);
-        const started = performance.now();
-        let elapsed = started;
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-        const wait = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (delayMs) => {
-          elapsed += delayMs;
-          if (boundary === "brief maintenance write" && maintenance.isTransaction) {
-            maintenance.exec("ROLLBACK");
-          }
-        });
-        try {
-          // A separate connection models the maintenance worker's handle-lease registration.
-          maintenance.exec("BEGIN IMMEDIATE");
-          maintenance
-            .prepare(
-              `INSERT INTO agent_database_leases
-                (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at)
-               VALUES (?, ?, ?, ?, NULL, ?)`,
-            )
-            .run("maintenance-writer", "main", "/fixture/agent.sqlite", process.pid, Date.now());
-          expect(database.db.prepare("SELECT * FROM state_leases").all()).toEqual([]);
-          const commandsBefore = mocks.runCommand.mock.calls.length;
-          const blocked = await callPersonalPublicationRpc(
-            person,
-            "sessions.github.confirm",
-            confirmation,
-          );
-          expect(wait).toHaveBeenCalled();
-          expect(elapsed - started).toBeLessThanOrEqual(100);
-          if (boundary === "brief maintenance write") {
-            expect(blocked[0], JSON.stringify(blocked[2])).toBe(true);
-            expect(blocked[1]).toMatchObject({ status: "published", url });
-          } else {
-            expect(blocked).toEqual([
-              false,
-              undefined,
-              {
+      }).finally(() => {
+        writer?.exec("ROLLBACK");
+        writer?.close();
+      });
+      if (boundary === "held" || boundary === "store-busy") {
+        expect(confirmed[0]).toBe(false);
+        expect(confirmed[2]).toMatchObject(
+          boundary === "held"
+            ? {
+                code: "FORBIDDEN",
+                retryable: false,
+                message: expect.stringContaining(`${holder.owner} (lease epoch ${holder.epoch})`),
+                details: { leaseAcquisition: { kind: "held", holder } },
+              }
+            : {
                 code: "UNAVAILABLE",
                 retryable: true,
-                message: expect.stringContaining("shared-state database is busy"),
+                details: { leaseAcquisition: { kind: "store-unavailable", reason: "sqlite-busy" } },
               },
-            ]);
-            expect(blocked[2].message).toContain("100 ms");
-            expect(blocked[2].message).toContain("Retry after");
-            expect(mocks.runCommand).toHaveBeenCalledTimes(commandsBefore);
-            expect(readRepositoryGitHubPublication(first.requestId)).toEqual(original);
-            expect(f.runtime.effects).toEqual(["push"]);
-          }
-        } finally {
-          wait.mockRestore();
-          clock.mockRestore();
-          if (maintenance.isTransaction) {
-            maintenance.exec("ROLLBACK");
-          }
-          maintenance.close();
-        }
+        );
+        expect(f.runtime.effects).toEqual(["push"]);
+        return;
       }
-      const confirmed = await callPersonalPublicationRpc(
-        person,
-        "sessions.github.confirm",
-        confirmation,
-      );
       if (boundary === "reset") {
         expect(confirmed[0]).toBe(false);
-        expect(confirmed[2]).toMatchObject({ code: "FORBIDDEN" });
         expect(f.runtime.effects).toEqual(["push"]);
         return;
       }

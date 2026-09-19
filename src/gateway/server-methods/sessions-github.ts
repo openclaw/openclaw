@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { prepareCurrentGitHubPublicationOptionsIdentity } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -51,6 +52,18 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
     try {
       return await handler(options);
     } catch (error) {
+      if (error instanceof OpenClawStateLeaseAcquisitionError) {
+        const held = error.outcome.kind === "held";
+        options.respond(
+          false,
+          undefined,
+          errorShape(held ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE, error.message, {
+            retryable: !held,
+            details: { leaseAcquisition: error.outcome },
+          }),
+        );
+        return;
+      }
       const publishing = method === "sessions.github.publish";
       const busy = error instanceof SessionWorkspaceReservationBusyError;
       if (publishing && error instanceof SessionMutationAuthorizationChangedError) {

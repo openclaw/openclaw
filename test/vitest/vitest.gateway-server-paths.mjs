@@ -7,6 +7,18 @@ export const gatewayPluginTestFiles = [
 // This curated cohort retains serial forks and the extended database-worker watchdog,
 // even though ordinary Gateway methods also use forks.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/github-personal-publication-outcomes.test.ts",
+  "src/gateway/github-personal-publication.test.ts",
+  "src/gateway/github-publication-admission.test.ts",
+  "src/gateway/github-publication-attribution.test.ts",
+  "src/gateway/github-publication-boundaries.test.ts",
+  "src/gateway/github-publication-history.test.ts",
+  "src/gateway/github-publication-legacy-options.test.ts",
+  "src/gateway/github-publication.test.ts",
+  "src/gateway/github-repository-publication.test.ts",
+  "src/gateway/github-repository-publication-restart.test.ts",
+  "src/gateway/github-shared-publication-read.test.ts",
+  "src/gateway/worker-environments/workspace-result-repository.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",

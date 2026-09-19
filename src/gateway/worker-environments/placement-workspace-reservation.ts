@@ -1,18 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import {
-  OpenClawStateLeaseError,
-  withOpenClawStateLease,
-} from "../../state/openclaw-state-lease.js";
+import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { find } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 
 const SCOPE = "session-workspace-action";
 const PERSONAL_SCOPE = "session-workspace-personal-publication";
-// Covers observed 1–45 ms maintenance lease writes without waiting for a publication holder.
-const PUBLICATION_STORAGE_WAIT_MS = 100;
 export class SessionWorkspaceReservationBusyError extends Error {}
 const query = (db: DatabaseSync) =>
   getNodeSqliteKysely<
@@ -91,40 +87,24 @@ function assertReconciled(
 }
 
 export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRuntime) {
+  const signal = getGatewayRestartDrainSignal();
   const withReservation = async <T>(
     scope: string,
     sessionId: string,
     run: (assertOwned: () => void) => Promise<T>,
-  ): Promise<T> => {
-    let entered = false;
-    try {
-      return await withOpenClawStateLease(
-        {
-          scope,
-          key: sessionId,
-          database: { scope: "shared", options: { path: runtime.path } },
-          leaseMs: 60000,
-          waitMs: PUBLICATION_STORAGE_WAIT_MS,
-          waitForLease: false,
-          leaseLabel: "session publication exclusion",
-        },
-        async (lease) => {
-          entered = true;
-          return await run(() => lease.assertOwned());
-        },
-      );
-    } catch (error) {
-      // Only admission failures are safe to report as retryable workspace contention.
-      if (
-        !entered &&
-        error instanceof OpenClawStateLeaseError &&
-        error.code === "STATE_LEASE_BUSY"
-      ) {
-        throw new SessionWorkspaceReservationBusyError(error.message, { cause: error });
-      }
-      throw error;
-    }
-  };
+  ): Promise<T> =>
+    await withOpenClawStateLease(
+      {
+        scope,
+        key: sessionId,
+        database: { scope: "shared", options: { path: runtime.path } },
+        leaseMs: 60000,
+        waitMs: 0,
+        leaseLabel: "session publication exclusion",
+        signal,
+      },
+      async (lease) => await run(() => lease.assertOwned()),
+    );
   const withWorkspaceExclusion = <T>(
     sessionId: string,
     run: (assertOwned: () => void) => Promise<T>,

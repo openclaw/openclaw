@@ -8,6 +8,10 @@ const leaseErrorCodes = [
 ] as const;
 export type OpenClawStateLeaseErrorCode = (typeof leaseErrorCodes)[number];
 
+type OpenClawStateLeaseAcquisitionFailure =
+  | { kind: "held"; holder: { owner: string; epoch: number } }
+  | { kind: "store-unavailable"; reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" };
+
 export function isOpenClawStateLeaseErrorCode(
   value: unknown,
 ): value is OpenClawStateLeaseErrorCode {
@@ -21,6 +25,27 @@ export class OpenClawStateLeaseError extends Error {
     super(message, { cause: options.cause });
     this.name = "OpenClawStateLeaseError";
     this.code = options.code;
+  }
+}
+
+export class OpenClawStateLeaseAcquisitionError extends OpenClawStateLeaseError {
+  constructor(
+    label: string,
+    readonly outcome: OpenClawStateLeaseAcquisitionFailure,
+    cause?: unknown,
+  ) {
+    super(
+      outcome.kind === "held"
+        ? `${label} is held by ${outcome.holder.owner} (lease epoch ${outcome.holder.epoch})`
+        : `failed to acquire ${label}: store unavailable (${outcome.reason})`,
+      {
+        code:
+          outcome.kind === "held"
+            ? "OPENCLAW_STATE_LEASE_TIMEOUT"
+            : "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+        cause,
+      },
+    );
   }
 }
 

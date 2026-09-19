@@ -40,8 +40,8 @@ function controlElapsedTime() {
   };
 }
 
-it.each(["maintenance", "generic", "storage-contention-only"] as const)(
-  "preserves the %s admission contract after a slow physical database open",
+it.each(["maintenance", "generic"] as const)(
+  "admits %s work after slow database preparation",
   async (caller) => {
     await withOpenClawTestState({ label: "lease-cold-admission" }, async (state) => {
       const advance = controlElapsedTime();
@@ -65,17 +65,11 @@ it.each(["maintenance", "generic", "storage-contention-only"] as const)(
                 database: { scope: "shared", options: { env: state.env } },
                 leaseMs: 60_000,
                 waitMs: 5_000,
-                waitForLease: caller !== "storage-contention-only",
               },
               run,
             );
-      if (caller !== "generic") {
-        await operation;
-        expect(run).toHaveBeenCalledOnce();
-      } else {
-        await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
-        expect(run).not.toHaveBeenCalled();
-      }
+      await operation;
+      expect(run).toHaveBeenCalledOnce();
       expect(physicalOpen).toHaveBeenCalled();
       expect(
         openOpenClawStateDatabase({ env: state.env })
@@ -86,29 +80,7 @@ it.each(["maintenance", "generic", "storage-contention-only"] as const)(
   },
 );
 
-it("releases a late successful acquisition after maintenance storage preparation", async () => {
-  await withOpenClawTestState({ label: "lease-late-acquisition" }, async (state) => {
-    const advance = controlElapsedTime();
-    const acquire = leaseStore.acquireOpenClawStateLeaseInTransaction;
-    vi.spyOn(leaseStore, "acquireOpenClawStateLeaseInTransaction").mockImplementation(
-      (database, identity, leaseMs) => {
-        const expiresAt = acquire(database, identity, leaseMs);
-        advance(6_000);
-        return expiresAt;
-      },
-    );
-    const run = vi.fn(async () => undefined);
-    await expect(withAgentDatabaseMaintenanceLease({ env: state.env }, run)).rejects.toMatchObject({
-      code: "OPENCLAW_STATE_LEASE_TIMEOUT",
-    });
-    expect(run).not.toHaveBeenCalled();
-    expect(
-      openOpenClawStateDatabase({ env: state.env }).db.prepare("SELECT * FROM state_leases").all(),
-    ).toEqual([]);
-  });
-});
-
-it("keeps one wait budget when cold preparation first encounters a competing writer", async () => {
+it("records unavailable storage when a lifecycle writer prevents observing a held lease", async () => {
   await withOpenClawTestState({ label: "lease-preparation-contention" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
     const identity = { scope: "core:test", key: "preparation-contention", owner: "other-process" };
@@ -126,43 +98,33 @@ it("keeps one wait budget when cold preparation first encounters a competing wri
     if (!writer) {
       throw new Error("independent writer did not acquire its coordinator");
     }
-    const advance = controlElapsedTime();
-    let waitedMs = 0;
-    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (delayMs) => {
-      const elapsedMs = waitedMs === 0 ? 4_000 : delayMs;
-      waitedMs += elapsedMs;
-      advance(elapsedMs);
-      writer.release();
-    });
-    const controller = new AbortController();
     const run = vi.fn(async () => undefined);
-    const operation = withOpenClawStateLease(
-      {
-        scope: identity.scope,
-        key: identity.key,
-        database: { scope: "shared", options: { env: state.env } },
-        leaseMs: 60_000,
-        waitMs: 5_000,
-        prepareDatabase: true,
-        signal: controller.signal,
-      },
-      run,
-    );
     try {
-      await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
-      expect(sleep).toHaveBeenCalled();
-      expect(waitedMs).toBeLessThanOrEqual(5_000);
+      await expect(
+        withOpenClawStateLease(
+          {
+            scope: identity.scope,
+            key: identity.key,
+            database: { scope: "shared", options: { env: state.env } },
+            leaseMs: 60_000,
+            waitMs: 5_000,
+            prepareDatabase: true,
+          },
+          run,
+        ),
+      ).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+        outcome: { kind: "store-unavailable", reason: "lifecycle-busy" },
+      });
       expect(run).not.toHaveBeenCalled();
-      expect(
-        openOpenClawStateDatabase({ env: state.env })
-          .db.prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
-          .get(identity.scope, identity.key),
-      ).toMatchObject({ owner: identity.owner });
     } finally {
       writer.release();
-      controller.abort();
-      await operation.catch(() => undefined);
     }
+    expect(
+      openOpenClawStateDatabase({ env: state.env })
+        .db.prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .get(identity.scope, identity.key),
+    ).toMatchObject({ owner: identity.owner });
   });
 });
 
@@ -227,15 +189,19 @@ it("restores the cached connection timeout after preparation fails during schema
         }
       }
     });
-    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
-      writer?.release();
-    });
+    const sleep = vi.spyOn(backoff, "sleepWithAbort");
     try {
-      await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
-        lease.assertOwned();
+      await expect(
+        withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
+          lease.assertOwned();
+        }),
+      ).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+        outcome: { kind: "store-unavailable", reason: "lifecycle-busy" },
       });
       expect(preparedBusyTimeoutMs).toBe(0);
-      expect(sleep).toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      writer?.release();
       expect(readSqliteBusyTimeout(openOpenClawStateDatabase({ env: state.env }).db)).toBe(
         OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       );
