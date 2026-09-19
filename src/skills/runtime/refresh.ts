@@ -419,6 +419,15 @@ function createSkillsPathWatcher(
       return;
     }
     const changedPath = resolveRawSkillsWatchPath(rawPathText, details);
+    // An ancestor replaced between Chokidar scans can retain its name and emit only raw events.
+    if (
+      changedPath &&
+      isPathInside(changedPath, target.path) &&
+      !pathFilter.ignored(changedPath) &&
+      reconcileRoot(changedPath)
+    ) {
+      return;
+    }
     if (
       changedPath &&
       isSkillDiscoveryFileWatchPath(changedPath) &&
