@@ -43,6 +43,10 @@ process working directory. A distinct working directory requires an unsandboxed
 run; sandboxed runs reject it. When the directories differ, the system prompt
 identifies their separate roles so deliverables stay in the working directory.
 
+> **Note:** An explicitly configured `agents.entries.*.cwd` or `agents.defaults.cwd`
+> must not be blank. A blank value is a configuration error and OpenClaw rejects
+> it instead of silently inheriting the default working directory.
+
 ## `agents.defaults.repoRoot`
 
 Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.

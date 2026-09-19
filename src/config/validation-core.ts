@@ -160,6 +160,57 @@ function createIdentityAvatarIssue(
   return withConfigIssuePath({ path: pathSegments.join("."), message }, pathSegments);
 }
 
+function createAgentCwdIssue(
+  source: ReturnType<typeof listAgentEntriesWithSource>[number]["source"],
+  message: string,
+): ConfigValidationIssue {
+  const pathSegments =
+    source.kind === "entries"
+      ? (["agents", "entries", source.key, "cwd"] as const)
+      : (["agents", "list", source.index, "cwd"] as const);
+  return withConfigIssuePath({ path: pathSegments.join("."), message }, pathSegments);
+}
+
+/**
+ * Surface explicitly blank agent `cwd` values as field-level issues at the
+ * configuration boundary while preserving the shipped runtime fallback: the
+ * resolver keeps normalizing and falling back, so previously valid
+ * configurations keep working across upgrade. A blank default is only
+ * diagnostic when at least one agent actually depends on it (no per-agent cwd).
+ */
+function collectBlankAgentCwdIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const agents = listAgentEntriesWithSource(config);
+  const defaultsCwd = config.agents?.defaults?.cwd;
+  const defaultsCwdBlank = typeof defaultsCwd === "string" && !defaultsCwd.trim();
+  let dependsOnDefaultCwd = false;
+  for (const { entry, source } of agents) {
+    const cwd = entry.cwd;
+    if (typeof cwd === "string" && !cwd.trim()) {
+      issues.push(
+        createAgentCwdIssue(
+          source,
+          "cwd must not be blank; omit the key to inherit the default cwd.",
+        ),
+      );
+    } else if (typeof cwd !== "string") {
+      dependsOnDefaultCwd = true;
+    }
+  }
+  if (defaultsCwdBlank && dependsOnDefaultCwd) {
+    issues.push(
+      withConfigIssuePath(
+        {
+          path: "agents.defaults.cwd",
+          message: "agents.defaults.cwd must not be blank; omit the key to use the default cwd.",
+        },
+        ["agents", "defaults", "cwd"],
+      ),
+    );
+  }
+  return issues;
+}
+
 function validateIdentityAvatar(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -452,6 +503,10 @@ export function validateConfigObjectRaw(
       ok: false,
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
+  }
+  const blankCwdIssues = collectBlankAgentCwdIssues(validatedConfig);
+  if (blankCwdIssues.length > 0) {
+    return { ok: false, issues: blankCwdIssues };
   }
   const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
   if (avatarIssues.length > 0) {
