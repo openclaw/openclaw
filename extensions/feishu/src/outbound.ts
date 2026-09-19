@@ -469,6 +469,7 @@ function withFeishuOutboundSendContext(adapter: ChannelOutboundAdapter): Channel
 // forcing a required property here (ClawSweeper P1).
 export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendContext({
   deliveryMode: "direct",
+  preferFinalAssistantVisibleText: true,
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
