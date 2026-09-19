@@ -150,7 +150,11 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
     }
     ancestors.add(node);
     if (Array.isArray(node.enum)) {
-      values.push(...node.enum);
+      // Append per entry: spreading the enum into push arguments reintroduces the engine's
+      // argument-count limit on wide enums, which the original flatMap did not hit.
+      for (const enumValue of node.enum) {
+        values.push(enumValue);
+      }
       ancestors.delete(node);
       continue;
     }

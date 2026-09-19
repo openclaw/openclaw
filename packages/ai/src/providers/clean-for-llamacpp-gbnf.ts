@@ -60,7 +60,9 @@ type CleanAssembleRecordTask = {
         kind: "map";
         key: string;
         source: Record<string, unknown>;
-        cleaned: Record<string, unknown>;
+        // Child results land in source order and rebuild through Object.fromEntries so
+        // user-named keys such as `__proto__` become own properties, matching the recursion.
+        entries: Array<[string, unknown]>;
         mapChanged: boolean;
       }
   >;
@@ -106,7 +108,7 @@ function cleanSchemaNode(root: unknown): unknown {
         if (entry.kind === "keep" || entry.kind === "child") {
           cleaned[entry.key] = entry.value;
         } else if (entry.kind === "map") {
-          cleaned[entry.key] = entry.mapChanged ? entry.cleaned : entry.source;
+          cleaned[entry.key] = entry.mapChanged ? Object.fromEntries(entry.entries) : entry.source;
         }
       }
       task.assign(cleaned);
@@ -177,7 +179,7 @@ function cleanSchemaNode(root: unknown): unknown {
           kind: "map",
           key,
           source: value,
-          cleaned: {},
+          entries: [],
           mapChanged: false,
         };
         assemble.plan.push(mapEntry);
@@ -187,7 +189,7 @@ function cleanSchemaNode(root: unknown): unknown {
             node: childValue,
             assign: (childResult) => {
               mapEntry.mapChanged ||= childResult !== childValue;
-              mapEntry.cleaned[childKey] = childResult;
+              mapEntry.entries.push([childKey, childResult]);
             },
           });
         }

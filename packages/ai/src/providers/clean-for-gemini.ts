@@ -289,12 +289,17 @@ type GeminiVisitTask = {
   node: unknown;
   defs: SchemaDefs | undefined;
   refStack: Set<string> | undefined;
+  // Nodes on the current raw-descent path. A $ref expansion starts a fresh segment: cycles
+  // spanning $ref edges repeat a ref string and are already bounded by refStack, while cycles
+  // inside one segment are bounded here the way the call stack bounded them before.
+  ancestors: Set<object>;
   assign: (value: unknown) => void;
 };
 
 type GeminiAssembleArrayTask = {
   kind: "assemble-array";
   node: object;
+  ancestors: Set<object>;
   assign: (value: unknown) => void;
   entries: unknown[];
 };
@@ -303,6 +308,7 @@ type GeminiAssembleArrayTask = {
 type GeminiAssembleRefTask = {
   kind: "assemble-ref";
   node: object;
+  ancestors: Set<object>;
   assign: (value: unknown) => void;
   obj: Record<string, unknown>;
   resolved: unknown;
@@ -312,6 +318,7 @@ type GeminiAssembleRefTask = {
 type GeminiAssembleUnionsTask = {
   kind: "assemble-unions";
   node: object;
+  ancestors: Set<object>;
   assign: (value: unknown) => void;
   obj: Record<string, unknown>;
   nextDefs: SchemaDefs | undefined;
@@ -326,6 +333,7 @@ type GeminiAssembleUnionsTask = {
 type GeminiAssembleRecordTask = {
   kind: "assemble-record";
   node: object;
+  ancestors: Set<object>;
   assign: (value: unknown) => void;
   // Body entries in source order; child results write back through the entry, and the cleaned
   // record is built in plan order at assemble time so key insertion order (including the
@@ -355,13 +363,14 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
   let rootResult: unknown = schema;
   // Recursion previously bounded cyclic object graphs via the call stack; the explicit stack
   // removes that implicit guard, so the walk tracks the nodes on its current path instead.
-  const ancestors = new Set<object>();
+  const rootAncestors = new Set<object>();
   const tasks: GeminiTask[] = [
     {
       kind: "visit",
       node: schema,
       defs: undefined,
       refStack: undefined,
+      ancestors: rootAncestors,
       assign: (value) => {
         rootResult = value;
       },
@@ -370,12 +379,12 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
   let task: GeminiTask | undefined;
   while ((task = tasks.pop()) !== undefined) {
     if (task.kind === "assemble-array") {
-      ancestors.delete(task.node);
+      task.ancestors.delete(task.node);
       task.assign(task.entries);
       continue;
     }
     if (task.kind === "assemble-ref") {
-      ancestors.delete(task.node);
+      task.ancestors.delete(task.node);
       const cleaned = task.resolved;
       if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
         task.assign(cleaned);
@@ -389,7 +398,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
       continue;
     }
     if (task.kind === "assemble-record") {
-      ancestors.delete(task.node);
+      task.ancestors.delete(task.node);
       const cleaned: Record<string, unknown> = {};
       for (const entry of task.plan) {
         if (entry.kind === "write") {
@@ -425,6 +434,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
     }
     if (task.kind === "assemble-unions") {
       const { obj, nextDefs, refStack, hasAnyOf, hasOneOf, assign } = task;
+      const ancestors = task.ancestors;
       let cleanedAnyOf = task.cleanedAnyOf;
       let cleanedOneOf = task.cleanedOneOf;
       if (hasAnyOf) {
@@ -499,6 +509,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
                 node: childValue,
                 defs: nextDefs,
                 refStack,
+                ancestors,
                 assign: (childResult) => {
                   planEntry.entries.push([childKey, childResult]);
                 },
@@ -524,6 +535,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
                 node: entry,
                 defs: nextDefs,
                 refStack,
+                ancestors,
                 assign: (childResult) => {
                   planEntry.entries[index] = childResult;
                 },
@@ -538,6 +550,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
               node: value,
               defs: nextDefs,
               refStack,
+              ancestors,
               assign: (childResult) => {
                 planEntry.value = childResult;
               },
@@ -569,6 +582,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
               node: entry,
               defs: nextDefs,
               refStack,
+              ancestors,
               assign: (childResult) => {
                 planEntry.entries[index] = childResult;
               },
@@ -582,6 +596,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
       tasks.push({
         kind: "assemble-record",
         node: task.node,
+        ancestors,
         assign,
         plan,
       });
@@ -595,7 +610,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
     }
 
     // visit
-    const { node, defs, refStack, assign } = task;
+    const { node, defs, refStack, ancestors, assign } = task;
     if (!node || typeof node !== "object") {
       assign(node);
       continue;
@@ -606,7 +621,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
     ancestors.add(node);
     if (Array.isArray(node)) {
       const entries: unknown[] = Array.from({ length: node.length });
-      tasks.push({ kind: "assemble-array", node, assign, entries });
+      tasks.push({ kind: "assemble-array", node, ancestors, assign, entries });
       for (let index = node.length - 1; index >= 0; index -= 1) {
         const slot = index;
         tasks.push({
@@ -614,6 +629,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
           node: node[slot],
           defs,
           refStack,
+          ancestors,
           assign: (value) => {
             entries[slot] = value;
           },
@@ -640,16 +656,20 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
         const refTask: GeminiAssembleRefTask = {
           kind: "assemble-ref",
           node,
+          ancestors,
           assign,
           obj,
           resolved: undefined,
         };
         tasks.push(refTask);
+        // A $ref expansion starts a fresh raw-descent segment: reusing the referencing
+        // path's ancestors would mistake an acyclic shared definition for a cycle.
         tasks.push({
           kind: "visit",
           node: resolved,
           defs: nextDefs,
           refStack: nextRefStack,
+          ancestors: new Set<object>(),
           assign: (value) => {
             refTask.resolved = value;
           },
@@ -678,6 +698,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
     tasks.push({
       kind: "assemble-unions",
       node,
+      ancestors,
       assign,
       obj,
       nextDefs,
@@ -696,6 +717,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
           node: oneOfVariants[slot],
           defs: nextDefs,
           refStack,
+          ancestors,
           assign: (value) => {
             target[slot] = value;
           },
@@ -711,6 +733,7 @@ function cleanSchemaForGeminiTree(schema: unknown): unknown {
           node: anyOfVariants[slot],
           defs: nextDefs,
           refStack,
+          ancestors,
           assign: (value) => {
             target[slot] = value;
           },

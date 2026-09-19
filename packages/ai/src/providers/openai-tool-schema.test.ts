@@ -2,6 +2,7 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
@@ -417,5 +418,38 @@ describe("deeply nested tool schemas", () => {
     (cyclic.properties as Record<string, unknown>).self = cyclic;
     expect(() => normalizeToolParameterSchema(cyclic)).toThrow(TypeError);
     expect(() => normalizeToolParameterSchema(cyclic)).toThrow(/circular/i);
+  });
+});
+
+describe("schema walker compatibility regressions", () => {
+  it("preserves an own __proto__ property when llamacpp cleaning changes the child", () => {
+    const schema = {
+      type: "object",
+      properties: { ["__proto__"]: { type: "string", pattern: "x" } },
+      required: ["__proto__"],
+    };
+
+    const cleaned = cleanSchemaForLlamacppGbnf(schema) as Record<string, unknown>;
+    const properties = cleaned.properties as Record<string, unknown>;
+    expect(Object.getOwnPropertyDescriptor(properties, "__proto__")?.value).toStrictEqual({
+      type: "string",
+    });
+    expect(cleaned.required).toStrictEqual(["__proto__"]);
+  });
+
+  it("collects wide composed enums without hitting the argument-spread limit", () => {
+    const wideEnum = Array.from({ length: 1_000_000 }, (_, index) => `v${index}`);
+    const schema = {
+      anyOf: [
+        { type: "object", properties: { pick: { anyOf: [{ enum: wideEnum }] } } },
+        { type: "object", properties: { pick: { anyOf: [{ enum: ["v0"] }] } } },
+      ],
+    };
+
+    const normalized = normalizeToolParameterSchema(schema) as Record<string, unknown>;
+    const properties = normalized.properties as Record<string, unknown>;
+    const pick = properties.pick as Record<string, unknown>;
+    expect(Array.isArray(pick.enum)).toBe(true);
+    expect((pick.enum as unknown[]).length).toBe(1_000_000);
   });
 });
