@@ -1,5 +1,8 @@
 // Covers the manifest-schema boundary that keeps third-party schema failures out of the loader.
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 describe("validatePluginSchemaValue", () => {
   it("returns an error instead of throwing for a structurally invalid schema", () => {
@@ -57,5 +60,43 @@ describe("validatePluginSchemaValue", () => {
       value: {},
     });
     expect(wellFormedSchemaRejectingValue).toMatchObject({ ok: false, schemaError: false });
+  });
+
+  it("classifies unsafe patternProperties as schema errors, not missing config", () => {
+    const result = validatePluginSchemaValue({
+      origin: "global",
+      cacheKey: "manifest-schema.unsafe-pattern-schema-error",
+      schema: {
+        type: "object",
+        patternProperties: {
+          "a*[a]*$": { type: "string" },
+        },
+      },
+      value: {},
+    });
+    expect(result).toMatchObject({ ok: false, schemaError: true });
+    expect(result.ok ? "" : result.errors[0]?.text).toMatch(/unsafe patternProperties/i);
+  });
+
+  it("does not hide unusable patternProperties as missing plugin config", () => {
+    const setup = resolvePluginConfigEnablement({
+      config: { plugins: { entries: {} } } as OpenClawConfig,
+      pluginId: "demo-unsafe-schema",
+      manifest: {
+        id: "demo-unsafe-schema",
+        origin: "global",
+        configSchema: {
+          type: "object",
+          patternProperties: {
+            "^((a|b)|bb)+$": { type: "string" },
+          },
+        },
+      } as unknown as PluginManifestRecord,
+    });
+    expect(setup.mode).toBe("invalid");
+    if (setup.mode !== "invalid") {
+      throw new Error("expected unusable schema to stay invalid");
+    }
+    expect(setup.error).toMatch(/unsafe patternProperties/i);
   });
 });
