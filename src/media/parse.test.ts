@@ -174,6 +174,22 @@ describe("splitMediaFromOutput", () => {
 
   it.each([
     ["MEDIA:/tmp/a.png /tmp/b.png", ["/tmp/a.png", "/tmp/b.png"]],
+    [
+      'MEDIA:"/tmp/first image.png" "/tmp/second image.png"',
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    [
+      "MEDIA:'/tmp/first image.png' '/tmp/second image.png'",
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    [
+      "MEDIA:`/tmp/first image.png` `/tmp/second image.png`",
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    [
+      'MEDIA:"/tmp/project /first image.png" /tmp/second.png',
+      ["/tmp/project /first image.png", "/tmp/second.png"],
+    ],
     ["MEDIA:media/a.png media/b.png", ["media/a.png", "media/b.png"]],
     ["MEDIA:/tmp/a.png media/b.png", ["/tmp/a.png", "media/b.png"]],
     ["MEDIA:./a.png ./b.png", ["./a.png", "./b.png"]],

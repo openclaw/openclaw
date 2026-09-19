@@ -16,7 +16,7 @@ import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/mar
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
-const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*([^\n]+)/gi;
 
 const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
   /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
@@ -218,10 +218,10 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
-function splitUnquotedMediaDirectiveParts(payload: string): string[] {
+function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   let previousEnd = 0;
-  for (const match of payload.matchAll(/\S+/g)) {
+  for (const match of payload.matchAll(/"[^"]*"|'[^']*'|`[^`]*`|\S+/g)) {
     const candidate = normalizeMediaSource(cleanCandidate(match[0]));
     const previous = parts.at(-1);
     const previousCandidate = previous ? normalizeMediaSource(cleanCandidate(previous)) : "";
@@ -251,6 +251,9 @@ function unwrapQuoted(value: string): string | undefined {
     return undefined;
   }
   if (first !== `"` && first !== "'" && first !== "`") {
+    return undefined;
+  }
+  if (trimmed.indexOf(first, 1) !== trimmed.length - 1) {
     return undefined;
   }
   return trimmed.slice(1, -1).trim();
@@ -492,7 +495,7 @@ export function splitMediaOutput(
       const payload = expectDefined(match[1], "parse regex capture 1");
       const unwrapped = unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : splitUnquotedMediaDirectiveParts(payload);
+      const parts = unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload);
       const mediaStartIndex = media.length;
       let validCount = 0;
       const invalidParts: string[] = [];
