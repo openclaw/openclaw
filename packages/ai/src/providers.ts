@@ -1,3 +1,6 @@
+/** Shared provider option normalization. */
+export { adjustMaxTokensForThinking } from "./providers/simple-options.js";
+
 /** Lazy built-in protocol adapter registration. */
 export {
   BUILT_IN_API_PROVIDER_SOURCE_ID,
