@@ -302,6 +302,76 @@ describe("chat transcript invalidation", () => {
     },
   );
 
+  it("reuses hidden tool normalization while search hides and restores its preview", async () => {
+    const props = threadProps("pane-search-tool-preview");
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "search-preview-call",
+      toolName: "show_widget",
+      timestamp: 3_500,
+      content: JSON.stringify({
+        kind: "canvas",
+        view: {
+          id: "cv_search_history",
+          title: "Search preview",
+          url: "/__openclaw__/canvas/documents/cv_search_history/index.html",
+        },
+        presentation: { target: "assistant_message" },
+      }),
+    };
+    props.messages = [...props.messages.slice(0, 3), toolResult, ...props.messages.slice(3)];
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const searchContainer = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderTranscriptSearch(props.paneId, rerender), searchContainer);
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    props.onRequestUpdate = rerender;
+    const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
+      expect(container.textContent).toContain("reply two");
+
+      toggleTranscriptSearch(props.paneId, rerender);
+      const input = expectDefined(
+        searchContainer.querySelector<HTMLInputElement>("input"),
+        "transcript search",
+      );
+      for (const { query, replyOne, replyTwo, prompt } of [
+        { query: "reply two", replyOne: false, replyTwo: true, prompt: false },
+        { query: "no such reply", replyOne: false, replyTwo: false, prompt: false },
+        { query: "reply", replyOne: true, replyTwo: true, prompt: false },
+        { query: "", replyOne: true, replyTwo: true, prompt: true },
+      ]) {
+        normalizeSpy.mockClear();
+        input.value = query;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await flushDeferredRowPrune();
+
+        expect(container.textContent?.includes("reply one")).toBe(replyOne);
+        expect(container.textContent?.includes("reply two")).toBe(replyTwo);
+        expect(container.textContent?.includes("message two")).toBe(prompt);
+        const widgets = container.querySelectorAll("openclaw-canvas-widget-view");
+        expect(widgets).toHaveLength(replyTwo ? 1 : 0);
+        if (replyTwo) {
+          expect(widgets[0]).toMatchObject({ docId: "cv_search_history", title: "Search preview" });
+        }
+        expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
+        expect(
+          normalizeSpy.mock.calls.filter(([message]) => message === toolResult).length,
+        ).toBeLessThanOrEqual(1);
+      }
+    } finally {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    }
+  });
+
   it.each(["unchanged", "stream-only"] as const)(
     "keeps settled run frames idle during %s updates",
     async (update) => {

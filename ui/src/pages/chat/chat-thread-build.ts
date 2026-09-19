@@ -220,7 +220,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
-    const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg, normalized) : null;
     if (persistedCanvasSource) {
       const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
       if (identity) {

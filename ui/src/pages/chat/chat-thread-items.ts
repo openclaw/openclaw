@@ -92,8 +92,11 @@ type ChatMessagePreview = {
   timestamp: number | null;
 };
 
-export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
-  if (!safeNormalizeMessage(toolMessage)) {
+export function extractChatMessagePreview(
+  toolMessage: unknown,
+  normalized = safeNormalizeMessage(toolMessage),
+): ChatMessagePreview | null {
+  if (!normalized) {
     return null;
   }
   const cards = extractToolCardsCached(toolMessage);
