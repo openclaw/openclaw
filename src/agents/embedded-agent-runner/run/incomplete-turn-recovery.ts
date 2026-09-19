@@ -1,5 +1,6 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -27,6 +28,7 @@ import {
   shouldApplyNonVisibleTurnRetryGuard,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 // Allow one immediate continuation plus one follow-up continuation before
@@ -122,15 +124,21 @@ function shouldSkipNonVisibleTurnRetry(params: {
 }
 
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
-export function shouldTreatEmptyAssistantReplyAsSilent(params: {
-  allowEmptyAssistantReplyAsSilent?: boolean;
-  onlyExplicitSilentReply?: boolean;
-  terminalReplyExpectation?: "required" | "optional";
-  payloadCount: number;
-  aborted: boolean;
-  timedOut: boolean;
-  attempt: IncompleteTurnAttempt;
-}): boolean {
+export function shouldTreatEmptyAssistantReplyAsSilent(
+  params: Pick<
+    RunEmbeddedAgentParams,
+    | "allowEmptyAssistantReplyAsSilent"
+    | "terminalReplyExpectation"
+    | "inputProvenance"
+    | "sourceReplyDeliveryMode"
+  > & {
+    onlyExplicitSilentReply?: boolean;
+    payloadCount: number;
+    aborted: boolean;
+    timedOut: boolean;
+    attempt: IncompleteTurnAttempt;
+  },
+): boolean {
   // NO_REPLY is an authored outcome, not missing output: a successful reaction
   // can be the entire reply. Agents: classify it before the side-effect retry
   // guard, or it becomes a false missing-summary warning (or a repeated tool).
@@ -151,13 +159,26 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (explicitSilentReply) {
     return true;
   }
-  // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
-  // Bare empty and reasoning-only stops are provider failures, even when the
-  // conversation policy permits deliberate silence.
-  if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
+  if (params.onlyExplicitSilentReply) {
     return false;
   }
-  return classifyAssistantTurn(params).nonVisibleEligibleForSilentReply;
+  const assistantState = classifyAssistantTurn(params);
+  const assistant = assistantState.assistant;
+  // Only this producer permits a clean empty handoff. Provenance never relaxes
+  // required replies, reasoning recovery, or the side-effect guards above.
+  const cleanEmptySessionHandoff =
+    params.terminalReplyExpectation !== "required" &&
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "sessions_send" &&
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    assistantState.emptyResponse &&
+    assistant?.stopReason === "stop" &&
+    !isCompactionReplayCheckpoint(assistant.providerReplay) &&
+    assistant.content.every((block) => block.type === "text" && block.text.trim().length === 0);
+  return (
+    cleanEmptySessionHandoff ||
+    (terminalReplyOptional && assistantState.nonVisibleEligibleForSilentReply)
+  );
 }
 
 /**

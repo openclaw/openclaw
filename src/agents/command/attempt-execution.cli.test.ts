@@ -3871,50 +3871,91 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("keeps live stream output for visible subagent lane runs", async () => {
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      opts: { lane: "subagent" },
-      runId: "visible-subagent-stream",
-    });
+  it.each([undefined, "internal"] as const)(
+    "suppresses subagent stream output only for internal session effects: %s",
+    async (sessionEffects) => {
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        opts: { lane: "subagent", sessionEffects },
+      });
 
-    expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
-    expect(embeddedArg.terminalReplyExpectation).toBe("optional");
-    expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
-  });
+      expect(embeddedArg.suppressLiveStreamOutput).toBe(sessionEffects === "internal");
+      expect(embeddedArg.terminalReplyExpectation).toBe("optional");
+      expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
+    },
+  );
+
+  it.each([
+    ["sessions_send", "message_tool_only", "inter_session", true],
+    ["sessions_send", "automatic", "inter_session", false],
+    ["exec_approval_followup", "message_tool_only", "inter_session", false],
+    ["unknown_handoff", "message_tool_only", "inter_session", false],
+    ["sessions_send", "message_tool_only", "external_user", false],
+  ] as const)(
+    "scopes empty handoff opt-in to source=%s mode=%s kind=%s",
+    async (sourceTool, sourceReplyDeliveryMode, kind, expected) => {
+      const inputProvenance = { kind, sourceTool };
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        opts: {
+          lane: "nested:agent:main:handoff-empty",
+          inputProvenance,
+          sourceReplyDeliveryMode,
+        },
+      });
+
+      expect(embeddedArg).toMatchObject({
+        allowEmptyAssistantReplyAsSilent: expected,
+        terminalReplyExpectation: undefined,
+        inputProvenance,
+        sourceReplyDeliveryMode,
+      });
+    },
+  );
 
   it.each([
     {
       name: "subagent lane",
-      lane: "subagent" as const,
+      opts: { lane: "subagent" },
       sessionKey: "agent:main:subagent:cli-empty-completion",
       expected: true,
     },
     {
       name: "ordinary lane",
-      lane: undefined,
+      opts: {},
       sessionKey: "agent:main:direct:cli-empty-completion",
       expected: false,
     },
-  ])("allows empty CLI output only for $name runs", async ({ lane, sessionKey, expected }) => {
-    const sessionEntry = makeSessionEntry(`session-${lane ?? "ordinary"}`);
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
+    {
+      name: "sessions_send handoff",
+      opts: {
+        inputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      },
+      sessionKey: "agent:main:direct:cli-handoff",
+      expected: false,
+    },
+  ])(
+    "allows empty CLI output only for $name runs",
+    async ({ name, opts, sessionKey, expected }) => {
+      const sessionEntry = makeSessionEntry(`session-${name}`);
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
 
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
-      body: "complete the task",
-      runId: `run-${lane ?? "ordinary"}-cli-empty-completion`,
-      opts: lane ? { lane } : {},
-      sessionStore,
-    });
+      await runStoredAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionEntry,
+        sessionKey,
+        body: "complete the task",
+        runId: `run-${name}-cli-empty-completion`,
+        opts,
+        sessionStore,
+      });
 
-    expect(firstRunCliAgentArg().allowEmptyAssistantReplyAsSilent).toBe(expected);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
+      expect(firstRunCliAgentArg().allowEmptyAssistantReplyAsSilent).toBe(expected);
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards exact cron creator authority into embedded execution", async () => {
     const runId = "embedded-cron-creator-authority";
@@ -3938,15 +3979,6 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.allowGatewaySubagentBinding).toBe(true);
-  });
-
-  it("suppresses live stream output for hidden internal runs", async () => {
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      opts: { lane: "subagent", sessionEffects: "internal" },
-      runId: "internal-subagent-stream",
-    });
-
-    expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
   });
 
   it("preserves embedded OpenAI-compatible tools for the exact trusted completion", async () => {
@@ -4487,68 +4519,30 @@ describe("CLI attempt execution", () => {
     },
   );
 
-  it("replaces a stale automatic session profile with the configured model profile", async () => {
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      runId: "configured-auth-replaces-auto",
-      configuredAuthProfileId: "openai:verified",
-      sessionEntry: {
-        authProfileOverride: "openai:stale-auto",
-        authProfileOverrideSource: "auto",
-      },
-    });
+  it.each([
+    ["stale-auto", "auto", undefined, "verified"],
+    ["legacy-auto", undefined, 0, "verified"],
+    ["session-choice", "user", undefined, "session-choice"],
+    ["legacy-user", undefined, undefined, "legacy-user"],
+  ] as const)(
+    "selects session profile %s with source=%s legacy marker=%s over configured auth as %s",
+    async (profile, source, compactionCount, expected) => {
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        runId: `configured-auth-${profile}`,
+        configuredAuthProfileId: "openai:verified",
+        sessionEntry: {
+          authProfileOverride: `openai:${profile}`,
+          authProfileOverrideSource: source,
+          authProfileOverrideCompactionCount: compactionCount,
+        },
+      });
 
-    expectRecordFields(embeddedArg, {
-      authProfileId: "openai:verified",
-      authProfileIdSource: "user",
-    });
-  });
-
-  it("replaces a legacy marker-backed automatic profile with the configured model profile", async () => {
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      runId: "configured-auth-replaces-legacy-auto",
-      configuredAuthProfileId: "openai:verified",
-      sessionEntry: {
-        authProfileOverride: "openai:legacy-auto",
-        authProfileOverrideCompactionCount: 0,
-      },
-    });
-
-    expectRecordFields(embeddedArg, {
-      authProfileId: "openai:verified",
-      authProfileIdSource: "user",
-    });
-  });
-
-  it("preserves an explicit session profile over the configured model profile", async () => {
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      runId: "session-auth-over-configured",
-      configuredAuthProfileId: "openai:verified",
-      sessionEntry: {
-        authProfileOverride: "openai:session-choice",
-        authProfileOverrideSource: "user",
-      },
-    });
-
-    expectRecordFields(embeddedArg, {
-      authProfileId: "openai:session-choice",
-      authProfileIdSource: "user",
-    });
-  });
-
-  it("preserves a legacy source-less user profile over the configured model profile", async () => {
-    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
-      runId: "legacy-session-auth-over-configured",
-      configuredAuthProfileId: "openai:verified",
-      sessionEntry: {
-        authProfileOverride: "openai:legacy-user",
-      },
-    });
-
-    expectRecordFields(embeddedArg, {
-      authProfileId: "openai:legacy-user",
-      authProfileIdSource: "user",
-    });
-  });
+      expectRecordFields(embeddedArg, {
+        authProfileId: `openai:${expected}`,
+        authProfileIdSource: "user",
+      });
+    },
+  );
 });
 
 describe("embedded attempt harness pinning", () => {

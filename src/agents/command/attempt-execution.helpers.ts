@@ -31,9 +31,29 @@ import {
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
+
+/** Embedded recovery can distinguish clean empty stops from reasoning-only output. */
+export function resolveEmbeddedReplyPolicy(
+  opts: AgentCommandOpts,
+  isSubagentAnnounceHandoff: boolean,
+) {
+  const isSubagentLane = opts.lane === AGENT_LANE_SUBAGENT;
+  const isSilentSessionHandoff =
+    opts.inputProvenance?.kind === "inter_session" &&
+    opts.inputProvenance.sourceTool === "sessions_send" &&
+    opts.sourceReplyDeliveryMode === "message_tool_only";
+  return {
+    allowEmptyAssistantReplyAsSilent:
+      isSubagentLane || isSubagentAnnounceHandoff || isSilentSessionHandoff,
+    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
+    terminalReplyExpectation: isSubagentLane ? ("optional" as const) : undefined,
+  };
+}
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();

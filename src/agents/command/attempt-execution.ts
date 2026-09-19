@@ -108,6 +108,7 @@ import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
+  resolveEmbeddedReplyPolicy,
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
@@ -140,10 +141,6 @@ function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
-}
-
-function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
-  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
 
 type HarnessAuthProfileSelection = {
@@ -1017,8 +1014,7 @@ export function runAgentAttempt(params: {
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
-    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
-    terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
+    ...resolveEmbeddedReplyPolicy(params.opts, isSubagentAnnounceHandoff),
     ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
@@ -1050,7 +1046,8 @@ export function runAgentAttempt(params: {
     execApprovalContinuationPromptRange: embeddedExecApprovalContinuationPromptRange,
     execApprovalContinuationTranscriptPromptRange: continuationTranscriptPromptRange,
     // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
-    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
+    suppressLiveStreamOutput:
+      params.opts.sessionEffects === "internal" && params.opts.deliver !== true,
     abortSignal: params.opts.abortSignal,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
