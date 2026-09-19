@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Message,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
+import { Type } from "typebox";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
@@ -8,11 +16,188 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
+import { Agent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore } from "./tool-display.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
+const steeringModel: Model = {
+  id: "tool-terminal-steering-model",
+  name: "Tool terminal steering model",
+  api: "openai-responses",
+  provider: "test-provider",
+  baseUrl: "https://example.test",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_000,
+  maxTokens: 1_000,
+};
+
+function steeringAssistant(content: AssistantMessage["content"]): AssistantMessage {
+  const stopReason = content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop";
+  return {
+    role: "assistant",
+    content,
+    api: steeringModel.api,
+    provider: steeringModel.provider,
+    model: steeringModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason,
+    timestamp: Date.now(),
+  };
+}
+
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
+
+  it("does not record a steering skip as a tool failure", () => {
+    const terminal = createToolTerminalObserver("run-steering-skip")({
+      toolName: "exec",
+      arguments: { command: "echo interrupted" },
+      executionStarted: false,
+      outcome: "failure",
+      result: { details: { status: "skipped", deniedReason: "steering" } },
+      failure: { error: "Skipped due to queued user message." },
+    });
+
+    expect(terminal.lastToolError).toBeUndefined();
+    expect(buildPayloads({ lastToolError: terminal.lastToolError })).toEqual([]);
+  });
+
+  it("preserves a genuine pre-execution failure across a steering skip", () => {
+    const observe = createToolTerminalObserver("run-steering-admission");
+    const admissionBlock = observe({
+      toolName: "exec",
+      arguments: { command: "echo denied" },
+      executionStarted: false,
+      outcome: "failure",
+      result: { details: { status: "blocked", deniedReason: "tool-admission" } },
+      failure: { error: "Tool execution was blocked before launch." },
+    });
+
+    const afterSteeringSkip = observe({
+      toolName: "exec",
+      arguments: { command: "echo interrupted" },
+      executionStarted: false,
+      outcome: "failure",
+      result: { details: { status: "skipped", deniedReason: "steering" } },
+      failure: { error: "Skipped due to queued user message." },
+    });
+
+    expect(admissionBlock.lastToolError).toMatchObject({
+      error: "Tool execution was blocked before launch.",
+    });
+    expect(afterSteeringSkip.lastToolError).toMatchObject({
+      error: "Tool execution was blocked before launch.",
+    });
+    expect(buildPayloads({ lastToolError: afterSteeringSkip.lastToolError })).toEqual([
+      expect.objectContaining({ text: "⚠️ Exec blocked", isError: true }),
+    ]);
+  });
+
+  it("runs the observer through a sequential agent steering reply", async () => {
+    const firstStarted = createDeferred();
+    const releaseFirst = createDeferred();
+    const secondExecute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "unexpected second execution" }],
+      details: {},
+    }));
+    const providerRequests: Message[][] = [];
+    const observe = createToolTerminalObserver("run-agent-steering");
+    const terminalResults: ReturnType<typeof observe>[] = [];
+    let providerRequest = 0;
+    const streamFn = (_model: Model, context: { messages: Message[] }) => {
+      providerRequests.push(context.messages.slice());
+      providerRequest += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          providerRequest === 1
+            ? steeringAssistant([
+                { type: "toolCall", id: "call-first", name: "first", arguments: {} },
+                { type: "toolCall", id: "call-second", name: "second", arguments: {} },
+              ])
+            : steeringAssistant([{ type: "text", text: "steering reply" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const agent = new Agent({
+      initialState: {
+        model: steeringModel,
+        tools: [
+          {
+            name: "first",
+            label: "first",
+            description: "Runs the first step.",
+            parameters: Type.Object({}),
+            execute: async () => {
+              firstStarted.resolve();
+              await releaseFirst.promise;
+              return { content: [{ type: "text", text: "first completed" }], details: {} };
+            },
+          },
+          {
+            name: "second",
+            label: "second",
+            description: "Runs the second step.",
+            parameters: Type.Object({}),
+            execute: secondExecute,
+          },
+        ],
+      },
+      streamFn,
+      toolExecution: "sequential",
+      afterToolOutcome: async ({ toolCall, args, result, executionStarted, isError }) => {
+        terminalResults.push(
+          observe({
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            arguments: args,
+            result,
+            executionStarted,
+            outcome: isError ? "failure" : "success",
+            ...(isError ? { failure: { error: "Agent reported a tool error." } } : {}),
+          }),
+        );
+        return { isError };
+      },
+    });
+
+    const run = agent.prompt("start the sequence");
+    await firstStarted.promise;
+    agent.steer({ role: "user", content: "change direction", timestamp: Date.now() });
+    releaseFirst.resolve();
+    await run;
+
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(terminalResults.at(-1)).toMatchObject({ executionStarted: false });
+    expect(terminalResults.at(-1)?.lastToolError).toBeUndefined();
+    expect(buildPayloads({ lastToolError: terminalResults.at(-1)?.lastToolError })).toEqual([]);
+    expect(providerRequests[1]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: "call-second",
+          isError: true,
+          details: { status: "skipped", deniedReason: "steering" },
+        }),
+        expect.objectContaining({ role: "user", content: "change direction" }),
+      ]),
+    );
+  });
 
   it("retains a genuine message failure across suppression until a real send succeeds", () => {
     const observe = createToolTerminalObserver("run-suppression");
