@@ -14,7 +14,7 @@ import { normalizeAccountId } from "../../routing/account-id.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-normalize.js";
 import { normalizeConversationReadInvocationOrigin } from "./conversation-read-origin.js";
-import { resolveChannelDefaultAccountId } from "./helpers.js";
+import { resolveChannelDefaultAccountId, supportsChannelMessageAction } from "./helpers.js";
 import {
   hasCurrentConversationTarget,
   hasMatchingCurrentAccountContext,
@@ -717,10 +717,7 @@ export async function dispatchChannelMessageAction(
       }
       // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
       // action names before the dispatcher enters channel-specific behavior.
-      if (
-        actions.supportsAction &&
-        !actions.supportsAction({ action: authorizedActionContext.action })
-      ) {
+      if (!supportsChannelMessageAction(actions, authorizedActionContext.action)) {
         return null;
       }
       assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);

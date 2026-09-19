@@ -240,6 +240,36 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("forwards the required action when activating a scoped setup shell", () => {
+    const setupPlugin = createChannelTestPluginBase({ id: "alpha" });
+    const runtimePlugin = {
+      ...createChannelTestPluginBase({ id: "alpha" }),
+      actions: {
+        handleAction: vi.fn(),
+        supportsAction: ({ action }: { action: string }) => action === "send",
+      },
+    };
+    const scopedRegistry = createTestRegistry([
+      { pluginId: "alpha", plugin: setupPlugin, source: "test" },
+    ]);
+    const activatedRegistry = createTestRegistry([
+      { pluginId: "alpha", plugin: runtimePlugin, source: "runtime" },
+    ]);
+    resolveRuntimePluginRegistryMock.mockReturnValueOnce(activatedRegistry);
+
+    withPluginRuntimeRegistryScope(scopedRegistry, () => {
+      expect(
+        channelResolution.resolveOutboundChannelPlugin({
+          channel: "alpha",
+          cfg: { channels: {} } as never,
+          allowBootstrap: true,
+          requiredAction: "send",
+        }),
+      ).toBe(runtimePlugin);
+    });
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+  });
+
   it("bootstraps configured channel plugins when the active registry is missing the target", async () => {
     const plugin = { id: "alpha", outbound: { sendText: vi.fn() } };
     getLoadedChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
@@ -420,6 +450,14 @@ describe("outbound channel resolution", () => {
         allowBootstrap: true,
       }),
     ).toBeUndefined();
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+        requiredAction: "send",
+      }),
+    ).toBe(actionsOnlyPlugin);
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 
