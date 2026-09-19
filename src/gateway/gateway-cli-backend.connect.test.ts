@@ -8,6 +8,7 @@ import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { prepareGatewayClientDeviceAuth } from "./client.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -107,6 +108,12 @@ describe("gateway cli backend connect", () => {
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 
       try {
+        // Native auth-store startup belongs to fixture setup, before the handshake budget.
+        await prepareGatewayClientDeviceAuth({
+          url: server.url,
+          token,
+          deviceIdentity,
+        });
         client = await connectTestGatewayClient({
           url: server.url,
           token,

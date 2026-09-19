@@ -16,7 +16,11 @@ import {
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
 import { hasErrnoCode } from "../../src/infra/errno.js";
-import { drainFileLockStateForTest, resetFileLockStateForTest } from "../../src/infra/file-lock.js";
+import {
+  drainFileLockStateForTest,
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
+  resetFileLockStateForTest,
+} from "../../src/infra/file-lock.js";
 import { resolveMaxOutputBytes } from "../../src/process/exec-output.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -791,7 +795,7 @@ describe("openclaw test instance", () => {
       try { console.log(JSON.stringify({ pid: process.pid, port: fixture.port, attempted, tempRoot: await realpath(tmpdir()) })); }
       finally { await fixture.cleanup(); }
     `;
-      const allocateContender = async () => {
+      const runContender = async (source: string) => {
         const result = await promisify(execFile)(
           resolveTestNodeExecPath(),
           [
@@ -800,13 +804,30 @@ describe("openclaw test instance", () => {
             new URL("../../scripts/tsx.mjs", import.meta.url).href,
             "--input-type=module",
             "-e",
-            script,
+            source,
           ],
           { cwd: process.cwd(), timeout: 20_000 },
         );
         return JSON.parse(result.stdout.trim());
       };
+      const allocateContender = () => runContender(script);
+      const reserveInProcessPort = () =>
+        runContender(`
+      const { reserveGatewayTestListener } = await import(${JSON.stringify(new URL("../../src/gateway/test-helpers.listener.ts", import.meta.url).href)});
       try {
+        const listener = await reserveGatewayTestListener(${instance.port + offset});
+        await listener.closeUnadopted();
+        console.log(JSON.stringify({ reserved: true }));
+      } catch (error) {
+        console.log(JSON.stringify({ reserved: false, code: error.code, causeCode: error.cause?.code }));
+      }
+    `);
+      try {
+        expect(await reserveInProcessPort()).toEqual({
+          reserved: false,
+          code: "EADDRINUSE",
+          causeCode: FILE_LOCK_TIMEOUT_ERROR_CODE,
+        });
         const contender = await allocateContender();
         expect(contender.tempRoot).toBe(await fs.realpath(tmpdir()));
         expect(contender.pid).not.toBe(process.pid);
@@ -818,6 +839,7 @@ describe("openclaw test instance", () => {
         control.unblock();
         await Promise.allSettled([starting]);
         await instance.cleanup();
+        expect(await reserveInProcessPort()).toEqual({ reserved: true });
         const released = await allocateContender();
         expect(released.port).toBe(instance.port + offset);
         expect(released.attempted).toEqual([instance.port + offset]);

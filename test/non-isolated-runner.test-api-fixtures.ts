@@ -22,6 +22,9 @@ for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.go
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
 }
+const { redactRegisteredSecretValues: redactPriorValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
+const priorError = "Agent harness-owned session identity is locked and cannot be replaced or shared.";
+expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 `
         : "";
     files[`${prefix}-test-api-${generation}.test.ts`] = `
@@ -46,8 +49,11 @@ expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/diagnostic-run-activity.test-support.ts")});
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
+const { registerSecretValueForRedaction, redactRegisteredSecretValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
 describe("${generation} test API consumers", () => {
   async function verifyConsumers(message: string): Promise<void> {
+    registerSecretValueForRedaction("identity");
+    expect(redactRegisteredSecretValues("session identity is locked", () => "***")).toBe("session *** is locked");
     const blocked = createBeforeToolCallBlockedError(message);
     expect(blocked.message).toBe(message);
     expect(isBeforeToolCallBlockedError(blocked)).toBe(true);

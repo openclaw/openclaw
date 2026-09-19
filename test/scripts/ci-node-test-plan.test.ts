@@ -3428,13 +3428,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(new Set(actual).size).toBe(actual.length);
   });
 
-  it("preserves Gateway runner hooks while assigning database consumers to forks", () => {
+  it("preserves Gateway runner hooks while assigning database consumers to parallel forks", () => {
     const worker = createGatewayDatabaseWorkersVitestConfig({});
     const core = createGatewayCoreVitestConfig({});
     const server = createGatewayServerVitestConfig({});
     const methods = createGatewayMethodsVitestConfig({});
     expect(methods.test?.pool).toBe("forks");
     expect(worker.test?.pool).toBe("forks");
+    expect(worker.test?.fileParallelism).toBe(true);
     expect(core.test?.isolate).toBe(true);
     for (const shared of [worker, server, methods]) {
       expect(shared.test?.isolate).toBe(false);

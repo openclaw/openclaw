@@ -219,6 +219,14 @@ selection retains the Gateway config owner and its admission metadata.
 Gateway admission is finalized before runtime placement, so inventory changes
 retain the admitted job ceiling instead of creating a different group policy.
 
+Within its exclusive plan, the Gateway database-worker cohort runs files in
+parallel forks under the existing Vitest worker ceiling. Each fork retains the
+non-isolated runner's file-boundary cleanup for native database owners, admission,
+and module state. One worker still runs files serially; the file inventory and
+no-output watchdog are unchanged.
+Shared test port claims cover both child-process startup and in-process listener
+lifetimes, including the handoff before a child binds its socket.
+
 Complete hybrid main and pull-request plans retain their existing jobs and runner
 allocations while admitting measured runtime groups within 440 seconds, including
 the existing 100-second build allowance. This reserves 40 seconds of the
