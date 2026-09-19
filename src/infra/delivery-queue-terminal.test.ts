@@ -240,7 +240,9 @@ describe("delivery queue pending terminal transition", () => {
   });
 
   it("keeps health reads immutable and expires tombstones during maintenance", async () => {
-    const retention = { idPrefix: "health:", maxAgeMs: 1_000, maxEntries: 1 } as const;
+    const now = Date.now();
+    const hour = 60 * 60_000;
+    const retention = { idPrefix: "health:", maxAgeMs: hour, maxEntries: 1 } as const;
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -274,9 +276,9 @@ describe("delivery queue pending terminal transition", () => {
         failedAt,
       );
     };
-    insertRetained("health:expired", 1_000, retention);
-    insertRetained("health:over-cap", 9_000, retention);
-    insertRetained("health:newest", 9_500, retention);
+    insertRetained("health:expired", now - 2 * hour, retention);
+    insertRetained("health:over-cap", now - hour / 2, retention);
+    insertRetained("health:newest", now - hour / 4, retention);
     insertRetained("health:permanent", 1_000, "permanent");
     insertFailed.run(
       queueName,
@@ -291,36 +293,30 @@ describe("delivery queue pending terminal transition", () => {
       queueName,
       entry: {
         id: "health:ordinary-completed",
-        enqueuedAt: 10_000 - 31 * 24 * 60 * 60_000,
+        enqueuedAt: now - 31 * 24 * 60 * 60_000,
         retryCount: 0,
       },
       status: "completed",
       stateDir,
     });
 
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(10_000);
-      expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
-        { queueName, count: 5, oldestFailedAt: 1_000 },
-      ]);
-      expect(
-        db
-          .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
-          .all(queueName),
-      ).toEqual([
-        { id: "health:expired" },
-        { id: "health:malformed" },
-        { id: "health:newest" },
-        { id: "health:ordinary-completed" },
-        { id: "health:over-cap" },
-        { id: "health:permanent" },
-      ]);
+    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([
+      { queueName, count: 5, oldestFailedAt: 1_000 },
+    ]);
+    expect(
+      db
+        .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")
+        .all(queueName),
+    ).toEqual([
+      { id: "health:expired" },
+      { id: "health:malformed" },
+      { id: "health:newest" },
+      { id: "health:ordinary-completed" },
+      { id: "health:over-cap" },
+      { id: "health:permanent" },
+    ]);
 
-      pruneExpiredDeliveryQueueTombstones(stateDir);
-    } finally {
-      vi.useRealTimers();
-    }
+    await pruneExpiredDeliveryQueueTombstones(stateDir);
     expect(
       db
         .prepare("SELECT id FROM delivery_queue_entries WHERE queue_name = ? ORDER BY id")

@@ -10,7 +10,10 @@ import {
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
-import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite.js";
+import {
+  captureDeliveryQueueStateContext,
+  pruneExpiredDeliveryQueueTombstones,
+} from "../infra/delivery-queue-sqlite.js";
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -239,13 +242,15 @@ export function startGatewayMaintenanceTimers(params: {
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
+  let mediaCleanupStopped = false;
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
+      const context = captureDeliveryQueueStateContext();
       try {
-        pruneExpiredDeliveryQueueTombstones();
+        await pruneExpiredDeliveryQueueTombstones(undefined, context);
       } finally {
-        await pruneOrphanedDeliveryQueueMedia();
+        await pruneOrphanedDeliveryQueueMedia(undefined, context);
       }
     });
   let deliveryQueueMediaGcStartedAtMs = 0;
@@ -258,11 +263,24 @@ export function startGatewayMaintenanceTimers(params: {
       deliveryQueueMediaGcLoader.clear();
     }
   });
+  let deliveryQueueMediaGcStartPromise: Promise<void> | undefined;
   const performDeliveryQueueMediaGc = () => {
-    if (!deliveryQueueMediaGcLoader.peek()) {
-      deliveryQueueMediaGcStartedAtMs = Date.now();
+    if (mediaCleanupStopped) {
+      return undefined;
     }
-    return deliveryQueueMediaGcLoader.load();
+    const running = deliveryQueueMediaGcLoader.peek();
+    if (running) {
+      return running;
+    }
+    deliveryQueueMediaGcStartPromise ??= waitForMediaCleanupDrainsToSettle().then(() => {
+      deliveryQueueMediaGcStartPromise = undefined;
+      if (mediaCleanupStopped) {
+        return undefined;
+      }
+      deliveryQueueMediaGcStartedAtMs = Date.now();
+      return deliveryQueueMediaGcLoader.load();
+    });
+    return deliveryQueueMediaGcStartPromise;
   };
   void performDeliveryQueueMediaGc();
 
@@ -502,7 +520,6 @@ export function startGatewayMaintenanceTimers(params: {
   };
 
   let mediaCleanupInterval: ReturnType<typeof setInterval> | undefined;
-  let mediaCleanupStopped = false;
   const runMediaMaintenance = () => {
     if (mediaCleanupStopped) {
       return;
@@ -538,6 +555,7 @@ export function startGatewayMaintenanceTimers(params: {
         mediaCleanupInterval = undefined;
       }
       const pending = [
+        deliveryQueueMediaGcLoader.peek(),
         playbackTranscodeCacheCleanupLoader.peek(),
         managedOutgoingCleanupLoader.peek(),
         mediaCleanupInFlight,

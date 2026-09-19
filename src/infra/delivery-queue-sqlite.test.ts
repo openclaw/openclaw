@@ -415,7 +415,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBe(
         "completed",
       );
-      pruneExpiredDeliveryQueueTombstones(stateDir);
+      await pruneExpiredDeliveryQueueTombstones(stateDir);
       expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBeUndefined();
       const { db } = database;
       const row = db

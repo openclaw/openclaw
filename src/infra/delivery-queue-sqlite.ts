@@ -15,7 +15,6 @@ import {
   getDeliveryQueueEntryOwnersInDatabase,
   loadDeliveryQueueEntriesInDatabase,
   prepareDeliveryQueueTerminalEntry,
-  pruneExpiredDeliveryQueueTombstonesInDatabase,
   reserveDeliveryQueueEntryAttemptInDatabase,
   terminalizePendingDeliveryQueueEntryInDatabase,
   updateDeliveryQueueEntryInDatabase,
@@ -191,8 +190,14 @@ export async function countPendingDeliveryQueueEntriesReadOnly(
 }
 
 /** Physically expire age-bounded delivery queue tombstones. */
-export function pruneExpiredDeliveryQueueTombstones(stateDir?: string): void {
-  pruneExpiredDeliveryQueueTombstonesInDatabase(openStateDatabase(stateDir));
+export async function pruneExpiredDeliveryQueueTombstones(
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  await executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.pruneTombstones",
+    input: undefined,
+  });
 }
 
 /** Atomically delete or tombstone a pending row only while its value is unchanged. */

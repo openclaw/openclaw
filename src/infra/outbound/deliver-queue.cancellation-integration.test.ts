@@ -458,7 +458,7 @@ describe("queued cancellation during adapter preparation", () => {
         if (artifact) {
           expect(fs.existsSync(artifact)).toBe(true);
           expect(
-            loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir })
+            (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
               .stagedArtifacts,
           ).toEqual([artifact]);
           expect(
@@ -480,7 +480,7 @@ describe("queued cancellation during adapter preparation", () => {
         if (artifact) {
           expect(fs.existsSync(artifact)).toBe(false);
           expect(
-            loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir })
+            (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0, stateDir }))
               .stagedArtifacts,
           ).toEqual([]);
         }

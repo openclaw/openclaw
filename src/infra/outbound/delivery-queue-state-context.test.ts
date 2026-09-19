@@ -254,7 +254,8 @@ describe("captured delivery queue state", () => {
         await release?.();
         expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
         expect(
-          loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context).stagedArtifacts,
+          (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context))
+            .stagedArtifacts,
         ).toEqual([]);
         await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
       },

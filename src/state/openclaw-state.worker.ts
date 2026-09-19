@@ -29,8 +29,12 @@ import {
   listManagedImageOriginalMediaIdsInDatabase,
 } from "../gateway/managed-image-record-store.kernel.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
-import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
+import {
+  countFailedDeliveryQueueEntriesInDatabase,
+  pruneExpiredDeliveryQueueTombstonesInDatabase,
+} from "../infra/delivery-queue-sqlite.kernel.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import { loadDeliveryQueueMediaRetentionSnapshotInDatabase } from "../infra/outbound/delivery-queue-media-staging.kernel.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import {
   readApnsRegistrationFromDatabase,
@@ -430,6 +434,12 @@ function createSharedStateWorkerBackend(
       }
       if (command.type === "deliveryQueue.countFailed") {
         return countFailedDeliveryQueueEntriesInDatabase(database);
+      }
+      if (command.type === "deliveryQueue.pruneTombstones") {
+        return pruneExpiredDeliveryQueueTombstonesInDatabase(database);
+      }
+      if (command.type === "deliveryQueue.mediaRetentionSnapshot") {
+        return loadDeliveryQueueMediaRetentionSnapshotInDatabase(database, command.input);
       }
       if (
         command.type === "sessionDelivery.enqueue" ||
