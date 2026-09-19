@@ -75,7 +75,7 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -203,8 +203,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
-    started: Date.now(),
-    startedMonotonicMs: performance.now(),
+    ...captureCliRunStartTime(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,
@@ -2066,47 +2065,6 @@ describe("runCliAgent reliability", () => {
 
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
     expect(clearBeforeRetry).not.toHaveBeenCalled();
-  });
-
-  it("keeps the fresh retry budget across a wall-clock jump", async () => {
-    supervisorSpawnMock
-      .mockResolvedValueOnce(
-        makeManagedRun({
-          reason: "no-output-timeout",
-          exitCode: null,
-          exitSignal: "SIGKILL",
-          durationMs: 1_000,
-          timedOut: true,
-          noOutputTimedOut: true,
-        }),
-      )
-      .mockResolvedValueOnce(makeManagedRun({ stdout: "fresh fallback" }));
-    const clearBeforeRetry = vi.fn(async () => true);
-    const context = makeClaudePreparedContext({
-      sessionKey: "agent:main:clock-jump-retry",
-      runId: "run-clock-jump-retry",
-      cliSessionId: "stale-cli-session",
-      openClawHistoryPrompt: CLI_RESEED_PROMPT,
-    });
-    // A forward wall-clock step (NTP sync, VM resume, manual clock change) must
-    // not consume the elapsed retry budget: only monotonic time decides how
-    // much of timeoutMs remains for the recovery attempt.
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(context.started + 60_000);
-    try {
-      const result = await runPreparedCliAgent({
-        ...context,
-        params: {
-          ...context.params,
-          onBeforeFreshCliSessionRetry: clearBeforeRetry,
-        },
-      });
-      expect(result.payloads).toEqual([{ text: "fresh fallback" }]);
-    } finally {
-      nowSpy.mockRestore();
-    }
-
-    expect(clearBeforeRetry).toHaveBeenCalledOnce();
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {

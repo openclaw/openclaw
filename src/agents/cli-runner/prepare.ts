@@ -178,11 +178,12 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import type {
-  CliReusableSession,
-  CliSecretInput,
-  PreparedCliRunContext,
-  RunCliAgentParams,
+import {
+  captureCliRunStartTime,
+  type CliReusableSession,
+  type CliSecretInput,
+  type PreparedCliRunContext,
+  type RunCliAgentParams,
 } from "./types.js";
 
 type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
@@ -552,11 +553,9 @@ async function prepareCliRunContextWithinReadFence(
           entries: { [sessionOwner]: { default: true } },
         },
       } satisfies OpenClawConfig);
-  const started = Date.now();
+  const { started, startedMonotonicMs } = captureCliRunStartTime();
   // Recovery retry budgets measure elapsed time; keep a monotonic anchor so a
-  // wall-clock step (NTP sync, VM suspend, manual clock change) cannot shorten
-  // or extend an operator-configured timeout.
-  const startedMonotonicMs = performance.now();
+  // wall-clock correction cannot shorten or extend an operator-configured timeout.
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
   const isControlOperation = params.controlOperation !== undefined;
@@ -2234,9 +2233,7 @@ async function prepareCliRunContextWithinReadFence(
           .join("\n\n").length,
       },
     });
-    const buildPreparedContext = (
-      preparedParams: PreparedCliRunContext["params"],
-    ): Omit<PreparedCliRunContext, "hadSessionFile"> => ({
+    const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,
       effectiveAuthProfileId,
@@ -2261,14 +2258,14 @@ async function prepareCliRunContextWithinReadFence(
       ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
       authEpoch,
       authBindingFingerprint,
-      ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true } : {}),
+      ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true as const } : {}),
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
       ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
-      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
+      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true as const } : {}),
     });
     const admitFinalParams = () =>
       admitPreparedParams({

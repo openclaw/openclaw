@@ -214,9 +214,9 @@ longer resumed-run budget for cron and explicit timeouts. Set it only when a
 backend intentionally needs its own watchdog policy.
 
 Recovery retries stay inside the operator-configured `timeoutMs`: elapsed time
-is measured monotonically, so a system-clock step (NTP sync, VM resume, manual
-clock change) can neither shorten a retry that still has budget nor let a hung
-CLI outlive its timeout.
+is measured monotonically, so an NTP correction or manual clock change can
+neither shorten a retry that still has budget nor let a hung CLI outlive its
+timeout.
 
 `freshSessionRecovery` is a backend-owned compatibility contract:
 

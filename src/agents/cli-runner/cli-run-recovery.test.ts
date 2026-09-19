@@ -4,6 +4,40 @@ import { FailoverError } from "../failover-error.js";
 import { runCliRecovery } from "./cli-run-recovery.js";
 
 describe("cli-run-recovery retry budget", () => {
+  it("keeps recovery budget after a forward wall-clock step", async () => {
+    const context = buildPreparedCliRunContext({
+      sessionKey: "agent:main:main",
+      timeoutMs: 60_000,
+    });
+    context.openClawHistoryPrompt = "…earlier history…";
+    context.reusableCliSession = { mode: "reuse", sessionId: "s1" };
+    const error = new FailoverError("selected session expired", {
+      reason: "session_expired",
+      provider: "claude-cli",
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(context.started + 120_000);
+    let attempts = 0;
+    try {
+      const result = await runCliRecovery({
+        context,
+        executeAttempt: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw error;
+          }
+          return { done: true };
+        },
+        finishAttempt: async (attempt) => ({ ...attempt, meta: { durationMs: 1 } }),
+        finishDeliveredFailure: async () => undefined,
+        onTerminalFailure: async () => {},
+      });
+      expect(result).toEqual({ done: true, meta: { durationMs: 1 } });
+      expect(attempts).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("passes an integer retry timeout to the next attempt when elapsed monotonic time is fractional", async () => {
     const context = buildPreparedCliRunContext({
       sessionKey: "agent:main:main",

@@ -229,6 +229,10 @@ export type CliSessionBindingFacts = {
   requireExplicitMessageTarget?: boolean;
 };
 
+export function captureCliRunStartTime() {
+  return { started: Date.now(), startedMonotonicMs: performance.now() };
+}
+
 /** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
