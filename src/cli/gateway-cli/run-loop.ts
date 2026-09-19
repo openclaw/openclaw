@@ -818,7 +818,7 @@ export async function runGatewayLoop(params: {
           let drainTimedOut = false;
           await measureGatewayRestartTrace(
             "restart.drain",
-            async () => {
+            async (): Promise<void> => {
               const {
                 abortEmbeddedAgentRun,
                 createGatewayActiveWorkSnapshot,
@@ -837,7 +837,8 @@ export async function runGatewayLoop(params: {
               reportDrainSnapshot(initialSnapshot);
               if (restartIntent?.force) {
                 gatewayLog.warn("forced restart requested; skipping active work drain");
-                return;
+                // Cron execution can retain connection work joined before cron service teardown.
+                return void eagerLifecycleRuntime.abortActiveCronTaskRuns("Gateway restarting.");
               }
 
               const remainingDrainTimeoutMs =
