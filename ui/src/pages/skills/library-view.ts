@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
 import { renderLibraryIdentity } from "./library-detail.ts";
 import { libraryEventControl } from "./library-events.ts";
+import { renderLibraryFilePath } from "./library-file-path.ts";
 import { libraryFileText } from "./library-files.ts";
 import { renderSkillLibraryStatus } from "./skill-status.ts";
 
@@ -389,41 +390,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
                 ></textarea>
               </label>`
         }
-        ${
-          !disabled
-            ? html`<div class="plugins-toolbar">
-                <label class="field" style="flex: 1; min-width: 0;"
-                  ><span>${t("skillLibrary.newFile")}</span
-                  ><input
-                    class="settings-input"
-                    name="library-file-path"
-                    .value=${library.newFilePath}
-                    @input=${(event: Event) => {
-                      library.newFilePath = libraryEventControl(event, HTMLInputElement).value;
-                      library.changed();
-                    }} /></label
-                ><button
-                  type="button"
-                  class="btn"
-                  ?disabled=${!library.newFilePath.trim()}
-                  @click=${() => {
-                    const path = library.newFilePath.trim();
-                    if (path === "SKILL.md" || draft.files.some((file) => file.path === path)) {
-                      library.error = t("skillLibrary.fileExists");
-                    } else {
-                      draft.files = [...draft.files, { path, content: "", encoding: "utf8" }];
-                      draft.selectedFile = path;
-                      draft.dirty = true;
-                      library.newFilePath = "";
-                    }
-                    library.changed();
-                  }}
-                >
-                  ${t("skillLibrary.addFile")}
-                </button>
-              </div>`
-            : nothing
-        }
+        ${!disabled ? renderLibraryFilePath(library, draft) : nothing}
         ${
           library.error
             ? html`<div class="callout danger" role="alert">${library.error}</div>`

@@ -80,60 +80,91 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
-  it("keeps workspace creation for a solo shared-token admin with many channel identities", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const proposal = {
-        record: { id: "proposal-synthetic", status: "pending" },
-        content: "Draft",
-        revisionHash: "a".repeat(64),
-      };
-      const gateway = await installMockGateway(page, {
-        presenceUsers: [
-          { id: "channel-1", name: "Sender one" },
-          { id: "channel-2", name: "Sender two" },
-          { id: "channel-3", name: "Sender three" },
-        ],
-        methodResponses: {
-          "skills.library.list": {
-            entries: [],
-            profileId: null,
-            multipleProfiles: false,
-            defaultTarget: "workspace",
-            canManageWorkspace: true,
-            defaultSelectionLimit: 64,
+  it.each([1440, 390])(
+    "explains workspace support paths before saving and preserves proposal review at %ipx",
+    async (width) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        const proposal = {
+          record: { id: "proposal-synthetic", status: "pending" },
+          content: "Draft",
+          revisionHash: "a".repeat(64),
+        };
+        const gateway = await installMockGateway(page, {
+          presenceUsers: [
+            { id: "channel-1", name: "Sender one" },
+            { id: "channel-2", name: "Sender two" },
+            { id: "channel-3", name: "Sender three" },
+          ],
+          methodResponses: {
+            "skills.library.list": {
+              entries: [],
+              profileId: null,
+              multipleProfiles: false,
+              defaultTarget: "workspace",
+              canManageWorkspace: true,
+              defaultSelectionLimit: 64,
+            },
+            "skills.status": status,
+            "skills.proposals.create": proposal,
+            "skills.proposals.apply": {
+              record: { ...proposal.record, status: "applied" },
+              targetSkillFile: "/tmp/synthetic-workspace/skills/checklist/SKILL.md",
+            },
           },
-          "skills.status": status,
-          "skills.proposals.create": proposal,
-          "skills.proposals.apply": {
-            record: { ...proposal.record, status: "applied" },
-            targetSkillFile: "/tmp/synthetic-workspace/skills/checklist/SKILL.md",
-          },
-        },
+        });
+        await openSkillSettings(page);
+        await page.getByRole("button", { name: "Create skill", exact: true }).click();
+        expect(await page.getByText("My skills", { exact: true }).count()).toBe(0);
+        expect(await page.getByText("Team", { exact: true }).count()).toBe(0);
+        const path = page.getByRole("textbox", { name: "New text file path", exact: true });
+        const guidance =
+          "Workspace support files must be under assets/, examples/, references/, scripts/, or templates/. For example: references/notes.md.";
+        const help = page.getByText(guidance, { exact: true });
+        expect(await help.count()).toBe(1);
+        expect(await help.isVisible()).toBe(true);
+        expect(
+          await path.evaluate((element) =>
+            (element.getAttribute("aria-describedby") ?? "")
+              .split(/\s+/u)
+              .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
+              .join(" "),
+          ),
+        ).toBe(guidance);
+        expect(await gateway.getRequests("skills.proposals.create")).toHaveLength(0);
+        await path.fill("references/notes.md");
+        expect(await help.isVisible()).toBe(true);
+        const form = page.locator("form.skill-reader-dialog");
+        expect(
+          await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+        ).toBe(true);
+        await page.getByRole("button", { name: "Add file", exact: true }).click();
+        await page.getByLabel("references/notes.md", { exact: true }).fill("Supporting notes.\n");
+        await page.getByLabel("File", { exact: true }).selectOption("SKILL.md");
+        await page.getByLabel("Skill name", { exact: true }).fill("checklist");
+        await page.getByLabel("Description", { exact: true }).fill("A repeatable checklist");
+        await page
+          .getByLabel("SKILL.md", { exact: true })
+          .fill("---\nname: checklist\ndescription: A repeatable checklist\n---\nDo the work.\n");
+        await page.getByRole("button", { name: "Save workspace proposal" }).click();
+        const request = await gateway.waitForRequest("skills.proposals.create");
+        expect(request.params).toMatchObject({
+          agentId: "main",
+          name: "checklist",
+          supportFiles: [{ path: "references/notes.md", content: "Supporting notes.\n" }],
+        });
+        await page.getByText(/pending review and is not active yet/u).waitFor();
+        expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
+        await page.getByRole("button", { name: "Apply to workspace" }).click();
+        expect((await gateway.waitForRequest("skills.proposals.apply")).params).toEqual({
+          agentId: "main",
+          proposalId: "proposal-synthetic",
+          expectedRevisionHash: "a".repeat(64),
+        });
+        await page.getByText(/Workspace main: applied/u).waitFor();
+        expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
       });
-      await openSkillSettings(page);
-      await page.getByRole("button", { name: "Create skill", exact: true }).click();
-      expect(await page.getByText("My skills", { exact: true }).count()).toBe(0);
-      expect(await page.getByText("Team", { exact: true }).count()).toBe(0);
-      await page.getByLabel("Skill name", { exact: true }).fill("checklist");
-      await page.getByLabel("Description", { exact: true }).fill("A repeatable checklist");
-      await page
-        .getByLabel("SKILL.md", { exact: true })
-        .fill("---\nname: checklist\ndescription: A repeatable checklist\n---\nDo the work.\n");
-      await page.getByRole("button", { name: "Save workspace proposal" }).click();
-      const request = await gateway.waitForRequest("skills.proposals.create");
-      expect(request.params).toMatchObject({ agentId: "main", name: "checklist" });
-      await page.getByText(/pending review and is not active yet/u).waitFor();
-      expect(await gateway.getRequests("skills.proposals.apply")).toHaveLength(0);
-      await page.getByRole("button", { name: "Apply to workspace" }).click();
-      expect((await gateway.waitForRequest("skills.proposals.apply")).params).toEqual({
-        agentId: "main",
-        proposalId: "proposal-synthetic",
-        expectedRevisionHash: "a".repeat(64),
-      });
-      await page.getByText(/Workspace main: applied/u).waitFor();
-      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
-    });
-  });
+    },
+  );
 
   it("saves and edits an operator's complete bundle, preserving a stale draft on a narrow viewport", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
@@ -295,6 +326,7 @@ suite.define(() => {
         await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
         const skill = page.getByLabel("SKILL.md", { exact: true });
         await skill.fill(own.content);
+        expect(await page.getByText(/Workspace support files must be under/u).count()).toBe(0);
         await page.getByLabel("New text file path", { exact: true }).fill("references/lilac.txt");
         await page.getByRole("button", { name: "Add file", exact: true }).press("Enter");
         const support = page.getByLabel("references/lilac.txt", { exact: true });

@@ -25,6 +25,8 @@ const enSkillLibrary = {
     description: "Description",
     file: "File",
     newFile: "New text file path",
+    workspaceFilePathHelp:
+      "Workspace support files must be under assets/, examples/, references/, scripts/, or templates/. For example: references/notes.md.",
     addFile: "Add file",
     deleteFile: "Delete file",
     deleteFileConfirm: "Remove {path} from the next saved bundle?",
