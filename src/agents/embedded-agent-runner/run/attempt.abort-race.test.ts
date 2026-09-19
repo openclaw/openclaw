@@ -1,6 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
+import { setEmbeddedMode } from "../../../infra/embedded-mode.js";
+import {
+  EmbeddedPluginApprovalBroker,
+  setEmbeddedPluginApprovalBroker,
+} from "../../../infra/embedded-plugin-approval-broker.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
+import { runBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import {
   cleanupTempPaths,
@@ -26,6 +33,103 @@ describe("runEmbeddedAttempt abort races", () => {
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
     tempPaths.length = 0;
+    vi.useRealTimers();
+  });
+
+  it("preserves the approval budget through the production attempt entrypoint", async () => {
+    vi.useRealTimers();
+    const originalDateNow = Date.now;
+    let wallClockOffsetMs = 0;
+    Date.now = () => originalDateNow() + wallClockOffsetMs;
+    const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
+    const broker = new EmbeddedPluginApprovalBroker();
+    const approvalEvents: string[] = [];
+    const unsubscribe = broker.subscribe((event) => {
+      approvalEvents.push(event.event);
+      if (event.event === "plugin.approval.requested") {
+        wallClockOffsetMs = 60_000;
+        emitAgentEvent({
+          runId: "run-context-engine-forwarding",
+          sessionId: "embedded-session",
+          stream: "lifecycle",
+          data: { phase: "waiting-approval", approvalId: event.payload.id },
+        });
+      } else if (event.event === "plugin.approval.resolved") {
+        emitAgentEvent({
+          runId: "run-context-engine-forwarding",
+          sessionId: "embedded-session",
+          stream: "lifecycle",
+          data: { phase: "approval-resolved", approvalId: event.payload.id },
+        });
+      }
+    });
+    setEmbeddedMode(true);
+    setEmbeddedPluginApprovalBroker(broker);
+
+    try {
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:telegram:direct:approval-clock-step",
+        tempPaths,
+        sessionPrompt: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 40);
+          });
+          const approvalPromise = runBeforeToolCallHook({
+            toolName: "skill_workshop",
+            params: { action: "apply", proposal_id: "clock-step" },
+            toolCallId: "clock-step",
+            ctx: {
+              agentId: "main",
+              sessionKey: "agent:main:telegram:direct:approval-clock-step",
+              config: { skills: { workshop: { approvalPolicy: "pending" } } },
+            },
+          });
+          while (broker.listPending().length === 0) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 1);
+            });
+          }
+          const approval = broker.listPending()[0];
+          if (!approval) {
+            throw new Error("approval broker did not publish a pending request");
+          }
+          if (!broker.resolve(approval.id, "allow-once")) {
+            throw new Error("approval broker did not resolve the pending request");
+          }
+          await approvalPromise;
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
+        },
+        attemptOverrides: {
+          timeoutMs: 1_000,
+          onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
+        },
+      });
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(publishedDeadlines.map(({ kind }) => kind)).toEqual([
+        "bounded",
+        "unlimited",
+        "bounded",
+      ]);
+      expect(publishedDeadlines[2]?.deadlineAtMs).toBeGreaterThan(
+        (publishedDeadlines[0]?.deadlineAtMs ?? 0) + 59_000,
+      );
+      expect(approvalEvents).toEqual(["plugin.approval.requested", "plugin.approval.resolved"]);
+      process.stdout.write(
+        `REAL_BEHAVIOR_PROOF terminal=ok deadlineKinds=${publishedDeadlines.map(({ kind }) => kind).join(",")} ` +
+          `resumedDeadlineDeltaMs=${(publishedDeadlines[2]?.deadlineAtMs ?? 0) - (publishedDeadlines[0]?.deadlineAtMs ?? 0)} ` +
+          `approvalLifecycle=${approvalEvents.join(",")}\n`,
+      );
+    } finally {
+      unsubscribe();
+      broker.stop();
+      setEmbeddedPluginApprovalBroker(null);
+      setEmbeddedMode(false);
+      Date.now = originalDateNow;
+    }
   });
 
   it.each([false, true])(
