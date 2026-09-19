@@ -9,6 +9,7 @@ const routeState = vi.hoisted(() => ({
   setDeviceViaPlaywright: vi.fn(async () => {}),
   setHttpCredentialsViaPlaywright: vi.fn(async () => {}),
   storageSetViaPlaywright: vi.fn(async () => {}),
+  storageGetViaPlaywright: vi.fn(async () => ({ values: { " key ": "value" } })),
   storageClearViaPlaywright: vi.fn(async () => {}),
   withPlaywrightRouteContext: vi.fn(),
 }));
@@ -33,6 +34,7 @@ type PlaywrightRouteParams = {
       setDeviceViaPlaywright: typeof routeState.setDeviceViaPlaywright;
       setHttpCredentialsViaPlaywright: typeof routeState.setHttpCredentialsViaPlaywright;
       storageSetViaPlaywright: typeof routeState.storageSetViaPlaywright;
+      storageGetViaPlaywright: typeof routeState.storageGetViaPlaywright;
       storageClearViaPlaywright: typeof routeState.storageClearViaPlaywright;
     };
   }) => Promise<unknown>;
@@ -182,6 +184,44 @@ describe("browser cookie batch route", () => {
 
 describe("browser storage route boundaries", () => {
   it.each([
+    { key: 0, expected: "0" },
+    { key: false, expected: "false" },
+    { key: " \t ", expected: undefined },
+  ])("retains storage key validation for $key", async ({ key, expected }) => {
+    const response = createBrowserRouteResponse();
+    await getPostHandler("/storage/:kind/set")?.(
+      { params: { kind: "local" }, query: {}, body: { key, value: "value" } },
+      response.res,
+    );
+    if (expected === undefined) {
+      expect(response.statusCode).toBe(400);
+      expect(routeState.storageSetViaPlaywright).not.toHaveBeenCalled();
+    } else {
+      expect(response.statusCode).toBe(200);
+      expect(routeState.storageSetViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({ key: expected }),
+      );
+    }
+  });
+
+  it.each(["local", "session"])("preserves %s storage lookup keys", async (kind) => {
+    const { app, getHandlers } = createBrowserRouteApp();
+    registerBrowserAgentStorageRoutes(app, {} as never);
+    const response = createBrowserRouteResponse();
+    await getHandlers.get("/storage/:kind")?.(
+      { params: { kind }, query: { key: " key " } },
+      response.res,
+    );
+    expect(routeState.storageGetViaPlaywright).toHaveBeenCalledExactlyOnceWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      targetId: "tab-1",
+      kind,
+      key: " key ",
+    });
+    expect(response.body).toEqual({ ok: true, targetId: "tab-1", values: { " key ": "value" } });
+  });
+
+  it.each([
     { kind: "local", operation: "set", value: "  preserved  " },
     { kind: "session", operation: "set", value: "" },
     { kind: "local", operation: "clear", value: undefined },
@@ -210,7 +250,7 @@ describe("browser storage route boundaries", () => {
         cdpUrl: "http://127.0.0.1:18800",
         targetId: "tab-1",
         kind,
-        ...(operation === "set" ? { key: "key", value } : {}),
+        ...(operation === "set" ? { key: " key ", value } : {}),
       });
       expect(response.statusCode).toBe(200);
       expect(response.body).toEqual({ ok: true, targetId: "tab-1" });

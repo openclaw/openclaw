@@ -352,6 +352,11 @@ openclaw browser storage local set token abc123
 openclaw browser storage session clear
 ```
 
+Storage keys preserve surrounding whitespace. Quote the key in shell commands,
+for example `openclaw browser storage local get " account "`. Setting that key
+does not overwrite the separate `account` entry. Empty or whitespace-only keys
+remain invalid for `set`; omitting the key in `get` lists all entries.
+
 ## Debugging
 
 ```bash

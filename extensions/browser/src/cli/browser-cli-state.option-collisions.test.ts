@@ -103,6 +103,11 @@ describe("browser state option collisions", () => {
     );
   });
 
+  it.each(["local", "session"])("preserves quoted %s storage lookup keys", async (kind) => {
+    const request = await runBrowserCommandAndGetRequest(["storage", kind, "get", " key "]);
+    expect(request.query?.key).toBe(" key ");
+  });
+
   it("inherits the parent timeout for the viewport resize alias", async () => {
     await runBrowserCommand(["--timeout", "60000", "set", "viewport", "1024", "768"]);
 
