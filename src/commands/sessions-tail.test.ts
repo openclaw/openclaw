@@ -115,6 +115,46 @@ describe("sessionsTailCommand", () => {
     await writeSessionEntry();
     await appendEvents([
       makeEvent({
+        type: "trace.metadata",
+        ts: "2026-05-18T12:04:15.000Z",
+        data: {
+          skills: { entries: [{ name: "SECRET" }, { name: "also-secret" }] },
+          prompting: {
+            skillsPrompt: "SECRET skill prompt",
+            systemPromptReport: {
+              currentTurn: { promptChars: 1_200 },
+              systemPrompt: { chars: 24_500 },
+              skills: {
+                promptChars: 3_400,
+                entries: [{ name: "SECRET" }, { name: "also-secret" }],
+              },
+              tools: {
+                schemaChars: 6_789,
+                entries: [{ name: "bash" }, { name: "read" }],
+              },
+            },
+          },
+        },
+      }),
+      makeEvent({
+        type: "context.compiled",
+        ts: "2026-05-18T12:04:16.000Z",
+        data: {
+          prompt: "ask SECRET",
+          systemPrompt: {
+            truncated: true,
+            reason: "trajectory-field-size-limit",
+            originalChars: 39_406,
+          },
+          tools: [{ name: "bash" }, { name: "read" }],
+        },
+      }),
+      makeEvent({
+        type: "prompt.submitted",
+        ts: "2026-05-18T12:04:17.000Z",
+        data: { prompt: "SECRET", systemPrompt: "top SECRET", imagesCount: 2 },
+      }),
+      makeEvent({
         type: "tool.call",
         ts: "2026-05-18T12:04:18.000Z",
         data: { name: "bash", arguments: { command: "echo SECRET" } },
@@ -122,13 +162,31 @@ describe("sessionsTailCommand", () => {
       makeEvent({
         type: "tool.result",
         ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "bash", success: true, output: "SECRET" },
+        data: {
+          name: "bash",
+          success: true,
+          output: "SECRET🙂",
+          result: { durationMs: 1_250 },
+        },
       }),
       makeEvent({
         type: "model.completed",
         ts: "2026-05-18T12:04:29.000Z",
         provider: "openai",
         modelId: "gpt-5.2",
+        data: {
+          usage: {
+            input: 1_200,
+            output: 30,
+            cacheRead: 1_000,
+            cacheWrite: 0,
+            reasoningTokens: 4,
+            total: 1_234,
+          },
+          promptCache: { retention: "short", observation: { broke: true } },
+          startedAt: 1_000,
+          endedAt: 3_500,
+        },
       }),
     ]);
 
@@ -139,12 +197,19 @@ describe("sessionsTailCommand", () => {
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
     expect(output).toContain("12:04:18");
+    expect(output).toContain(
+      "trace metadata prompt=1.2Kch system=24.5Kch skills=2 skillChars=3.4Kch tools=2 schema=6.8Kch",
+    );
+    expect(output).toContain("context compiled (2 tools) prompt=10ch system=39.4Kch");
+    expect(output).toContain("prompt submitted prompt=6ch system=10ch images=2");
     expect(output).toContain("tool.call");
     expect(output).toContain("bash {...redacted...}");
     expect(output).toContain("tool.result");
-    expect(output).toContain("bash ok");
+    expect(output).toContain("bash ok result=10B duration=1.25s");
     expect(output).toContain("model.completed");
-    expect(output).toContain("openai/gpt-5.2 done");
+    expect(output).toContain(
+      "openai/gpt-5.2 done tokens(in=1.2K out=30 cacheR=1K cacheW=0 reason=4 total=1.2K) retention=short cacheBroke elapsed=2.5s",
+    );
     expect(output).not.toContain("SECRET");
   });
 
