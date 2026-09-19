@@ -9,11 +9,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
-  getPluginRuntimeGatewayRequestScope: () => ({
-    context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
-      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
-    },
+  getPluginRuntimeGatewayRequestContext: () => ({
+    getRuntimeConfig: mocks.getRuntimeConfig,
+    nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
   }),
 }));
 

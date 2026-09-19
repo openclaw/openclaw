@@ -25,7 +25,7 @@ import {
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { createPluginToolsMcpHandlers } from "../mcp/plugin-tools-handlers.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
@@ -57,7 +57,7 @@ export async function prepareNodeClaudeSkillRuntime(
   ) {
     return undefined;
   }
-  const gateway = getPluginRuntimeGatewayRequestScope()?.context;
+  const gateway = getPluginRuntimeGatewayRequestContext();
   const target = context.executionTarget;
   const node =
     target.kind === "node" ? gateway?.nodeRegistry.get(target.placement.nodeId) : undefined;

@@ -100,6 +100,22 @@ describe("gateway request scope", () => {
     expect(first.getGatewayContextResolver(owner)).toBeUndefined();
   });
 
+  it("resolves detached Gateway context without reviving a retired request context", async () => {
+    await withTestGatewayScope(async (runtimeScope) => {
+      const detachedContext = {} as NonNullable<PluginRuntimeGatewayRequestScope["context"]>;
+      let current: PluginRuntimeGatewayRequestScope["context"] = detachedContext;
+      await runtimeScope.withPluginRuntimeGatewayContextResolver(
+        () => current,
+        async () => {
+          expect(runtimeScope.getPluginRuntimeGatewayRequestContext()).toBe(detachedContext);
+          current = undefined;
+          expect(runtimeScope.getPluginRuntimeGatewayRequestContext()).toBeUndefined();
+        },
+      );
+      expect(runtimeScope.getPluginRuntimeGatewayRequestContext()).toBe(TEST_SCOPE.context);
+    });
+  });
+
   it("attaches plugin id to the active scope", async () => {
     await expectPluginIdScopedGatewayScope("voice-call");
   });
