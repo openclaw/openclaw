@@ -97,6 +97,133 @@ describe("handleMessageUpdate text signatures", () => {
       updates: [{ text: "Done.", delta: "Done." }],
     },
     {
+      name: "held GLM arg_key tool call",
+      chunks: [
+        "Visible\n<tool_call>exec",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM arg_key after whitespace",
+      chunks: [
+        "Visible\n<tool_call>exec ",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM arg_key after newline",
+      chunks: [
+        "Visible\n<tool_call>exec\n",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM one-character tool name",
+      chunks: [
+        "Visible\n<tool_call>x",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM arg_key split inside the tag name",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_",
+        "key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM arg_key split before the last letters",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_ke",
+        "y>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM arg_key split inside the first closing tag",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_key>command",
+        "</arg_",
+        "key><arg_value>redacted</arg_value></tool_call>\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM first key split at formatting whitespace",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_key>command",
+        " \n",
+        "</arg_key><arg_value>private</arg_value></tool_call>\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM first key split around formatting whitespace",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_key>\n",
+        "command\n",
+        "</arg_key><arg_value>private</arg_value></tool_call>\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "releases leading-space GLM literal prose without borrowing a later close",
+      chunks: ["Use <tool_call>exec<arg_key> ", "literally. Example: `</arg_key>`."],
+      updates: [
+        { text: "Use", delta: "Use" },
+        {
+          text: "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+          delta: " <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+        },
+      ],
+    },
+    {
+      name: "releases a terminal literal GLM marker after later prose",
+      chunks: ["Use <tool_call>exec", " now."],
+      updates: [
+        { text: "Use", delta: "Use" },
+        { text: "Use <tool_call>exec now.", delta: " <tool_call>exec now." },
+      ],
+    },
+    {
       name: "split voice directive",
       chunks: ["[[audio_as_", "voice]]Hello", " world"],
       updates: [

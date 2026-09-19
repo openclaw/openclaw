@@ -27,6 +27,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
+import { sanitizeAssistantVisibleText } from "../../../shared/text/assistant-visible-text.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   formatAssistantErrorText,
@@ -34,6 +35,7 @@ import {
   normalizeTextForComparison,
 } from "../../embedded-agent-helpers.js";
 import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -43,7 +45,6 @@ import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-typ
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
@@ -54,6 +55,13 @@ import {
 } from "../delivery-evidence.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
+
+// Terminal GLM first, then user-facing cleanup. parseReplyDirectives runs next
+// and would otherwise adopt [[reply_to:]] from INTERNAL_CONTEXT that later
+// payload cleanup only strips as text.
+function sanitizeAssistantVisibleCompletedText(text: string): string {
+  return sanitizeUserFacingText(sanitizeAssistantVisibleText(text));
+}
 
 /**
  * Converts a completed embedded attempt into reply payloads for channels. This
@@ -151,7 +159,7 @@ export function buildEmbeddedRunPayloads(params: {
     // hide a later input that actually failed without producing an answer.
     hasIntentionalSilentFinal = false;
     const nonEmptyAssistantTexts = assistantTexts
-      .map((text) => sanitizeAssistantVisibleStreamText(text))
+      .map((text) => sanitizeAssistantVisibleCompletedText(text))
       .filter((text) => text.trim().length > 0);
     const assistantForPayload =
       currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : lastAssistant);
