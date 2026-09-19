@@ -43,6 +43,65 @@ extension GatewayNodeSession {
 struct GatewayNativeTransportDeviceAuthTests {
     @Test(.stateDirectoryIsolated)
     @MainActor
+    func `interrupted identity import carries legacy auth into first native connect`() async throws {
+        let stateDirPath = try #require(getenv("OPENCLAW_STATE_DIR").map { String(cString: $0) })
+        let destinationStateDirURL = URL(fileURLWithPath: stateDirPath, isDirectory: true)
+        let canonical = DeviceIdentityStore.loadOrCreate()
+        let sourceStateDirURL = destinationStateDirURL
+            .appendingPathComponent("interrupted-legacy-source", isDirectory: true)
+        let sourceIdentityDirURL = sourceStateDirURL.appendingPathComponent("identity", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: sourceIdentityDirURL,
+            withIntermediateDirectories: true)
+        let sourceIdentityURL = sourceIdentityDirURL.appendingPathComponent("device.json")
+        let sourceAuthURL = sourceIdentityDirURL.appendingPathComponent("device-auth.json")
+        let claimURL = URL(fileURLWithPath: "\(sourceIdentityURL.path).native-importing")
+        try JSONEncoder().encode(canonical).write(to: claimURL, options: [.atomic])
+        let legacyToken = "interrupted-native-legacy-token"
+        let legacyAuth = DeviceAuthStoreFile(
+            version: 1,
+            deviceId: canonical.deviceId,
+            tokens: [
+                "node": DeviceAuthEntry(
+                    token: legacyToken,
+                    role: "node",
+                    scopes: [],
+                    updatedAtMs: 1_800_000_000_000),
+            ])
+        try JSONEncoder().encode(legacyAuth).write(to: sourceAuthURL, options: [.atomic])
+        let source = DeviceIdentityPaths.LegacyIdentitySource(
+            stateDirURL: sourceStateDirURL,
+            identityURL: sourceIdentityURL,
+            authURL: sourceAuthURL)
+
+        let resumed = try DeviceIdentitySQLiteStore.loadOrCreate(
+            databaseURL: destinationStateDirURL
+                .appendingPathComponent("state", isDirectory: true)
+                .appendingPathComponent("openclaw.sqlite"),
+            destinationStateDirURL: destinationStateDirURL,
+            profile: .primary,
+            legacySources: [source])
+
+        #expect(resumed == canonical)
+        #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+
+        let fixture = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [nil])
+        defer { fixture.stop() }
+        let gateway = GatewayNodeSession()
+        try await gateway.connectThroughURLSessionForTest(
+            fixture.url(),
+            options: nativeNodeConnectOptions(allowStoredDeviceAuth: true))
+
+        #expect(fixture.capturedAuth(at: 0) == .init(
+            token: legacyToken,
+            bootstrapToken: nil,
+            deviceToken: nil))
+
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    @MainActor
     func `legacy unscoped token rotation persists and reconnects with replacement`() async throws {
         let previousToken = "native-legacy-previous-token"
         let rotatedToken = "native-legacy-rotated-token"
