@@ -14,7 +14,7 @@ import {
 } from "./runtime/load-context.js";
 
 /** Shared options for resolving plugin-backed web providers. */
-type ResolvePluginWebProvidersParams = {
+export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -26,6 +26,12 @@ type ResolvePluginWebProvidersParams = {
   sandboxed?: boolean;
   manifestRecords?: readonly PluginManifestRecord[];
 };
+
+/** Parameters for resolvers that run after candidate eligibility is established. */
+export type ResolveRuntimeWebProvidersParams = Omit<
+  ResolvePluginWebProvidersParams,
+  "activate" | "cache" | "mode"
+>;
 
 export type WebProviderRuntimeResolution<TEntry> = {
   resolveBundledResolutionConfig: (params: {
@@ -57,6 +63,7 @@ export type WebProviderRuntimeResolution<TEntry> = {
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
     onlyPluginIds?: readonly string[];
+    sandboxed?: boolean;
     manifestRecords?: readonly PluginManifestRecord[];
   }) => TEntry[] | null;
   resolveBundledRuntimeArtifactProviders?: (params: {
@@ -64,6 +71,7 @@ export type WebProviderRuntimeResolution<TEntry> = {
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
     onlyPluginIds: readonly string[];
+    sandboxed?: boolean;
     manifestRecords?: readonly PluginManifestRecord[];
   }) => TEntry[] | null;
 };
@@ -186,6 +194,7 @@ export function resolvePluginWebProviders<TEntry>(
         workspaceDir,
         env,
         onlyPluginIds: pluginIds,
+        sandboxed: params.sandboxed,
         ...(params.manifestRecords ? { manifestRecords: params.manifestRecords } : {}),
       });
       if (bundledArtifactProviders) {
@@ -255,6 +264,7 @@ export function resolvePluginWebProviders<TEntry>(
       workspaceDir: context.workspaceDir,
       env: context.env,
       onlyPluginIds: context.loadPluginIds,
+      sandboxed: params.sandboxed,
       ...(context.manifestRecords ? { manifestRecords: context.manifestRecords } : {}),
     });
     if (bundledArtifactProviders) {
