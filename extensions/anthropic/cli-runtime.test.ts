@@ -6,6 +6,7 @@ import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
+  CliBackendMessageInjection,
   CliBackendPreparedExecution,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -408,6 +409,74 @@ describe("Claude native stdio boundary", () => {
       }
     }
     expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scenario: "steer-merged", results: 1 },
+    { scenario: "steer-after-result", results: 2 },
+  ])(
+    "delivers same-turn input once native starts it and keeps the turn open ($scenario)",
+    async ({ scenario, results }) => {
+      let injection: CliBackendMessageInjection | undefined;
+      const context = await createContext(scenario, {
+        liveSession: createLiveSession(),
+        promptContext: { prependContext: "current private context" },
+        registerMessageInjection: (value) => {
+          injection = value;
+        },
+      });
+      const running = collect(context);
+      await vi.waitFor(async () => {
+        expect(await readFile(path.join(context.cwd, "turn.ready"), "utf8")).toBe("ready");
+        expect(injection?.isAvailable()).toBe(true);
+      });
+      const assertCurrent = vi.fn();
+      await injection!.queueMessage("steering input", assertCurrent);
+      expect(assertCurrent).toHaveBeenCalledOnce();
+      const records = await running;
+      expect(records.filter((record) => record.type === "result")).toHaveLength(results);
+      // Private turn context belongs to the admitted prompt, never to injected input.
+      const detail = resultDetail(records);
+      expect(detail.user).toBe("steering input");
+      expect(detail.injectedContext).toEqual({});
+      expect(injection!.isAvailable()).toBe(false);
+    },
+  );
+
+  it("rejects same-turn input the native process never started", async () => {
+    let injection: CliBackendMessageInjection | undefined;
+    const context = await createContext("steer-exit", {
+      liveSession: createLiveSession(),
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    });
+    const running = collect(context);
+    void running.catch(() => {});
+    await vi.waitFor(() => expect(injection?.isAvailable()).toBe(true));
+    await expect(injection!.queueMessage("lost input", () => {})).rejects.toThrow();
+    await expect(running).rejects.toThrow();
+  });
+
+  it("refuses same-turn input when the admitted authority fails at the write", async () => {
+    let injection: CliBackendMessageInjection | undefined;
+    const context = await createContext("steer-merged", {
+      liveSession: createLiveSession(),
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    });
+    const running = collect(context);
+    void running.catch(() => {});
+    await vi.waitFor(() => expect(injection?.isAvailable()).toBe(true));
+    await expect(
+      injection!.queueMessage("revoked input", () => {
+        throw new Error("revoked");
+      }),
+    ).rejects.toThrow("revoked");
+    expect(await readFile(path.join(context.cwd, "user.received"), "utf8")).toBe(
+      "synthetic user input",
+    );
   });
 
   it("closes a partially consumed native process when its event iterator is returned", async () => {

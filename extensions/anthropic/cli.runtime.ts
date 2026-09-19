@@ -9,6 +9,7 @@ import type {
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
@@ -27,6 +28,10 @@ type ClaudeCliTurn = {
   inputUuid: string;
   inputStarted: boolean;
   sawTerminalResult: boolean;
+  /** Same-turn inputs written to native, keyed by UUID until their lifecycle completes. */
+  injectedInputs: Map<string, { text: string; started: ReturnType<typeof createDeferred<void>> }>;
+  /** A successful result is held until every injected input has completed. */
+  heldResult: boolean;
   error?: Error;
 };
 type ClaudeCliSession = {
@@ -95,6 +100,14 @@ async function authorizeTool(
   }
 }
 
+function isInjectedPrompt(turn: ClaudeCliTurn, prompt: unknown): boolean {
+  // Native reruns this hook for same-turn input; private context belongs to the admitted prompt.
+  if (typeof prompt !== "string" || prompt === turn.context.prompt) {
+    return false;
+  }
+  return [...turn.injectedInputs.values()].some((input) => input.text === prompt);
+}
+
 async function handleRequest(
   session: ClaudeCliSession,
   request: Record<string, unknown>,
@@ -109,7 +122,7 @@ async function handleRequest(
   const input = request.input;
   const turn = activeTurn(session);
   if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
-    if (!turn || signal.aborted) {
+    if (!turn || signal.aborted || isInjectedPrompt(turn, input.prompt)) {
       return {};
     }
     const additionalContext = [
@@ -156,6 +169,47 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
+function createUserInput(context: CliBackendExecuteContext, text: string, uuid: string) {
+  return {
+    type: "user",
+    message: { role: "user", content: text },
+    parent_tool_use_id: null,
+    uuid,
+    ...(context.sessionId ? { session_id: context.sessionId } : {}),
+  };
+}
+
+function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
+  for (const input of turn.injectedInputs.values()) {
+    input.started.reject(error);
+  }
+}
+
+async function injectInput(
+  session: ClaudeCliSession,
+  turn: ClaudeCliTurn,
+  text: string,
+  assertCurrent: () => void,
+): Promise<void> {
+  // Native lifecycle is the only receipt that proves the input joined this turn.
+  if (!session.hasInputLifecycle || !session.transport || activeTurn(session) !== turn) {
+    throw new Error("The Claude CLI turn cannot accept more input.");
+  }
+  assertCurrent();
+  const uuid = randomUUID();
+  const started = createDeferred<void>();
+  // Closing can reject the receipt while the write is still pending.
+  void started.promise.catch(() => {});
+  turn.injectedInputs.set(uuid, { text, started });
+  try {
+    await session.transport.send(createUserInput(turn.context, text, uuid));
+  } catch (error) {
+    turn.injectedInputs.delete(uuid);
+    throw error;
+  }
+  await started.promise;
+}
+
 function closeSession(
   session: ClaudeCliSession,
   _reason: CliBackendLiveSessionCloseReason,
@@ -171,6 +225,7 @@ function closeSession(
   session.currentTurn = undefined;
   if (turn) {
     turn.error = toErrorObject(error, "Claude CLI live session closed.");
+    rejectInjectedInputs(turn, turn.error);
     turn.controller.abort();
     turn.events.end();
   }
@@ -179,11 +234,17 @@ function closeSession(
 
 function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
   session.currentTurn = undefined;
+  // Unfinished injected input would run as an orphan native turn; the host replays it instead.
+  const orphanedInput = turn.injectedInputs.size > 0;
+  rejectInjectedInputs(
+    turn,
+    new Error("Claude CLI turn ended before its injected input completed."),
+  );
   turn.controller.abort();
   turn.events.end();
-  if (!session.capability || session.hasBackgroundTasks) {
+  if (!session.capability || session.hasBackgroundTasks || orphanedInput) {
     // A failed parent does not stop native background continuations. Never lend them a new turn.
-    session.handle.close(session.hasBackgroundTasks ? "abort" : "idle");
+    session.handle.close(session.hasBackgroundTasks || orphanedInput ? "abort" : "idle");
   } else {
     session.idleTimer = setTimeout(() => session.handle.close("idle"), IDLE_TIMEOUT_MS);
     session.idleTimer.unref();
@@ -202,6 +263,17 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   if (message.type === "command_lifecycle") {
     if (message.state === "started" && message.command_uuid === turn.inputUuid) {
       turn.inputStarted = true;
+    }
+    const injectedUuid =
+      typeof message.command_uuid === "string" ? message.command_uuid : undefined;
+    const injected = injectedUuid ? turn.injectedInputs.get(injectedUuid) : undefined;
+    if (injected && message.state === "started") {
+      injected.started.resolve();
+    } else if (injected && injectedUuid && message.state === "completed") {
+      turn.injectedInputs.delete(injectedUuid);
+      if (turn.heldResult && turn.injectedInputs.size === 0 && !session.hasBackgroundTasks) {
+        completeTurn(session, turn);
+      }
     }
     return;
   }
@@ -223,14 +295,19 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         task.task_id.length > 0,
     );
   }
+  if (message.type !== "result" && message.type !== "rate_limit_event") {
+    turn.heldResult = false;
+  }
   if (!turn.events.write(message)) {
     await once(turn.events, "drain", { signal: turn.controller.signal });
   }
   if (message.type === "result") {
     turn.sawTerminalResult = true;
-    // Background agents/workflows hold successful interim results, never terminal failures.
+    turn.heldResult = true;
+    // Background agents/workflows and injected input hold successful interim results,
+    // never terminal failures.
     if (
-      !session.hasBackgroundTasks ||
+      (!session.hasBackgroundTasks && turn.injectedInputs.size === 0) ||
       message.is_error === true ||
       (typeof message.subtype === "string" && message.subtype.startsWith("error")) ||
       (typeof message.result === "string" && hasClaudeRawToolInvocation(message.result))
@@ -289,6 +366,8 @@ export async function* executeClaudeCli(
     inputUuid: randomUUID(),
     inputStarted: false,
     sawTerminalResult: false,
+    injectedInputs: new Map(),
+    heldResult: false,
   };
   session.currentTurn = turn;
   const abort = () => session.handle.close("abort", context.abortSignal?.reason);
@@ -348,12 +427,11 @@ export async function* executeClaudeCli(
     if (session.closed || session.currentTurn !== turn) {
       throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
     }
-    await session.transport.send({
-      type: "user",
-      message: { role: "user", content: context.prompt },
-      parent_tool_use_id: null,
-      uuid: turn.inputUuid,
-      ...(context.sessionId ? { session_id: context.sessionId } : {}),
+    await session.transport.send(createUserInput(context, context.prompt, turn.inputUuid));
+    context.registerMessageInjection?.({
+      isAvailable: () =>
+        session.hasInputLifecycle && turn.inputStarted && activeTurn(session) === turn,
+      queueMessage: (text, assertCurrent) => injectInput(session, turn, text, assertCurrent),
     });
     for await (const record of turn.events) {
       yield record;

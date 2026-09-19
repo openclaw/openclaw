@@ -236,6 +236,16 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Plugin-owned input sink for the admitted turn; the host revalidates authority at each effect. */
+export type CliBackendMessageInjection = {
+  isAvailable(): boolean;
+  /**
+   * Delivers user text into the running native turn. Invoke assertCurrent synchronously
+   * immediately before the write; resolve only after the runtime starts the input.
+   */
+  queueMessage(text: string, assertCurrent: () => void): Promise<void>;
+};
+
 /** Turn-only context that must not become an operator-authored native transcript row. */
 export type CliBackendPromptContext = {
   prependContext?: string;
@@ -264,6 +274,8 @@ export type CliBackendExecuteContext = {
   toolAvailability?: CliBackendToolAvailability;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
+  /** Offers same-turn input for this run; the host drops it when the run closes. */
+  registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,

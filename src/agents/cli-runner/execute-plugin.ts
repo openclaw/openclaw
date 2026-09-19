@@ -1,11 +1,13 @@
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { toErrorObject } from "../../infra/errors.js";
+import type { ReplyBackendQueueMessageOptions } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
 import type {
   CliBackendExecute,
+  CliBackendMessageInjection,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
   CliBackendUserInputRequest,
@@ -36,6 +38,7 @@ import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog } from "./execute-plugin-watchdog.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
+import { cliBackendLog } from "./log.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -405,6 +408,34 @@ async function closePluginIterator(
   }
 }
 
+/**
+ * Records a steered user turn once the native runtime has started it.
+ *
+ * The embedded runtime appends steered input to the session transcript itself;
+ * a CLI owns its native transcript, so without this the input reaches the model
+ * and the native session but not OpenClaw's transcript, memory search or history.
+ * The input is already in the model's hands: a persistence failure is logged,
+ * never turned into a rejection that would replay it as a second turn.
+ */
+async function persistSteeredCliUserTurn(
+  options: ReplyBackendQueueMessageOptions | undefined,
+  cwd: string,
+): Promise<void> {
+  const recorder = options?.userTurnTranscriptRecorder;
+  if (!recorder || recorder.hasPersisted() || recorder.isBlocked()) {
+    return;
+  }
+  try {
+    const persisted = await recorder.persistApproved({ cwd });
+    if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
+      // A before_message_write rejection is terminal; outer mirrors must not retry it.
+      recorder.markBlocked();
+    }
+  } catch (error) {
+    cliBackendLog.warn(`steered CLI user turn was not persisted: ${formatErrorMessage(error)}`);
+  }
+}
+
 /** Runs a prepared plugin transport while keeping cancellation and approvals host-owned. */
 export async function executePluginOwnedProcess(params: {
   context: PreparedCliRunContext;
@@ -492,6 +523,7 @@ export async function executePluginOwnedProcess(params: {
     watchdog.reset(),
   );
 
+  let messageInjection: CliBackendMessageInjection | undefined;
   const replyBackendHandle = run.replyOperation
     ? {
         kind: "cli" as const,
@@ -500,6 +532,25 @@ export async function executePluginOwnedProcess(params: {
         cancel: () => {
           termination.reason = "manual-cancel";
           controller.abort(createCliAbortError());
+        },
+        messageInjectionV2: {
+          version: 2 as const,
+          isAvailable: () => !signal.aborted && messageInjection?.isAvailable() === true,
+          queueMessage: async (
+            text: string,
+            options: ReplyBackendQueueMessageOptions | undefined,
+            assertInjectionCurrent: () => void,
+          ) => {
+            if (!messageInjection) {
+              throw new Error("CLI plugin runtime does not accept input during its turn.");
+            }
+            // The plugin invokes this at its final write; both host fences must still hold.
+            await messageInjection.queueMessage(text, () => {
+              assertInjectionCurrent();
+              assertCurrent();
+            });
+            await persistSteeredCliUserTurn(options, run.cwd ?? run.workspaceDir);
+          },
         },
       }
     : undefined;
@@ -559,6 +610,13 @@ export async function executePluginOwnedProcess(params: {
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
+      ...(replyBackendHandle
+        ? {
+            registerMessageInjection: (injection: CliBackendMessageInjection) => {
+              messageInjection = injection;
+            },
+          }
+        : {}),
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,
