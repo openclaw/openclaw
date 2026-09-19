@@ -132,42 +132,38 @@ it.each(
 it.each(["leaf", "source-consumer", "tooling-consumer", "archive", "untracked", "symlink"])(
   "preserves Windows coverage for %s test entries",
   (mode) => {
-    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-windows-test-selection-"));
+    const cwd = argvTempDirs.make("openclaw-windows-test-selection-");
     const target = "test/native.test.ts";
-    try {
-      mkdirSync(path.join(cwd, "test"));
-      writeFileSync(path.join(cwd, "test/source.ts"), "export const fixture = 1;\n");
-      if (mode === "symlink") {
-        symlinkSync("source.ts", path.join(cwd, target));
-      } else {
-        writeFileSync(path.join(cwd, target), "export const fixture = 1;\n");
-      }
-      writeFileSync(
-        path.join(cwd, "package.json"),
-        JSON.stringify({
-          scripts: {
-            "test:windows:ci:1": `node scripts/test-projects.mts ${target}`,
-            "test:windows:ci:2": "node scripts/test-projects.mts test/other.test.ts",
-          },
-        }),
-      );
-      if (mode.endsWith("consumer")) {
-        const directory = mode === "tooling-consumer" ? "scripts" : "src";
-        mkdirSync(path.join(cwd, directory));
-        writeFileSync(path.join(cwd, directory, "consumer.ts"), `import "../${target}";\n`);
-      }
-      if (mode !== "archive") {
-        execFileSync("git", ["init", "-q"], { cwd });
-        if (mode !== "untracked") {
-          execFileSync("git", ["add", "."], { cwd });
-        }
-      }
-      expect(resolveChangedWindowsTestTargets([target], { cwd })).toEqual(
-        mode === "leaf" ? [target] : undefined,
-      );
-    } finally {
-      rmSync(cwd, { force: true, recursive: true });
+    mkdirSync(path.join(cwd, "test"));
+    writeFileSync(path.join(cwd, "test/source.ts"), "export const fixture = 1;\n");
+    if (mode === "symlink") {
+      symlinkSync("source.ts", path.join(cwd, target));
+    } else {
+      writeFileSync(path.join(cwd, target), "export const fixture = 1;\n");
     }
+    writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: {
+          "test:windows:ci:1": `node scripts/test-projects.mts ${target}`,
+          "test:windows:ci:2": "node scripts/test-projects.mts test/other.test.ts",
+        },
+      }),
+    );
+    if (mode.endsWith("consumer")) {
+      const directory = mode === "tooling-consumer" ? "scripts" : "src";
+      mkdirSync(path.join(cwd, directory));
+      writeFileSync(path.join(cwd, directory, "consumer.ts"), `import "../${target}";\n`);
+    }
+    if (mode !== "archive") {
+      execFileSync("git", ["init", "-q"], { cwd });
+      if (mode !== "untracked") {
+        execFileSync("git", ["add", "."], { cwd });
+      }
+    }
+    expect(resolveChangedWindowsTestTargets([target], { cwd })).toEqual(
+      mode === "leaf" ? [target] : undefined,
+    );
   },
 );
 
