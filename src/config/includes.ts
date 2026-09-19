@@ -29,7 +29,7 @@ export const MAX_INCLUDE_DEPTH = 10;
 // share one nesting budget: the recursive resolver descends one frame per
 // level, so a single cap across chained files keeps the whole resolution below
 // the call stack limit while real-world configs (tens of levels) never hit it.
-export const MAX_CONFIG_OBJECT_DEPTH = 512;
+const MAX_CONFIG_OBJECT_DEPTH = 512;
 const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */

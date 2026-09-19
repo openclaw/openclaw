@@ -1,12 +1,11 @@
 // Covers the object/array traversal depth guard for deeply nested configs.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  ConfigIncludeError,
-  type IncludeResolver,
-  MAX_CONFIG_OBJECT_DEPTH,
-  resolveConfigIncludes,
-} from "./includes.js";
+import { ConfigIncludeError, type IncludeResolver, resolveConfigIncludes } from "./includes.js";
+
+// Pins the resolver's object-depth budget; the boundary tests are only
+// meaningful against this exact cap.
+const MAX_CONFIG_OBJECT_DEPTH = 512;
 
 const ROOT_DIR = path.parse(process.cwd()).root;
 const CONFIG_DIR = path.join(ROOT_DIR, "config");
