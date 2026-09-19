@@ -641,6 +641,72 @@ describe("msteams graph helpers", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(3);
     });
 
+    it("fetches the newest Teams thread replies across pages", async () => {
+      const page1Items = Array.from({ length: 50 }, (_, index) => ({
+        id: `reply-${index + 1}`,
+        name: `Reply ${index + 1}`,
+        createdDateTime: `2026-08-01T00:${String(index).padStart(2, "0")}:00Z`,
+      }));
+      const page2Items = Array.from({ length: 10 }, (_, index) => ({
+        id: `reply-${index + 51}`,
+        name: `Reply ${index + 51}`,
+        createdDateTime: `2026-08-01T00:${String(index + 50).padStart(2, "0")}:00Z`,
+      }));
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        return callCount === 1
+          ? Response.json(
+              pagedResponse(
+                page1Items,
+                "https://graph.microsoft.com/v1.0/teams/group/channels/channel/messages/root/replies?$skiptoken=page2",
+              ),
+            )
+          : Response.json(pagedResponse(page2Items));
+      });
+
+      const result = await fetchThreadReplies("tok", "group", "channel", "root");
+
+      expect(result).toHaveLength(50);
+      expect(result[0]?.id).toBe("reply-11");
+      expect(result.at(-1)?.id).toBe("reply-60");
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expectFetchPathContains(
+        1,
+        "/teams/group/channels/channel/messages/root/replies?$skiptoken=page2",
+      );
+    });
+
+    it("forwards the shared deadline to every paginated request", async () => {
+      const deadline = {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: 10_000,
+        deadlineAtMs: Date.now() + 10_000,
+      };
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        return callCount === 1
+          ? Response.json(
+              pagedResponse(
+                [{ id: "reply-1", name: "Reply 1" }],
+                "https://graph.microsoft.com/v1.0/teams/group/channels/channel/messages/root/replies?$skiptoken=page2",
+              ),
+            )
+          : Response.json(pagedResponse([{ id: "reply-2", name: "Reply 2" }]));
+      });
+
+      await fetchThreadReplies("tok", "group", "channel", "root", 50, deadline);
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      for (const [params] of fetchWithSsrFGuardMock.mock.calls) {
+        expect(params.timeoutMs).toBeGreaterThan(0);
+        expect(params.timeoutMs).toBeLessThanOrEqual(10_000);
+      }
+    });
+
     it("truncation at maxPages", async () => {
       mockFetch(async () =>
         Response.json(
