@@ -350,6 +350,17 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return row?.found === 1;
   }
 
+  protected resolveConfiguredIndexIdentity() {
+    if (this.settings.provider === "none") {
+      return undefined;
+    }
+    return resolveEmbeddingProviderIndexIdentity({
+      config: this.cfg,
+      agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+    });
+  }
+
   protected resolveCurrentIndexIdentityState(params?: {
     meta?: MemoryIndexMeta | null;
     provider?: { id: string; model: string } | null;
@@ -360,11 +371,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     const hasProviderOverride = params && "provider" in params;
     const configuredIndexIdentity =
       !hasProviderOverride && !this.provider && this.settings.provider !== "none"
-        ? resolveEmbeddingProviderIndexIdentity({
-            config: this.cfg,
-            agentDir: resolveAgentDir(this.cfg, this.agentId),
-            ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
-          })
+        ? this.resolveConfiguredIndexIdentity()
         : undefined;
     // Dynamic defaults stay unknown until provider initialization. Plain status
     // must not reinterpret an undiscovered semantic model as keyword-only.

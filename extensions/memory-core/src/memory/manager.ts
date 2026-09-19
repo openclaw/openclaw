@@ -559,7 +559,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       provider: statusProvider,
       providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
       requestedProvider: this.requestedProvider,
-      configuredModel: this.settings.model || undefined,
+      configuredModel: this.resolveConfiguredIndexIdentity()?.provider.model || this.settings.model,
     });
     const storage =
       this.sourceInspections.size > 0

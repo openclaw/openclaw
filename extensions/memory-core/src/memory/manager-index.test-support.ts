@@ -34,6 +34,7 @@ type ManagerIndexFixtureConfig = {
   providerAliases?: NonNullable<NonNullable<ManagerConfig["models"]>["providers"]>;
   batchEnabled?: boolean;
   model?: string;
+  local?: { modelPath: string; contextSize?: number };
   outputDimensionality?: number;
   multimodal?: {
     enabled?: boolean;
@@ -211,7 +212,10 @@ vi.mock("./embeddings.js", async (importOriginal) => {
         : {
             provider: {
               id: options.config.models?.providers?.[options.provider]?.api ?? options.provider,
-              model: options.model.trim() || resolveFallbackModel(options.provider, ""),
+              model:
+                options.provider === "local" && options.local?.modelPath
+                  ? options.local.modelPath
+                  : options.model.trim() || resolveFallbackModel(options.provider, ""),
             },
           },
     createEmbeddingProvider: async (options: ProviderCall) => {
@@ -427,6 +431,7 @@ export function createManagerIndexFixture(deps: {
         search: {
           ...(params.provider !== undefined ? { provider: params.provider } : {}),
           model: params.model ?? "mock-embed",
+          local: params.local,
           fallback: params.fallback,
           outputDimensionality: params.outputDimensionality,
           store: {
