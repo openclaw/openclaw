@@ -4,7 +4,7 @@ import type {
   SkillsLibraryListResult,
   SkillsLibraryReceipt,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { buildSkillLibraryMock } from "../test-helpers/skill-library-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -48,6 +48,22 @@ async function expectLibraryDialogOpen(page: Page) {
     });
   });
   expect(await dialog.isVisible()).toBe(true);
+}
+
+// The Skills editor now uses the shared showConfirmDialog (an openclaw-modal-dialog
+// mounted in document.body with exec-approval-actions) instead of a browser-native
+// window.confirm, so Playwright's page.on("dialog") can no longer intercept it.
+async function answerSharedConfirm(page: Page, message: string, action: "confirm" | "cancel") {
+  const dialog = page.locator("openclaw-modal-dialog").filter({ hasText: message });
+  await dialog.getByText(message, { exact: false }).waitFor();
+  await dialog.evaluate(async (element) => {
+    await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+  const label = action === "confirm" ? "Confirm" : "Cancel";
+  await dialog.getByRole("button", { name: label, exact: true }).click();
 }
 
 async function expectSkillNameValidation(page: Page) {
@@ -188,11 +204,9 @@ suite.define(() => {
       await page.getByLabel("File", { exact: true }).selectOption("SKILL.md");
       const draft = `${own.content}\nKeep this draft.\n`;
       await page.getByLabel("SKILL.md", { exact: true }).fill(draft);
-      page.once("dialog", (dialog) => {
-        expect(dialog.message()).toBe("Discard your unsaved skill changes?");
-        void dialog.dismiss();
-      });
+      const discardMessage = "Discard your unsaved skill changes?";
       await page.keyboard.press("Escape");
+      await answerSharedConfirm(page, discardMessage, "cancel");
       await expectLibraryDialogOpen(page);
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
       await gateway.deferNext("skills.library.save");
@@ -226,11 +240,8 @@ suite.define(() => {
       expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
         true,
       );
-      page.once("dialog", (dialog) => {
-        expect(dialog.message()).toBe("Discard your unsaved skill changes?");
-        void dialog.accept();
-      });
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await answerSharedConfirm(page, "Discard your unsaved skill changes?", "confirm");
       await page.getByRole("button", { name: "Import skill", exact: true }).click();
       const importer = page.locator("openclaw-modal-dialog");
       await importer.getByLabel("Skill name", { exact: true }).waitFor();
@@ -325,8 +336,12 @@ suite.define(() => {
         const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
         // The saved receipt precedes refresh completion; press() does not wait for enabled controls.
         await expect.poll(() => deleteFile.isEnabled()).toBe(true);
-        page.once("dialog", (dialog) => void dialog.accept());
         await deleteFile.press("Enter");
+        await answerSharedConfirm(
+          page,
+          "Remove references/lilac.txt from the next saved bundle?",
+          "confirm",
+        );
         await picker.locator('option[value="references/lilac.txt"]').waitFor({ state: "detached" });
         expect(await picker.inputValue()).toBe("SKILL.md");
         expect(await skill.inputValue()).toBe(own.content);
@@ -496,7 +511,6 @@ suite.define(() => {
 
   it("uses stable identity for share, transfer, rollback, and removal receipts", async () => {
     await suite.withPage({}, async ({ page }) => {
-      page.on("dialog", (dialog) => void dialog.accept());
       const oldRevision = "0".repeat(64);
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -548,6 +562,11 @@ suite.define(() => {
         entry: { ...published.entry, ownerProfileId: null, ownerLabel: "Team", shared: true },
       });
       await page.getByRole("button", { name: "Transfer to team", exact: true }).click();
+      await answerSharedConfirm(
+        page,
+        "Transfer release-notes to team ownership? Team administrators will manage it.",
+        "confirm",
+      );
       await page.getByText(/Saved release-notes to team library/u).waitFor();
       await page
         .getByText(`Team · revision ${published.entry.revision.slice(0, 8)}`, { exact: true })
@@ -579,12 +598,320 @@ suite.define(() => {
           "Existing sessions retain their pinned revision. Create a new skill to add it to future sessions.",
       });
       await page.getByRole("button", { name: "Remove skill", exact: true }).click();
+      await answerSharedConfirm(page, "Remove release-notes from the library?", "confirm");
       await page.getByText(/Removed release-notes from team library/u).waitFor();
       expect(
         (await gateway.getRequests("skills.library.mutate")).map(
           (request) => (request.params as { action: string }).action,
         ),
       ).toEqual(["share", "rollback", "transfer", "disable", "remove"]);
+    });
+  });
+  it("cancels a pending confirm dialog when the Skills owner resets", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        methodResponses: {
+          "skills.library.list": list,
+          "skills.status": status,
+          "skills.library.save": published,
+        },
+      });
+      await openSkillSettings(page);
+      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
+      const skill = page.getByLabel("SKILL.md", { exact: true });
+      await skill.fill(own.content);
+      await page.getByLabel("New text file path", { exact: true }).fill("references/lilac.txt");
+      await page.getByRole("button", { name: "Add file", exact: true }).press("Enter");
+      const picker = page.getByLabel("File", { exact: true });
+      await picker.selectOption("SKILL.md");
+      await picker.selectOption("references/lilac.txt");
+      const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
+      await expect.poll(() => deleteFile.isEnabled()).toBe(true);
+      await deleteFile.press("Enter");
+
+      const message = "Remove references/lilac.txt from the next saved bundle?";
+      const dialog = page.locator("openclaw-modal-dialog").filter({ hasText: message });
+      await dialog.getByText(message).waitFor();
+      await dialog.evaluate(async (element) => {
+        await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(await dialog.isVisible()).toBe(true);
+
+      // Gateway disconnect triggers owner reset, which aborts the pending confirmation.
+      await gateway.closeLatest(1001, "mock Gateway restart");
+
+      // The pending confirm dialog is removed from the DOM.
+      await expect.poll(() => dialog.count()).toBe(0);
+
+      // Reconnect and prove the confirmation lock was released by opening and
+      // answering a *new* confirmation — not just checking the old dialog is gone.
+      await reconnectMockGateway(page, gateway);
+      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
+      await skill.fill(own.content);
+      await page.getByLabel("New text file path", { exact: true }).fill("references/violet.txt");
+      await page.getByRole("button", { name: "Add file", exact: true }).press("Enter");
+      await page.getByLabel("File", { exact: true }).selectOption("references/violet.txt");
+      await expect.poll(() => deleteFile.isEnabled()).toBe(true);
+      await deleteFile.press("Enter");
+
+      const secondMessage = "Remove references/violet.txt from the next saved bundle?";
+      const secondDialog = page.locator("openclaw-modal-dialog").filter({ hasText: secondMessage });
+      await secondDialog.getByText(secondMessage).waitFor();
+      expect(await secondDialog.isVisible()).toBe(true);
+      await secondDialog.getByRole("button", { name: "Confirm", exact: true }).click();
+
+      // The second confirmation was answered successfully — the lock was released.
+      await page.locator('option[value="references/violet.txt"]').waitFor({ state: "detached" });
+
+      // No stale dialog from the aborted confirmation remains.
+      expect(await dialog.count()).toBe(0);
+    });
+  });
+
+  it("preserves the draft and file when the confirm dialog is dismissed via Escape", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        methodResponses: {
+          "skills.library.list": list,
+          "skills.status": status,
+          "skills.library.save": published,
+        },
+      });
+      await openSkillSettings(page);
+      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
+      const skill = page.getByLabel("SKILL.md", { exact: true });
+      await skill.fill(own.content);
+      await page.getByLabel("New text file path", { exact: true }).fill("references/lilac.txt");
+      await page.getByRole("button", { name: "Add file", exact: true }).press("Enter");
+      const picker = page.getByLabel("File", { exact: true });
+      await picker.selectOption("references/lilac.txt");
+      const support = page.getByLabel("references/lilac.txt", { exact: true });
+      const supportContent = "Supporting instructions.\n";
+      await support.fill(supportContent);
+      const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
+      await expect.poll(() => deleteFile.isEnabled()).toBe(true);
+      await deleteFile.press("Enter");
+
+      const message = "Remove references/lilac.txt from the next saved bundle?";
+      const dialog = page.locator("openclaw-modal-dialog").filter({ hasText: message });
+      await dialog.getByText(message).waitFor();
+      await dialog.evaluate(async (element) => {
+        await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(await dialog.isVisible()).toBe(true);
+
+      // Escape triggers modal-cancel on the shared confirm dialog, which
+      // resolves it as false without mutating the draft.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => dialog.count()).toBe(0);
+
+      // The Skills editor dialog is still open — only the confirm was dismissed.
+      await expectLibraryDialogOpen(page);
+
+      // Record scroll position before dismissal.
+      const scrollBeforeEscape = await page.evaluate(() => ({
+        x: window.scrollX,
+        y: window.scrollY,
+      }));
+
+      // Focus returns to the Delete file button (the control that opened the
+      // confirmation), identified by its accessible name. The modal dialog
+      // restores focus asynchronously via setTimeout(0), so poll for it.
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const active = document.activeElement;
+            return (
+              active instanceof HTMLElement &&
+              (active.textContent?.trim() === "Delete file" ||
+                active.closest("button")?.textContent?.trim() === "Delete file")
+            );
+          }),
+        )
+        .toBe(true);
+
+      // Scroll position is unchanged.
+      const scrollAfterEscape = await page.evaluate(() => ({
+        x: window.scrollX,
+        y: window.scrollY,
+      }));
+      expect(scrollAfterEscape).toEqual(scrollBeforeEscape);
+
+      // The file, its content, and the SKILL.md content are all preserved.
+      expect(await picker.inputValue()).toBe("references/lilac.txt");
+      expect(await support.inputValue()).toBe(supportContent);
+      await picker.selectOption("SKILL.md");
+      expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(own.content);
+
+      // No library save was requested.
+      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
+    });
+  });
+
+  it("preserves the draft and file when the confirm dialog is dismissed via backdrop click", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        methodResponses: {
+          "skills.library.list": list,
+          "skills.status": status,
+          "skills.library.save": published,
+        },
+      });
+      await openSkillSettings(page);
+      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
+      const skill = page.getByLabel("SKILL.md", { exact: true });
+      await skill.fill(own.content);
+      await page.getByLabel("New text file path", { exact: true }).fill("references/lilac.txt");
+      await page.getByRole("button", { name: "Add file", exact: true }).press("Enter");
+      const picker = page.getByLabel("File", { exact: true });
+      await picker.selectOption("references/lilac.txt");
+      const support = page.getByLabel("references/lilac.txt", { exact: true });
+      const supportContent = "Supporting instructions.\n";
+      await support.fill(supportContent);
+      const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
+      await expect.poll(() => deleteFile.isEnabled()).toBe(true);
+      await deleteFile.press("Enter");
+
+      const message = "Remove references/lilac.txt from the next saved bundle?";
+      const dialog = page.locator("openclaw-modal-dialog").filter({ hasText: message });
+      await dialog.getByText(message).waitFor();
+      await dialog.evaluate(async (element) => {
+        await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(await dialog.isVisible()).toBe(true);
+
+      // Record scroll position before dismissal to verify it doesn't change.
+      const scrollBefore = await page.evaluate(() => ({
+        x: window.scrollX,
+        y: window.scrollY,
+      }));
+
+      // Click the backdrop — a real pointer event on the overlay area outside
+      // the dialog panel. The native <dialog> fills the viewport; clicking a
+      // corner (outside the centered panel) triggers pointerdown → requestClose.
+      const panelBox = await dialog.evaluate((element) => {
+        const wa = element.shadowRoot?.querySelector("wa-dialog");
+        const nativeDialog = wa?.shadowRoot?.querySelector("dialog");
+        const rect = nativeDialog?.getBoundingClientRect();
+        return rect
+          ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+          : null;
+      });
+      // Click at a point guaranteed to be outside the panel but inside the dialog overlay.
+      const clickX = panelBox ? Math.max(2, panelBox.left - 20) : 2;
+      const clickY = panelBox ? Math.max(2, panelBox.top - 20) : 2;
+      await page.mouse.click(clickX, clickY);
+      await expect.poll(() => dialog.count()).toBe(0);
+
+      // The Skills editor dialog is still open — only the confirm was dismissed.
+      await expectLibraryDialogOpen(page);
+
+      // Focus returns to the Delete file button (the control that opened the
+      // confirmation), identified by its accessible name.
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const active = document.activeElement;
+            return (
+              active instanceof HTMLElement &&
+              (active.textContent?.trim() === "Delete file" ||
+                active.closest("button")?.textContent?.trim() === "Delete file")
+            );
+          }),
+        )
+        .toBe(true);
+
+      // Scroll position is unchanged — the page did not jump.
+      const scrollAfter = await page.evaluate(() => ({
+        x: window.scrollX,
+        y: window.scrollY,
+      }));
+      expect(scrollAfter).toEqual(scrollBefore);
+
+      // The file, its content, and the SKILL.md content are all preserved.
+      expect(await picker.inputValue()).toBe("references/lilac.txt");
+      expect(await support.inputValue()).toBe(supportContent);
+      await picker.selectOption("SKILL.md");
+      expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(own.content);
+
+      // No library save was requested.
+      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
+    });
+  });
+
+  it("does not mutate a stale draft when a late confirmation resolves", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        methodResponses: {
+          "skills.library.list": list,
+          "skills.status": status,
+          "skills.library.save": published,
+        },
+      });
+      await openSkillSettings(page);
+      await page.getByRole("button", { name: "Create skill", exact: true }).click();
+      await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
+      const skill = page.getByLabel("SKILL.md", { exact: true });
+      await skill.fill(own.content);
+      await page.getByLabel("New text file path", { exact: true }).fill("references/lilac.txt");
+      await page.getByRole("button", { name: "Add file", exact: true }).press("Enter");
+      const picker = page.getByLabel("File", { exact: true });
+      await picker.selectOption("references/lilac.txt");
+      const deleteFile = page.getByRole("button", { name: "Delete file", exact: true });
+      await expect.poll(() => deleteFile.isEnabled()).toBe(true);
+      await deleteFile.press("Enter");
+
+      const message = "Remove references/lilac.txt from the next saved bundle?";
+      const dialog = page.locator("openclaw-modal-dialog").filter({ hasText: message });
+      await dialog.getByText(message).waitFor();
+      await dialog.evaluate(async (element) => {
+        await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(await dialog.isVisible()).toBe(true);
+
+      // While the confirmation is pending, invalidate the draft so the captured
+      // target is stale. The controller's re-check (library.draft !== draft)
+      // must prevent the late confirmation from mutating anything.
+      await page.evaluate(() => {
+        const skillsPage = document.querySelector("openclaw-skills-page") as {
+          library?: { draft: unknown };
+        };
+        if (skillsPage?.library) {
+          skillsPage.library.draft = null;
+        }
+      });
+
+      // Confirm the stale dialog — it should resolve but not delete the file
+      // because the draft reference no longer matches.
+      await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+
+      // The file is still present in the picker — the stale-target guard
+      // (library.draft !== draft) prevented the late confirmation from removing it.
+      expect(await picker.locator('option[value="references/lilac.txt"]').count()).toBe(1);
+
+      // No library save was requested.
+      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
     });
   });
 });

@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsEmpty,
@@ -223,7 +224,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
     @modal-cancel=${(event: Event) => {
       // Native dismissal must not bypass the controller's busy and discard checks.
       event.preventDefault();
-      library.close();
+      void library.close();
     }}
   >
     <form
@@ -334,10 +335,15 @@ function renderLibraryEditor(library: SkillLibraryController) {
                   type="button"
                   class="btn"
                   ?disabled=${disabled}
-                  @click=${() => {
-                    if (
-                      !window.confirm(t("skillLibrary.deleteFileConfirm", { path: support.path }))
-                    ) {
+                  @click=${async () => {
+                    const confirmed = await showConfirmDialog({
+                      message: t("skillLibrary.deleteFileConfirm", { path: support.path }),
+                      danger: true,
+                      signal: library.captureConfirmSignal(),
+                    });
+                    // The async dialog does not block reentrancy like window.confirm
+                    // did; re-check the draft is still the active one before mutating.
+                    if (!confirmed || library.draft !== draft) {
                       return;
                     }
                     draft.files = draft.files.filter((file) => file.path !== support.path);
@@ -544,7 +550,7 @@ function renderLibraryImport(library: SkillLibraryController) {
             .join(", ") + (selectedFiles.length > 2 ? ", …" : ""),
       })
     : t("skillLibrary.noFilesSelected");
-  const close = () => library.close();
+  const close = () => void library.close();
   return html`<openclaw-modal-dialog
     label=${t("skillLibrary.import")}
     @modal-cancel=${(event: Event) => {
