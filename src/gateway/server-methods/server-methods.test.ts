@@ -4949,9 +4949,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       prefix: "openclaw-health-cached-dq-",
     });
     try {
-      const { upsertDeliveryQueueEntry } = await import("../../infra/delivery-queue-sqlite.js");
-      const { prepareDeliveryQueueTerminalEntry, terminalizePendingDeliveryQueueEntryInDatabase } =
-        await import("../../infra/delivery-queue-sqlite.kernel.js");
+      const queue = await import("../../infra/delivery-queue-sqlite.kernel.js");
       const { openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
       const cachedPressure = [
         {
@@ -4973,12 +4971,12 @@ describe("gateway healthHandlers.health cache freshness", () => {
         retryCount: 5,
         retainOnFailure: true as const,
       };
-      upsertDeliveryQueueEntry({ queueName: "outbound", entry });
       const database = openOpenClawStateDatabase();
+      queue.upsertDeliveryQueueEntryInDatabase({ queueName: "outbound", entry }, database);
       expect(
-        terminalizePendingDeliveryQueueEntryInDatabase(
+        queue.terminalizePendingDeliveryQueueEntryInDatabase(
           database,
-          prepareDeliveryQueueTerminalEntry({ queueName: "outbound", id: entry.id, entry }),
+          queue.prepareDeliveryQueueTerminalEntry({ queueName: "outbound", id: entry.id, entry }),
         ),
       ).toMatchObject({ status: "terminalized" });
       const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");

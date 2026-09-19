@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
-import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
@@ -72,7 +72,7 @@ const entry = {
   to: "!synthetic:example",
   payloads: [{ text: "synthetic" }],
 };
-upsertDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
+seedDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
 const coordinator = acquireGatewayLifecycleCoordinator({
   databasePath: path.join(stateDir, "state/openclaw.sqlite"),
 });

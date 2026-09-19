@@ -12,7 +12,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { loadDeliveryQueueEntry, upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { loadDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import type { LegacyQueuedDelivery, QueuedDelivery } from "./outbound/delivery-queue-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./outbound/prepared-batch.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
@@ -127,7 +128,7 @@ describe("Doctor outbound preparation", () => {
       if (kind === "file") {
         await fs.writeFile(source, bytes);
       } else {
-        upsertDeliveryQueueEntry({
+        seedDeliveryQueueEntry({
           stateDir,
           queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
           entry: {
@@ -161,7 +162,7 @@ describe("Doctor outbound preparation", () => {
 
   it("preserves an unclaimed SQLite legacy row when its plugin cannot load", async () => {
     const entry = legacy("sqlite-only");
-    upsertDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
+    seedDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
     await fs.writeFile(pluginFile, 'throw new Error("synthetic plugin unavailable");');
     const result = await repair();
     expect(result.warnings.join("\n")).toContain("synthetic plugin unavailable");
@@ -179,7 +180,7 @@ describe("Doctor outbound preparation", () => {
       to: "!synthetic:example",
       preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "already prepared" }]),
     };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: "outbound-prepared-migration-v1",
       stateDir,
       entry,

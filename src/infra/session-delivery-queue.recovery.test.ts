@@ -2,7 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
-import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
@@ -195,7 +195,7 @@ describe("session-delivery queue recovery", () => {
       if (!entry) {
         throw new Error("Expected pending session delivery");
       }
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: "session",
         entry: {
           ...entry,
@@ -237,7 +237,7 @@ describe("session-delivery queue recovery", () => {
       if (!entry) {
         throw new Error("Expected pending session delivery");
       }
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: "session",
         entry: {
           ...entry,

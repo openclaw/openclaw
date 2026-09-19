@@ -34,16 +34,16 @@ import {
 } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadDeliveryQueueEntryInDatabase } from "../../infra/delivery-queue-sqlite-bound.js";
+import { loadDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.js";
 import {
-  loadDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
-} from "../../infra/delivery-queue-sqlite.js";
-import {
+  completeDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
 } from "../../infra/delivery-queue-sqlite.kernel.js";
+import { seedDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
-import { ackDelivery, enqueueDeliveryOnce } from "../../infra/outbound/delivery-queue-storage.js";
+import type { QueuedDelivery } from "../../infra/outbound/delivery-queue-types.js";
+import { createUnmodifiedPreparedOutboundBatch } from "../../infra/outbound/prepared-batch.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -196,6 +196,22 @@ vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
 });
 
 let tmpDir: string;
+
+function seedQueuedFinal(id: string, text: string): void {
+  const entry: QueuedDelivery = {
+    id,
+    enqueuedAt: Date.now(),
+    retryCount: 0,
+    attemptCount: 0,
+    channel: "discord",
+    to: "discord:dm:123",
+    preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text }]),
+    queuePolicy: "required",
+    completionRetention: "permanent",
+    retainOnFailure: true,
+  };
+  seedDeliveryQueueEntry({ queueName: OUTBOUND_DELIVERY_QUEUE_NAME, stateDir: tmpDir, entry });
+}
 const resolveGatewayContext = () => undefined;
 
 function loadSessionEntry(
@@ -2868,17 +2884,7 @@ describe("main-session-restart-recovery", () => {
     ],
   ])("defers mixed deliveries while any exact queue owner is pending", async (...deliveries) => {
     try {
-      await enqueueDeliveryOnce(
-        {
-          channel: "discord",
-          to: "discord:dm:123",
-          payloads: [{ text: "Pending sibling." }],
-          queuePolicy: "required",
-          completionRetention: "permanent",
-        },
-        "delivery-still-pending",
-        tmpDir,
-      );
+      seedQueuedFinal("delivery-still-pending", "Pending sibling.");
       const sessionsDir = await makeSessionsDir();
       await writeMainSession({
         sessionsDir,
@@ -2900,17 +2906,7 @@ describe("main-session-restart-recovery", () => {
 
   it("completes terminal deliveries despite a residual pending queue row", async () => {
     try {
-      await enqueueDeliveryOnce(
-        {
-          channel: "discord",
-          to: "discord:dm:123",
-          payloads: [{ text: "Already delivered." }],
-          queuePolicy: "required",
-          completionRetention: "permanent",
-        },
-        "delivery-terminal-with-row",
-        tmpDir,
-      );
+      seedQueuedFinal("delivery-terminal-with-row", "Already delivered.");
       const sessionsDir = await makeSessionsDir();
       const storePath = path.join(sessionsDir, "sessions.json");
       await writeMainSession({
@@ -3069,20 +3065,10 @@ describe("main-session-restart-recovery", () => {
     async (ownerStatus) => {
       const deliveryId = `delivery-owner-${ownerStatus}`;
       try {
-        await enqueueDeliveryOnce(
-          {
-            channel: "discord",
-            to: "discord:dm:123",
-            payloads: [{ text: "Queue owns this final." }],
-            queuePolicy: "required",
-            completionRetention: "permanent",
-          },
-          deliveryId,
-          tmpDir,
-        );
+        seedQueuedFinal(deliveryId, "Queue owns this final.");
         if (ownerStatus === "settling") {
           const entry = loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir)!;
-          upsertDeliveryQueueEntry({
+          seedDeliveryQueueEntry({
             queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
             entry: { ...entry, recoveryState: "settlement_pending" },
             status: "failed",
@@ -3112,7 +3098,11 @@ describe("main-session-restart-recovery", () => {
             ),
           ).toMatchObject({ status: "terminalized" });
         } else if (ownerStatus === "completed") {
-          await ackDelivery(deliveryId, tmpDir);
+          completeDeliveryQueueEntryInDatabase(
+            openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } }),
+            OUTBOUND_DELIVERY_QUEUE_NAME,
+            deliveryId,
+          );
         }
         const sessionsDir = await makeSessionsDir();
         await writeMainSession({

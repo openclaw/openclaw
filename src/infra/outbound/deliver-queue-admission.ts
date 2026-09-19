@@ -2,6 +2,8 @@
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
+import { throwSqliteLifecycleErrors } from "../sqlite-coordinator.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
@@ -210,12 +212,25 @@ export async function stageAndEnqueueOutboundDelivery(
       ...(initialProducerClaim ? { producerClaimId: initialProducerClaim.producerClaimId } : {}),
     };
   } catch (err) {
-    cancelDeliveryQueueMediaRetention(
-      staged.mediaStageId,
-      stateDir,
-      params.deliveryQueueStateContext,
-    );
-    await releaseSpoolArtifacts(staged.artifacts, stateDir);
+    if (isDeliveryRecoveryOwnedRetry(err)) {
+      throw err;
+    }
+    const errors: unknown[] = [err];
+    try {
+      cancelDeliveryQueueMediaRetention(
+        staged.mediaStageId,
+        stateDir,
+        params.deliveryQueueStateContext,
+      );
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+    try {
+      await releaseSpoolArtifacts(staged.artifacts, stateDir);
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+    throwSqliteLifecycleErrors(errors, "Delivery queue admission and media cleanup failed");
     throw err;
   }
 }

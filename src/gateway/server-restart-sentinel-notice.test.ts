@@ -30,7 +30,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
@@ -82,8 +85,9 @@ describe("restart sentinel notice recovery", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let stateDir = "";
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
       vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       vi.restoreAllMocks();
       resetGatewayWorkAdmission();
       resetPluginRuntimeStateForTest();

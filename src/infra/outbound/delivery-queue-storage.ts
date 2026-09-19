@@ -2,16 +2,16 @@
 // platform-send recovery state in the shared SQLite queue.
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
+import {
   promoteDeliveryQueueEntryPlatformSend,
   transitionOwnedDeliveryQueueEntry,
   type InitialDeliveryProducerClaim,
 } from "../delivery-queue-sqlite-claim.js";
 import {
-  commitStagedDeliveryQueueEntryOnceAcrossNamespaces,
-  movePendingDeliveryQueueEntryNamespace,
-  upsertDeliveryQueueEntryOnceAcrossNamespaces,
-} from "../delivery-queue-sqlite-namespace.js";
-import {
+  captureDeliveryQueueStateContext,
   getDeliveryQueueEntryOwners,
   type DeliveryQueueStateContext,
   loadDeliveryQueueEntries,
@@ -20,15 +20,18 @@ import {
   resolveDeliveryQueueStateEnv,
   terminalizePendingDeliveryQueueEntry,
   updateDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { upsertDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
+import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../sqlite-worker-operation-settlement.js";
+import { OutboundDeliveryError } from "./deliver-types.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
 import {
-  DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
@@ -157,6 +160,55 @@ function createQueuedDelivery(
   };
 }
 
+/** Keep uncertain publication with recovery even when the broker returns a cleanup error. */
+async function enqueueQueuedDelivery(
+  input: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["input"],
+  stateDir: string | undefined,
+  context: DeliveryQueueStateContext | undefined,
+) {
+  let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let result: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["output"];
+  try {
+    result = await executeDeliveryQueueOperation(
+      context,
+      stateDir,
+      {
+        type: "deliveryQueue.enqueue",
+        input,
+      },
+      {
+        createAdmission: (retained) => {
+          settlement = retained.settled;
+          return {
+            nativeLocations: [],
+            // This operation observes native settlement; it grants no additional authority.
+            admission: createSqliteWorkerOperationAdmission(() => {
+              throw new Error("Delivery enqueue does not request host transaction admission");
+            }),
+          };
+        },
+      },
+    );
+  } catch (cause) {
+    if (settlement && (await settlement).kind !== "not-entered") {
+      const error = new OutboundDeliveryError("Delivery queue publication could not be confirmed", {
+        cause,
+      });
+      // Even a completed rejection may follow COMMIT and coordinator cleanup.
+      error.queueCustody = "held";
+      throw error;
+    }
+    throw cause;
+  }
+  if (typeof result !== "string") {
+    const error = new Error("Delivery queue publication failed");
+    retainOpenClawStateWorkerErrorPayload(error, result.error);
+    // A full rollback result proves nonpublication; do not reclassify it as uncertain execution.
+    throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+  }
+  return result;
+}
+
 /** Persist a delivery entry before attempting send. Returns the entry ID. */
 export async function enqueueDelivery(
   params: QueuedDeliveryAdmissionPayload,
@@ -164,39 +216,23 @@ export async function enqueueDelivery(
   mediaStageId?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<string> {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
   const id = generateSecureUuid();
   const entry = createQueuedDelivery(
     params,
     id,
     params.deliveryCompletion !== undefined || params.completionRetention !== undefined,
   );
-  if (mediaStageId) {
-    const result = commitStagedDeliveryQueueEntryOnceAcrossNamespaces(
-      {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        entry,
-        stagingId: mediaStageId,
-        stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-        conflictQueueNames: [],
-        stateDir,
-      },
-      context,
-    );
-    if (result === "missing") {
-      throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
-    }
-    if (result === "existing") {
-      throw new Error(`Delivery queue entry already exists: ${OUTBOUND_DELIVERY_QUEUE_NAME}/${id}`);
-    }
-  } else {
-    upsertDeliveryQueueEntry(
-      {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        entry,
-        stateDir,
-      },
-      context,
-    );
+  const result = await enqueueQueuedDelivery(
+    { kind: "random", entryJson: JSON.stringify(entry), mediaStageId },
+    stateDir,
+    captured,
+  );
+  if (result === "missing") {
+    throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
+  }
+  if (result === "existing") {
+    throw new Error(`Delivery queue entry already exists: ${OUTBOUND_DELIVERY_QUEUE_NAME}/${id}`);
   }
   return id;
 }
@@ -213,36 +249,17 @@ export async function enqueueDeliveryOnce(
   if (!normalizedId) {
     throw new Error("Stable delivery queue id is required");
   }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
   const entry = createQueuedDelivery(params, normalizedId, true);
-  const queueParams = {
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    conflictQueueNames: [
-      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-      OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-    ],
-    entry,
+  const result = await enqueueQueuedDelivery(
+    { kind: "stable", entryJson: JSON.stringify(entry), mediaStageId },
     stateDir,
-  };
-  let created: boolean;
-  if (mediaStageId) {
-    const result = commitStagedDeliveryQueueEntryOnceAcrossNamespaces(
-      {
-        ...queueParams,
-        stagingId: mediaStageId,
-        stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-      },
-      context,
-    );
-    if (result === "missing") {
-      throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
-    }
-    created = result === "created";
-  } else {
-    created = upsertDeliveryQueueEntryOnceAcrossNamespaces(queueParams, context);
+    captured,
+  );
+  if (result === "missing") {
+    throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
   }
-  return { id: normalizedId, created };
+  return { id: normalizedId, created: result === "created" };
 }
 
 /** Atomically replaces a payload-free stable preparation owner with prepared custody. */
@@ -258,27 +275,17 @@ export async function enqueuePreparedDeliveryOnce(
   if (!normalizedId || normalizedId !== preparation.id) {
     throw new Error("Stable delivery preparation id is invalid");
   }
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
   const entry = createQueuedDelivery(params, normalizedId, true);
-  const result = movePendingDeliveryQueueEntryNamespace(
+  const result = await enqueueQueuedDelivery(
     {
-      sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      conflictQueueNames: [
-        OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-        OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-        LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      ],
-      expectedSourceEntry: preparation,
-      destinationEntry: entry,
-      ...(mediaStageId
-        ? {
-            stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-            stagingId: mediaStageId,
-          }
-        : {}),
-      stateDir,
+      kind: "prepared",
+      entryJson: JSON.stringify(entry),
+      preparationJson: JSON.stringify(preparation),
+      mediaStageId,
     },
-    context,
+    stateDir,
+    captured,
   );
   if (result === "staging-missing") {
     throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);

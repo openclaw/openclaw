@@ -1,3 +1,4 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 // Owns durable queue admission and hands stable custody to the execution loop.
 import { readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
@@ -9,6 +10,7 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { runWithQuestionChannelDeliveries } from "../question-channel-runtime.js";
 import { throwIfAborted } from "./abort.js";
@@ -399,7 +401,15 @@ async function runOutboundDeliveryWithQueue(
             ? { getStablePreparation: stablePreparationOwner.current }
             : {}),
         }).catch((err: unknown) => {
-          if (queuePolicy === "required" || err instanceof StableDeliveryPreparationLostError) {
+          if (isDeliveryRecoveryOwnedRetry(err)) {
+            throw err;
+          }
+          if (
+            queuePolicy === "required" ||
+            collectNestedErrorCandidates(err).some(
+              (candidate) => candidate instanceof StableDeliveryPreparationLostError,
+            )
+          ) {
             emitPreQueueFailure();
             throw err;
           }

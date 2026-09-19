@@ -58,6 +58,22 @@ Native host writers, Gateway lifecycle ownership, and source-handle
 preparation retain their existing owners. Schemas, retention, and update behavior
 are unchanged.
 
+Outbound queue enqueue writes execute in the shared-state worker. The host captures
+canonical JSON custody and its state context before waiting, while the existing
+transaction owner preserves namespace conflicts, exact preparation comparisons,
+and atomic media-stage consumption. A complete enqueue result remains authoritative
+through later worker cleanup. Recorded transaction rollback preserves ordinary
+media cleanup and best-effort live sending. When execution may have occurred but no publication
+result is available, recovery retains queue custody and staged media; best-effort
+sending does not fall back to an independent live send. Native settlement alone
+is not evidence that a rejected command did not commit. Random insertion without
+a media stage retains its single-statement boundary; a rejected statement without
+authoritative nonpublication evidence remains an unconfirmed outcome. Recovery
+owns terminal audit publication while custody is retained. Media preparation and
+callbacks stay on the host. Media stage creation, cancellation, pruning, stable
+preparation checkpoints, and other queue mutations retain their existing owners.
+Schemas, retention, and update behavior are unchanged.
+
 Managed outgoing image metadata lookups and cleanup inventories read through the
 shared-state worker, retaining their writable, creating database-open behavior.
 Typed columns, ordering, cleanup claims, and original-media references are unchanged.

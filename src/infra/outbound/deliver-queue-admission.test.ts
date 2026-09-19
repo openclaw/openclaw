@@ -121,4 +121,27 @@ describe("stageAndEnqueueOutboundDelivery", () => {
     expect(queued?.[1]).toBe("stable-1");
     expect(queued?.[2]).toBe(current);
   });
+  it("preserves admission and independent media cleanup failures", async () => {
+    const original = new Error("enqueue failed before publication");
+    const cancel = new Error("stage cancellation failed");
+    const release = new Error("spool cleanup failed");
+    const payloads = [{ text: "prepared" }];
+    mocks.stageQueuePayloadMedia.mockResolvedValueOnce({
+      status: "staged",
+      payloads,
+      artifacts: ["synthetic.ogg"],
+      mediaStageId: "synthetic-stage",
+    });
+    mocks.enqueueDelivery.mockRejectedValueOnce(original);
+    mocks.cancelDeliveryQueueMediaRetention.mockImplementationOnce(() => {
+      throw cancel;
+    });
+    mocks.releaseSpoolArtifacts.mockRejectedValueOnce(release);
+    await expect(
+      stageAndEnqueueOutboundDelivery(
+        { cfg: {}, channel: "matrix", to: "!synthetic:example", payloads },
+        createUnmodifiedPreparedOutboundBatch(payloads),
+      ),
+    ).rejects.toMatchObject({ cause: original, errors: [original, cancel, release] });
+  });
 });

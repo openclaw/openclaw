@@ -18,8 +18,8 @@ import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntry,
   terminalizePendingDeliveryQueueEntry,
-  upsertDeliveryQueueEntry,
 } from "../infra/delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "../infra/delivery-queue-sqlite.test-support.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8434,7 +8434,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = openOpenClawStateDatabase(options).path;
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: "outbound",
       entry: {
         id: "pending-telegram-delivery",

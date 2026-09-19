@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
-import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./outbound/delivery-queue.test-helpers.js";
 import {
   createLegacyStateMigrationStepReceipt,
@@ -150,7 +150,7 @@ describe("legacy delivery queue file retention", () => {
     "$queueName: retains canonical conflicts, equal duplicate IDs, and unknown files",
     async (queue) => {
       const canonical = { ...legacyEntry(queue, "conflict"), enqueuedAt: NOW - 1, retryCount: 2 };
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: queue.queueName,
         entry: canonical,
         stateDir: tmpDir(),

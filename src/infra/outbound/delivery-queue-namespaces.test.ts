@@ -7,19 +7,16 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
-  commitStagedDeliveryQueueEntryOnceAcrossNamespaces,
   movePendingDeliveryQueueEntryNamespace,
   upsertDeliveryQueueEntryOnceAcrossNamespaces,
 } from "../delivery-queue-sqlite-namespace.js";
-import {
-  deleteDeliveryQueueEntry,
-  getDeliveryQueueEntryStatus,
-  upsertDeliveryQueueEntry,
-} from "../delivery-queue-sqlite.js";
+import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "../delivery-queue-sqlite-namespace.kernel.js";
+import { deleteDeliveryQueueEntry, getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import {
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
 } from "../delivery-queue-sqlite.kernel.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.types.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
@@ -52,7 +49,7 @@ describe("outbound delivery namespace ownership", () => {
   ): void {
     vi.setSystemTime(terminalAt);
     const entry = { id, enqueuedAt: terminalAt - 1, retryCount: 0, completionRetention };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       entry,
       stateDir,
@@ -93,7 +90,7 @@ describe("outbound delivery namespace ownership", () => {
   it("resolves canonical ownership from one exact-ID namespace snapshot", () => {
     const id = "shared-delivery-intent";
     for (const queueName of [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, OUTBOUND_DELIVERY_QUEUE_NAME]) {
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName,
         entry: { id, enqueuedAt: 1, retryCount: 0 },
         stateDir,
@@ -144,7 +141,7 @@ describe("outbound delivery namespace ownership", () => {
     const id = "moving-delivery-intent";
     const source = { id, enqueuedAt: 1, retryCount: 0 };
     const destination = { ...source, enqueuedAt: 2 };
-    upsertDeliveryQueueEntry({
+    seedDeliveryQueueEntry({
       queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
       entry: source,
       stateDir,
@@ -200,20 +197,22 @@ describe("outbound delivery namespace ownership", () => {
       [ids.permanent, "existing"],
     ] as const) {
       const stagingId = `stage-${id}`;
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
         entry: { id: stagingId, enqueuedAt: 2_050, retryCount: 0 },
         stateDir,
       });
       expect(
-        commitStagedDeliveryQueueEntryOnceAcrossNamespaces({
-          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-          conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
-          entry: { id, enqueuedAt: 2_050, retryCount: 0 },
-          stagingId,
-          stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-          stateDir,
-        }),
+        commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase(
+          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+          {
+            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+            conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
+            entry: { id, enqueuedAt: 2_050, retryCount: 0 },
+            stagingId,
+            stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+          },
+        ),
       ).toBe(expected);
     }
   });
@@ -226,7 +225,7 @@ describe("outbound delivery namespace ownership", () => {
       [ids.permanent, "destination-exists"],
     ] as const) {
       const source = { id, enqueuedAt: 2_050, retryCount: 0 };
-      upsertDeliveryQueueEntry({
+      seedDeliveryQueueEntry({
         queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
         entry: source,
         stateDir,
