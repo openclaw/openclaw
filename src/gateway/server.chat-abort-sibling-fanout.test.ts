@@ -166,7 +166,7 @@ for (const { name, fault, replaceParent } of [
               reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
             ).toBe(true);
           }
-          registerSubagentRun({
+          await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
             requesterSessionKey: parentKey,

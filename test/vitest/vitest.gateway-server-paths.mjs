@@ -84,6 +84,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-swarm-summary.test.ts",
   "src/gateway/session-utils-store-lookup.test.ts",
   "src/gateway/session-utils.agent-models.test.ts",
+  "src/gateway/session-utils.queued-collector-admission.test.ts",
+  "src/gateway/session-utils.queued-collector.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",

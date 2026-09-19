@@ -441,10 +441,10 @@ describe("requester settle wake product flow", () => {
               agentId: "main",
               sessionKey: MAIN_REQUESTER_SESSION_KEY,
             }),
-            () => {
+            async () => {
               const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
               resolvers.push(gatewayContextResolver);
-              registry.registerSubagentRun(
+              await registry.registerSubagentRun(
                 createSubagentRunParams({
                   ...child,
                   requesterTurnRunId,

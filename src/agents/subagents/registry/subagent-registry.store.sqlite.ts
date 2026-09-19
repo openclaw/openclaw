@@ -5,13 +5,7 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  sql,
-  type ExpressionBuilder,
-  type Insertable,
-  type Selectable,
-  type Updateable,
-} from "kysely";
+import { sql, type ExpressionBuilder, type Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -30,15 +24,16 @@ import {
   projectSubagentRunForMaintenance,
 } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import {
+  writeSubagentRunValuesInDatabase,
+  type BoundSubagentRunRecord,
+} from "./subagent-registry.store.kernel.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
-type BoundSubagentRunRecord = Insertable<SubagentRunsTable>;
-type SubagentRunSqliteInsert = BoundSubagentRunRecord;
-type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
   "run_id" | "child_session_key" | "controller_session_key" | "requester_session_key" | "created_at"
@@ -150,36 +145,6 @@ export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRu
   };
 }
 
-/** Upserts a prebound run on the exact supplied shared-state handle. */
-export function upsertSubagentRunRowInDatabase(
-  database: OpenClawStateDatabase,
-  row: BoundSubagentRunRecord,
-): void {
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .insertInto("subagent_runs")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
-      ),
-  );
-}
-
-/** Deletes one run on the exact supplied shared-state handle. */
-export function deleteSubagentRunRowInDatabase(
-  database: OpenClawStateDatabase,
-  runId: string,
-): void {
-  executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
-      .deleteFrom("subagent_runs")
-      .where("run_id", "=", runId),
-  );
-}
-
 export function readSubagentRun(
   database: OpenClawStateDatabase,
   runId: string,
@@ -194,40 +159,17 @@ export function readSubagentRun(
   return row ? rowToSubagentRunRecord(row) : null;
 }
 
-function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
-  const { run_id: _runId, ...update } = values;
-  return update;
-}
-
 function writeSubagentRunValues(
-  values: readonly SubagentRunSqliteInsert[],
+  values: readonly BoundSubagentRunRecord[],
   deleteRunIds?: readonly string[],
   retainedRunIds?: readonly string[],
 ): void {
   if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
     return;
   }
-  runOpenClawStateWriteTransaction((database) => {
-    const { db } = database;
-    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-    for (const row of values) {
-      upsertSubagentRunRowInDatabase(database, row);
-    }
-    if (retainedRunIds !== undefined) {
-      const deleteQuery =
-        retainedRunIds.length === 0
-          ? stateDb.deleteFrom("subagent_runs")
-          : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", retainedRunIds);
-      executeSqliteQuerySync(db, deleteQuery);
-      return;
-    }
-    if (deleteRunIds && deleteRunIds.length > 0) {
-      executeSqliteQuerySync(
-        db,
-        stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds),
-      );
-    }
-  });
+  runOpenClawStateWriteTransaction((database) =>
+    writeSubagentRunValuesInDatabase(database, values, deleteRunIds, retainedRunIds),
+  );
 }
 
 type SubagentRegistryReadScope =
@@ -652,7 +594,7 @@ export function saveSubagentRegistryChangesToSqlite(
   changedRunIds: readonly string[],
 ): void {
   const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
-  const values: SubagentRunSqliteInsert[] = [];
+  const values: BoundSubagentRunRecord[] = [];
   const deleteRunIds: string[] = [];
   for (const runId of runIds) {
     const entry = runs.get(runId);

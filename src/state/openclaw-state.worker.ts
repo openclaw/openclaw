@@ -5,6 +5,7 @@ import {
   listNativeHookRelayBridgeSnapshotsInDatabase,
 } from "../agents/harness/native-hook-relay-store.kernel.js";
 import { executeNativeHookRelayMutation } from "../agents/harness/native-hook-relay-store.worker.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
@@ -44,6 +45,7 @@ import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
+import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
@@ -54,6 +56,7 @@ import {
   persistTelemetrySuccessInDatabase,
   readTelemetryStateInWorker,
 } from "../infra/telemetry-store.kernel.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import { isPluginStateWorkerCommand } from "../plugin-state/plugin-state-worker-contract.js";
 import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.js";
@@ -115,6 +118,8 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
+
+const log = createSubsystemLogger("state/worker");
 
 export function createSqliteWorkerBackend(
   _input: undefined,
@@ -558,6 +563,26 @@ function createSharedStateWorkerBackend(
           }
           throw error;
         }
+      }
+      if (command.type === "subagents.persistChanges") {
+        const { writeId, values, deleteRunIds } = command.input;
+        let committed = false;
+        try {
+          runOpenClawStateWriteTransaction((writer) => {
+            requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
+            writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
+            requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
+            deferSqlitePostCommitPublication(writer.db, () => {
+              committed = true;
+            });
+          }, writeOptions);
+        } catch (error) {
+          if (!committed) {
+            throw error;
+          }
+          log.warn("Subagent registry write committed before cleanup failed", { error });
+        }
+        return { writeId };
       }
       if (command.type === "backup.recordOutcome") {
         return runOpenClawStateWriteTransaction(

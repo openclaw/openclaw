@@ -18,7 +18,10 @@ export type TaskInitialWorkerOperations = {
     input: {
       taskId: string;
       expectedTask: TaskPersistenceReceipt;
-      terminal: Pick<DetachedTaskTerminalState, "status" | "endedAt" | "error" | "terminalSummary">;
+      terminal: Pick<
+        DetachedTaskTerminalState,
+        "status" | "endedAt" | "error" | "terminalSummary" | "suppressDelivery" | "lastEventAt"
+      >;
       now: number;
     };
     output: TaskRecordTransitionReceipt | null;

@@ -20,11 +20,10 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import {
-  bindSubagentRunRecord,
   deleteSubagentRunRowInDatabase,
-  readSubagentRun,
   upsertSubagentRunRowInDatabase,
-} from "./subagent-registry.store.sqlite.js";
+} from "./subagent-registry.store.kernel.js";
+import { bindSubagentRunRecord, readSubagentRun } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function assertReplacementCorrelation(params: {

@@ -58,6 +58,9 @@ async function setupAcceptedRecovery(persistedPhase: "attempted" | "consumed" = 
   const resumed = vi.fn();
   const createManager = () =>
     createSubagentRunManager({
+      persistAsyncOrThrow: async () => {
+        throw new Error("Unexpected queued registration");
+      },
       runs: subagentRuns,
       getRunsForChildSession: getSubagentRunsForChildSession,
       resumedRuns: new Set(),

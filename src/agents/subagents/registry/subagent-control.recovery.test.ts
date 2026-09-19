@@ -30,7 +30,6 @@ import * as sessionLifecycle from "../../../sessions/session-lifecycle-admission
 import { observeSessionWorkAdmissionDrain } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
 import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import {
@@ -466,6 +465,7 @@ it.each(
       const displaced = scenario.startsWith("replacement");
       if (displaced || scenario.endsWith("rollback")) {
         const taskRuntime = getDetachedTaskLifecycleRuntime();
+        let releaseTaskRuntime = () => {};
         if (scenario === "registration rollback") {
           fixture.persist.mockImplementation((runs, ids) => {
             if (runs.has("unrelated")) {
@@ -474,11 +474,11 @@ it.each(
             persistSubagentRunsToDiskOrThrow(runs, ids);
           });
         } else if (scenario === "required-task rollback") {
-          setDetachedTaskLifecycleRuntime({
+          releaseTaskRuntime = fixture.useTaskRuntime({
             ...taskRuntime,
             createQueuedTaskRun: () => {
               expect(loadSubagentRegistryFromSqlite().has("unrelated")).toBe(true);
-              throw new Error("required task rejected");
+              return null;
             },
           });
         }
@@ -508,18 +508,22 @@ it.each(
               });
               expect(findTaskByRunId("unrelated")?.status).toBe("running");
             } else {
-              register();
+              await register();
             }
             expect(getLatestLiveSubagentRunByChildSessionKey(bKey)).toBe(
               subagentRuns.get("unrelated"),
             );
             expect(loadSubagentRegistryFromSqlite().has("unrelated")).toBe(true);
           } else {
-            expect(register).toThrow(/rejected/);
+            await expect(register()).rejects.toThrow(
+              scenario === "required-task rollback"
+                ? "created no task row"
+                : "Queued subagent registry persistence failed",
+            );
           }
         } finally {
           fixture.persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
-          setDetachedTaskLifecycleRuntime(taskRuntime);
+          releaseTaskRuntime();
         }
         if (scenario === "replacement retired") {
           expect(

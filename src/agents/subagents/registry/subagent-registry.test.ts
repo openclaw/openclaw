@@ -55,7 +55,7 @@ import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import {
   createSessionStore,
-  createSubagentRunParams,
+  createSubagentRegistryHarness,
   createSubagentRunRecord,
   expectRecordFields,
   mockGatewayMethods,
@@ -63,7 +63,7 @@ import {
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import type {
-  SubagentRunParamsOverrides,
+  SubagentRegistryHarness,
   SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -252,6 +252,9 @@ vi.mock("./subagent-registry-state.js", () => ({
   getSubagentMaintenanceRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
+  persistSubagentRunsToDiskAsyncOrThrow: async () => {
+    throw new Error("Unexpected required queued registration");
+  },
   restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
 }));
 
@@ -294,11 +297,6 @@ vi.mock("../../internal-session-effects.js", () => ({
 }));
 
 describe("subagent registry seam flow", () => {
-  type RegistryModule = typeof import("./subagent-registry.test-helpers.js");
-  type RegistryHarness = Omit<RegistryModule, "addSubagentRunForTests" | "registerSubagentRun"> & {
-    addSubagentRunForTests(entry: SubagentRunRecordOverrides): void;
-    registerSubagentRun(params: SubagentRunParamsOverrides): void;
-  };
   type RunRecordFixtureOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
     Partial<Omit<SubagentRunRecordOverrides, "runId">>;
   type KilledRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
@@ -426,7 +424,7 @@ describe("subagent registry seam flow", () => {
       ...deliveryOverrides,
     },
   });
-  let mod: RegistryHarness;
+  let mod: SubagentRegistryHarness;
   const recoveryRuntime: GatewayRecoveryRuntime = {
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
@@ -479,13 +477,7 @@ describe("subagent registry seam flow", () => {
 
   beforeAll(async () => {
     const registry = await import("./subagent-registry.test-helpers.js");
-    mod = {
-      ...registry,
-      addSubagentRunForTests: (entry) =>
-        registry.addSubagentRunForTests(createSubagentRunRecord(entry)),
-      registerSubagentRun: (params) =>
-        registry.registerSubagentRun(createSubagentRunParams(params)),
-    };
+    mod = createSubagentRegistryHarness(registry);
   });
 
   beforeEach(() => {
@@ -2467,6 +2459,9 @@ describe("subagent registry seam flow", () => {
     const runs = new Map([[runId, entry]]);
     const persistOrThrow = vi.fn();
     const manager = createSubagentRunManager({
+      persistAsyncOrThrow: async () => {
+        throw new Error("Unexpected queued registration");
+      },
       runs,
       getRunsForChildSession: () => runs.values(),
       resumedRuns: new Set(),

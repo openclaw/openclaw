@@ -28,6 +28,7 @@ type QueuedSwarmRun = {
   launch?: SwarmLaunch;
   pendingLaunch?: Promise<void>;
   removal?: Promise<void>;
+  callbackWork?: AsyncWorkScope;
   holds: number;
   retryReady: boolean;
 };
@@ -42,17 +43,30 @@ type SwarmGroupLane = {
 
 function bindSwarmLaunchWork<Args extends unknown[], Result>(
   run: (...args: Args) => Result | Promise<Result>,
+  owner?: QueuedSwarmRun,
 ): (...args: Args) => Promise<Result> {
   // Keep activation identity without re-entering its retired request's work scope.
   return AsyncLocalStorage.bind(async (...args: Args) => {
     const work = new AsyncWorkScope();
+    if (owner) {
+      owner.callbackWork = work;
+      if (owner.removal) {
+        work.beginClose();
+      }
+    }
     try {
       return await work.track(() => run(...args));
     } finally {
-      await AsyncWorkScope.runWhenAllIdle(
-        () => [work],
-        () => work.run(() => work.drain()),
-      );
+      try {
+        await AsyncWorkScope.runWhenAllIdle(
+          () => [work],
+          () => work.run(() => work.drain()),
+        );
+      } finally {
+        if (owner?.callbackWork === work) {
+          owner.callbackWork = undefined;
+        }
+      }
     }
   });
 }
@@ -102,6 +116,8 @@ function finalizeRemovedRun(
     };
     // A retained launch can finish after its triggering request's work scope closes.
     item.removal = getAsyncWorkSignal()?.aborted ? cleanup() : trackAsyncWork(cleanup);
+    // Retire claim waits now; removal still joins the admitted launch and its physical tails.
+    item.callbackWork?.beginClose();
     void item.removal.then(
       () => pendingRemovals.delete(item),
       (error: unknown) => {
@@ -278,8 +294,8 @@ export function activateSwarmRun(
   const onRemoved = params.onRemoved;
   // Capacity can be released by another run or Stop; callbacks keep their activation owner.
   item.launch = {
-    start: bindSwarmLaunchWork(params.start),
-    onStartFailure: bindSwarmLaunchWork(params.onStartFailure),
+    start: bindSwarmLaunchWork(params.start, item),
+    onStartFailure: bindSwarmLaunchWork(params.onStartFailure, item),
     onRemoved: onRemoved && bindSwarmLaunchWork(onRemoved),
     lifecycleOwner: params.lifecycleOwner,
   };
@@ -374,6 +390,7 @@ export function holdQueuedSwarmRun(runId: string) {
   publishCapacityChange(item);
   let released = false;
   return {
+    isCurrent: () => !released && runLocations.get(runId) === location,
     async release() {
       if (!released) {
         released = true;

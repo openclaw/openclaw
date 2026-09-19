@@ -115,7 +115,7 @@ beforeEach(async () => {
       updatedAt: Date.now(),
     },
   );
-  registerCollector(runId);
+  await registerCollector(runId);
   expect(findTaskByRunIdForStatus(runId)?.status).toBe("queued");
   expect(settleFailedQueuedSubagentLaunch(runId, "launch failed")).toBe(true);
   expect(findTaskByRunIdForStatus(runId)?.status).toBe("failed");
@@ -125,8 +125,8 @@ beforeEach(async () => {
   expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("original");
 });
 
-function registerCollector(id: string, childSessionKey = key, agentId = "main") {
-  registerSubagentRun({
+async function registerCollector(id: string, childSessionKey = key, agentId = "main") {
+  await registerSubagentRun({
     runId: id,
     childSessionKey,
     requesterSessionKey: "agent:main:main",
@@ -270,8 +270,8 @@ test("postcommit failure cannot restore cleanup authority after a successful res
   await expectResultRetained();
 });
 
-function startCollector(id: string) {
-  registerCollector(id);
+async function startCollector(id: string) {
+  await registerCollector(id);
   emitAgentEvent({
     runId: id,
     stream: "lifecycle",
@@ -280,8 +280,8 @@ function startCollector(id: string) {
   expect(subagentRuns.get(id)?.execution.status).toBe("running");
 }
 
-function startAnnouncingSubagent(id: string) {
-  registerSubagentRun({
+async function startAnnouncingSubagent(id: string) {
+  await registerSubagentRun({
     runId: id,
     childSessionKey: key,
     requesterSessionKey: "agent:main:main",
@@ -329,7 +329,7 @@ async function settleCollectorCleanup(id: string) {
 
 test("same-turn reset keeps its active continuation and task unsuppressed", async () => {
   const activeId = "active-continuation";
-  startCollector(activeId);
+  await startCollector(activeId);
   const interrupt = vi.fn();
   const admission = await beginSessionWorkAdmission({
     scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
@@ -367,7 +367,7 @@ test.each(["new", "replacement"])(
         throw new Error("not used");
       },
       reset: async () => {
-        startCollector(activeId);
+        await startCollector(activeId);
       },
     });
     await request("sessions.reset", { key });
@@ -410,7 +410,7 @@ test("a changed session generation skips revocation together with reset", async 
 
 test("revocation rechecks terminal owners after awaited entry planning", async () => {
   const id = "late-terminal-owner";
-  registerCollector(id);
+  await registerCollector(id);
   let settled = false;
   const unsubscribe = onSubagentRegistryPersisted(() => {
     if (!settled && subagentRuns.get(runId)?.execution.suppressSessionEffects) {
@@ -465,7 +465,7 @@ test.each([
       { ...scope, agentId: agentId === "main" ? "worker" : "main", sessionKey: siblingKey },
       { sessionId: "sibling", lifecycleRevision: "sibling", updatedAt: Date.now() },
     );
-    registerCollector(id, childSessionKey, agentId);
+    await registerCollector(id, childSessionKey, agentId);
     expect(settleFailedQueuedSubagentLaunch(id, "scoped launch failed")).toBe(true);
     attempts = 0;
     await testing.sweepOnceForTests();
@@ -519,7 +519,7 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
     },
   });
   const id = "completing-owner";
-  startCollector(id);
+  await startCollector(id);
   emitAgentEvent({ runId: id, stream: "lifecycle", data: { phase: "end", endedAt: Date.now() } });
   await entered.promise;
   const original = loadSessionEntry({ sessionKey: key });
@@ -540,7 +540,7 @@ test("reset cannot publish while a terminal completion owns an awaited capture",
 
 test("a retained kill claim cannot revive durably revoked session cleanup", async () => {
   const id = "kill-claim-owner";
-  registerCollector(id);
+  await registerCollector(id);
   expect(
     claimSubagentRunKill({
       runId: id,
@@ -593,7 +593,7 @@ test("reset preserves a yielded continuation instead of revoking it as completed
   const id = "yielded-continuation";
   // A yielded collector is settled at its terminal (#141474), so it is not a continuation to
   // preserve; this case uses an announcing subagent, and the sibling case below pins the collector.
-  startAnnouncingSubagent(id);
+  await startAnnouncingSubagent(id);
   emitAgentEvent({
     runId: id,
     stream: "lifecycle",
@@ -607,7 +607,7 @@ test("reset preserves a yielded continuation instead of revoking it as completed
 
 test("reset revokes a yielded collector that settled at its own terminal", async () => {
   const id = "yielded-collector";
-  startCollector(id);
+  await startCollector(id);
   emitAgentEvent({
     runId: id,
     stream: "lifecycle",

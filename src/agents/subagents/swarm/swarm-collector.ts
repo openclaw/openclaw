@@ -25,6 +25,27 @@ function resolveStatus(
   return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
 }
 
+export function prepareTerminatedCollectorLaunch(
+  entry: SubagentRunRecord,
+  endedAt: number,
+  error: string,
+  getRuntimeConfig: () => OpenClawConfig,
+): void {
+  entry.swarmLaunchPending = false;
+  entry.collectorLaunchCleanupPending = true;
+  entry.queuedLaunch = undefined;
+  entry.execution = { ...entry.execution, status: "terminal", endedAt };
+  entry.completion = {
+    required: false,
+    resultText:
+      entry.execution.outcome?.status === "error"
+        ? (entry.execution.outcome.error ?? error)
+        : error,
+    capturedAt: endedAt,
+  };
+  updateSwarmCollectorCompletion(entry, getRuntimeConfig());
+}
+
 /** Freeze the waitable collector record after raw completion capture. */
 export function updateSwarmCollectorCompletion(
   entry: SubagentRunRecord,

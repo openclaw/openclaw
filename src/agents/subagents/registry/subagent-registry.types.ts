@@ -234,6 +234,20 @@ export type SubagentRunMaintenanceRecord = Pick<
   delivery?: Pick<SubagentCompletionDeliveryState, "status" | "suspendedAt">;
 };
 
+export type SubagentRegistrationScope = {
+  readonly waitForClaim: () => Promise<void> | undefined;
+  readonly canLaunch: () => boolean;
+  readonly canCleanupSession: () => boolean;
+  readonly canAcceptLaunch: () => boolean;
+  readonly canRetireReservation: () => boolean;
+  readonly settleFailedLaunch: (error: string) => Promise<void>;
+};
+
+export type RegisterSubagentRunOptions = {
+  assertCurrent?: () => void;
+  retainOwnership?: (scope: SubagentRegistrationScope) => void;
+};
+
 export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;

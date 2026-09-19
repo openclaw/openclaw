@@ -9,10 +9,6 @@ import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-confi
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  GatewayDrainingError,
-  runWithGatewayIndependentRootWorkContinuation,
-} from "../../../process/gateway-work-admission.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
@@ -24,22 +20,17 @@ import {
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import {
-  completeCollectorLaunchCleanup,
-  settleFailedQueuedSubagentLaunch,
-  startQueuedSubagentRun,
-} from "../registry/subagent-registry.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
-import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { activateSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
-  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
+import { createCollectorLaunchCallbacks } from "./subagent-spawn-collector.js";
 import {
   prepareContextEngineSubagentSpawn,
   prepareSubagentSessionContext,
@@ -134,8 +125,14 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
+  const swarmReservation = reservationPending ? holdQueuedSwarmRun(childIdem) : undefined;
+  let canCleanupCreatedSession: (() => boolean) | undefined;
+  let canRetireReservation: (() => boolean) | undefined;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
+    if (reservationPending && !swarmReservation) {
+      return { status: "error", error: "Collector FIFO reservation is no longer current" };
+    }
     const childPlan = await resolveSubagentChildPlan({
       request: params,
       ctx,
@@ -204,6 +201,7 @@ export async function spawnSubagentDirect(
         emitLifecycleHooks,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
+        ...(canCleanupCreatedSession ? { isCurrent: canCleanupCreatedSession } : {}),
       });
     const preparedSpawnContext = await prepareSubagentSessionContext({
       assertActive,
@@ -410,6 +408,7 @@ export async function spawnSubagentDirect(
         deleteTranscript: true,
         ...provisionalSessionIdentity,
         waitForSessionDeletion,
+        isCurrent: canCleanupCreatedSession,
       });
     type SubagentBackendState = { contextEnginePreparation?: PreparedContextEngineSubagentSpawn };
     // Set once the gateway accepts the child run, so a later failure can tell an
@@ -451,7 +450,9 @@ export async function spawnSubagentDirect(
         });
         return { runId: acceptedChildRunId };
       },
-      async cleanupOnFailure({ phase, state }) {
+      async cleanupOnFailure({ phase, state, registrationScope }) {
+        canCleanupCreatedSession = registrationScope?.canCleanupSession;
+        canRetireReservation = registrationScope?.canRetireReservation;
         if (phase === "initialize") {
           await cleanupFailedSpawn();
           return;
@@ -460,19 +461,29 @@ export async function spawnSubagentDirect(
         // the run's row, and registration is what delivers it. A register failure
         // means no owner ever recorded the run, so abort the run the gateway
         // already accepted instead of leaving it executing unrecorded.
-        if (phase === "register" && acceptedChildRunId && taskRowOwnership === "required") {
+        if (
+          phase === "register" &&
+          acceptedChildRunId &&
+          taskRowOwnership === "required" &&
+          canCleanupCreatedSession?.() !== false
+        ) {
           await terminateAcceptedCollectorRun({
             childSessionKey,
             gatewayRunId: acceptedChildRunId,
             ...provisionalSessionIdentity,
           });
         }
-        await rollbackPreparedContextEngine(state?.contextEnginePreparation);
-        if (attachmentId) {
+        if (canCleanupCreatedSession?.() === false) {
+          await state?.contextEnginePreparation?.dispose().catch(() => {});
+        } else {
+          await rollbackPreparedContextEngine(state?.contextEnginePreparation);
+        }
+        if (attachmentId && canCleanupCreatedSession?.() !== false) {
           try {
             await cleanupMaterializedSubagentAttachments({
               childSessionKey,
               attachmentId,
+              isCurrent: canCleanupCreatedSession,
             });
           } catch {
             // Best-effort cleanup only.
@@ -583,99 +594,59 @@ export async function spawnSubagentDirect(
       };
     }
     childRunId = pipelineResult.runId;
+    canCleanupCreatedSession = pipelineResult.registrationScope?.canCleanupSession;
+    canRetireReservation = pipelineResult.registrationScope?.canRetireReservation;
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-      let launchTerminationConfirmed = false;
-      activateSwarmRun({
-        groupId: swarmSchedulerGroupKey,
-        runId: childRunId,
-        lifecycleOwner: gatewayContextResolver
-          ? getCanonicalGatewayContextResolver(gatewayContextResolver)
-          : undefined,
-        start: async () => {
-          await runWithGatewayIndependentRootWorkContinuation(async () => {
-            const launch = await launchChildRun();
-            // Queued registration already owns the task row before either dispatch route starts.
-            // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
-            const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
-            recordSessionParticipantBestEffort({
-              promptedAt,
-              identity: { type: "agent", id: requesterAgentId },
-              agentId: targetAgentId,
-              sessionKey: childSessionKey,
-              storePath: resolveSessionStorePathCore(cfg.session?.store, {
+      for (
+        let claim = pipelineResult.registrationScope?.waitForClaim();
+        claim;
+        claim = pipelineResult.registrationScope?.waitForClaim()
+      ) {
+        await claim;
+      }
+      const canLaunch = pipelineResult.registrationScope?.canLaunch() !== false;
+      if (swarmReservation?.isCurrent() !== false) {
+        // The scheduler also settles registrations that have lost launch authority.
+        activateSwarmRun({
+          groupId: swarmSchedulerGroupKey,
+          runId: childRunId,
+          lifecycleOwner: gatewayContextResolver
+            ? getCanonicalGatewayContextResolver(gatewayContextResolver)
+            : undefined,
+          ...createCollectorLaunchCallbacks({
+            childRunId,
+            childSessionKey,
+            requesterSessionKey: requesterInternalKey,
+            gatewayContextResolver,
+            registrationScope: pipelineResult.registrationScope,
+            preparation: pipelineResult.state.contextEnginePreparation,
+            provisionalSessionIdentity,
+            launchChildRun,
+            recordParticipant: () =>
+              recordSessionParticipantBestEffort({
+                promptedAt,
+                identity: { type: "agent", id: requesterAgentId },
                 agentId: targetAgentId,
+                sessionKey: childSessionKey,
+                storePath: resolveSessionStorePathCore(cfg.session?.store, {
+                  agentId: targetAgentId,
+                }),
               }),
-            });
-            try {
-              const started = gatewayContextResolver
-                ? startQueuedSubagentRun(
-                    childRunId,
-                    gatewayRunId,
-                    undefined,
-                    gatewayContextResolver,
-                  )
-                : startQueuedSubagentRun(childRunId, gatewayRunId);
-              if (!started) {
-                throw new Error(
-                  "collector registry row could not transition from queued to running",
-                );
-              }
-            } catch (error) {
-              await terminateAcceptedCollectorRun({
-                childSessionKey,
-                gatewayRunId,
-                ...provisionalSessionIdentity,
-              });
-              launchTerminationConfirmed = true;
-              throw error;
-            }
-            await emitSpawnLifecycleHooks(gatewayRunId);
-          }, "subagents:spawn");
-          await pipelineResult.state.contextEnginePreparation?.dispose().catch(() => {});
-        },
-        onStartFailure: async (error) => {
-          if (error instanceof GatewayDrainingError) {
-            return false;
-          }
-          const launchError = summarizeSpawnError(error);
-          const [contextRollback, sessionCleanup] = await Promise.allSettled([
-            rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
-            cleanupFailedSpawn(
-              // A launch RPC can fail after acceptance. Keep the FIFO slot until
-              // deleting the child session proves no accepted run remains active.
-              !launchTerminationConfirmed,
-            ),
-          ]);
-          await retrySubagentCleanup(async () => {
-            settleFailedQueuedSubagentLaunch(childRunId, launchError);
-            return true;
-          });
-          const cleanupComplete =
-            contextRollback.status === "fulfilled" &&
-            contextRollback.value &&
-            sessionCleanup.status === "fulfilled" &&
-            sessionCleanup.value.attachmentsRemoved &&
-            sessionCleanup.value.sessionDeleted;
-          if (cleanupComplete) {
-            emitSessionLifecycleEvent({
-              sessionKey: childSessionKey,
-              reason: "delete",
-              parentSessionKey: requesterInternalKey,
-            });
-            completeCollectorLaunchCleanup(childRunId);
-          }
-          return true;
-        },
-        onRemoved: async (reason) => {
-          if (reason === "shutdown") {
-            // Restart replays queuedLaunch without repeating its durable context preparation.
-            await pipelineResult.state.contextEnginePreparation?.dispose();
-          } else {
-            await pipelineResult.state.contextEnginePreparation?.rollback();
-          }
-        },
-      });
+            emitSpawnLifecycleHooks,
+            cleanupFailedSpawn,
+          }),
+        });
+      } else {
+        if (canRetireReservation?.() !== false) {
+          swarmReservation?.withdraw();
+        }
+        if (!canLaunch && canCleanupCreatedSession?.() !== false) {
+          await rollbackPreparedContextEngine(contextEnginePreparation);
+        } else {
+          await contextEnginePreparation?.dispose().catch(() => {});
+        }
+      }
       contextEnginePreparation = undefined;
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;
@@ -710,13 +681,17 @@ export async function spawnSubagentDirect(
     };
   } finally {
     admissionReservation?.release();
-    if (swarmReservationPending) {
-      removeQueuedSwarmRun(childRunId);
+    if (swarmReservationPending && canRetireReservation?.() !== false) {
+      swarmReservation?.withdraw();
     }
-    if (params.collect && contextEnginePreparation) {
-      await rollbackPreparedContextEngine(contextEnginePreparation);
-    } else {
-      await contextEnginePreparation?.dispose().catch(() => {});
+    try {
+      if (params.collect && contextEnginePreparation && canCleanupCreatedSession?.() !== false) {
+        await rollbackPreparedContextEngine(contextEnginePreparation);
+      } else {
+        await contextEnginePreparation?.dispose().catch(() => {});
+      }
+    } finally {
+      await swarmReservation?.release();
     }
   }
 }
