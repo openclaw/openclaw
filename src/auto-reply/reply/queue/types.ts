@@ -44,6 +44,7 @@ import type {
   TraceLevel,
   VerboseLevel,
 } from "../directives.js";
+import type { QueuedReplyPresentation } from "../queued-reply-presentation.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
@@ -111,6 +112,8 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 
 export type FollowupRun = {
   prompt: string;
+  /** In-memory source presentation; absent for work using a refreshed local dispatcher. */
+  presentation?: QueuedReplyPresentation;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -288,6 +291,25 @@ export type FollowupRun = {
     skillLibraryAuthoring?: import("../../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   };
 };
+
+/** Source metadata retained by same-route collection and overflow summaries. */
+export type FollowupRuntimeMetadata = Pick<
+  FollowupRun,
+  | "currentInboundEventKind"
+  | "currentInboundAudio"
+  | "currentInboundContext"
+  | "explicitSkillSelections"
+  | "channelAdmissionEvidence"
+  | "toolsAllow"
+  | "disableTools"
+  | "abortSignal"
+  | "queueAbortSignal"
+  | "deliveryCorrelations"
+  | "turnAdoptionLifecycle"
+  | "replyOperationRunStates"
+  | "queuedFollowupReplyDisposition"
+  | "presentation"
+>;
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,

@@ -30,6 +30,7 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import type { QueuedFollowupReplyBatch } from "./queue/types.js";
+import { applyQueuedReplyPresentation } from "./queued-reply-presentation.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 type FollowupDrainDisposition =
@@ -87,7 +88,7 @@ export function createFollowupRunner(
   const resolveGatewayContext = Object.hasOwn(initialDefaults, "resolveGatewayContext")
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
-  const defaults = { ...initialDefaults, resolveGatewayContext };
+  const runnerDefaults = { ...initialDefaults, resolveGatewayContext };
   // Every queue handoff, including delivery retries, retains this host owner
   // without borrowing the invoking turn's request-local authority.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
@@ -95,6 +96,7 @@ export function createFollowupRunner(
       inheritRequestScope: false,
     });
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
+    const defaults = applyQueuedReplyPresentation(runnerDefaults, queued.presentation);
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedRunId: string | undefined;

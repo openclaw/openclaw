@@ -170,8 +170,8 @@ export async function admitFollowupTurn(params: {
       return { kind: "skipped", reason: "aborted", operation };
     }
 
-    // Queue drains retain the latest live runner closure per key. Keep local dispatcher
-    // callbacks in that closure so retried non-routable items use the newest transport owner.
+    // Routable sources retain their own presentation; work without that source
+    // retains the refreshed local dispatcher supplied by the runner.
     queuedFollowupAdmitted = true;
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
     if (operation.sessionId !== run.sessionId) {

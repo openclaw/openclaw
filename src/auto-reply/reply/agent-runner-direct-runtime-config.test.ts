@@ -800,26 +800,38 @@ describe("runReplyAgent runtime config", () => {
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
-  it("does not resolve secrets before the enqueue-followup queue path", async () => {
-    const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: true,
-      isActive: true,
-    });
-    const runState: ReplyOperationRunState = {};
-    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-    enqueueFollowupRunMock.mockReturnValueOnce(true);
+  it.each(["slack", "webchat"])(
+    "captures only routable %s presentation before enqueueing without secrets",
+    async (channel) => {
+      const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({
+        shouldFollowup: true,
+        isActive: true,
+      });
+      const runState: ReplyOperationRunState = {};
+      const onReasoningStream = vi.fn(async () => true);
+      followupRun.originatingChannel = channel;
+      followupRun.originatingTo = "channel:D-SYNTHETIC";
+      replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState, onReasoningStream };
+      enqueueFollowupRunMock.mockReturnValueOnce(true);
 
-    await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
+      await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
 
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
-    expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
-    const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
-    expect(enqueueCall?.[0]).toBe("main");
-    expect(enqueueCall?.[1]).toBe(followupRun);
-    expect(enqueueCall?.[2]).toBe(resolvedQueue);
-    expect(enqueueCall?.[3]).toBe("message-id");
-    expect(typeof enqueueCall?.[4]).toBe("function");
-    expect(enqueueCall?.[5]).toBe(false);
-  });
+      expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+      expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
+      expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
+      const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
+      expect(enqueueCall?.[0]).toBe("main");
+      expect(enqueueCall?.[1]).toBe(followupRun);
+      if (channel === "slack") {
+        expect(followupRun.presentation?.opts.onReasoningStream).toBe(onReasoningStream);
+        expect(followupRun.presentation?.typing).toBe(replyParams.typing);
+      } else {
+        expect(followupRun.presentation).toBeUndefined();
+      }
+      expect(enqueueCall?.[2]).toBe(resolvedQueue);
+      expect(enqueueCall?.[3]).toBe("message-id");
+      expect(typeof enqueueCall?.[4]).toBe("function");
+      expect(enqueueCall?.[5]).toBe(false);
+    },
+  );
 });
