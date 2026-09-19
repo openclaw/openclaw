@@ -58,36 +58,87 @@ function sanitizeImageContentRecord(
   return undefined;
 }
 
-/** Sanitizes images without copying unchanged history or mutating its owned snapshot. */
+/**
+ * Sanitizes images without copying unchanged history or mutating its owned snapshot.
+ *
+ * The walk keeps its own heap stack instead of the call stack, so pathologically
+ * nested history is sanitized rather than overflowing the stack. A container that is
+ * already being walked is left untouched, which also terminates cyclic payloads.
+ */
 export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T {
-  if (Array.isArray(value)) {
-    let next: unknown[] | undefined;
-    for (let index = 0; index < value.length; index++) {
-      const child = sanitizeCodexHistoryImagePayloads(value[index], label);
-      if (child !== value[index]) {
-        (next ??= value.slice())[index] = child;
-      }
-    }
-    return (next ?? value) as T;
+  type Container = unknown[] | Record<string, unknown>;
+  type Frame = {
+    container: Container;
+    isArray: boolean;
+    keys: readonly (string | number)[];
+    index: number;
+    copy: Container | undefined;
+  };
+
+  const makeFrame = (container: Container): Frame => ({
+    container,
+    isArray: Array.isArray(container),
+    keys: Array.isArray(container)
+      ? Array.from({ length: container.length }, (_, index) => index)
+      : Object.keys(container),
+    index: 0,
+    copy: undefined,
+  });
+
+  const ownReplacement = isRecord(value) ? sanitizeImageContentRecord(value, label) : undefined;
+  if (ownReplacement) {
+    return ownReplacement as T;
   }
-  if (!isRecord(value)) {
+  if (!Array.isArray(value) && !isRecord(value)) {
     return value;
   }
 
-  const imageRecord = sanitizeImageContentRecord(value, label);
-  if (imageRecord) {
-    return imageRecord as T;
-  }
+  const inProgress = new WeakSet<object>();
+  const root = value as Container;
+  const stack: Frame[] = [makeFrame(root)];
+  inProgress.add(root);
+  let lastResult: unknown = root;
+  let lastChanged = false;
 
-  let next: Record<string, unknown> | undefined;
-  for (const key in value) {
-    if (!Object.hasOwn(value, key)) {
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.index > 0 && lastChanged) {
+      const copy = (frame.copy ??= frame.isArray
+        ? (frame.container as unknown[]).slice()
+        : { ...(frame.container as Record<string, unknown>) });
+      (copy as Record<string | number, unknown>)[frame.keys[frame.index - 1]!] = lastResult;
+    }
+
+    if (frame.index >= frame.keys.length) {
+      stack.pop();
+      inProgress.delete(frame.container);
+      lastResult = frame.copy ?? frame.container;
+      lastChanged = frame.copy !== undefined;
       continue;
     }
-    const child = sanitizeCodexHistoryImagePayloads(value[key], label);
-    if (child !== value[key]) {
-      (next ??= { ...value })[key] = child;
+
+    const key = frame.keys[frame.index]!;
+    frame.index += 1;
+    const child = (frame.container as Record<string | number, unknown>)[key];
+    const childReplacement = isRecord(child) ? sanitizeImageContentRecord(child, label) : undefined;
+    if (childReplacement) {
+      lastResult = childReplacement;
+      lastChanged = childReplacement !== child;
+      continue;
     }
+    if (Array.isArray(child) || isRecord(child)) {
+      if (inProgress.has(child)) {
+        lastResult = child;
+        lastChanged = false;
+        continue;
+      }
+      inProgress.add(child);
+      stack.push(makeFrame(child as Container));
+      continue;
+    }
+    lastResult = child;
+    lastChanged = false;
   }
-  return (next ?? value) as T;
+
+  return lastResult as T;
 }
