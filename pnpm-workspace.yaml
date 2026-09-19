@@ -35,22 +35,15 @@ minimumReleaseAgeExclude:
   - "@openclaw/proxyline@0.3.12"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe descriptor ownership fix; remove after 2026-09-23 22:01 UTC.
-  - "@openclaw/fs-safe@0.13.1"
-  # Remove after 2026-09-23 21:57 UTC.
-  - "@openclaw/fs-safe-darwin-arm64@0.13.1"
-  # Remove after 2026-09-23 21:51 UTC.
-  - "@openclaw/fs-safe-darwin-x64@0.13.1"
-  # Remove after 2026-09-23 21:48 UTC.
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.13.1"
-  # Remove after 2026-09-23 21:49 UTC.
-  - "@openclaw/fs-safe-linux-arm64-musl@0.13.1"
-  # Remove after 2026-09-23 21:44 UTC.
-  - "@openclaw/fs-safe-linux-x64-gnu@0.13.1"
-  # Remove after 2026-09-23 21:46 UTC.
-  - "@openclaw/fs-safe-linux-x64-musl@0.13.1"
-  # Remove after 2026-09-23 21:58 UTC.
-  - "@openclaw/fs-safe-win32-x64-msvc@0.13.1"
+  # Reviewed fs-safe 0.16.0 release and native helpers; remove after 2026-09-27.
+  - "@openclaw/fs-safe@0.16.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.16.0"
+  - "@openclaw/fs-safe-darwin-x64@0.16.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.16.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.16.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.16.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.16.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.16.0"
   # fs-safe archive dependency; remove after 2026-09-16.
   - "jszip@3.10.2"
   # GHSA-prgh-xp8r-p3m5 / GHSA-v53p-9fqp-m79j security fixes; remove after 2026-09-18.

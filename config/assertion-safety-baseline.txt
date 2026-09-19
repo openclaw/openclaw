@@ -3386,7 +3386,7 @@ src/skills/workshop/store-sqlite-event.ts	1
 src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	9
 src/snapshot/git-backup.ts	2
-src/snapshot/local-repository.ts	8
+src/snapshot/local-repository.ts	7
 src/snapshot/manifest.ts	1
 src/state/agent-deletion-journal.ts	15
 src/state/backup-run-records.ts	1
@@ -3395,7 +3395,7 @@ src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	3
-src/state/openclaw-agent-db-registry.ts	5
+src/state/openclaw-agent-db-registry.ts	1
 src/state/openclaw-agent-db-schema.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	2
