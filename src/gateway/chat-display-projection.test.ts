@@ -293,7 +293,6 @@ describe("oversized multimodal chat history", () => {
             type: "video",
             mimeType: "video/mp4",
             url: "https://media.example/video.mp4",
-            omitted: true,
             bytes: payload.length,
           },
         ],

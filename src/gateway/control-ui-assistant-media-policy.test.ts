@@ -6,6 +6,11 @@ import { finished } from "node:stream/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  recordInboundMediaOwner,
+  recordStagedInboundMedia,
+} from "../media/inbound-media-ownership.js";
+import { getMediaDir } from "../media/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -135,6 +140,86 @@ async function request(
 // The real HTTP boundary plus real files protect session-root admission and exact-file grants;
 // existing media tests cover static agent roots only.
 describe("assistant image session policy", () => {
+  // Publication copies agent-held bytes into the inbound bucket, which is one of the
+  // default media roots, so a staged object has to stay bound to the session that
+  // published it: a reader who kept the reference may not fetch it while naming no
+  // session, and it may not outlive that session's visibility.
+  it("refuses a staged reference without its originating session and after withdrawal", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(temp, "staged-media-state") }, async () => {
+      cfg.gateway = {
+        roles: {
+          default: "viewer",
+          definitions: {
+            viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      };
+      const profile = ensureProfileForEmail("staged-reader@example.test");
+      state.auth.mockResolvedValue({
+        authMethod: "trusted-proxy",
+        operatorScopes: ["operator.read"],
+        ...resolveHttpProfile(profile.id, profile.updatedAt, cfg),
+      });
+
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      await fs.mkdir(inboundDir, { recursive: true });
+      const id = "staged-inline-image.png";
+      await fs.writeFile(path.join(inboundDir, id), PNG);
+      const reference = `media://inbound/${id}`;
+      // The sanitizer marks the object when it publishes it, then the session that
+      // persists the result owns it. Both happen before any request is served.
+      expect(await recordStagedInboundMedia(id)).toBe(true);
+      expect(await recordInboundMediaOwner(id, { sessionKey })).toBe(true);
+
+      // Allowed retrieval: the publishing session reads its own staged bytes, with and
+      // without the ticket the metadata response hands out.
+      const allowed = await request(reference);
+      expect(allowed.payload).toMatchObject({ available: true });
+      const ticket = String(allowed.payload!.mediaTicket);
+      expect((await request(reference, { ticket, bytes: true })).bytes).toEqual(PNG);
+
+      // The same reference, retained by a reader who names no session and holds no
+      // ticket, is refused rather than falling back to general reader authority.
+      const unbound = await request(reference, { unscoped: true, omitAgent: true });
+      expect(unbound.res.statusCode).toBe(404);
+
+      // Control: a managed inbound object that was never staged keeps today's access, so
+      // this narrows staged references rather than every managed one.
+      const controlId = "unstaged-channel-attachment.png";
+      await fs.writeFile(path.join(inboundDir, controlId), PNG);
+      const controlReference = `media://inbound/${controlId}`;
+      const control = await request(controlReference, { unscoped: true, omitAgent: true });
+      expect(control.payload).toMatchObject({ available: true });
+      // The unbound control is served end to end, so the binding narrows staged objects
+      // rather than every managed inbound reference.
+      const controlTicket = String((await request(controlReference)).payload!.mediaTicket);
+      const controlBytes = await request(controlReference, { ticket: controlTicket, bytes: true });
+      expect(controlBytes.res.statusCode).toBe(200);
+      expect(controlBytes.bytes).toEqual(PNG);
+
+      // Withdraw the session's visibility: the staged reference stops being served, both
+      // to the session that published it and to the retained ticket.
+      entry.visibility = "draft";
+      invalidateSessionSharingSnapshot(sessionKey);
+      expect((await request(reference)).res.statusCode).toBe(404);
+      expect((await request(reference, { ticket, bytes: true })).res.statusCode).toBe(404);
+
+      // Reconfirmation: restoring visibility restores the presenting session's access, so
+      // the refusals above are the binding and the visibility check, not a broken path.
+      entry.visibility = undefined;
+      invalidateSessionSharingSnapshot(sessionKey);
+      const reconfirmed = await request(reference);
+      expect(reconfirmed.payload).toMatchObject({ available: true });
+      const reconfirmedTicket = String(reconfirmed.payload!.mediaTicket);
+      const reconfirmedBytes = await request(reference, {
+        ticket: reconfirmedTicket,
+        bytes: true,
+      });
+      expect(reconfirmedBytes.res.statusCode).toBe(200);
+      expect(reconfirmedBytes.bytes).toEqual(PNG);
+    });
+  });
+
   it.each(["absolute", "image.png", "./image.png", "openclaw/tmp/proof/image.png"])(
     "previews a protected project's image using %s paths",
     async (reference) => {

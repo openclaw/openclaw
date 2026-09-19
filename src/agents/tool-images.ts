@@ -1,13 +1,20 @@
 /**
  * Tool image output sanitizer.
  *
- * Downscales and recompresses oversized base64 image blocks before provider replay.
+ * Downscales and recompresses oversized base64 image blocks before provider replay, and
+ * stages an explicitly presentable image into the media store so the chat display
+ * projection can keep a reference. Inspection-only results are never published.
  */
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  inboundMediaIdFromReference,
+  recordStagedInboundMedia,
+} from "../media/inbound-media-ownership.js";
+import { buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -18,6 +25,7 @@ import {
   resizeToJpeg,
   type ImageMetadata,
 } from "../media/media-services.js";
+import { saveMediaBuffer } from "../media/store.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
@@ -402,6 +410,87 @@ export async function sanitizeImageBlocks(
   return { images: next, dropped: Math.max(0, images.length - next.length) };
 }
 
+/**
+ * Decides whether a tool result may be published into the conversation.
+ *
+ * Publication copies bytes into shared managed storage, which the assistant media route
+ * serves, so it happens only on an explicit presentation decision carried by the result
+ * itself. Everything else stays inspection-only: a native vision result marks
+ * `media.outbound: false` under the shipped inspection contract, the shared read tool and
+ * private image reads carry no decision at all, and the default is to publish nothing.
+ */
+function resolveToolMediaPresentation(details: unknown): "inspection-only" | "conversation" {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return "inspection-only";
+  }
+  // SAFETY: details is confirmed a non-null, non-array object by the guard immediately above.
+  const media = (details as { media?: unknown }).media;
+  if (!media || typeof media !== "object" || Array.isArray(media)) {
+    return "inspection-only";
+  }
+  // SAFETY: media is confirmed a non-null, non-array object by the guard immediately above.
+  return (media as { present?: unknown }).present === true ? "conversation" : "inspection-only";
+}
+
+/**
+ * Persists inline image payloads into the managed media store and attaches the
+ * canonical `media://inbound/<id>` reference to each block.
+ *
+ * An inline image block carries only base64 `data`, which the chat display
+ * projection drops as private, so an image presented in the conversation fell back
+ * to a non-recoverable "omitted from history" placeholder even when it had been
+ * captured seconds earlier. Staging the same bytes gives the block a reference the
+ * projection keeps, and `data` stays in place because provider hydration reads it.
+ *
+ * Only an explicitly presentable result reaches here, and the object is registered as
+ * session-bound before its reference is attached, because the route refuses a staged
+ * reference to a request that names no session. Staging is idempotent and best-effort: a
+ * block that already carries a reference is left alone, and bytes the store refuses, or
+ * whose registration fails, keep the block's current shape so it degrades to today's
+ * placeholder rather than to an unenforceable reference.
+ */
+async function stageInlineImageBlocks(
+  blocks: readonly ToolContentBlock[],
+): Promise<ToolContentBlock[]> {
+  const staged: ToolContentBlock[] = [];
+  for (const block of blocks) {
+    if (!isImageBlock(block) || hasMediaReference(block)) {
+      staged.push(block);
+      continue;
+    }
+    staged.push((await stageInlineImageBlock(block)) ?? block);
+  }
+  return staged;
+}
+
+function hasMediaReference(block: ImageContentBlock): boolean {
+  return typeof block.url === "string" && block.url.trim().length > 0;
+}
+
+async function stageInlineImageBlock(
+  block: ImageContentBlock,
+): Promise<ImageContentBlock | undefined> {
+  const data = canonicalizeBase64(block.data);
+  if (!data) {
+    return undefined;
+  }
+  try {
+    const saved = await saveMediaBuffer(Buffer.from(data, "base64"), block.mimeType, "inbound");
+    const url = buildInboundMediaUriFromPath(saved.path);
+    const id = url ? inboundMediaIdFromReference(url) : undefined;
+    if (!url || !id || !(await recordStagedInboundMedia(id))) {
+      return undefined;
+    }
+    return { ...block, url };
+  } catch (err) {
+    log.warn("Inline image staging failed; the chat view keeps its omitted placeholder", {
+      mimeType: block.mimeType,
+      error: String(err),
+    });
+    return undefined;
+  }
+}
+
 export async function sanitizeToolResultImages(
   result: AgentToolResult<unknown>,
   label: string,
@@ -413,5 +502,8 @@ export async function sanitizeToolResultImages(
   }
 
   const next = await sanitizeContentBlocksImages(content, label, opts);
-  return { ...result, content: next };
+  if (resolveToolMediaPresentation(result.details) !== "conversation") {
+    return { ...result, content: next };
+  }
+  return { ...result, content: await stageInlineImageBlocks(next) };
 }

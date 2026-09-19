@@ -60,6 +60,7 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import * as stagedMedia from "./control-ui-assistant-media-ownership.js";
 import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -361,53 +362,6 @@ function verifyAssistantMediaTicket(
   }
 }
 
-function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
-  if (err instanceof FsSafeError) {
-    switch (err.code) {
-      case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
-      case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
-      case "invalid-path":
-      case "path-mismatch":
-      case "symlink":
-        return { available: false, code: "invalid-file", reason: "Invalid file" };
-      default:
-        return {
-          available: false,
-          code: "attachment-unavailable",
-          reason: "Attachment unavailable",
-        };
-    }
-  }
-  if (err instanceof Error && "code" in err) {
-    const errorCode = (err as { code?: unknown }).code;
-    switch (typeof errorCode === "string" ? errorCode : "") {
-      case "unsupported-media-type":
-        return { available: false, code: "unsupported-media-type", reason: "Not an image" };
-      case "path-not-allowed":
-        return {
-          available: false,
-          code: "outside-allowed-folders",
-          reason: "Outside allowed folders",
-        };
-      case "invalid-file-url":
-      case "invalid-path":
-      case "unsafe-bypass":
-      case "network-path-not-allowed":
-      case "invalid-root":
-        return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
-      case "not-found":
-        return { available: false, code: "file-not-found", reason: "File not found" };
-      case "not-file":
-        return { available: false, code: "not-a-file", reason: "Not a file" };
-      default:
-        break;
-    }
-  }
-  return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
-}
-
 type AssistantMediaPolicy = NonNullable<ReturnType<typeof resolveAssistantMediaPolicy>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
 
@@ -522,7 +476,7 @@ async function resolveAssistantMediaAvailability(
       await opened.handle.close().catch(() => {});
     }
   } catch (error) {
-    return classifyAssistantMediaError(error);
+    return stagedMedia.reclassifyManagedInboundAvailability(source, error);
   }
 }
 
@@ -614,6 +568,17 @@ export async function handleControlUiAssistantMediaRequest(
     respondControlUiNotFound(res);
     return true;
   }
+  if (
+    !(await stagedMedia.managedInboundOwnershipAllows(
+      source,
+      policy.session?.sessionKey,
+      sessionKey,
+      ticket?.session?.sessionKey,
+    ))
+  ) {
+    respondControlUiNotFound(res);
+    return true;
+  }
   const allowance = explicitAllow
     ? true
     : ticket?.file && sameSession && policy.canAllow
@@ -656,9 +621,7 @@ export async function handleControlUiAssistantMediaRequest(
     sendJson(
       res,
       200,
-      !availability.available && availability.code === "outside-allowed-folders"
-        ? { ...availability, retryable: false, ...(current.canAllow ? { canAllow: true } : {}) }
-        : availability,
+      stagedMedia.resolveAssistantMediaMetaResponse(source, availability, current.canAllow),
     );
     return true;
   }

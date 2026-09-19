@@ -85,6 +85,11 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
       typeof media.source !== "string" ||
       /^(?:[a-z][a-z0-9+.-]*:|~?[\\/])|[\\/]/iu.test(media.source));
   let encodedPayload: string | undefined;
+  // A surviving reference means the UI can still load these bytes, so the media is
+  // presentable and an `omitted` flag on it would be a lie. Marking waits until both
+  // records are projected, since the reference can live on either of them.
+  let projectedReference = false;
+  const omittedRecords: Record<string, unknown>[] = [];
   for (const record of records) {
     let omitted = false;
     const payload = typeof record.data === "string" ? record.data : record.blob;
@@ -113,9 +118,16 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
       if (projected === undefined) {
         delete record[field];
         omitted = true;
+      } else {
+        projectedReference = true;
       }
     }
-    if (!fact && omitted) {
+    if (omitted) {
+      omittedRecords.push(record);
+    }
+  }
+  if (!fact && !projectedReference) {
+    for (const record of omittedRecords) {
       // Preserve shipped image/audio omission ownership; new video blocks mark both levels.
       if (record === media || media.type !== "image") {
         record.omitted = true;

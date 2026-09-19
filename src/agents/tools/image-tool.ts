@@ -710,6 +710,9 @@ export function createImageTool(options?: {
   }
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
+  // Every branch loads images for the model only. The fallback branch returns the
+  // delegated model's text with no image content, so none of these descriptions may
+  // promise a preview the conversation will render.
   const description = modelHasVision
     ? "Load image(s) into private model context for inspection: path accepts one local image path or permitted URL; paths accepts up to maxImages entries (20 by default). Does not display, attach, or send files to the user. Prompt images are already visible."
     : explicitImageModelConfig

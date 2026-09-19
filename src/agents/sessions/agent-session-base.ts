@@ -16,6 +16,7 @@ import {
   takeCodeModeResponseSource,
   prepareCodeModeSourceAppend,
 } from "../transcript-code-mode-source.js";
+import { bindStagedMediaOwnership } from "./agent-session-staged-media.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -425,6 +426,7 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
+        bindStagedMediaOwnership(event.message, this.sessionKey);
         try {
           // Normalize live delivery facts before persistence makes its redacted copy.
           // Stored arguments must never replace the values used for tool execution.

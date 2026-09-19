@@ -297,6 +297,15 @@ export interface ImageContent {
   type: "image";
   data: string; // base64 encoded image data
   mimeType: string; // e.g., "image/jpeg", "image/png"
+  /**
+   * Managed `media://inbound/<id>` reference to the same bytes in the local media
+   * store. A tool result that explicitly decides to present an image publishes it, so
+   * the chat display projection keeps a reference after it drops the private `data`
+   * payload; inspection-only results carry none, and the reference is bound to the
+   * session that published it. Providers map image blocks field by field and read
+   * `data`, so this never reaches a request.
+   */
+  url?: string;
 }
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
