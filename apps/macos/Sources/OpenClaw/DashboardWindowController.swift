@@ -147,6 +147,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var reconnectTask: (id: UUID, task: Task<Void, Never>)?
     private var signInProgress: GatewayBrowserSignInProgress?
     private var navigationGeneration: UInt64 = 0
+    lazy var downloads = DashboardDownloads(controller: self)
     private var loadGeneration: UInt64 = 0
     private var pendingLoad: Task<Void, Never>?
     private var pendingNativeCommands: [DashboardNativeCommand] = []
@@ -554,6 +555,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func retirePendingLoad() {
+        self.downloads.retire()
         self.loadGeneration &+= 1
         self.pendingLoad?.cancel()
         self.pendingLoad = nil
@@ -1042,6 +1044,10 @@ extension DashboardWindowController {
         Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
+    var canDownloadAttachments: Bool {
+        self.hasLiveContent && self.isTrustedDashboardDocument && self.hasCurrentBrowserSession
+    }
+
     private var canDispatchNativeCommands: Bool {
         // Older shared-credential Gateways predate the shell-ready signal.
         // Personal browser sign-in requires the current Control UI's listener-owned fact.
@@ -1439,6 +1445,10 @@ extension DashboardWindowController {
             decisionHandler(.cancel)
             return
         }
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(self.downloads.admit(navigationAction) ? .download : .cancel)
+            return
+        }
         if navigationAction.targetFrame == nil {
             let allowEditorURLs = Self.shouldAllowEditorURLLaunch(
                 from: navigationAction.sourceFrame.request.url,
@@ -1505,6 +1515,7 @@ extension DashboardWindowController {
     /// never pass through `load(_:)`, so commands queue for the new document.
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
         guard webView === self.webView else { return }
+        self.downloads.retire()
         self.notificationSourceID = UUID().uuidString
         self.invalidateGatewayHealth()
         self.deviceSettingsMessageHandler.cancelRequests()
