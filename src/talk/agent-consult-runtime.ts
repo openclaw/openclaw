@@ -482,7 +482,7 @@ export async function consultRealtimeVoiceAgent(params: {
       const sessionId = sessionEntry.sessionId;
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
 
-      const runId = `${params.runIdPrefix}:${Date.now()}:${randomUUID()}`;
+      const runId = `${params.runIdPrefix}-${randomUUID()}`;
       const timeoutMs =
         params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg });
       const runRegistration = params.onRunStarted?.({ runId, sessionId, timeoutMs });
