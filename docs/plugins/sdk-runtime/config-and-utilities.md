@@ -94,6 +94,13 @@ It may return `void` or `Promise<void>`; observer throws and rejections do not
 replace the termination error or release custody, and closure does not wait for
 the observer.
 
+Cancellation can reject `run()` before an asynchronous input factory settles.
+The pool retains its inputs and capacity until preparation and required worker
+retirement both finish, then invokes `onInputConsumed`. Await `close()` before
+disposing resources still captured by that factory. A delayed input callback
+failure is reported by `close()` even when `run()` already rejected; its admission
+charge remains held until closure observes the cleanup failure.
+
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
 This list is exported from `openclaw/plugin-sdk/process-runtime`; inherited parent

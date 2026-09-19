@@ -89,7 +89,7 @@ export type Task<Input, Output> = Deferred<Output> & {
   done: boolean;
   slot?: Slot<Input, Output>;
   admitted: boolean;
-  preparing: boolean;
+  /** Present only while the input factory is pending. */
   preparation?: Deferred;
   owner?: TaskOwner;
   inputBytes: number;

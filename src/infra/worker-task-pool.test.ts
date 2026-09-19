@@ -275,13 +275,18 @@ describe("worker task pool", () => {
     const pool = createPool({ workerUrl, maxPendingTasks: 1 });
     const gate = createDeferredCore<PoolFixtureInput>();
     const controller = new AbortController();
-    const first = pool.run(() => gate.promise, { signal: controller.signal });
+    const consumed = createDeferredCore();
+    const first = pool.run(() => gate.promise, {
+      signal: controller.signal,
+      onInputConsumed: () => consumed.resolve(),
+    });
     const settled = Promise.allSettled([first]);
     controller.abort();
     await settled;
     await expect(pool.run({ label: "excess" }, {})).rejects.toMatchObject({ code: "overloaded" });
     gate.resolve({ label: "canceled" });
-    await gate.promise;
+    await consumed.promise;
+    expect(pool.getSnapshot().pendingTasks).toBe(0);
     expect(await pool.run({ label: "recovered" }, {})).toMatchObject({ label: "recovered" });
   });
 
