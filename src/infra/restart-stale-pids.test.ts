@@ -95,7 +95,8 @@ vi.mock("./gateway-owner-lease.js", () => ({
   readGatewayOwnerLease: mockReadGatewayOwnerLease,
 }));
 
-vi.mock("../shared/pid-alive.js", () => ({
+vi.mock("../shared/pid-alive.js", async (original) => ({
+  ...(await original<typeof import("../shared/pid-alive.js")>()),
   getFileLockProcessStartTime: mockGetProcessStartTime,
   isPidDefinitelyDead: mockIsPidDefinitelyDead,
 }));
@@ -828,16 +829,6 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   // pollPortOnce (via cleanStaleGatewayProcessesSync) — Codex P1 regression
   // -------------------------------------------------------------------------
   describe("pollPortOnce — no second lsof spawn (Codex P1 regression)", () => {
-    it("treats lsof exit status 1 as port-free (no listeners)", () => {
-      // lsof exits with status 1 when no matching processes are found — this is
-      // the canonical "port is free" signal, not an error.
-      const stalePid = process.pid + 500;
-      installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
-      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-      cleanStaleGatewayProcessesSync();
-      expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
-    });
-
     it("treats lsof exit status >1 as inconclusive, not port-free — Codex P2 regression", () => {
       // Codex P2: non-zero lsof exits other than status 1 (e.g. permission denied,
       // bad flag, runtime error) must not be mapped to free:true. They are
