@@ -61,4 +61,5 @@ export type ComponentInteractionContext = {
   isDirectMessage: boolean;
   isGroupDm: boolean;
   memberRoleIds: string[];
+  channelCtx: DiscordChannelContext;
 };

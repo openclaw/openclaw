@@ -1,10 +1,7 @@
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  resolveComponentInteractionContext,
-  resolveDiscordChannelContext,
-} from "./agent-components-context.js";
+import { resolveComponentInteractionContext } from "./agent-components-context.js";
 import {
   readChannelIngressStoreAllowFromForDmPolicy,
   upsertChannelPairingRequest,
@@ -14,6 +11,7 @@ import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
+  DiscordChannelContext,
   DiscordUser,
 } from "./agent-components.types.js";
 import { resolveGroupDmAllow } from "./allow-list.js";
@@ -110,10 +108,11 @@ async function ensureGroupDmComponentAuthorized(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
   channelId: string;
+  channelCtx: DiscordChannelContext;
   componentLabel: string;
   replyOpts: { ephemeral?: boolean };
 }) {
-  const { ctx, interaction, channelId, componentLabel, replyOpts } = params;
+  const { ctx, interaction, channelId, channelCtx, componentLabel, replyOpts } = params;
   const groupDmEnabled = ctx.discordConfig?.dm?.groupEnabled ?? false;
   if (!groupDmEnabled) {
     logVerbose(`agent ${componentLabel}: blocked group dm ${channelId} (group DMs disabled)`);
@@ -124,7 +123,6 @@ async function ensureGroupDmComponentAuthorized(params: {
     return false;
   }
 
-  const channelCtx = resolveDiscordChannelContext(interaction);
   const allowed = resolveGroupDmAllow({
     channels: ctx.discordConfig?.dm?.groupChannels,
     channelId,
@@ -186,6 +184,7 @@ export async function resolveInteractionContextWithDmAuth(params: {
       ctx,
       interaction: params.interaction,
       channelId: interactionCtx.channelId,
+      channelCtx: interactionCtx.channelCtx,
       componentLabel: params.componentLabel,
       replyOpts: interactionCtx.replyOpts,
     });

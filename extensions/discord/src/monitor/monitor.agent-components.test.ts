@@ -59,6 +59,7 @@ describe("agent components", () => {
         id: params.interactionId,
         token: `token-${params.interactionId}`,
         channel_id: "dm-channel",
+        channel: { id: "dm-channel", type: ChannelType.DM },
         user: {
           id: "123456789",
           username: "Alice",
