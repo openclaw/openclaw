@@ -48,11 +48,18 @@ function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
   if (nonceV2) {
     return `plivo:v2:${nonceV2}`;
   }
-  return `plivo:fallback:${crypto.createHash("sha256").update(ctx.rawBody).digest("hex")}`;
+  const flow = normalizeOptionalString(ctx.query?.flow) ?? "";
+  const turnToken =
+    flow === "getinput" ? (normalizeOptionalString(ctx.query?.turnToken) ?? "") : "";
+  return `plivo:fallback:${crypto
+    .createHash("sha256")
+    .update(`${turnToken}\n${ctx.rawBody}`)
+    .digest("hex")}`;
 }
 
 export class PlivoProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
+  readonly echoesTurnToken = true;
 
   private readonly authId: string;
   private readonly authToken: string;
@@ -69,6 +76,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private pendingSpeakByCallId = new Map<string, PendingSpeak>();
   private pendingListenByCallId = new Map<string, PendingListen>();
+  private listenTurnTokenByCallId = new Map<string, string>();
 
   /**
    * Release all process-local metadata owned by one Plivo call.
@@ -83,6 +91,7 @@ export class PlivoProvider implements VoiceCallProvider {
       this.callIdToWebhookUrl.delete(params.callId);
       this.pendingSpeakByCallId.delete(params.callId);
       this.pendingListenByCallId.delete(params.callId);
+      this.listenTurnTokenByCallId.delete(params.callId);
     }
 
     const callUuid =
@@ -196,7 +205,11 @@ export class PlivoProvider implements VoiceCallProvider {
 
       const actionUrl =
         pending?.listenAfterPlayback && callId
-          ? this.buildActionUrl(ctx, { flow: "getinput", callId })
+          ? this.buildActionUrl(ctx, {
+              flow: "getinput",
+              callId,
+              turnToken: this.listenTurnTokenByCallId.get(callId),
+            })
           : null;
       const xml = pending
         ? actionUrl
@@ -225,6 +238,7 @@ export class PlivoProvider implements VoiceCallProvider {
       const actionUrl = this.buildActionUrl(ctx, {
         flow: "getinput",
         callId,
+        turnToken: normalizeOptionalString(ctx.query?.turnToken),
       });
 
       const xml =
@@ -246,7 +260,9 @@ export class PlivoProvider implements VoiceCallProvider {
     // Normal events.
     const callIdFromQuery = this.getCallIdFromQuery(ctx);
     const dedupeKey = options?.verifiedRequestKey ?? createPlivoRequestDedupeKey(ctx);
-    const event = this.normalizeEvent(parsed, callIdFromQuery, dedupeKey);
+    const event = this.normalizeEvent(parsed, callIdFromQuery, dedupeKey, {
+      turnToken: normalizeOptionalString(ctx.query?.turnToken),
+    });
 
     return {
       events: event ? [event] : [],
@@ -263,6 +279,7 @@ export class PlivoProvider implements VoiceCallProvider {
     params: URLSearchParams,
     callIdOverride?: string,
     dedupeKey?: string,
+    options?: { turnToken?: string },
   ): NormalizedEvent | null {
     const callUuid = params.get("CallUUID") || "";
     const requestUuid = params.get("RequestUUID") || "";
@@ -282,6 +299,7 @@ export class PlivoProvider implements VoiceCallProvider {
       callId: callIdOverride || callUuid || requestUuid,
       providerCallId: callUuid || requestUuid || undefined,
       timestamp: Date.now(),
+      turnToken: options?.turnToken,
       direction:
         direction === "inbound"
           ? ("inbound" as const)
@@ -449,11 +467,15 @@ export class PlivoProvider implements VoiceCallProvider {
     webhookBase: string;
     callId: string;
     flow: "xml-speak" | "xml-listen";
+    turnToken?: string;
   }): Promise<void> {
     const transferUrl = new URL(params.webhookBase);
     transferUrl.searchParams.set("provider", "plivo");
     transferUrl.searchParams.set("flow", params.flow);
     transferUrl.searchParams.set("callId", params.callId);
+    if (params.turnToken) {
+      transferUrl.searchParams.set("turnToken", params.turnToken);
+    }
 
     await this.apiRequest({
       method: "POST",
@@ -497,12 +519,18 @@ export class PlivoProvider implements VoiceCallProvider {
     this.pendingListenByCallId.set(input.callId, {
       language: input.language,
     });
+    if (input.turnToken) {
+      this.listenTurnTokenByCallId.set(input.callId, input.turnToken);
+    } else {
+      this.listenTurnTokenByCallId.delete(input.callId);
+    }
 
     await this.transferCallLeg({
       callUuid,
       webhookBase,
       callId: input.callId,
       flow: "xml-listen",
+      turnToken: input.turnToken,
     });
   }
 
@@ -605,7 +633,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private buildActionUrl(
     ctx: WebhookContext,
-    opts: { flow: string; callId?: string },
+    opts: { flow: string; callId?: string; turnToken?: string },
   ): string | null {
     const base = this.baseWebhookUrlFromCtx(ctx);
     if (!base) {
@@ -617,6 +645,9 @@ export class PlivoProvider implements VoiceCallProvider {
     u.searchParams.set("flow", opts.flow);
     if (opts.callId) {
       u.searchParams.set("callId", opts.callId);
+    }
+    if (opts.turnToken) {
+      u.searchParams.set("turnToken", opts.turnToken);
     }
     return u.toString();
   }

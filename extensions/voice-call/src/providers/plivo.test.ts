@@ -1,5 +1,6 @@
 // Voice Call tests cover plivo plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { NormalizedEvent } from "../types.js";
 import { PlivoProvider } from "./plivo.js";
 
 type PlivoPrivateCallState = {
@@ -68,6 +69,93 @@ function requireResponseBody(body: string | undefined): string {
     throw new Error("Plivo provider did not return a response body");
   }
   return body;
+}
+
+function webhookContextFor(url: string, rawBody: string) {
+  const parsed = new URL(url);
+  const query: Record<string, string> = {};
+  for (const [key, value] of parsed.searchParams) {
+    query[key] = value;
+  }
+  return {
+    headers: { host: parsed.host },
+    rawBody,
+    url,
+    method: "POST" as const,
+    query,
+  };
+}
+
+function requireTransferUrl(apiRequest: { mock: { calls: unknown[][] } }): string {
+  const body = (apiRequest.mock.calls.at(-1)?.[0] as { body?: { aleg_url?: string } } | undefined)
+    ?.body;
+  if (!body?.aleg_url) {
+    throw new Error("Plivo provider did not transfer the call leg");
+  }
+  return body.aleg_url;
+}
+
+function requireSpeechEvent(event: NormalizedEvent) {
+  if (event.type !== "call.speech") {
+    throw new Error(`expected a Plivo speech event, received ${event.type}`);
+  }
+  return event;
+}
+
+function requireGetInputActionUrl(responseBody: string): string {
+  const match = /<GetInput[^>]*action="([^"]+)"/.exec(responseBody);
+  if (!match?.[1]) {
+    throw new Error("Plivo provider did not render a GetInput action URL");
+  }
+  return match[1].replaceAll("&amp;", "&");
+}
+
+function createListeningProvider(): {
+  provider: PlivoProvider;
+  apiRequest: ReturnType<typeof vi.fn>;
+} {
+  const provider = new PlivoProvider({
+    authId: "MA000000000000000000",
+    authToken: "test-token",
+  });
+  const apiRequest = vi.fn(async (_params: unknown) => ({}));
+  (provider as unknown as { apiRequest: (params: unknown) => Promise<unknown> }).apiRequest =
+    apiRequest;
+  (provider as unknown as { callIdToWebhookUrl: Map<string, string> }).callIdToWebhookUrl.set(
+    "internal-call-id",
+    "https://example.com/voice/webhook",
+  );
+  return { provider, apiRequest };
+}
+
+async function driveListenRoundTrip(params: {
+  provider: PlivoProvider;
+  apiRequest: ReturnType<typeof vi.fn>;
+  turnToken?: string;
+  transcript: string;
+}) {
+  await params.provider.startListening({
+    callId: "internal-call-id",
+    providerCallId: "call-uuid",
+    language: "en-US",
+    ...(params.turnToken ? { turnToken: params.turnToken } : {}),
+  });
+
+  const transferUrl = requireTransferUrl(params.apiRequest);
+  const listenResult = params.provider.parseWebhookEvent(
+    webhookContextFor(transferUrl, "CallUUID=call-uuid"),
+  );
+  const actionUrl = requireGetInputActionUrl(
+    requireResponseBody(listenResult.providerResponseBody),
+  );
+  const speechResult = params.provider.parseWebhookEvent(
+    webhookContextFor(
+      actionUrl,
+      `CallUUID=call-uuid&Speech=${encodeURIComponent(params.transcript)}`,
+    ),
+  );
+  const event = requireEvent(speechResult.events[0], "expected a Plivo speech event");
+  return { transferUrl, actionUrl, event: requireSpeechEvent(event) };
 }
 
 describe("PlivoProvider", () => {
@@ -379,5 +467,118 @@ describe("PlivoProvider", () => {
       endpoint: `/Call/${callUuid}/`,
       allowNotFound: true,
     });
+  });
+
+  it("round-trips a turn token from startListening onto the speech callback", async () => {
+    const { provider, apiRequest } = createListeningProvider();
+
+    const roundTrip = await driveListenRoundTrip({
+      provider,
+      apiRequest,
+      turnToken: "turn-token-1",
+      transcript: "eight six seven five three oh nine",
+    });
+
+    expect(new URL(roundTrip.transferUrl).searchParams.get("turnToken")).toBe("turn-token-1");
+    expect(new URL(roundTrip.actionUrl).searchParams.get("turnToken")).toBe("turn-token-1");
+    expect(roundTrip.event.turnToken).toBe("turn-token-1");
+  });
+
+  it("omits the turn token when the manager does not issue one", async () => {
+    const { provider, apiRequest } = createListeningProvider();
+
+    const roundTrip = await driveListenRoundTrip({
+      provider,
+      apiRequest,
+      transcript: "no token here",
+    });
+
+    expect(new URL(roundTrip.transferUrl).searchParams.has("turnToken")).toBe(false);
+    expect(new URL(roundTrip.actionUrl).searchParams.has("turnToken")).toBe(false);
+    expect(roundTrip.event.turnToken).toBeUndefined();
+  });
+
+  it("keeps identical speech bodies from different turns distinct for replay dedupe", async () => {
+    const { provider, apiRequest } = createListeningProvider();
+
+    const first = await driveListenRoundTrip({
+      provider,
+      apiRequest,
+      turnToken: "turn-token-1",
+      transcript: "yes",
+    });
+    const second = await driveListenRoundTrip({
+      provider,
+      apiRequest,
+      turnToken: "turn-token-2",
+      transcript: "yes",
+    });
+
+    expect(first.event.transcript).toBe(second.event.transcript);
+    expect(first.event.dedupeKey).toBeDefined();
+    expect(second.event.dedupeKey).toBeDefined();
+    expect(first.event.dedupeKey).not.toBe(second.event.dedupeKey);
+  });
+
+  it("carries the live turn token onto an auto-response GetInput", async () => {
+    const { provider, apiRequest } = createListeningProvider();
+
+    await provider.startListening({
+      callId: "internal-call-id",
+      providerCallId: "call-uuid",
+      language: "en-US",
+      turnToken: "turn-token-1",
+    });
+
+    await provider.playTts({
+      callId: "internal-call-id",
+      providerCallId: "call-uuid",
+      text: "How can I help?",
+      locale: "en-US",
+      listenAfterPlayback: true,
+    });
+
+    const speakUrl = requireTransferUrl(apiRequest);
+    expect(new URL(speakUrl).searchParams.get("flow")).toBe("xml-speak");
+    const speakResult = provider.parseWebhookEvent(
+      webhookContextFor(speakUrl, "CallUUID=call-uuid"),
+    );
+    const actionUrl = requireGetInputActionUrl(
+      requireResponseBody(speakResult.providerResponseBody),
+    );
+    expect(new URL(actionUrl).searchParams.get("turnToken")).toBe("turn-token-1");
+
+    const speechResult = provider.parseWebhookEvent(
+      webhookContextFor(actionUrl, "CallUUID=call-uuid&Speech=yes please"),
+    );
+    const event = requireSpeechEvent(
+      requireEvent(speechResult.events[0], "expected a Plivo speech event"),
+    );
+    expect(event.turnToken).toBe("turn-token-1");
+  });
+
+  it("leaves the auto-response GetInput unstamped when no turn is listening", async () => {
+    const { provider, apiRequest } = createListeningProvider();
+
+    await provider.playTts({
+      callId: "internal-call-id",
+      providerCallId: "call-uuid",
+      text: "How can I help?",
+      locale: "en-US",
+      listenAfterPlayback: true,
+    });
+
+    const speakResult = provider.parseWebhookEvent(
+      webhookContextFor(requireTransferUrl(apiRequest), "CallUUID=call-uuid"),
+    );
+    const actionUrl = requireGetInputActionUrl(
+      requireResponseBody(speakResult.providerResponseBody),
+    );
+    expect(new URL(actionUrl).searchParams.has("turnToken")).toBe(false);
+  });
+
+  it("declares that it echoes the turn token back to the manager", () => {
+    const { provider } = createListeningProvider();
+    expect(provider.echoesTurnToken).toBe(true);
   });
 });

@@ -31,6 +31,8 @@ export interface VoiceCallProvider {
   /** Provider identifier */
   readonly name: ProviderName;
 
+  readonly echoesTurnToken?: boolean;
+
   setPublicUrl?(url: string): void;
 
   /**

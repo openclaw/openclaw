@@ -39,6 +39,7 @@ import type {
 
 export class FakeProvider implements VoiceCallProvider {
   readonly name: "plivo" | "twilio" | "telnyx";
+  echoesTurnToken: boolean;
   twilioStreamConnectEnabled = true;
   readonly playTtsCalls: PlayTtsInput[] = [];
   readonly hangupCalls: HangupCallInput[] = [];
@@ -48,6 +49,7 @@ export class FakeProvider implements VoiceCallProvider {
 
   constructor(name: "plivo" | "twilio" | "telnyx" = "plivo") {
     this.name = name;
+    this.echoesTurnToken = name === "twilio";
   }
 
   verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {

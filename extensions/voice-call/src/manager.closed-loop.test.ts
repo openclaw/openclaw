@@ -23,6 +23,21 @@ function expectTranscriptWaiter(
   expect(waiters.has(callId)).toBe(true);
 }
 
+function abandonTurn(
+  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
+  callId: string,
+) {
+  const waiters = (
+    manager as unknown as {
+      transcriptWaiters: Map<string, { reject: (error: Error) => void; timeout: NodeJS.Timeout }>;
+    }
+  ).transcriptWaiters;
+  const waiter = expectDefined(waiters.get(callId), `transcript waiter for ${callId}`);
+  clearTimeout(waiter.timeout);
+  waiters.delete(callId);
+  waiter.reject(new Error("turn abandoned"));
+}
+
 describe("CallManager closed-loop turns", () => {
   it("completes a closed-loop turn without live audio", async () => {
     const { manager, provider } = await createManagerHarness({
@@ -256,5 +271,188 @@ describe("CallManager closed-loop turns", () => {
     expect(metadata.turnCount).toBe(5);
     expect(provider.startListeningCalls).toHaveLength(5);
     expect(provider.stopListeningCalls).toHaveLength(5);
+  });
+
+  it("does not let a late turn answer satisfy the next turn on token-echoing providers", async () => {
+    const provider = new FakeProvider("plivo");
+    provider.echoesTurnToken = true;
+    const { manager } = await createManagerHarness({ transcriptTimeoutMs: 5000 }, provider);
+
+    const started = await manager.initiateCall("+15550000009");
+    expect(started.success).toBe(true);
+    await markCallAnswered(manager, started.callId, "evt-plivo-stale-answered");
+
+    const firstTurn = manager.continueCall(started.callId, "What is your account number?");
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
+    const firstTurnToken = requireTurnToken(provider);
+    abandonTurn(manager, started.callId);
+    await expect(firstTurn).resolves.toMatchObject({ success: false });
+
+    const secondTurn = manager.continueCall(started.callId, "What is your date of birth?");
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(2);
+      expectTranscriptWaiter(manager, started.callId);
+    });
+    const secondTurnToken = expectDefined(
+      provider.startListeningCalls[1]?.turnToken,
+      "second turn token",
+    );
+    expect(secondTurnToken).not.toBe(firstTurnToken);
+
+    const staleResult = await manager.processEvent({
+      id: "evt-plivo-stale-speech",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "eight six seven five three oh nine",
+      isFinal: true,
+      turnToken: firstTurnToken,
+    });
+    expect(staleResult).toEqual({ kind: "ignored" });
+    expectTranscriptWaiter(manager, started.callId);
+
+    const liveResult = await manager.processEvent({
+      id: "evt-plivo-live-speech",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "First of January",
+      isFinal: true,
+      turnToken: secondTurnToken,
+    });
+    expect(liveResult).toMatchObject({
+      kind: "final-speech",
+      transcript: "First of January",
+      waiterResolved: true,
+    });
+
+    const secondResult = await secondTurn;
+    expect(secondResult.success).toBe(true);
+    expect(secondResult.transcript).toBe("First of January");
+
+    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
+    expect(call.transcript.map((entry) => entry.text)).toEqual([
+      "What is your account number?",
+      "What is your date of birth?",
+      "First of January",
+    ]);
+  });
+
+  it("completes an ordinary turn on token-echoing providers", async () => {
+    const provider = new FakeProvider("plivo");
+    provider.echoesTurnToken = true;
+    const { manager } = await createManagerHarness({ transcriptTimeoutMs: 5000 }, provider);
+
+    const started = await manager.initiateCall("+15550000010");
+    expect(started.success).toBe(true);
+    await markCallAnswered(manager, started.callId, "evt-plivo-live-answered");
+
+    const turn = manager.continueCall(started.callId, "What is your account number?");
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
+
+    const result = await manager.processEvent({
+      id: "evt-plivo-in-turn-speech",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "eight six seven five three oh nine",
+      isFinal: true,
+      turnToken: requireTurnToken(provider),
+    });
+    expect(result).toMatchObject({ kind: "final-speech", waiterResolved: true });
+
+    const turnResult = await turn;
+    expect(turnResult.success).toBe(true);
+    expect(turnResult.transcript).toBe("eight six seven five three oh nine");
+  });
+
+  it("ignores an unattributable final transcript while a turn token waiter is live", async () => {
+    const provider = new FakeProvider("plivo");
+    provider.echoesTurnToken = true;
+    const { manager } = await createManagerHarness({ transcriptTimeoutMs: 5000 }, provider);
+
+    const started = await manager.initiateCall("+15550000012");
+    expect(started.success).toBe(true);
+    await markCallAnswered(manager, started.callId, "evt-plivo-untagged-answered");
+
+    const turn = manager.continueCall(started.callId, "What is your account number?");
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
+    const turnToken = requireTurnToken(provider);
+
+    const untagged = await manager.processEvent({
+      id: "evt-plivo-untagged-speech",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "answer to an earlier prompt",
+      isFinal: true,
+    });
+    expect(untagged).toEqual({ kind: "ignored" });
+    expectTranscriptWaiter(manager, started.callId);
+
+    await manager.processEvent({
+      id: "evt-plivo-tagged-speech",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "eight six seven five three oh nine",
+      isFinal: true,
+      turnToken,
+    });
+
+    const turnResult = await turn;
+    expect(turnResult.success).toBe(true);
+    expect(turnResult.transcript).toBe("eight six seven five three oh nine");
+
+    const call = expectDefined(manager.getCall(started.callId), `active call ${started.callId}`);
+    expect(call.transcript.map((entry) => entry.text)).toEqual([
+      "What is your account number?",
+      "eight six seven five three oh nine",
+    ]);
+  });
+
+  it("does not issue a turn token to providers that cannot echo it back", async () => {
+    const provider = new FakeProvider("telnyx");
+    const { manager } = await createManagerHarness({ transcriptTimeoutMs: 5000 }, provider);
+
+    const started = await manager.initiateCall("+15550000011");
+    expect(started.success).toBe(true);
+    await markCallAnswered(manager, started.callId, "evt-telnyx-answered");
+
+    const turn = manager.continueCall(started.callId, "What is your account number?");
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
+    expect(provider.echoesTurnToken).toBe(false);
+    expect(provider.startListeningCalls[0]?.turnToken).toBeUndefined();
+
+    await manager.processEvent({
+      id: "evt-telnyx-speech",
+      type: "call.speech",
+      callId: started.callId,
+      providerCallId: "request-uuid",
+      timestamp: Date.now(),
+      transcript: "eight six seven five three oh nine",
+      isFinal: true,
+    });
+
+    const turnResult = await turn;
+    expect(turnResult.success).toBe(true);
+    expect(turnResult.transcript).toBe("eight six seven five three oh nine");
   });
 });

@@ -562,7 +562,7 @@ export async function continueCall(
   ctx.activeTurnCalls.add(callId);
 
   const turnStartedAt = Date.now();
-  const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
+  const turnToken = provider.echoesTurnToken ? crypto.randomUUID() : undefined;
 
   try {
     const speakResult = await speak(ctx, callId, prompt);

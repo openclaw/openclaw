@@ -74,6 +74,7 @@ type TwilioProviderConfig = {
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
+  readonly echoesTurnToken = true;
 
   private readonly accountSid: string;
   private readonly authToken: string;
