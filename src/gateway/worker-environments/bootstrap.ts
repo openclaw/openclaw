@@ -487,7 +487,10 @@ type WorkerBootstrapRequest = {
 };
 
 type WorkerBootstrapDependencies = {
-  resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
+  resolveIdentity: (
+    keyRef: WorkerSshEndpoint["keyRef"],
+    context: { assertCurrent: () => void },
+  ) => Promise<ResolvedWorkerSshIdentity>;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -723,13 +726,17 @@ export async function bootstrapWorker(
   const uploadFilename = workerUploadFilename(receipt.bundleHash, operationToken);
   const run = dependencies.runCommand ?? runCommandWithTimeout;
   let needsUploadCleanup = false;
-  const runCommand: WorkerBootstrapCommandRunner = (argv, options) => {
+  const assertCurrent = () => {
+    dependencies.signal?.throwIfAborted();
     dependencies.assertCurrent?.();
+  };
+  const runCommand: WorkerBootstrapCommandRunner = (argv, options) => {
+    assertCurrent();
     needsUploadCleanup = true;
     return run(argv, options);
   };
-  dependencies.assertCurrent?.();
   const prepared = await prepareWorkerSsh({
+    assertCurrent,
     ssh: request.ssh,
     pinnedHostKey: request.pinnedHostKey,
     resolveIdentity: dependencies.resolveIdentity,
@@ -755,6 +762,7 @@ export async function bootstrapWorker(
           signal: dependencies.signal,
         }),
     );
+    assertCurrent();
     const preflight = parsePreflight(preflightResult, receipt, uploadFilename);
     if (preflight.action === "current") {
       // A validated current response already removed this operation's upload in preflight.
@@ -804,6 +812,7 @@ export async function bootstrapWorker(
         signal: dependencies.signal,
       }),
     );
+    assertCurrent();
     if (
       install.code === NPM_MISSING_EXIT_CODE ||
       install.stderr.includes(NPM_MISSING_MARKER) ||

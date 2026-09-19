@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type { SecretRef } from "../../config/types.secrets.js";
 import {
   WorkerProviderError,
   type WorkerExecutionMode,
@@ -21,6 +20,7 @@ import { retireMismatchedWorkerLease } from "./provider-persisted-lease.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import { createWorkerRuntimeRefresher } from "./provider-runtime-refresh.js";
+import { createWorkerSshIdentityResolver } from "./provider-ssh-identity.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerLease,
@@ -39,23 +39,6 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
   const requireWorkerProfile = (value: unknown) => validateWorkerProfile(value, serviceError);
-
-  const identityResolverFor = (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => {
-    const profile = requireWorkerProfile(record.profileSnapshot.settings);
-    const resolveSshIdentity = options.resolveSshIdentity;
-    return async (keyRef: SecretRef) => {
-      if (!resolveSshIdentity) {
-        throw new Error("Worker SSH identity resolution is unavailable");
-      }
-      return await callProvider(record.environmentId, () =>
-        resolveSshIdentity({ provider, leaseId, profile, keyRef }),
-      );
-    };
-  };
 
   const providerFor = (providerId: string): WorkerProvider => {
     const provider = options.resolveProvider(providerId);
@@ -77,6 +60,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     preserveIndeterminateProvisionCleanup,
     destroy,
   } = createWorkerProviderOwnerLifecycle({ ...options, providerFor, requireWorkerProfile });
+
+  const identityResolverFor = createWorkerSshIdentityResolver({
+    ...options,
+    requireCurrentOwner,
+    requireWorkerProfile,
+  });
 
   const machineCatalog = createWorkerMachineCatalog({
     getConfig: options.getConfig,

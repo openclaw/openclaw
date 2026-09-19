@@ -719,7 +719,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         record,
         provider,
         record.leaseId,
-      )(record.sshEndpoint.keyRef);
+      )(record.sshEndpoint.keyRef, {
+        // Direct lookup has no tunnel; its service and exact lease own the invocation.
+        assertCurrent: () => {
+          if (stopping) {
+            throw serviceError("invalid_state", "Worker environment service is stopping");
+          }
+        },
+      });
     },
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,

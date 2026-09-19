@@ -107,6 +107,27 @@ const bootstrapWorker = (
   );
 
 describe("bootstrapWorker", () => {
+  it("does not dispatch SSH after bootstrap cancellation during identity resolution", async () => {
+    const controller = new AbortController();
+    const closed = new Error("bootstrap canceled");
+    // Main dispatches preflight despite the aborted identity wait; return a valid receipt.
+    const runner = fakeRunner([result({ stdout: tagged("current", RECEIPT_JSON) })]);
+    await expect(
+      bootstrapWorker(
+        { ssh: SSH, artifact: BUNDLE },
+        {
+          signal: controller.signal,
+          runCommand: runner.runCommand,
+          resolveIdentity: async () => {
+            controller.abort(closed);
+            return { kind: "material", contents: "synthetic-bootstrap-key" };
+          },
+        },
+      ),
+    ).rejects.toBe(closed);
+    expect(runner.calls).toEqual([]);
+  });
+
   it("skips a matching installed bundle and uses the pinned host key", async () => {
     let knownHosts = "";
     const runner = fakeRunner(
