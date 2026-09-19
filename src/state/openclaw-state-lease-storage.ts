@@ -12,6 +12,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -63,13 +64,21 @@ export async function acquireLease(
   if (database.schemaPolicy === "existing" && database.options?.database) {
     throw new Error("Existing-state writes require their own tracked writable connection.");
   }
+  const opened =
+    database.schemaPolicy === "existing" ? undefined : openOpenClawStateDatabase(database.options);
   const context = captureOpenClawStateWorkerContext({
     ...database.options,
-    path: resolveLeaseDatabasePath(database),
+    path: opened?.path ?? resolveLeaseDatabasePath(database),
   });
   const assertAdmission = () => {
     context.admission.assertCurrent();
     assertCurrent();
+    // The worker cannot join a transaction held by the caller's verification handle.
+    if (opened?.db.isTransaction) {
+      throw new OpenClawStateLeaseError("State lease acquisition requires no active transaction", {
+        code: "OPENCLAW_STATE_LEASE_INVALID_INPUT",
+      });
+    }
   };
   const result = await runOpenClawStateWorkerOperation(
     context,

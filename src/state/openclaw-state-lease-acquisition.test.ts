@@ -322,3 +322,43 @@ it.each(["invalid", "aborted"] as const)(
     });
   },
 );
+
+it.each([false, true])(
+  "rejects an active database transaction before acquisition (supplied handle: %s)",
+  async (supplied) => {
+    await withOpenClawTestState({ label: "lease-active-transaction" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const options = {
+        scope: "core:test",
+        key: "active-transaction",
+        database: {
+          scope: "shared" as const,
+          options: { env: state.env, ...(supplied ? { database } : {}) },
+        },
+        leaseMs: 60_000,
+        waitMs: 0,
+      };
+      const run = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
+      database.db.exec("BEGIN");
+      database.db.prepare("SELECT owner FROM state_leases").all();
+      let failure: unknown;
+      try {
+        failure = await withOpenClawStateLease(options, run).catch((error: unknown) => error);
+      } finally {
+        database.db.exec("ROLLBACK");
+      }
+      expect({
+        failure,
+        entered: run.mock.calls.length,
+        leases: database.db.prepare("SELECT owner FROM state_leases").all(),
+      }).toMatchObject({
+        failure: { code: "OPENCLAW_STATE_LEASE_INVALID_INPUT" },
+        entered: 0,
+        leases: [],
+      });
+      await withOpenClawStateLease(options, run);
+      expect(run).toHaveBeenCalledOnce();
+      expect(database.db.prepare("SELECT owner FROM state_leases").all()).toEqual([]);
+    });
+  },
+);

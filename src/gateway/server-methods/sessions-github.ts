@@ -15,6 +15,7 @@ import { GitHubPublicationKnownFailure } from "../github-publication-failure.js"
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.js";
 import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionAction,
@@ -57,7 +58,8 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       }
       const acquisition =
         error instanceof OpenClawStateLeaseAcquisitionError ? error.outcome : undefined;
-      const forbidden = acquisition ? acquisition.kind === "held" : !publishing;
+      const busy = error instanceof SessionWorkspaceReservationBusyError;
+      const forbidden = acquisition ? acquisition.kind === "held" : !publishing && !busy;
       options.respond(
         false,
         undefined,
@@ -69,12 +71,14 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
                 retryable: acquisition.kind === "store-unavailable",
                 details: { leaseAcquisition: acquisition },
               }
-            : publishing &&
-                error instanceof GitHubPublicationKnownFailure &&
-                "idempotencyKey" in options.params &&
-                error.rejection?.idempotencyKey === options.params.idempotencyKey
-              ? { details: error.rejection }
-              : undefined,
+            : busy
+              ? { retryable: true }
+              : publishing &&
+                  error instanceof GitHubPublicationKnownFailure &&
+                  "idempotencyKey" in options.params &&
+                  error.rejection?.idempotencyKey === options.params.idempotencyKey
+                ? { details: error.rejection }
+                : undefined,
         ),
       );
     }

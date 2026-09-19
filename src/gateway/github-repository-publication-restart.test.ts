@@ -19,21 +19,21 @@ import {
   createRepositoryPublicationFixture,
   repositoryPublicationTestUrl as url,
 } from "./github-repository-publication.test-support.js";
-// Prepare the real reset entry point before timing its lifecycle operation.
-import "./session-reset-service.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
-const repositoryFixture = () => createRepositoryPublicationFixture(checkpoint);
+
+// Cold reset imports are fixture preparation, outside the publication behavior's test budget.
+await import("./session-reset-service.js");
 
 describe("repository checkpoint GitHub publication", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
   it("fences publication reservations when the Gateway owner restarts", async () => {
-    await repositoryFixture();
+    await createRepositoryPublicationFixture(checkpoint);
     const person = await createPersonalPublicationFixture();
     const previous = person.placements;
     await expect(
@@ -53,7 +53,7 @@ describe("repository checkpoint GitHub publication", () => {
   it.each(["turn", "reset", "move", "held", "store-busy", "retired-owner"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
-      const f = await repositoryFixture();
+      const f = await createRepositoryPublicationFixture(checkpoint);
       const person = await createPersonalPublicationFixture();
       f.runtime.accountId = personalPublicationAccount.accountId;
       f.runtime.interruptPush = true;
@@ -182,7 +182,7 @@ describe("repository checkpoint GitHub publication", () => {
           original.checkpoint_ref,
         );
       }
-      const confirmed = await callPersonalPublicationRpc(
+      let confirmed = await callPersonalPublicationRpc(
         person,
         "sessions.github.confirm",
         confirmation,
@@ -207,10 +207,19 @@ describe("repository checkpoint GitHub publication", () => {
               },
         );
         expect(f.runtime.effects).toEqual(["push"]);
-        return;
+        expect(readRepositoryGitHubPublication(first.requestId)).toEqual(original);
+        if (boundary === "held") {
+          return;
+        }
+        confirmed = await callPersonalPublicationRpc(
+          person,
+          "sessions.github.confirm",
+          confirmation,
+        );
       }
       if (boundary === "reset") {
         expect(confirmed[0]).toBe(false);
+        expect(confirmed[2]).toMatchObject({ code: "FORBIDDEN" });
         expect(f.runtime.effects).toEqual(["push"]);
         return;
       }
