@@ -208,6 +208,8 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
   const yes = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!;
   const check = popover.querySelector<HTMLInputElement>(".chat-confirm-popover__check")!;
   let dismissed = false;
+  let placementFrame: number | null = null;
+  const viewport = window.visualViewport;
   let ownerObserver: MutationObserver | null = null;
   function dismissPopover(options?: ConfirmedActionDismissOptions) {
     if (dismissed) {
@@ -215,6 +217,13 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
     }
     dismissed = true;
     ownerObserver?.disconnect();
+    if (placementFrame !== null) {
+      cancelAnimationFrame(placementFrame);
+      placementFrame = null;
+    }
+    window.removeEventListener("resize", schedulePlacement);
+    viewport?.removeEventListener("resize", schedulePlacement);
+    viewport?.removeEventListener("scroll", schedulePlacement);
     document.removeEventListener("click", closeOnOutside, true);
     document.removeEventListener("contextmenu", closeOnContextMenu, true);
     window.removeEventListener("keydown", closeOnEscape, true);
@@ -284,10 +293,20 @@ function openConfirmedActionPopover(btn: HTMLElement, params: ConfirmedActionPar
   });
   ownerObserver.observe(wrap.ownerDocument.body, { childList: true, subtree: true });
   cancel.focus({ preventScroll: true });
-  requestAnimationFrame(() => {
-    if (!dismissed && popover.isConnected) {
-      placeConfirmedActionPopover(btn, popover);
-      document.addEventListener("click", closeOnOutside, true);
+  function schedulePlacement() {
+    if (placementFrame !== null) {
+      return;
     }
-  });
+    placementFrame = requestAnimationFrame(() => {
+      placementFrame = null;
+      if (!dismissed && popover.isConnected) {
+        placeConfirmedActionPopover(btn, popover);
+        document.addEventListener("click", closeOnOutside, true);
+      }
+    });
+  }
+  window.addEventListener("resize", schedulePlacement);
+  viewport?.addEventListener("resize", schedulePlacement);
+  viewport?.addEventListener("scroll", schedulePlacement);
+  schedulePlacement();
 }

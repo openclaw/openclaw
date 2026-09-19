@@ -409,22 +409,7 @@ function domRect(params: {
   width?: number;
   height?: number;
 }): DOMRect {
-  const left = params.left ?? 0;
-  const top = params.top ?? 0;
-  const width = params.width ?? 0;
-  const height = params.height ?? 0;
-  const rect = {
-    x: left,
-    y: top,
-    left,
-    top,
-    width,
-    height,
-    right: left + width,
-    bottom: top + height,
-    toJSON: () => rect,
-  };
-  return rect as DOMRect;
+  return new DOMRect(params.left ?? 0, params.top ?? 0, params.width ?? 0, params.height ?? 0);
 }
 
 function stubConfirmedActionGeometry(params: {
@@ -434,12 +419,13 @@ function stubConfirmedActionGeometry(params: {
 }) {
   vi.stubGlobal("innerWidth", params.viewport.width);
   vi.stubGlobal("innerHeight", params.viewport.height);
-  vi.stubGlobal("visualViewport", {
+  const viewport = Object.assign(new EventTarget(), {
     height: params.viewport.height,
     offsetLeft: params.viewport.left ?? 0,
     offsetTop: params.viewport.top ?? 0,
     width: params.viewport.width,
   });
+  vi.stubGlobal("visualViewport", viewport);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
     function (this: HTMLElement) {
       if (this.classList.contains("chat-group-rewind")) {
