@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
@@ -44,6 +41,13 @@ import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { collectOption } from "../program/helpers.js";
 import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import {
+  buildModelRunRequestedOverrides,
+  type ModelRunRequestedOverrides,
+  normalizeModelRunMaxOutputTokens,
+  normalizeModelRunTemperature,
+  resolveModelRunPrompt,
+} from "./model-run-input.js";
 import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
   providerHasGenericConfig,
@@ -93,13 +97,6 @@ function collectModelRunText(content: Array<{ type: string; text?: string }>): s
     .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
     .join("")
     .trim();
-}
-
-function requireModelRunPrompt(value: unknown): string {
-  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
-    throw new Error("--prompt cannot be empty or whitespace-only.");
-  }
-  return value;
 }
 
 type ModelRunImageFile = {
@@ -166,6 +163,7 @@ async function runModelRun(params: {
   files?: string[];
   model?: string;
   thinking?: ThinkLevel;
+  requestedOverrides: ModelRunRequestedOverrides;
   transport: CapabilityTransport;
   agent?: string;
 }) {
@@ -243,10 +241,12 @@ async function runModelRun(params: {
               },
               options: {
                 maxTokens:
-                  typeof prepared.model.maxTokens === "number" &&
+                  params.requestedOverrides.maxTokens ??
+                  (typeof prepared.model.maxTokens === "number" &&
                   Number.isFinite(prepared.model.maxTokens)
                     ? prepared.model.maxTokens
-                    : undefined,
+                    : undefined),
+                temperature: params.requestedOverrides.temperature,
                 ...(params.thinking ? { reasoning: params.thinking } : {}),
               },
             });
@@ -268,6 +268,7 @@ async function runModelRun(params: {
               provider: prepared.selection.provider,
               model: prepared.selection.modelId,
               attempts: [],
+              requestedOverrides: buildModelRunRequestedOverrides(params.requestedOverrides),
               ...(imageFiles.length > 0
                 ? {
                     inputs: imageFiles.map((image) => ({
@@ -332,6 +333,10 @@ async function runModelRun(params: {
       model,
       ...(params.thinking ? { thinking: params.thinking } : {}),
       modelRun: true,
+      ...(params.requestedOverrides.maxTokens !== undefined ||
+      params.requestedOverrides.temperature !== undefined
+        ? { modelRunRequestedOverrides: params.requestedOverrides }
+        : {}),
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
@@ -349,6 +354,7 @@ async function runModelRun(params: {
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
     attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
+    requestedOverrides: buildModelRunRequestedOverrides(params.requestedOverrides),
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,
@@ -473,10 +479,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("run")
     .description("Run a one-shot model turn")
-    .requiredOption("--prompt <text>", "Prompt text")
+    .option("--prompt <text>", "Prompt text")
+    .option("--prompt-file <path>", "Read prompt from a private mode-0600 POSIX file")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--thinking <level>", "Thinking level override")
+    .option("--max-output-tokens <count>", "Requested maximum output tokens")
+    .option("--temperature <number>", "Requested sampling temperature from 0 to 2")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option(
@@ -486,8 +495,15 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const prompt = requireModelRunPrompt(opts.prompt);
+        const prompt = await resolveModelRunPrompt({
+          prompt: opts.prompt,
+          promptFile: opts.promptFile,
+        });
         const thinking = normalizeModelRunThinking(opts.thinking);
+        const requestedOverrides = {
+          maxTokens: normalizeModelRunMaxOutputTokens(opts.maxOutputTokens),
+          temperature: normalizeModelRunTemperature(opts.temperature),
+        };
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -500,6 +516,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
           thinking,
+          requestedOverrides,
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);

@@ -31,6 +31,10 @@ export type AgentRunRequest = {
   cwd?: string;
   extraSystemPrompt?: string;
   modelRun?: boolean;
+  modelRunRequestedOverrides?: {
+    maxTokens?: number;
+    temperature?: number;
+  };
   promptMode?: "full" | "minimal" | "none";
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
