@@ -1,0 +1,25 @@
+{
+  "componentId": "joint-architecture-reports",
+  "conflictType": "declared-vs-observed-mismatch",
+  "severity": "LOW",
+  "authorityConflict": false,
+  "startupImpact": false,
+  "capabilityImpact": [],
+  "taskImpact": [],
+  "fallbackAvailable": false,
+  "fallbackActive": false,
+  "approvalRequired": false,
+  "blocking": false,
+  "evidence": [
+    {
+      "evidenceType": "FILESYSTEM",
+      "source": "FilesystemObserver",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "FilesystemObserver",
+      "confidence": "MEDIUM",
+      "valueHash": "ghi789",
+      "notes": "Observed path differs from declared path."
+    }
+  ],
+  "notes": "Non-blocking mismatch."
+}

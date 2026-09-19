@@ -1,0 +1,24 @@
+{
+  "componentId": "missing-requirement-source",
+  "startupRequired": true,
+  "capabilityRequired": false,
+  "requiredCapabilities": [],
+  "taskRequired": false,
+  "requiredTasks": [],
+  "activeRuntimeProfile": "default",
+  "fallbackAllowed": false,
+  "fallbackApproved": false,
+  "policyBlocked": false,
+  "approvalBlocked": false,
+  "evidence": [
+    {
+      "evidenceType": "CONFIG",
+      "source": "test",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "test",
+      "confidence": "HIGH",
+      "valueHash": null,
+      "notes": "Missing startupRequirementSource field."
+    }
+  ]
+}

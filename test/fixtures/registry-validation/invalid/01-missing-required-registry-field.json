@@ -1,0 +1,23 @@
+{
+  "schema": {
+    "schemaId": "openclaw.registry-specification",
+    "version": "1.0.0",
+    "compatibilityPolicy": "exact"
+  },
+  "components": [
+    {
+      "pathClass": "NATIVE_RUNTIME",
+      "logicalName": "Missing componentId",
+      "declarationRule": null,
+      "declaredValue": null,
+      "declarationSource": "src/config/paths.ts",
+      "lifecycle": "persistent",
+      "startupRequirementRule": true,
+      "capabilityDependencies": [],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": { "requireExists": true },
+      "notes": "Missing required componentId field."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "componentId": "missing-blocking",
+  "conflictType": "declared-vs-observed-mismatch",
+  "severity": "LOW",
+  "authorityConflict": false,
+  "startupImpact": false,
+  "capabilityImpact": [],
+  "taskImpact": [],
+  "fallbackAvailable": false,
+  "fallbackActive": false,
+  "approvalRequired": false,
+  "evidence": [
+    {
+      "evidenceType": "FILESYSTEM",
+      "source": "test",
+      "collectedAt": "2026-07-18T18:00:00.000Z",
+      "collector": "test",
+      "confidence": "MEDIUM",
+      "valueHash": null,
+      "notes": "Missing required 'blocking' field."
+    }
+  ],
+  "notes": "Missing blocking field."
+}
