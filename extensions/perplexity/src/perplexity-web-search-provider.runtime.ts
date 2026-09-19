@@ -50,6 +50,22 @@ type PerplexitySearchResponse = {
   citations?: string[];
 };
 
+type PerplexityAgentResponse = {
+  output?: Array<{
+    type?: string;
+    results?: Array<{ url?: string }>;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      annotations?: Array<{
+        type?: string;
+        url?: string;
+        url_citation?: { url?: string };
+      }>;
+    }>;
+  }>;
+};
+
 type PerplexitySearchApiResponse = {
   results?: Array<{
     title?: string;
@@ -121,6 +137,69 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     }
   }
   return uniqueStrings(citations);
+}
+
+function extractPerplexityAgentResult(data: PerplexityAgentResponse): {
+  content: string;
+  citations: string[];
+} {
+  const content: string[] = [];
+  const citations: string[] = [];
+  for (const output of data.output ?? []) {
+    for (const result of output.results ?? []) {
+      const url = normalizeOptionalString(result.url);
+      if (url) {
+        citations.push(url);
+      }
+    }
+    if (output.type !== "message") {
+      continue;
+    }
+    for (const part of output.content ?? []) {
+      if (part.type === "output_text" && typeof part.text === "string") {
+        content.push(part.text);
+      }
+      for (const annotation of part.annotations ?? []) {
+        if (annotation.type !== "url_citation") {
+          continue;
+        }
+        const url = normalizeOptionalString(annotation.url_citation?.url ?? annotation.url);
+        if (url) {
+          citations.push(url);
+        }
+      }
+    }
+  }
+  const answer = content.join("\n");
+  if (!answer.trim()) {
+    throw new Error(
+      "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+    );
+  }
+  return { content: answer, citations: uniqueStrings(citations) };
+}
+
+function resolvePerplexityAgentSelection(
+  model: string,
+): { preset: "fast" | "low" | "medium" | "high" } | { model: string } {
+  const normalized = model.replace(/^perplexity\//u, "");
+  switch (normalized) {
+    case "sonar":
+      return { preset: "fast" };
+    case "sonar-pro":
+      return { preset: "low" };
+    case "sonar-reasoning-pro":
+      return { preset: "medium" };
+    case "sonar-deep-research":
+      return { preset: "high" };
+    default:
+      return { model: normalized };
+  }
+}
+
+function resolvePerplexityAgentEndpoint(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/$/u, "");
+  return normalized.endsWith("/v1") ? `${normalized}/agent` : `${normalized}/v1/agent`;
 }
 
 async function runPerplexitySearchApi(params: {
@@ -246,6 +325,53 @@ async function runPerplexitySearch(params: {
         content,
         citations: extractPerplexityCitations(data),
       };
+    },
+  );
+}
+
+async function runPerplexityAgentSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: number;
+  signal?: AbortSignal;
+  freshness?: string;
+}): Promise<{ content: string; citations: string[] }> {
+  const body: Record<string, unknown> = {
+    ...resolvePerplexityAgentSelection(params.model),
+    input: params.query,
+  };
+  if (params.freshness || "model" in body) {
+    body.tools = [
+      {
+        type: "web_search",
+        ...(params.freshness
+          ? { filters: { search_recency_filter: params.freshness } }
+          : undefined),
+      },
+    ];
+  }
+
+  const headers = buildPerplexityRequestHeaders(params.apiKey);
+  return withTrustedWebSearchEndpoint(
+    {
+      url: resolvePerplexityAgentEndpoint(params.baseUrl),
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+      init: {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Perplexity", { headers, signal: params.signal });
+      }
+      return extractPerplexityAgentResult(
+        await readProviderJsonResponse<PerplexityAgentResponse>(res, "Perplexity"),
+      );
     },
   );
 }
@@ -391,17 +517,8 @@ export async function executePerplexitySearch(
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
   const result =
-    runtime.transport === "chat_completions"
-      ? await runPerplexitySearch({
-          query,
-          apiKey: runtime.apiKey,
-          baseUrl: runtime.baseUrl,
-          model: runtime.model,
-          timeoutSeconds,
-          signal,
-          freshness,
-        })
-      : await runPerplexitySearchApi({
+    runtime.transport === "search_api"
+      ? await runPerplexitySearchApi({
           query,
           apiKey: runtime.apiKey,
           count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -415,7 +532,26 @@ export async function executePerplexitySearch(
           searchBeforeDate: dateBefore ? isoToPerplexityDate(dateBefore) : undefined,
           maxTokens: maxTokens ?? undefined,
           maxTokensPerPage: maxTokensPerPage ?? undefined,
-        });
+        })
+      : runtime.transport === "agent_api"
+        ? await runPerplexityAgentSearch({
+            query,
+            apiKey: runtime.apiKey,
+            baseUrl: runtime.baseUrl,
+            model: runtime.model,
+            timeoutSeconds,
+            signal,
+            freshness,
+          })
+        : await runPerplexitySearch({
+            query,
+            apiKey: runtime.apiKey,
+            baseUrl: runtime.baseUrl,
+            model: runtime.model,
+            timeoutSeconds,
+            signal,
+            freshness,
+          });
   const resultFields = Array.isArray(result)
     ? { results: result }
     : {
