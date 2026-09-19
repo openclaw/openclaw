@@ -1,9 +1,12 @@
 // Feishu tests cover policy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   hasExplicitFeishuGroupConfig,
+  normalizeFeishuAllowEntry,
+  resolveFeishuDmIngressAccess,
   resolveFeishuGroupConfig,
   resolveFeishuGroupSenderActivationIngressAccess,
   resolveFeishuGroupToolPolicy,
@@ -274,5 +277,41 @@ describe("resolveFeishuGroupSenderActivationIngressAccess", () => {
         senderUserId: "on_user_123",
       }),
     ).resolves.toBe("allow");
+  });
+});
+
+describe("feishu pinned main-DM owner", () => {
+  async function dmAdmission(allowFrom: string[]): Promise<string> {
+    return (
+      await resolveFeishuDmIngressAccess({
+        cfg: createCfg({}),
+        accountId: "default",
+        dmPolicy: "allowlist",
+        allowFrom,
+        senderOpenId: "ou_stranger_0001",
+        conversationId: "oc_chat_0001",
+        mayPair: false,
+      })
+    ).ingress.admission;
+  }
+
+  function pinnedOwner(allowFrom: string[]): string | null {
+    return resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: "main",
+      allowFrom,
+      normalizeEntry: normalizeFeishuAllowEntry,
+    });
+  }
+
+  it.each(["*", "feishu:*", "lark:*", "user:*"])(
+    "admits any sender for %s and leaves the main DM owner unpinned",
+    async (entry) => {
+      await expect(dmAdmission([entry])).resolves.toBe("dispatch");
+      expect(pinnedOwner([entry])).toBeNull();
+    },
+  );
+
+  it("still pins a single configured owner", () => {
+    expect(pinnedOwner(["feishu:ou_owner_0001"])).toBe("user:ou_owner_0001");
   });
 });

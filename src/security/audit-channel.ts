@@ -16,6 +16,7 @@ import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-ins
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { evaluateDmPolicyAllowFromDependency } from "../config/zod-schema.core.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   listExactDirectMessageBindingPeerIds,
@@ -263,7 +264,11 @@ export async function collectChannelSecurityFindingsCore(params: {
         detail: `${policyPath}="open" allows anyone to DM the bot.`,
         remediation: `Use pairing/allowlist; if you really need open DMs, ensure ${allowFromKey} includes "*".`,
       });
-      if (!hasWildcard) {
+      const configuredWildcardViolation = evaluateDmPolicyAllowFromDependency({
+        policy: input.dmPolicy,
+        allowFrom: input.allowFrom ?? undefined,
+      });
+      if (configuredWildcardViolation === "open_requires_wildcard") {
         findings.push({
           checkId: `channels.${input.provider}.dm.open_invalid`,
           severity: "warn",
@@ -283,7 +288,7 @@ export async function collectChannelSecurityFindingsCore(params: {
       return auditState;
     }
 
-    if (input.dmPolicy !== "open" && auditState.admittedPrincipals.length === 0) {
+    if (input.dmPolicy !== "open" && !hasWildcard && auditState.admittedPrincipals.length === 0) {
       findings.push({
         checkId: `channels.${input.provider}.dm.locked`,
         severity: "info",

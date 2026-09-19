@@ -1,8 +1,10 @@
 // Slack tests cover allow list plugin behavior.
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it } from "vitest";
 import {
   normalizeAllowList,
   normalizeAllowListLower,
+  normalizeSlackAllowOwnerEntry,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
   resolveSlackUserAllowListForTeam,
@@ -125,5 +127,24 @@ describe("slack/allow-list", () => {
         teamId: "T11111111",
       }),
     ).toEqual(["w01234567", "team:t11111111:user:u01234567"]);
+  });
+});
+
+describe("slack pinned main-DM owner", () => {
+  function pinnedOwner(allowFrom: string[]): string | null {
+    return resolvePinnedMainDmOwnerFromAllowlist({
+      dmScope: "main",
+      allowFrom,
+      normalizeEntry: normalizeSlackAllowOwnerEntry,
+    });
+  }
+
+  it.each(["*", "slack:*", "user:*"])("leaves the main DM owner unpinned for %s", (entry) => {
+    expect(normalizeSlackAllowOwnerEntry(entry)).toBeUndefined();
+    expect(pinnedOwner([entry])).toBeNull();
+  });
+
+  it("still pins a single configured owner", () => {
+    expect(pinnedOwner(["slack:U01234567"])).toBe("u01234567");
   });
 });

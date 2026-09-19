@@ -157,6 +157,7 @@ export type ResolvedIngressAllowlist = {
 };
 
 export type NormalizedIngressAllowlist = Omit<ResolvedIngressAllowlist, "normalizedEntries"> & {
+  hasLiteralWildcard: boolean;
   normalizedEntries: Array<
     ChannelIngressNormalizedEntry & { authentication: IdentifierAuthentication }
   >;
