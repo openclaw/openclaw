@@ -13,6 +13,7 @@ import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-outpu
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
+  updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
@@ -82,6 +83,7 @@ export const vitestWorkerBuildEntries = {
     ...groqSetupSdkEntrypoints,
     ...Object.values(cliRecoveryEntrypoints),
     ...Object.values(updateExecutorNativeEntrypoints),
+    ...Object.values(updateExecutorEntrypoints),
     ...Object.values(gatewayDirectStopEntrypoints),
     stateDirGatewayFixtureEntrypoint,
     ...Object.values(doctorConfigRuntimeEntrypoints),

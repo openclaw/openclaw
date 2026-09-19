@@ -6,6 +6,13 @@ import { expect, it, vi } from "vitest";
 import { installLaunchAgent } from "./launchd-install.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import {
+  captureGatewayServiceRebind,
+  currentGatewayServiceRebindReceipt,
+  fingerprintGatewayServiceDefinition,
+  withGatewayServiceRebindCapture,
+} from "./service-rebind.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";
 import { stageSystemdService } from "./systemd-install.js";
 import * as systemdScope from "./systemd-scope.js";
@@ -255,3 +262,38 @@ it.each(["publication", "activation"])(
     }
   },
 );
+
+it("settles a failed activation receipt after the real definition transaction restores A", async () => {
+  const f = await fixture("darwin");
+  const before = await fingerprintGatewayServiceDefinition(f.command);
+  let rewritten: string | undefined;
+  await withGatewayServiceRebindCapture(before, async () => {
+    await expect(
+      reconcileGatewayServiceDefinition({
+        env: f.env,
+        root: "/old",
+        command: f.command,
+        expectedCommand: f.command,
+        install: async (hooks) => {
+          await withGatewayServiceOperationLock(f.env, async (assertCurrent) => {
+            await captureGatewayServiceRebind(
+              async () => f.command,
+              assertCurrent,
+              async () => {
+                await f.install(hooks);
+                rewritten = await fingerprintGatewayServiceDefinition(f.command);
+                throw new Error("fixture activation failure");
+              },
+            );
+          });
+        },
+        warn: () => {},
+      }),
+    ).rejects.toThrow("fixture activation failure");
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    // Atomic restoration changes file identity even when original bytes are restored.
+    const after = await fingerprintGatewayServiceDefinition(f.command);
+    expect(after).not.toBe(rewritten);
+    expect(currentGatewayServiceRebindReceipt()).toEqual({ before, after, mutated: true });
+  });
+});

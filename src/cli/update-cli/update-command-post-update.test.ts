@@ -118,6 +118,10 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 }));
 
 import * as postCoreModule from "./update-command-post-core.js";
+import {
+  expectUpdateFailure,
+  registerBoundaryFinalizationControls,
+} from "./update-command-post-update-boundary.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
@@ -132,15 +136,6 @@ function expectFailureReport(reason: string, options: unknown = expect.any(Objec
     expect.any(Object),
   );
   expect(defaultRuntime.exit).not.toHaveBeenCalled();
-}
-
-function expectUpdateFailure(promise: Promise<unknown>, reason: string, details: object = {}) {
-  return expect(promise).rejects.toMatchObject({
-    name: "UpdateCommandFailure",
-    exitCode: 1,
-    result: { status: "error", reason },
-    ...details,
-  });
 }
 
 afterEach(() => {
@@ -210,6 +205,8 @@ describe("successful update finalization ordering", () => {
     expect(mocks.printResult).not.toHaveBeenCalled();
     expect(loadUpdateRecovery(run.runId, { env })).toEqual(record);
   });
+
+  registerBoundaryFinalizationControls({ makeTempDir: (prefix) => tempDirs.make(prefix), mocks });
 
   it("retains pending staged service load without legacy rollback or completion", async () => {
     const refusal = new UpdateServiceLoadBoundaryError("checkpoint seal refused");
@@ -346,6 +343,7 @@ describe("successful update finalization ordering", () => {
   });
 
   it("restarts when shell completion cache generation returns false", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.checkCompletionStatus.mockResolvedValueOnce({
       shell: "zsh",

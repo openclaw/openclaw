@@ -22,8 +22,13 @@ import * as oneShotExit from "../one-shot-exit.js";
 import { invokeUpdateCli } from "../update-cli-invocation.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as shared from "./shared.js";
+import * as databaseContext from "./update-command-database-context.js";
 import * as execution from "./update-command-execution.js";
 import * as executorOwner from "./update-command-executor.js";
+import {
+  captureFreshManagedServiceAdmission,
+  freshManagedServiceRuntimeCases,
+} from "./update-command-fresh-preview.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -540,6 +545,37 @@ describe("update command admission with fresh state", () => {
       );
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("registry unavailable"),
+      );
+      expectFreshStatePreserved();
+    },
+  );
+
+  it.each(freshManagedServiceRuntimeCases)(
+    "limits fresh-state Node recovery ($name)",
+    async (testCase) => {
+      const { owned, writable, restart, discovered, expectedFallback, expectedRecovery } = testCase;
+      fixture.managedServiceNodeRunner = discovered ? "/service/node" : undefined;
+      vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
+      vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockImplementation(() =>
+        captureFreshManagedServiceAdmission({ root: fixture.root, owned, writable, restart }),
+      );
+      const runtimePreflight = vi
+        .spyOn(servicePlan, "resolvePackageRuntimePreflight")
+        .mockResolvedValue({ ok: false, error: "fixture-stop" });
+
+      await expect(
+        updateCommand({ tag: "2026.9.2", yes: true, json: true, restart }),
+      ).rejects.toMatchObject({ code: 1 });
+
+      expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          nodeRunner: discovered ? "/service/node" : undefined,
+          fallbackNodeRunner: expectedFallback,
+          runtimeRecovery: expectedRecovery ? expect.any(Object) : undefined,
+        }),
+      );
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error", reason: "node-runtime-preflight" }),
       );
       expectFreshStatePreserved();
     },

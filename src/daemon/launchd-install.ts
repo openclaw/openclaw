@@ -10,6 +10,7 @@ import {
 import { assertValidLaunchAgentLabel, resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   bootstrapLaunchAgentOrThrow,
+  isLaunchAgentEnabled,
   probeLaunchAgentState,
   resolveLaunchAgentGuiDomain,
 } from "./launchd-runtime.js";
@@ -140,6 +141,7 @@ type LaunchAgentInstallSnapshot = {
   envFileContents: Buffer | null;
   wrapperContents: Buffer | null;
   loaded: boolean;
+  enabled?: boolean;
   definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
 };
 
@@ -190,6 +192,7 @@ async function restoreLaunchAgentInstallArtifacts(params: {
   label: string;
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
+  preserveAutoStart?: boolean;
 }): Promise<void> {
   await assertNoSystemLaunchDaemonOwnership(params.label);
   const ancillary = [
@@ -235,6 +238,7 @@ async function restoreLaunchAgentInstall(params: {
   label: string;
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
+  preserveAutoStart?: boolean;
 }): Promise<void> {
   const serviceTarget = `${params.domain}/${params.label}`;
   // A failed bootstrap may leave no registered job. Restore files directly in
@@ -264,6 +268,8 @@ async function restoreLaunchAgentInstall(params: {
       plistPath: params.plistPath,
       actionHint: "openclaw gateway start",
       retryPendingTeardown: true,
+      preserveAutoStart: params.preserveAutoStart,
+      preservedEnabled: params.snapshot.enabled,
     });
   }
 }
@@ -286,6 +292,7 @@ async function activateLaunchAgent(params: {
   env: GatewayServiceEnv;
   plistPath: string;
   snapshot: LaunchAgentInstallSnapshot;
+  preserveAutoStart?: boolean;
 }) {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(params.env);
@@ -305,6 +312,8 @@ async function activateLaunchAgent(params: {
       plistPath: params.plistPath,
       actionHint: "openclaw gateway install --force",
       retryPendingTeardown: true,
+      preserveAutoStart: params.preserveAutoStart,
+      preservedEnabled: params.snapshot.enabled,
     });
   } catch (error) {
     if (params.snapshot.definitionTransaction) {
@@ -317,6 +326,7 @@ async function activateLaunchAgent(params: {
         label,
         plistPath: params.plistPath,
         snapshot: params.snapshot,
+        preserveAutoStart: params.preserveAutoStart,
       });
     } catch (rollbackError) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -342,6 +352,7 @@ export async function installLaunchAgent(
   // Plist, generated environment files, and launchd registration form one cutover.
   // Capture every prior owner before publication so any later failure can restore it.
   const snapshot: LaunchAgentInstallSnapshot = {
+    enabled: args.preserveAutoStart ? await isLaunchAgentEnabled({ env: args.env }) : undefined,
     definitionTransaction: args.definitionTransaction,
     plist: previous,
     envFileContents:
@@ -380,6 +391,7 @@ export async function installLaunchAgent(
     env: args.env,
     plistPath,
     snapshot,
+    preserveAutoStart: args.preserveAutoStart,
   });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the

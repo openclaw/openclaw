@@ -507,7 +507,10 @@ export async function stageSystemdService({
   return { unitPath };
 }
 
-async function activateSystemdService(params: { env: GatewayServiceEnv }) {
+async function activateSystemdService(params: {
+  env: GatewayServiceEnv;
+  preserveAutoStart?: boolean;
+}) {
   const unitName = `${resolveSystemdServiceName(params.env)}.service`;
   // A system unit may appear after publication. Refuse before the user manager
   // can load a second supervisor for the same gateway name.
@@ -537,6 +540,9 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
     throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
   };
   for (const action of ["daemon-reload", "enable", "restart"] as const) {
+    if (action === "enable" && params.preserveAutoStart) {
+      continue;
+    }
     await runActivation(action);
   }
 }
@@ -544,7 +550,8 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const load = () => activateSystemdService({ env: args.env });
+  const load = () =>
+    activateSystemdService({ env: args.env, preserveAutoStart: args.preserveAutoStart });
   const { unitPath, backedUp } = await writeSystemdUnit(args, args.beforeLoad ? load : undefined);
   if (!args.beforeLoad) {
     await load();

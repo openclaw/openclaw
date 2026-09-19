@@ -1,3 +1,4 @@
+import { Writable } from "node:stream";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -20,11 +21,20 @@ import {
   recoverInstalledLaunchAgentAfterUpdate,
   type PostUpdateLaunchAgentRecoveryResult,
 } from "./update-command-launch-agent-recovery.js";
+import { restoreOriginalManagedServiceDefinition } from "./update-command-original-service-restore.js";
+import {
+  originalServiceAuthority,
+  assertOriginalServiceStateCompatible,
+  revalidateOriginalManagedServiceRuntime,
+} from "./update-command-original-service.js";
+import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   isPackageManagerUpdateMode,
+  restartRetainedUpdateGatewayService,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
+import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
@@ -33,6 +43,12 @@ import {
   assertGatewayServiceManagementAllowedForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+
+const QUIET_SERVICE_STDOUT = new Writable({
+  write(_chunk, _encoding, callback) {
+    callback();
+  },
+});
 
 type PostUpdateGatewayHealthRecoveryDeps = {
   recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
@@ -126,18 +142,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-export async function hasLoadedLaunchdKeepAliveSupervisor(params: {
-  service: GatewayService;
-  env?: NodeJS.ProcessEnv;
-}): Promise<boolean> {
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  // OpenClaw's loaded LaunchAgent has canonical KeepAlive policy. Read this once before
-  // polling so an unloaded agent can still reach the existing recovery path promptly.
-  return await params.service.isLoaded({ env: params.env }).catch(() => false);
-}
-
 function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
   const restartCommand = formatCliCommand("openclaw gateway restart");
   const installCommand = formatCliCommand("openclaw gateway install --force");
@@ -172,6 +176,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   jsonMode: boolean;
   nodeRunner?: string;
   timeoutMs?: number;
@@ -188,10 +193,18 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     executor?.assertCurrent();
   };
   const before = params.preManagedServiceStop;
-  if (!before?.stopped || !before.serviceEnv) {
+  const original = params.originalManagedServiceRuntime;
+  // An own-rebind receipt also proves an activation effect if final stop
+  // inspection observed A already down and did not record a native stop.
+  if (!before?.serviceEnv || (!before.stopped && !original?.definition.rebound)) {
     return undefined;
   }
-  if (params.recovery?.serviceRestartSafe !== true || !params.recovery.version) {
+  const serviceEnv = { ...(original?.service.serviceEnv ?? before.serviceEnv) };
+  const packageRecovery =
+    params.recovery?.serviceRestartSafe === true && params.recovery.version
+      ? params.recovery
+      : undefined;
+  if (!original && !packageRecovery) {
     defaultRuntime.error(
       "Managed gateway remains stopped: update safety is unverified. Run `openclaw doctor` and inspect the update failure before restarting.",
     );
@@ -205,15 +218,35 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         "Stopped service ownership is unknown; restart it manually after inspection.",
       );
     }
+    const assertOriginal = original ? originalServiceAuthority(run) : assertCurrent;
+    const checkOriginal = async () => {
+      assertCurrent();
+      assertOriginal();
+      if (original) {
+        await assertOriginalServiceStateCompatible(original, assertOriginal);
+        await revalidateOriginalManagedServiceRuntime(original, assertOriginal, params.timeoutMs);
+      }
+      assertCurrent();
+    };
+    if (original && run) {
+      await restoreOriginalManagedServiceDefinition({
+        original,
+        run,
+        assertCurrent: assertOriginal,
+        stdout: params.jsonMode ? QUIET_SERVICE_STDOUT : process.stdout,
+        timeoutMs: params.timeoutMs,
+      });
+    }
+    await checkOriginal();
     const service = resolveGatewayService();
     let expectedService: Pick<
       PreManagedServiceStop,
       "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-    > = before;
+    > = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
       const state = await readGatewayServiceState(service, {
-        env: before.serviceEnv,
+        env: serviceEnv,
         requireEffective: true,
         requireLoadedCommand: true,
         validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
@@ -222,14 +255,14 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
         state,
-        root: verdict.root,
+        root: original?.root ?? verdict.root,
         preManagedServiceStop: expectedService,
       });
       assertCurrent();
       // Recovery preserves the current definition. Once observed, even a same-unit
       // replacement during config or health awaits must not inherit this activation.
       expectedService = {
-        serviceManagerUid: before.serviceManagerUid,
+        serviceManagerUid: original?.service.serviceManagerUid ?? before.serviceManagerUid,
         serviceEnv: state.env,
         serviceUpdateVerdict:
           inspection.kind === "owned" ? { ...inspection, refreshDefinition: false } : inspection,
@@ -245,27 +278,53 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     // Context resolution awaits config reads. Revalidate before the one activation;
     // the installed CLI owns its config dialect and preserves the service definition.
     const current = await readCurrentService();
-    await runUpdatedInstallGatewayCommand(
-      {
-        result: { root: verdict.root },
-        opts: { json: params.jsonMode, run },
-        invocationEnv: before.serviceEnv,
-        serviceEnv: current.env,
-        nodeRunner: params.nodeRunner,
-        timeoutMs: params.timeoutMs,
-        invocationCwd: params.invocationCwd,
-        assertCurrent,
-      },
-      "restart",
-    );
+    await checkOriginal();
+    // Executor capability does not bind an installed receiver's restart to A's
+    // retained definition. Use the candidate owner, which revalidates that binding
+    // under its final native-operation lock while retaining both A/B authorities.
+    if (original && run) {
+      const restart = await restartRetainedUpdateGatewayService({
+        run,
+        root: original.root,
+        env: serviceEnv,
+        stdout: params.jsonMode ? QUIET_SERVICE_STDOUT : process.stdout,
+        assertCurrent: assertOriginal,
+        revalidate: checkOriginal,
+      });
+      await checkOriginal();
+      if (restart.outcome !== "completed") {
+        throw new UpdateCommandRecoveryPendingError(
+          "Original service restart was scheduled; recovery remains unverified.",
+        );
+      }
+      // A platform owner may settle a previously suspended policy only after
+      // admitted activation; the native path refuses unsupported Windows custody
+      // before reaching this restoration. Recheck the retained identity throughout.
+      await before.windowsTaskAutoStartRecovery?.restore(true, checkOriginal, assertOriginal);
+      await checkOriginal();
+    } else {
+      await runUpdatedInstallGatewayCommand(
+        {
+          result: { root: original?.root ?? verdict.root },
+          opts: { json: params.jsonMode, run },
+          invocationEnv: serviceEnv,
+          serviceEnv: current.env,
+          nodeRunner: original?.nodeRunner ?? params.nodeRunner,
+          timeoutMs: params.timeoutMs,
+          invocationCwd: params.invocationCwd,
+          assertCurrent,
+        },
+        "restart",
+      );
+    }
     assertCurrent();
     const health = await waitForGatewayHealthyRestart({
       service,
       port,
       env: current.env,
       timeoutMs: params.timeoutMs,
-      expectedVersion: params.recovery.version,
-      expectedBuildId: params.recovery.buildId,
+      expectedVersion: original?.version ?? packageRecovery?.version,
+      expectedBuildId: original?.buildId ?? packageRecovery?.buildId,
       requireRunningService: true,
       settle: { probes: 12 },
     });
@@ -274,6 +333,34 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       throw new Error(renderRestartDiagnostics(health).join("\n"));
     }
     await readCurrentService();
+    await checkOriginal();
+    if (original) {
+      const context = await assertOriginalServiceStateCompatible(original, assertOriginal);
+      const ready = await verifyPreviousGatewayForUpdate({
+        root: original.root,
+        config: context.config,
+        env: context.env,
+        opts: { run },
+        timeoutMs: params.timeoutMs,
+        assertCurrent: assertOriginal,
+      });
+      await checkOriginal();
+      if (!ready) {
+        throw new Error("Original service independent readiness was not verified.");
+      }
+    }
+    if (original) {
+      try {
+        // Settle A's native restoration independently of B's failed activation.
+        await before.windowsTaskAutoStartRecovery?.complete(true);
+        assertCurrent();
+      } catch (cause) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Original service autostart settlement failed.",
+          { cause },
+        );
+      }
+    }
     if (!params.jsonMode) {
       defaultRuntime.log(
         theme.muted(
@@ -292,4 +379,84 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     );
     return "failed";
   }
+}
+
+export async function compensateOriginalManagedService(
+  params: {
+    result: UpdateRunResult;
+    opts: UpdateCommandOptions;
+    preManagedServiceStop?: PreManagedServiceStop;
+    originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
+    allowGatewayRestart?: boolean;
+    timeoutMs: number;
+    invocationCwd?: string;
+  },
+  assertCurrent: () => void,
+): Promise<{
+  result: UpdateRunResult;
+  rolledBack: false;
+  originalServiceRecovery: "healthy" | "failed";
+}> {
+  const original = params.originalManagedServiceRuntime;
+  if (!original) {
+    throw new Error("Original service observation is missing.");
+  }
+  const { result, opts, preManagedServiceStop: before } = params;
+  const run = opts.run;
+  // A is unchanged service code, not B's previous generation. Never reverse B
+  // or its current state merely to compensate the stop of compatible A.
+  const service =
+    params.allowGatewayRestart === false
+      ? undefined
+      : await maybeRestartServiceAfterFailedMutableUpdate({
+          updateRun: run,
+          preManagedServiceStop: before,
+          originalManagedServiceRuntime: original,
+          jsonMode: Boolean(opts.json),
+          timeoutMs: params.timeoutMs,
+          invocationCwd: params.invocationCwd,
+        });
+  assertCurrent();
+  return {
+    result: {
+      ...result,
+      recovery: {
+        ...result.recovery,
+        serviceRestartSafe: false,
+        reason:
+          result.recovery?.serviceRestartSafe === false
+            ? result.recovery.reason
+            : "runtime-verification-failed",
+      },
+      steps: [
+        ...result.steps,
+        {
+          name: "original managed service compensation",
+          command: "openclaw gateway restart --preserve-definition",
+          cwd: original.root,
+          durationMs: 0,
+          exitCode: service === "healthy" ? 0 : 1,
+          ...(service === "healthy"
+            ? {
+                stdoutTail: [
+                  `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`,
+                  original.packageFingerprintWarning,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+              }
+            : {
+                stderrTail: [
+                  "Original managed service compensation was not verified; package and current state were retained.",
+                  original.packageFingerprintWarning,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+              }),
+        },
+      ],
+    },
+    rolledBack: false,
+    originalServiceRecovery: service === "healthy" ? "healthy" : "failed",
+  };
 }

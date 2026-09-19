@@ -38,13 +38,17 @@ import {
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
-import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
+import type {
+  UpdateServiceDefinitionRecovery,
+  OriginalManagedServiceRuntime,
+} from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   createWindowsTaskAutoStartGuard,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
+import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import {
   maybeRestartService,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -63,6 +67,8 @@ export async function rollbackFailedUpdate(params: {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
+  allowGatewayRestart?: boolean;
   configSnapshot: ConfigFileSnapshot;
   activationConfig?: UpdateConfigSnapshot;
   opts: UpdateCommandOptions;
@@ -77,6 +83,7 @@ export async function rollbackFailedUpdate(params: {
   stoppedForRollback?: PreManagedServiceStop;
   verifiedAtMs?: number;
   pendingRecoveryReason?: string;
+  originalServiceRecovery?: "healthy" | "failed";
 }> {
   const { preManagedServiceStop: before, packageTransaction, opts } = params;
   const run = opts.run;
@@ -127,6 +134,11 @@ export async function rollbackFailedUpdate(params: {
       pendingRecoveryReason:
         "Full-state checkpoint recovery is deferred; the retained record and artifacts were left unchanged.",
     };
+  }
+  // A's original service is independent of B's package transaction. Keep the
+  // existing admission and explicit recovery refusals above this selection.
+  if (params.originalManagedServiceRuntime) {
+    return compensateOriginalManagedService(params, assertCurrent);
   }
   let result = params.result;
   const config =

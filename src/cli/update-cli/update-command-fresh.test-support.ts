@@ -42,6 +42,7 @@ export function installFreshUpdateFixture() {
       JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
     );
     vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);

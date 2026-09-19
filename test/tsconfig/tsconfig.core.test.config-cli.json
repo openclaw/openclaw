@@ -19,6 +19,10 @@
     "../../src/cli/cron*.test.ts",
     "../../src/cli/cron*.test.tsx",
     "../../src/cli/daemon-cli/**",
-    "../../src/config/sessions/**"
+    "../../src/config/sessions/**",
+    "../../src/cli/update-cli/**/*.test.ts",
+    "../../src/cli/update-cli/**/*.test.tsx",
+    "../../src/cli/update*.test.ts",
+    "../../src/cli/update*.test.tsx"
   ]
 }

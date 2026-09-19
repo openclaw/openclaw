@@ -218,35 +218,46 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
     },
   );
 
-  it("reports forced cleanup when the original group is confirmed absent", async () => {
-    const parent = spawn(
-      process.execPath,
-      ["-e", "process.on('message',()=>process.exit(0));process.send('ready');"],
-      {
-        detached: true,
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-      },
-    );
-    const closed = once(parent, "close");
-    try {
-      await once(parent, "message", { signal: AbortSignal.timeout(2_000) });
-      const owner = createCommandTerminationController({
-        child: parent,
-        cancelController: new AbortController(),
-        processTree: { mode: "force" },
-        killGraceMs: 0,
-        isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
-        isCommandSettled: () => false,
-      });
-      parent.send("finish");
-      await closed;
-      owner.terminate();
-      expect(await owner.settle()).toBe("forced");
-    } finally {
-      killPidIfAlive(parent.pid);
-      await closed;
-    }
-  });
+  it.each([
+    { mode: "graceful", killSignal: undefined },
+    { mode: "force", killSignal: undefined },
+    { mode: "graceful", killSignal: "SIGKILL" },
+    { mode: "graceful", killSignal: osConstants.signals.SIGKILL },
+  ] as const)(
+    "preserves normal cleanup for a retired group (mode=$mode signal=$killSignal)",
+    async ({ mode, killSignal }) => {
+      const parent = spawn(
+        process.execPath,
+        ["-e", "process.on('message',()=>process.exit(0));process.send('ready');"],
+        {
+          detached: true,
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+        },
+      );
+      const closed = once(parent, "close");
+      try {
+        await once(parent, "message", { signal: AbortSignal.timeout(2_000) });
+        const owner = createCommandTerminationController({
+          child: parent,
+          cancelController: new AbortController(),
+          processTree: { mode },
+          killSignal,
+          killGraceMs: 0,
+          isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
+          isCommandSettled: () => false,
+        });
+        parent.send("finish");
+        await closed;
+        const signals = vi.spyOn(process, "kill");
+        owner.terminate();
+        expect(await owner.settle()).toBe("normal");
+        expect(signals.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+      } finally {
+        killPidIfAlive(parent.pid);
+        await closed;
+      }
+    },
+  );
 
   it.each([
     { observation: "live", killSignal: undefined },

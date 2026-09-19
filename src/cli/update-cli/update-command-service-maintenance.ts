@@ -252,6 +252,8 @@ type ManagedServiceStopParams = {
   shouldRestart: boolean;
   jsonMode: boolean;
   phase?: "inspect" | "prepare";
+  /** Package/helper root can differ from the inspected service during a rebind. */
+  handoffRoot?: string;
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<
     PreManagedServiceStop,
@@ -324,7 +326,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     if (
       !blockMessage ||
       (await isCurrentManagedServiceUpdateHandoffProcess({
-        root: params.root,
+        root: params.handoffRoot ?? params.root,
         runId: params.updateRun?.runId,
       }))
     ) {
@@ -561,7 +563,9 @@ async function stopManagedServiceBeforeMutableUpdate(
       env: currentState.env,
       stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
       assertCurrent,
-      ...(updateRun ? { updateHandoff: { root: params.root, runId: updateRun.runId } } : {}),
+      ...(updateRun
+        ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
+        : {}),
       // Native stop may unload the service before a later port check fails.
       onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
     });

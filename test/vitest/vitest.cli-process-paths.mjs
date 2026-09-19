@@ -19,6 +19,7 @@ export const cliProcessTestFiles = [
   "src/cli/cron-output.process.test.ts",
   "src/cli/gateway-backed-exit-health.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
+  "src/cli/gateway-service-capability.process.test.ts",
   "src/cli/gateway-cli/shutdown-hard-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",
   "src/cli/message-plugin-cleanup.process.test.ts",

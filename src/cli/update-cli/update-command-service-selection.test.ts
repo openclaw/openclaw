@@ -13,7 +13,11 @@ import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-contr
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
-import { prepareUpdateCommand, resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
+import {
+  prepareUpdateCommand,
+  resolveUpdateCommandAdmissionEnv,
+  resolveUpdateCommandAdmissionRoot,
+} from "./update-command-run.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -78,24 +82,27 @@ it.each([
 
         const prepared = await prepareUpdateCommand({ dryRun: true });
         const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
-        const env = await resolveUpdateCommandAdmissionEnv({ root, opts: {} });
+        const admissionRoot = resolveUpdateCommandAdmissionRoot(prepared);
+        const env = await resolveUpdateCommandAdmissionEnv({ root: admissionRoot, opts: {} });
         const selected = fault === "none";
         const state = selected ? recordedState : path.join(home, ".openclaw");
         expect
           .soft({
             root,
+            admissionRoot,
             node: prepared.servicePlan?.nodeRunner,
             state: resolveStateDir(env),
             config: resolveConfigPath(env),
           })
           .toEqual({
-            root: selected ? recorded : requested,
+            root: requested,
+            admissionRoot: selected ? recorded : requested,
             node: selected ? recordedNode : undefined,
             state,
             config: path.join(state, "openclaw.json"),
           });
         const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-          root: selected ? recorded : requested,
+          root: admissionRoot,
           updateInstallKind: "package",
           shouldRestart: true,
           phase: "inspect",

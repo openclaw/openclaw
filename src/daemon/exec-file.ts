@@ -3,7 +3,10 @@ import { extractErrorCode } from "../infra/errors.js";
 import { createSanitizedCommandError } from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  getGatewayServiceUpdateNativeCommand,
+} from "./service-update-authority.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   code: number;
@@ -23,19 +26,22 @@ export async function execFileUtf8(
     windowsHide?: boolean;
   } = {},
 ): Promise<ExecResult> {
-  assertGatewayServiceUpdateCurrent();
+  const scopedNative = getGatewayServiceUpdateNativeCommand();
+  if (!scopedNative) {
+    assertGatewayServiceUpdateCurrent();
+  }
   try {
-    const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
-      [command, ...args],
-      {
-        baseEnv: resolveServiceManagerEnv(options.env),
-        // sudo -u can inherit an operator directory the service account cannot enter.
-        cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
-        killSignal: options.killSignal,
-        maxOutputBytes: 1024 * 1024,
-        timeoutMs: options.timeout,
-      },
-    );
+    // Scoped dispatch serializes before its parent-currentness check. Ordinary
+    // calls retain the existing synchronous assertion and unbound runner.
+    const runNative = scopedNative ?? runCommandWithTimeout;
+    const { stdout, stderr, code, termination, signal } = await runNative([command, ...args], {
+      baseEnv: resolveServiceManagerEnv(options.env),
+      // sudo -u can inherit an operator directory the service account cannot enter.
+      cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
+      killSignal: options.killSignal,
+      maxOutputBytes: 1024 * 1024,
+      timeoutMs: options.timeout,
+    });
     const diagnostic =
       termination === "exit"
         ? ""

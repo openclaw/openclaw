@@ -1,5 +1,6 @@
 // JSON/text response helpers for Gateway service lifecycle commands.
 import { Writable } from "node:stream";
+import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
@@ -49,7 +50,8 @@ type DaemonActionResponse = {
 };
 
 function emitDaemonActionJson(payload: DaemonActionResponse) {
-  defaultRuntime.writeJson(payload);
+  const rebind = currentGatewayServiceRebindReceipt();
+  defaultRuntime.writeJson({ ...payload, ...(rebind ? { rebind } : {}) });
 }
 
 function classifyDaemonHintText(text: string): DaemonHintKind {

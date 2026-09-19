@@ -15,6 +15,19 @@ export type UpdateServiceLoadBoundary = {
 export class UpdateServiceLoadBoundaryError extends Error {
   override name = "UpdateServiceLoadBoundaryError";
 }
+/** A local admission rejection before any native child or definition effect. */
+export class UpdateServiceLoadPreMutationError extends UpdateServiceLoadBoundaryError {
+  override name = "UpdateServiceLoadPreMutationError";
+}
+/** Only the explicit pre-mutation refusal can bypass staged-load retention. */
+export function isPendingUpdateServiceLoad(
+  error: unknown,
+): error is UpdateServiceLoadBoundaryError {
+  return (
+    error instanceof UpdateServiceLoadBoundaryError &&
+    !(error instanceof UpdateServiceLoadPreMutationError)
+  );
+}
 const stagedMessage = z.strictObject({
   type: z.literal("openclaw-service-staged"),
   id: z.uuid(),

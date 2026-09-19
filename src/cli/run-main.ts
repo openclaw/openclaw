@@ -1587,7 +1587,7 @@ async function runCliWithPreparedOutputMode(
         ]),
       );
       const program = await startupTrace.measure("build-program", () =>
-        buildProgram({ doctorDatabasePreflight }),
+        buildProgram({ doctorDatabasePreflight, runtimeRecoveryEnv: options.runtimeRecoveryEnv }),
       );
       await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 

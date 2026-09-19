@@ -469,7 +469,12 @@ export function registerRestartOutcomeTests(
           action,
         ),
       ).rejects.toMatchObject({
-        name: scenario === "health" ? "GatewayRestartHealthError" : "Error",
+        name:
+          scenario === "health"
+            ? "GatewayRestartHealthError"
+            : response?.cleanup === "forced" || response?.cleanup === "uncertain"
+              ? "CommandProcessCleanupError"
+              : "Error",
       });
       expect(mocks.child.mock.lastCall?.[0]).toContain("--json");
     },

@@ -5,6 +5,7 @@ import { auditGatewayServiceConfig, type GatewayServiceExpectedCommand } from ".
 import { captureGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { gatewayServiceCommandMatchesRoot } from "./service-layout.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import { settleGatewayServiceRebind } from "./service-rebind.js";
 import type {
   GatewayServiceDefinitionBackupReceipt,
   GatewayServiceDefinitionTransactionHooks,
@@ -97,30 +98,32 @@ export async function reconcileGatewayServiceDefinition(params: {
         `Service definition inspection or backup failed; the definition was preserved: ${String(error)}`,
       ),
     );
-    try {
-      await params.install(transaction.hooks);
-      assertCurrent();
-      const receipt = await transaction.finish();
-      warn(
-        `${keys.length ? `Reconciled Gateway service definition: ${keys.join(", ")}.` : "Refreshed Gateway service definition."} Backup: ${transaction.backupPaths.join(", ")}`,
-      );
-      return receipt;
-    } catch (error) {
-      assertCurrent();
+    return await settleGatewayServiceRebind(assertCurrent, async () => {
       try {
-        await transaction.compensate();
-      } catch (recoveryError) {
+        await params.install(transaction.hooks);
+        assertCurrent();
+        const receipt = await transaction.finish();
         warn(
-          `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}; backups retained: ${transaction.backupPaths.join(", ")}`,
+          `${keys.length ? `Reconciled Gateway service definition: ${keys.join(", ")}.` : "Refreshed Gateway service definition."} Backup: ${transaction.backupPaths.join(", ")}`,
         );
-        throw new Error(
-          `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
-          { cause: recoveryError },
+        return receipt;
+      } catch (error) {
+        assertCurrent();
+        try {
+          await transaction.compensate();
+        } catch (recoveryError) {
+          warn(
+            `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}; backups retained: ${transaction.backupPaths.join(", ")}`,
+          );
+          throw new Error(
+            `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
+            { cause: recoveryError },
+          );
+        }
+        return deny(
+          `Service definition refresh failed; the previous definition was restored: ${String(error)}`,
         );
       }
-      return deny(
-        `Service definition refresh failed; the previous definition was restored: ${String(error)}`,
-      );
-    }
+    });
   });
 }

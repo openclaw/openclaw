@@ -109,6 +109,9 @@ describe("candidate service capability startup", () => {
           updateExecutor: "root-spawner-v1",
           targetRootBinding: true,
           definitionBackup: true,
+          retainedOwnerBinding: true,
+          originalDefinitionBinding: true,
+          originalRuntimePinBinding: true,
         });
         const state = acquireStateDatabaseCoordinator({ databasePath: fixture.databasePath });
         try {

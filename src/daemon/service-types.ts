@@ -14,6 +14,11 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 export type GatewayServiceInstallArgs = {
   /** Required by managed writers when explicit runtime intent is already stored. */
   runtimePinUpdate?: DaemonRuntimePinUpdate;
+  /** Preserve the existing enable policy during an update-owned definition rebind. */
+  preserveAutoStart?: boolean;
+  beforeMutation?: () => Promise<void>;
+  /** Live caller authority, retained at every native write boundary. */
+  assertCurrent?: () => void;
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   warn?: (message: string) => void;
@@ -38,6 +43,10 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** Update stop identity only; the native owner must revalidate the live handoff lease. */
+  updateHandoff?: { root: string; runId: string };
+  /** Revalidate captured binding after native lock and config admission, before effects. */
+  beforeMutation?: () => Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
@@ -46,8 +55,6 @@ export type GatewayServiceControlArgs = {
   preserveAutoStart?: boolean;
   /** Original live caller fence, rechecked at native mutation boundaries. */
   assertCurrent?: () => void;
-  /** Update stop identity only; the native owner must revalidate the live handoff lease. */
-  updateHandoff?: { root: string; runId: string };
   warn?: (message: string) => void;
   onMutation?: (mutation: GatewayLifecycleMutation) => void;
 };

@@ -38,10 +38,10 @@ import { isPlainCommandExitFailure, runExec, type RunExecOptions } from "../../p
 import { defaultRuntime } from "../../runtime.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { parseUpdateTimeoutMs, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
+import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   assertUpdateDoctorChildSucceeded,
-  createUpdateDoctorAuthority,
   inspectUpdateDoctorChildSupport,
   withUpdateDoctorChild,
 } from "./update-command-doctor-child.js";
@@ -145,7 +145,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     assertCurrent,
     assertRequesterCurrent,
     refuseAuthority,
-  } = createUpdateDoctorAuthority(params);
+  } = createUpdateCommandAuthority(params, "Fresh Doctor");
   assertCurrent();
   const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
   if (!entryPath) {

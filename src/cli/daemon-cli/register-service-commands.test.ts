@@ -152,6 +152,9 @@ describe("addGatewayServiceCommands", () => {
           updateExecutor: "root-spawner-v1",
           targetRootBinding: true,
           definitionBackup: true,
+          retainedOwnerBinding: true,
+          originalDefinitionBinding: true,
+          originalRuntimePinBinding: true,
         }),
       );
       expect(ensureConfigReady).not.toHaveBeenCalled();
