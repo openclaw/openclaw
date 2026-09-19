@@ -76,3 +76,159 @@ describe("portaled hovercard presentation ownership", () => {
     expect(controller.card).toBeNull();
   });
 });
+
+describe("horizontal placement fallback", () => {
+  function horizontalFixture(innerW: number, anchorRect: DOMRect, cardW: number, cardH: number) {
+    Object.defineProperty(window, "innerWidth", {
+      value: innerW,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      value: 1000,
+      writable: true,
+      configurable: true,
+    });
+    const anchor = document.body.appendChild(document.createElement("a"));
+    anchor.getBoundingClientRect = () => anchorRect;
+    const controller = new PortaledHovercardController(() => controller.reset());
+    controller.markTrigger(anchor);
+    controller.mount(anchor, createPortaledHovercard("card", "preview"), "horizontal");
+    controller.pointerOverCard = true;
+    const card = controller.card!;
+    Object.defineProperty(card, "offsetWidth", { value: cardW, configurable: true });
+    Object.defineProperty(card, "offsetHeight", { value: cardH, configurable: true });
+    controller.position();
+    return { anchor, card, controller };
+  }
+
+  it("places card on the right when it fits", () => {
+    const { card } = horizontalFixture(
+      1000,
+      {
+        x: 10,
+        y: 100,
+        width: 200,
+        height: 30,
+        right: 210,
+        left: 10,
+        top: 100,
+        bottom: 130,
+        toJSON: () => ({}),
+      } as DOMRect,
+      300,
+      100,
+    );
+    expect(card.dataset.side).toBe("right");
+  });
+
+  it("places card on the left when right does not fit but left does", () => {
+    const { card } = horizontalFixture(
+      400,
+      {
+        x: 310,
+        y: 100,
+        width: 80,
+        height: 30,
+        right: 390,
+        left: 310,
+        top: 100,
+        bottom: 130,
+        toJSON: () => ({}),
+      } as DOMRect,
+      250,
+      100,
+    );
+    expect(card.dataset.side).toBe("left");
+  });
+
+  it("falls through to vertical placement when neither side fits", () => {
+    const { card } = horizontalFixture(
+      390,
+      {
+        x: 14,
+        y: 384,
+        width: 282,
+        height: 30,
+        right: 296,
+        left: 14,
+        top: 384,
+        bottom: 414,
+        toJSON: () => ({}),
+      } as DOMRect,
+      294,
+      136,
+    );
+    expect(card.dataset.side).not.toBe("left");
+    expect(card.dataset.side).not.toBe("right");
+    expect(["bottom", "top"]).toContain(card.dataset.side);
+  });
+
+  it("vertical fallback places card below when below fits", () => {
+    const { card } = horizontalFixture(
+      390,
+      {
+        x: 14,
+        y: 384,
+        width: 282,
+        height: 30,
+        right: 296,
+        left: 14,
+        top: 384,
+        bottom: 414,
+        toJSON: () => ({}),
+      } as DOMRect,
+      294,
+      136,
+    );
+    expect(card.dataset.side).toBe("bottom");
+  });
+
+  it("vertical fallback places card above when below does not fit", () => {
+    const { card } = horizontalFixture(
+      390,
+      {
+        x: 14,
+        y: 900,
+        width: 282,
+        height: 30,
+        right: 296,
+        left: 14,
+        top: 900,
+        bottom: 930,
+        toJSON: () => ({}),
+      } as DOMRect,
+      294,
+      136,
+    );
+    expect(card.dataset.side).toBe("top");
+  });
+
+  it("retains horizontal clamping when neither vertical side fits either", () => {
+    const { card, controller } = horizontalFixture(
+      390,
+      {
+        x: 14,
+        y: 384,
+        width: 282,
+        height: 30,
+        right: 296,
+        left: 14,
+        top: 384,
+        bottom: 414,
+        toJSON: () => ({}),
+      } as DOMRect,
+      294,
+      520,
+    );
+    // 520px card in 844px viewport: below needs 414+10+520+12=956 > 844, above needs 384-10-520-12 < 0
+    Object.defineProperty(window, "innerHeight", {
+      value: 844,
+      writable: true,
+      configurable: true,
+    });
+    controller.position();
+    expect(card.dataset.side).toBe("left");
+    expect(Number.parseInt(card.style.top, 10)).toBe(312);
+  });
+});

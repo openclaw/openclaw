@@ -382,11 +382,23 @@ function positionPortaledHovercard(
   const maxTop = Math.max(VIEWPORT_PADDING, innerHeight - cardHeight - VIEWPORT_PADDING);
   if (placement === "horizontal") {
     const fitsRight = anchorRect.right + CARD_GAP + cardWidth + VIEWPORT_PADDING <= innerWidth;
-    const left = fitsRight ? anchorRect.right + CARD_GAP : anchorRect.left - cardWidth - CARD_GAP;
-    card.dataset.side = fitsRight ? "right" : "left";
-    card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, left), maxLeft)}px`;
-    card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.top), maxTop)}px`;
-    return;
+    const fitsLeft = anchorRect.left - CARD_GAP - cardWidth - VIEWPORT_PADDING >= 0;
+    if (fitsRight || fitsLeft) {
+      const left = fitsRight ? anchorRect.right + CARD_GAP : anchorRect.left - cardWidth - CARD_GAP;
+      card.dataset.side = fitsRight ? "right" : "left";
+      card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, left), maxLeft)}px`;
+      card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.top), maxTop)}px`;
+      return;
+    }
+    const fitsBelow = anchorRect.bottom + CARD_GAP + cardHeight + VIEWPORT_PADDING <= innerHeight;
+    const fitsAbove = anchorRect.top - CARD_GAP - cardHeight - VIEWPORT_PADDING >= 0;
+    if (!fitsBelow && !fitsAbove) {
+      const left = anchorRect.left - cardWidth - CARD_GAP;
+      card.dataset.side = "left";
+      card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, left), maxLeft)}px`;
+      card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.top), maxTop)}px`;
+      return;
+    }
   }
   const fitsBelow = anchorRect.bottom + CARD_GAP + cardHeight + VIEWPORT_PADDING <= innerHeight;
   const side = fitsBelow ? "bottom" : "top";
