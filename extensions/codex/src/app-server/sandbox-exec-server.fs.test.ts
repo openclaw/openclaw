@@ -500,6 +500,42 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.close();
   });
 
+  it("denies a bridge-resolved read path before content or metadata leaves", async () => {
+    const readFile = vi.fn(async () => Buffer.from("blocked"));
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 7, mtimeMs: 1 }));
+    const sandbox = createSandboxContext({
+      readFile,
+      resolveReadPolicyPath: async () => "/workspace/private/secret.txt",
+      stat,
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+    const policy = codexFsSandboxContext({
+      entries: [
+        { path: specialPath("root"), access: "read" },
+        { path: specialPath("project_roots"), access: "write" },
+        { path: { type: "path", path: "file:///workspace/private" }, access: "deny" },
+      ],
+    });
+
+    for (const [method, params] of [
+      ["fs/open", { handleId: "read", path: "file:///workspace/allowed.txt" }],
+      ["fs/readFile", { path: "file:///workspace/allowed.txt" }],
+      ["fs/getMetadata", { path: "file:///workspace/allowed.txt" }],
+    ] as const) {
+      await expect(rpc(socket, method, { ...params, sandbox: policy })).rejects.toThrow(
+        "Codex fs sandbox denied read access",
+      );
+    }
+
+    expect(stat).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("ignores non-granting Codex fs sandbox special entries", async () => {
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ writeFile });

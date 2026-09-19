@@ -5,8 +5,10 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import {
   resolveSandboxFsMount,
@@ -15,6 +17,7 @@ import {
 } from "./fs-paths.js";
 import {
   getSandboxHostPathPolicyKey,
+  normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import {
@@ -124,13 +127,23 @@ export class SandboxFsPathGuard {
   async openReadableFile(
     target: SandboxResolvedFsPath,
     signal?: AbortSignal,
+    expectedPolicyPath?: string,
+    allowedType?: BoundaryAllowedType,
   ): Promise<RootFileOpenResult & { ok: true }> {
     const resolved = await this.resolveCanonicalReadTarget(target, "read files", signal);
-    const opened = await this.openBoundaryWithinRequiredMount(resolved.target, "read files");
+    const opened = await this.openBoundaryWithinRequiredMount(resolved.target, "read files", {
+      allowedType:
+        allowedType === "file-or-directory"
+          ? this.pathIsExistingDirectory(resolved.target.hostPath)
+            ? "directory"
+            : "file"
+          : allowedType,
+    });
     if (!opened.ok) {
       throw sandboxBoundaryError("read files", target.containerPath, opened.error);
     }
     try {
+      this.assertExpectedPolicyPath(resolved.target, opened.path, expectedPolicyPath);
       // Resolve aliases in the container before opening host bytes: an
       // intermediate hop can cross mounts even when its host endpoint does not.
       // Reject a host alias changed after that resolution; keep the same FD.
@@ -187,6 +200,44 @@ export class SandboxFsPathGuard {
     // unlinking an unresolved/outside final symlink. Unmapped endpoints never
     // borrow the hidden host path's identity.
     return resolved.canonicalHostPath ?? `container:${resolved.containerPath}`;
+  }
+
+  async resolveReadPolicyPath(
+    target: SandboxResolvedFsPath,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const resolved = await this.resolveCanonicalReadTarget(target, "authorize file reads", signal);
+    return this.policyPathForHostIdentity(resolved.target, resolved.canonicalHostPath);
+  }
+
+  private policyPathForHostIdentity(target: SandboxResolvedFsPath, observedPath: string): string {
+    return this.policyPathForCanonicalHostIdentity(
+      target,
+      resolveIdentityPathViaExistingAncestorSync(observedPath),
+    );
+  }
+
+  private policyPathForCanonicalHostIdentity(
+    target: SandboxResolvedFsPath,
+    observedPath: string,
+  ): string {
+    const canonicalHostPath = normalizeSandboxHostPath(observedPath);
+    const requestedMount = this.resolveMountByContainerPath(target.containerPath);
+    const selected =
+      requestedMount && isPathInside(requestedMount.canonicalHostRoot, canonicalHostPath)
+        ? requestedMount
+        : this.mountsByContainer
+            .toSorted((a, b) => b.canonicalHostRoot.length - a.canonicalHostRoot.length)
+            .find((mount) => isPathInside(mount.canonicalHostRoot, canonicalHostPath));
+    if (!selected) {
+      throw new Error(`Sandbox path escapes allowed mounts: ${target.containerPath}`);
+    }
+    const relativeHost = path.relative(selected.canonicalHostRoot, canonicalHostPath);
+    return normalizeContainerPathCore(
+      relativeHost
+        ? path.posix.join(selected.containerRoot, ...relativeHost.split(path.sep))
+        : selected.containerRoot,
+    );
   }
 
   async resolveCanonicalReadTarget(
@@ -427,6 +478,22 @@ export class SandboxFsPathGuard {
       return fs.statSync(hostPath).isDirectory();
     } catch {
       return false;
+    }
+  }
+
+  private assertExpectedPolicyPath(
+    target: SandboxResolvedFsPath,
+    observedPolicyPath: string,
+    expectedPolicyPath: string | undefined,
+  ): void {
+    if (
+      expectedPolicyPath !== undefined &&
+      // openRootFile already bound this admitted path to the returned FD.
+      // Re-resolving it here would observe a later pathname replacement.
+      this.policyPathForCanonicalHostIdentity(target, observedPolicyPath) !==
+        normalizeContainerPathCore(expectedPolicyPath)
+    ) {
+      throw new Error(`Sandbox file changed after authorization: ${target.containerPath}`);
     }
   }
 

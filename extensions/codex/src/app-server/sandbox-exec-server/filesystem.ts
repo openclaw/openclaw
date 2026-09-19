@@ -65,7 +65,8 @@ export async function openFile(
   }
 
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
   // Claim the handle before even stat so slow or cancelled stats cannot bypass
   // the connection's handle cap or lose their cancellation and ownership.
@@ -76,7 +77,17 @@ export async function openFile(
   };
   handles.set(handleId, handle);
   try {
-    const stat = await fsBridge.stat({ filePath, signal: handle.abortController.signal });
+    const readPolicy = await authorizePhysicalReadPath(
+      fsBridge,
+      fsSandboxPolicy,
+      filePath,
+      handle.abortController.signal,
+    );
+    const stat = await fsBridge.stat({
+      filePath,
+      signal: handle.abortController.signal,
+      ...readPolicy,
+    });
     if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
       throw new JsonRpcProtocolError(
         JSON_RPC_NOT_FOUND,
@@ -108,6 +119,7 @@ export async function openFile(
       filePath,
       maxBytes: handle.reservedBytes,
       signal: handle.abortController.signal,
+      ...readPolicy,
     });
     if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
       throw new JsonRpcProtocolError(
@@ -226,9 +238,11 @@ export async function readFile(
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/readFile params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
-  const stat = await fsBridge.stat({ filePath });
+  const readPolicy = await authorizePhysicalReadPath(fsBridge, fsSandboxPolicy, filePath);
+  const stat = await fsBridge.stat({ filePath, ...readPolicy });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
@@ -236,6 +250,7 @@ export async function readFile(
   const data = await fsBridge.readFile({
     filePath,
     maxBytes: CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES,
+    ...readPolicy,
   });
   return { dataBase64: data.toString("base64") };
 }
@@ -314,10 +329,14 @@ export async function getMetadata(
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/getMetadata params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "metadata path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
-  const stat = await execServer.fsBridge.stat({
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
+  const readPolicy = await authorizePhysicalReadPath(
+    execServer.fsBridge,
+    fsSandboxPolicy,
     filePath,
-  });
+  );
+  const stat = await execServer.fsBridge.stat({ filePath, ...readPolicy });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
@@ -368,6 +387,20 @@ async function listDirectoryEntries(
       isFile: kind === "f",
     };
   });
+}
+
+async function authorizePhysicalReadPath(
+  fsBridge: OpenClawExecServer["fsBridge"],
+  policy: ResolvedFsSandboxPolicy | undefined,
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<{ expectedPolicyPath?: string }> {
+  if (!policy || policy.unrestricted || !fsBridge.resolveReadPolicyPath) {
+    return {};
+  }
+  const expectedPolicyPath = await fsBridge.resolveReadPolicyPath({ filePath, signal });
+  assertResolvedFsSandboxAccess(policy, [{ path: expectedPolicyPath, access: "read" }]);
+  return { expectedPolicyPath };
 }
 
 /** Removes a sandbox path after rejecting writes outside policy or under read-only descendants. */

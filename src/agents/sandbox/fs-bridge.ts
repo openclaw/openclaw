@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
+import { isMissingPathError } from "../../infra/errors.js";
 import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "../../infra/guest-filesystem.js";
 import type {
   SandboxBackendCommandResult,
@@ -101,6 +102,15 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     return this.pathGuard.resolveFileIdentity(this.resolveResolvedPath(params), params.signal);
   }
 
+  async resolveReadPolicyPath(
+    params: Parameters<NonNullable<SandboxFsBridge["resolveReadPolicyPath"]>>[0],
+  ): Promise<string> {
+    return await this.pathGuard.resolveReadPolicyPath(
+      this.resolveResolvedPath(params),
+      params.signal,
+    );
+  }
+
   async resolvePinnedMutationTarget(
     params: Parameters<NonNullable<SandboxFsBridge["resolvePinnedMutationTarget"]>>[0],
   ): Promise<{ policyPath: string; pinnedPath: string }> {
@@ -117,7 +127,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    return this.readPinnedFile(target, params.maxBytes, params.signal);
+    return this.readPinnedFile(target, params.maxBytes, params.signal, params.expectedPolicyPath);
   }
 
   async readDirectory(
@@ -127,7 +137,13 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const result = await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "readdir",
-        check: { target, options: { action: "list directories", allowedType: "directory" } },
+        check: {
+          target,
+          options: {
+            action: "list directories",
+            allowedType: "directory",
+          },
+        },
         pinned: await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
           target,
           "list directories",
@@ -330,6 +346,34 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
+    if (params.expectedPolicyPath !== undefined) {
+      let opened;
+      try {
+        opened = await this.pathGuard.openReadableFile(
+          target,
+          params.signal,
+          params.expectedPolicyPath,
+          "file-or-directory",
+        );
+      } catch (error) {
+        if (
+          isMissingPathError(error) ||
+          (error instanceof Error && isMissingPathError(error.cause))
+        ) {
+          return null;
+        }
+        throw error;
+      }
+      try {
+        return {
+          type: opened.stat.isDirectory() ? "directory" : "file",
+          size: parseSandboxStatSize(String(opened.stat.size)),
+          mtimeMs: Math.trunc(opened.stat.mtimeMs),
+        };
+      } finally {
+        fs.closeSync(opened.fd);
+      }
+    }
     const resolved = await this.pathGuard.resolveCanonicalReadTarget(
       target,
       "stat files",
@@ -387,8 +431,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     target: SandboxResolvedFsPath,
     maxBytes?: number,
     signal?: AbortSignal,
+    expectedPolicyPath?: string,
   ): Promise<Buffer> {
-    const opened = await this.pathGuard.openReadableFile(target, signal);
+    const opened = await this.pathGuard.openReadableFile(target, signal, expectedPolicyPath);
     try {
       if (maxBytes === undefined) {
         return await readFileAsync(opened.fd);
