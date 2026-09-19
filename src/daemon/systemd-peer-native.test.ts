@@ -1,9 +1,14 @@
 import { expect, it } from "vitest";
-import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
+import {
+  GatewayServiceAuthorityError,
+  withGatewayServiceUpdateAuthority,
+} from "./service-update-authority.js";
 import { openSystemdBroker } from "./systemd-peer-native.js";
 
 it("checks inherited update authority before loading or opening a native transport", async () => {
   const denied = new Error("original update grant retired");
+  const isAuthorityRevocation = (error: unknown) =>
+    error instanceof GatewayServiceAuthorityError && error.cause === denied;
   let active = true;
   let transportFailure: unknown;
   await expect(
@@ -25,6 +30,6 @@ it("checks inherited update authority before loading or opening a native transpo
         }
       },
     ),
-  ).rejects.toBe(denied);
-  expect(transportFailure).toBe(denied);
+  ).rejects.toSatisfy(isAuthorityRevocation);
+  expect(transportFailure).toSatisfy(isAuthorityRevocation);
 });
