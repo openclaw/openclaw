@@ -55,6 +55,7 @@ const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetReca
 
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
+  assistantReplyStartLine?: number;
   assistantToolCallCounts: Record<string, number>;
   compactionSummaries: string[];
   completedToolCallCounts: Record<string, number>;
@@ -78,6 +79,11 @@ type QaSessionTranscriptSummary = {
 type QaSessionTranscriptSummaryOptions = {
   afterEventCursor?: number;
   allowEmpty?: boolean;
+  // Locates a visible assistant reply by exact text so a caller can cut the
+  // transcript at a real reply event. probeText matches the serialized event,
+  // which also hits reasoning blocks and tool arguments that merely quote the
+  // same string.
+  assistantReplyText?: string;
   pendingCodeModeExecNeedle?: string;
   probeText?: string;
 };
@@ -551,8 +557,21 @@ async function readSessionTranscriptSummary(
   const probeTextEndLine = probeText
     ? events.findLastIndex((event) => JSON.stringify(event).includes(probeText)) + 1
     : 0;
+  const assistantReplyText = options.assistantReplyText?.trim();
+  // The index of the event itself, not the position after it: an assistant
+  // message may carry both the visible reply and a tool call, and a cursor
+  // placed after it would drop that invocation while keeping its result.
+  const assistantReplyStartLine = assistantReplyText
+    ? events.findLastIndex((event) => {
+        const message = readSessionTranscriptEventMessage(event);
+        return (
+          message?.role === "assistant" && extractGatewayMessageText(message) === assistantReplyText
+        );
+      })
+    : -1;
   return {
     ...summary,
+    ...(assistantReplyStartLine >= 0 ? { assistantReplyStartLine } : {}),
     ...(isRecord(cutoff) && cutoff.state === "valid" && typeof cutoff.cutoffLine === "number"
       ? { resetRecallCutoffLine: cutoff.cutoffLine }
       : {}),
