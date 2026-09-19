@@ -136,6 +136,20 @@ function requestSlashCommandRefresh(
     });
 }
 
+function collectSlashMenuCategoryRuns(commands: SlashCommandDef[]): SlashCommandDef[] {
+  const runs: SlashCommandDef[][] = [];
+  for (const command of commands) {
+    const category = command.category ?? "session";
+    const run = runs.find((entries) => (entries[0]?.category ?? "session") === category);
+    if (run) {
+      run.push(command);
+    } else {
+      runs.push([command]);
+    }
+  }
+  return runs.flat();
+}
+
 export function updateSlashMenu(
   value: string,
   state: SlashMenuState,
@@ -212,10 +226,12 @@ export function updateSlashMenu(
       (!completion.inline || command.source === "skill" || host.canRun(true, command)),
   );
   state.slashMenuCompletion = completion;
-  state.slashMenuItems = [
-    ...items.filter((command) => command.source !== "skill"),
-    ...items.filter((command) => command.source === "skill"),
-  ];
+  const commands = items.filter((command) => command.source !== "skill");
+  const skills = items.filter((command) => command.source === "skill");
+  state.slashMenuItems =
+    value === "/"
+      ? [...collectSlashMenuCategoryRuns(commands), ...skills]
+      : [...commands, ...skills];
   state.slashMenuOpen = items.length > 0;
   state.slashMenuIndex = 0;
   state.slashMenuMode = "command";

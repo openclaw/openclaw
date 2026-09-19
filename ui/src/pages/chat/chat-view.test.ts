@@ -5760,6 +5760,77 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
+  it("keeps bare-slash arrow traversal aligned with displayed category groups", () => {
+    replaceSlashCommands([
+      {
+        key: "alpha-a",
+        name: "alpha-a",
+        description: "First session command.",
+        tier: "standard",
+        category: "session",
+      },
+      {
+        key: "beta-a",
+        name: "beta-a",
+        description: "Model command.",
+        tier: "standard",
+        category: "model",
+      },
+      {
+        key: "alpha-c",
+        name: "alpha-c",
+        description: "Power session command.",
+        tier: "power",
+        category: "session",
+      },
+    ]);
+    const harness = createSlashRerenderHarness();
+    let container = harness.inputAndRender(harness.container, "/");
+
+    const rowNames = () =>
+      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+      );
+    const activeRowName = () => {
+      const activeId = container
+        .querySelector<HTMLTextAreaElement>("textarea")
+        ?.getAttribute("aria-activedescendant");
+      expect(activeId).toBeTruthy();
+      return container
+        .querySelector(`#${CSS.escape(activeId ?? "")} .slash-menu-name`)
+        ?.textContent?.trim();
+    };
+    const selectedCount = () =>
+      container.querySelectorAll(".slash-menu [role='option'][aria-selected='true']").length;
+
+    expect(rowNames()).toEqual(["/alpha-a", "/alpha-c", "/beta-a"]);
+    expect(activeRowName()).toBe("/alpha-a");
+    expect(selectedCount()).toBe(1);
+
+    keydownComposer(container, "ArrowDown");
+    container = harness.renderCurrent();
+    expect(activeRowName()).toBe("/alpha-c");
+    expect(selectedCount()).toBe(1);
+
+    keydownComposer(container, "ArrowDown");
+    container = harness.renderCurrent();
+    expect(activeRowName()).toBe("/beta-a");
+    expect(selectedCount()).toBe(1);
+
+    keydownComposer(container, "ArrowDown");
+    container = harness.renderCurrent();
+    expect(activeRowName()).toBe("/alpha-a");
+
+    keydownComposer(container, "ArrowUp");
+    container = harness.renderCurrent();
+    expect(activeRowName()).toBe("/beta-a");
+
+    keydownComposer(container, "Enter");
+    container = harness.renderCurrent();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toContain("/beta-a");
+    expect(container.querySelector(".slash-menu")).toBeNull();
+  });
+
   it("keeps a stable composer name when attachments change its placeholder", () => {
     const harness = createReactiveDraftHarness();
     const textarea = requireElement(
