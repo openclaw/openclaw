@@ -528,8 +528,8 @@ describe("markdown sidebar", () => {
   it.each([
     ["external.html", "https://files.example/external.html", "text/html"],
     ["external.txt", "https://files.example/external.txt", "text/plain"],
+    ["external.pdf", "https://files.example/external.pdf", "application/pdf"],
     ["bundle.zip", "/__openclaw__/media/bundle.zip", "application/zip"],
-    ["brief.pdf", "/__openclaw__/media/brief.pdf", "application/pdf"],
   ] as const)(
     "renders document %s as a Files card without previewing it",
     async (title, src, mimeType) => {
