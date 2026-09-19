@@ -166,26 +166,44 @@ export function wrapStreamFnWithProviderPromptState(params: {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
     const originalOnPayload = options?.onPayload;
+    const admittedPayloads = params.assertFinalPayload ? new WeakSet<object>() : undefined;
     const observedOptions: NonNullable<Parameters<StreamFn>[2]> = {
       ...options,
-      onPayload: createNormalizingPayloadHook(async (payload, payloadModel, normalize) => {
-        const replacement = await originalOnPayload?.(payload, payloadModel);
-        const candidate = replacement === undefined ? payload : replacement;
-        // Ordinary retries preserve their existing payload contract. Custody requires
-        // the serializer to receive exactly the detached graph admitted below.
-        const finalPayload = params.assertFinalPayload
-          ? captureContinuationPayload(candidate, normalize)
-          : normalize(candidate);
-        params.assertFinalPayload?.(finalPayload, payloadModel.api);
-        const snapshot = snapshotProviderPrompt({
-          model: payloadModel,
-          payload: finalPayload,
-          effectiveContextTokenBudget: params.effectiveContextTokenBudget,
-        });
-        assertProviderPromptRetryProgress(params.state, snapshot);
-        params.state.lastAttempt = snapshot;
-        return finalPayload;
-      }),
+      onPayload: createNormalizingPayloadHook(
+        async (payload, payloadModel, normalize) => {
+          const replacement = await originalOnPayload?.(payload, payloadModel);
+          const candidate = replacement === undefined ? payload : replacement;
+          // Ordinary retries preserve their existing payload contract. Custody requires
+          // the serializer to receive exactly the detached graph admitted below.
+          const finalPayload = params.assertFinalPayload
+            ? captureContinuationPayload(candidate, normalize)
+            : normalize(candidate);
+          params.assertFinalPayload?.(finalPayload, payloadModel.api);
+          if (admittedPayloads && finalPayload !== null && typeof finalPayload === "object") {
+            admittedPayloads.add(finalPayload);
+          }
+          const snapshot = snapshotProviderPrompt({
+            model: payloadModel,
+            payload: finalPayload,
+            effectiveContextTokenBudget: params.effectiveContextTokenBudget,
+          });
+          assertProviderPromptRetryProgress(params.state, snapshot);
+          params.state.lastAttempt = snapshot;
+          return finalPayload;
+        },
+        admittedPayloads
+          ? (payload, payloadModel) => {
+              if (
+                payload === null ||
+                typeof payload !== "object" ||
+                !admittedPayloads.has(payload)
+              ) {
+                throw new Error("Quota continuation transport substituted the admitted payload");
+              }
+              params.assertFinalPayload?.(payload, payloadModel.api);
+            }
+          : undefined,
+      ),
     };
     if (params.recordEvent) {
       responsesPromptObserver.set(observedOptions, (observation) =>

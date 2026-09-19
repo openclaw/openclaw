@@ -381,7 +381,7 @@ transports (`openai-completions`, `openai-responses`, `anthropic-messages`) with
 final-payload admission, including configured OCI OpenAI-compatible Responses routes.
 Azure Responses and ChatGPT/subscription-specific Responses remain ineligible until
 their separate final-I/O authority and serializer contracts have equivalent proof.
-This does not change their ordinary non-continuation behavior. Result
+This does not change their ordinary non-continuation behavior. Continuation custody uses full-history HTTP requests, not a WebSocket, compact-endpoint, or previous-response projection. Explicit WebSocket-only continuation targets are refused; ordinary transport and replay optimizations are unchanged. A reconstructed retry must pass the private final-graph assertion before it can be sent. Result
 middleware, legacy extensions, redaction and context budgeting still run normally;
 if they change the concrete result's required text evidence, continuation is withheld
 rather than certifying the transformed output as the original result.

@@ -551,3 +551,24 @@ export async function readProviderBinaryResponse(
   }
   return bytes;
 }
+
+/** Preserves bounded transport-failure diagnostics without retaining a request owner. */
+export function summarizeProviderTransportError(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return `type=${typeof error}`;
+  }
+  // SAFETY: The non-null object guard permits key inspection; every reported value stays unknown and is checked below.
+  const record = error as Record<string, unknown>;
+  const cause =
+    record.cause && typeof record.cause === "object"
+      ? (record.cause as Record<string, unknown>) // SAFETY: The preceding non-null object guard establishes key inspection.
+      : undefined;
+  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
+  return [
+    `name=${read(record.name)}`,
+    `code=${read(record.code)}`,
+    `causeName=${read(cause?.name)}`,
+    `causeCode=${read(cause?.code)}`,
+    `message=${error instanceof Error ? error.message : read(record.message)}`,
+  ].join(" ");
+}

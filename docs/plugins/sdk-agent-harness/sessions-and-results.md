@@ -331,6 +331,10 @@ final-payload admission for `openai-completions`, `openai-responses` (including
 configured OCI-compatible routes), and `anthropic-messages`. Azure and
 ChatGPT/subscription-specific Responses are not yet admitted: they require separate
 final-I/O authority and serializer proof.
+The captured live run assertion also reaches the synchronous provider egress gate after
+awaited transport preparation, including redirects. Private Responses custody retains
+the full protected HTTP graph; socket/response-id/compact projections cannot replace it.
+Ordinary transport and normalization policies remain unchanged.
 Custom/session transports and opaque provider items fail closed. Canonical, runtime,
 legacy and layout media metadata, historical media and non-text source output are
 outside the initial portable scope. CLI dispatch is not supported.
