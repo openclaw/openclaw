@@ -13,6 +13,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { catalogMessageId } from "./catalog-message-id.ts";
+import { reconcileCatalogRefresh } from "./chat-pane-catalog-refresh.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
@@ -104,6 +106,184 @@ describe("catalog transcript cache", () => {
 });
 
 describe("chat pane catalog session lifecycle", () => {
+  it.each([
+    { name: "stable provider IDs", initialId: "answer", refreshedId: "answer" },
+    { name: "no provider IDs", initialId: undefined, refreshedId: undefined },
+  ])(
+    "replaces the refreshed latest page while preserving older history with $name",
+    async (ids) => {
+      const key = {
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "thread-101",
+      } satisfies CatalogSessionKey;
+      const listResult: SessionsCatalogListResult = {
+        catalogs: [
+          {
+            id: key.catalogId,
+            label: "Codex",
+            capabilities: { continueSession: false, archive: false },
+            hosts: [
+              {
+                hostId: key.hostId,
+                label: "Gateway",
+                kind: "gateway",
+                connected: true,
+                sessions: [
+                  {
+                    threadId: key.threadId,
+                    status: "idle",
+                    archived: false,
+                    canContinue: false,
+                    canArchive: false,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      let readCount = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.catalog.list") {
+          return listResult;
+        }
+        readCount += 1;
+        return readCount === 1
+          ? {
+              hostId: key.hostId,
+              threadId: key.threadId,
+              items: [{ id: ids.initialId, type: "agentMessage", text: "Partial answer" }],
+            }
+          : {
+              hostId: key.hostId,
+              threadId: key.threadId,
+              items: [
+                { id: "after", type: "agentMessage", text: "After exit" },
+                { id: ids.refreshedId, type: "agentMessage", text: "Final answer" },
+              ],
+            };
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      pane.sessionKey = state.sessionKey = buildCatalogSessionKey(key, "main");
+
+      await pane.loadCatalogSession(key, false);
+      pane.catalogMessages = [
+        { role: "assistant", content: [{ type: "text", text: "Older answer" }] },
+        ...pane.catalogMessages,
+      ];
+      await pane.loadCatalogSession(key, false, true);
+
+      expect(
+        pane.catalogMessages.map(
+          (message) => (message as { content: Array<{ text: string }> }).content[0]?.text,
+        ),
+      ).toEqual(["Older answer", "Final answer", "After exit"]);
+    },
+  );
+
+  it("keeps the refresh boundary stable across an interior insertion", () => {
+    const message = (id: string) => ({ role: "assistant", content: id, messageId: id });
+    const current = ["A", "B", "C", "D", "E"].map(message);
+    const refreshed = ["B", "C", "X", "D", "E", "F"].map(message);
+
+    expect(reconcileCatalogRefresh(current, refreshed, current.length, false)).toEqual(
+      ["A", "B", "C", "X", "D", "E", "F"].map(message),
+    );
+  });
+
+  it("reads backward until a refreshed latest page overlaps retained history", async () => {
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    const listResult: SessionsCatalogListResult = {
+      catalogs: [
+        {
+          id: key.catalogId,
+          label: "Codex",
+          capabilities: { continueSession: false, archive: false },
+          hosts: [
+            {
+              hostId: key.hostId,
+              label: "Gateway",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: key.threadId,
+                  status: "idle",
+                  archived: false,
+                  canContinue: false,
+                  canArchive: false,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const item = (index: number): SessionCatalogTranscriptItem => ({
+      id: `item-${index}`,
+      type: "agentMessage",
+      text: `Answer ${index}`,
+    });
+    let readCount = 0;
+    const request = vi.fn(async (method: string, params?: { cursor?: string }) => {
+      if (method === "sessions.catalog.list") {
+        return listResult;
+      }
+      readCount += 1;
+      if (readCount === 5) {
+        return {
+          hostId: key.hostId,
+          threadId: key.threadId,
+          items: [item(151)],
+        } satisfies SessionsCatalogReadResult;
+      }
+      const page =
+        readCount === 1
+          ? { newest: 50 }
+          : params?.cursor === "refresh-older-2"
+            ? { newest: 50 }
+            : params?.cursor === "refresh-older-1"
+              ? { newest: 100, nextCursor: "refresh-older-2" }
+              : { newest: 150, nextCursor: "refresh-older-1" };
+      return {
+        hostId: key.hostId,
+        threadId: key.threadId,
+        items: Array.from({ length: 50 }, (_, index) => item(page.newest - index)),
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      } satisfies SessionsCatalogReadResult;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(key, "main");
+
+    await pane.loadCatalogSession(key, false);
+    await pane.loadCatalogSession(key, false, true);
+
+    expect(pane.catalogMessages.map((message) => catalogMessageId(message))).toEqual(
+      Array.from({ length: 150 }, (_, index) => `item-${index + 1}`),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({ cursor: "refresh-older-1" }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({ cursor: "refresh-older-2" }),
+    );
+
+    await pane.loadCatalogSession(key, false, true);
+    expect(pane.catalogMessages.map((message) => catalogMessageId(message))).toEqual([
+      ...Array.from({ length: 100 }, (_, index) => `item-${index + 1}`),
+      "item-151",
+    ]);
+  });
+
   it.each(["global", "agent:other:main", "agent:other:catalog:fixture:gateway:Thread"])(
     "preserves the pane owner and pending model selection across ordinary snapshots for %s",
     (sessionKey) => {

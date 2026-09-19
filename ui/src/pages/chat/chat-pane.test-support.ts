@@ -153,7 +153,11 @@ export type TestChatPane = HTMLElement & {
   historyObserverArmed: boolean;
   transcriptScrollTop: number | null;
   syncHistoryObserver: () => void;
-  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<boolean>;
+  loadCatalogSession: (
+    key: CatalogSessionKey,
+    older: boolean,
+    preserveHistory?: boolean,
+  ) => Promise<boolean>;
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
   loadOlderMessages: () => Promise<void>;

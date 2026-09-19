@@ -29,6 +29,8 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
+import { loadCatalogRefreshPages, reconcileCatalogRefresh } from "./chat-pane-catalog-refresh.ts";
+import { ChatCatalogReleaseReconciler } from "./chat-pane-catalog-release.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
@@ -46,15 +48,28 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
-function catalogRefreshMessageIdentity(message: unknown): string | null {
-  const id = catalogMessageId(message);
-  const projection = id ? null : JSON.stringify(message);
-  return id ? `id:${id}` : projection ? `projection:${projection}` : null;
-}
-
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
+  private catalogLatestPageSize = 0;
+  private readonly catalogReleaseReconciler = new ChatCatalogReleaseReconciler({
+    current: () => {
+      const state = this.state;
+      return state?.client
+        ? {
+            connected: state.connected,
+            client: state.client,
+            sessionKey: this.sessionKey,
+            agentId: resolveChatAgentId(state),
+          }
+        : null;
+    },
+    load: (key) => this.loadCatalogSession(key, false, true),
+  });
+
+  protected connectCatalogReleaseReconciler(): () => void {
+    return this.catalogReleaseReconciler.connect();
+  }
 
   protected secondarySessionReadsReady(explicit = false): boolean {
     const state = this.state;
@@ -401,6 +416,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
     this.catalogRequestedSessionKey = this.sessionKey;
     this.catalogMessages = [];
+    this.catalogLatestPageSize = 0;
     this.catalogCursor = undefined;
     this.catalogSession = null;
     this.catalogHost = null;
@@ -553,7 +569,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (requestedOlderCursor) {
         this.olderCursorsSeen.add(requestedOlderCursor);
       }
-      const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+      const readParams = {
         agentId,
         catalogId: key.catalogId,
         hostId: key.hostId,
@@ -562,40 +578,47 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           ? { sourceHomeId: this.catalogSession.sourceHomeId }
           : {}),
         limit: 50,
+      };
+      const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+        ...readParams,
         ...(older && this.catalogCursor ? { cursor: this.catalogCursor } : {}),
       });
       if (!isCurrent()) {
         return false;
       }
-      const messages = page.items
-        .toReversed()
-        .map((item) => this.catalogItemMessage(item))
-        .filter((message) => message !== null);
-      const duplicateCounts = new Map<string, number>();
-      for (const message of this.catalogMessages) {
-        const identity = catalogRefreshMessageIdentity(message);
-        if (identity) {
-          duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
-        }
+      const project = (readPage: SessionsCatalogReadResult) =>
+        readPage.items
+          .toReversed()
+          .map((item) => this.catalogItemMessage(item))
+          .filter((message) => message !== null);
+      const latestPageMessages = project(page);
+      const refresh = preserveHistory
+        ? await loadCatalogRefreshPages({
+            current: this.catalogMessages,
+            firstPage: page,
+            firstPageMessages: latestPageMessages,
+            isCurrent,
+            project,
+            read: (cursor) =>
+              client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+                ...readParams,
+                cursor,
+              }),
+          })
+        : null;
+      if (preserveHistory && !refresh) {
+        return false;
       }
+      const messages = refresh?.messages ?? latestPageMessages;
       const nextMessages = older
         ? this.prependUniqueCatalogMessages(messages)
         : preserveHistory
-          ? [
-              ...this.catalogMessages,
-              ...messages.filter((message) => {
-                const identity = catalogRefreshMessageIdentity(message);
-                if (!identity) {
-                  return true;
-                }
-                const remaining = duplicateCounts.get(identity) ?? 0;
-                if (remaining === 0) {
-                  return true;
-                }
-                duplicateCounts.set(identity, remaining - 1);
-                return false;
-              }),
-            ]
+          ? reconcileCatalogRefresh(
+              this.catalogMessages,
+              messages,
+              this.catalogLatestPageSize,
+              refresh?.complete ?? false,
+            )
           : messages;
       const addedMessages = nextMessages.length > this.catalogMessages.length;
       // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
@@ -611,6 +634,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.catalogMessages = nextMessages;
       if (!preserveHistory) {
         this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
+      }
+      if (!older) {
+        this.catalogLatestPageSize = latestPageMessages.length;
       }
       state.lastError = null;
       scheduleChatScroll(state, !older && !preserveHistory);

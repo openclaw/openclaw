@@ -11,7 +11,6 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
@@ -22,16 +21,10 @@ import {
 } from "../../components/panel-toggle-contract.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
-import {
-  CATALOG_SESSION_RELEASED_EVENT,
-  CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS,
-  catalogSessionReleasedDetailFromEvent,
-  parseCatalogSessionKey,
-} from "../../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  normalizeAgentId,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import * as chatAvatars from "./chat-avatar.ts";
@@ -53,6 +46,7 @@ import {
 import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
+  subscribeBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
@@ -78,7 +72,6 @@ import {
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
@@ -117,52 +110,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
   private composerPresentation: ChatPaneComposerHandoff | undefined;
-  private catalogReleaseRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-
-  private readonly handleCatalogSessionReleased = (event: Event) => {
-    const state = this.state;
-    const key = parseCatalogSessionKey(this.sessionKey);
-    const detail = catalogSessionReleasedDetailFromEvent(event);
-    if (
-      !state?.connected ||
-      !state.client ||
-      !key ||
-      !detail ||
-      !detail.threadId ||
-      key.catalogId !== detail.catalogId ||
-      key.hostId !== detail.hostId ||
-      key.threadId !== detail.threadId ||
-      resolveChatAgentId(state) !== normalizeAgentId(detail.agentId)
-    ) {
-      return;
-    }
-    if (this.catalogReleaseRefreshTimer !== null) {
-      globalThis.clearTimeout(this.catalogReleaseRefreshTimer);
-    }
-    const client = state.client;
-    const sessionKey = this.sessionKey;
-    const reconcile = (attempt: number) => {
-      this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
-        this.catalogReleaseRefreshTimer = null;
-        const currentKey = parseCatalogSessionKey(this.sessionKey);
-        if (
-          !this.state?.connected ||
-          this.state.client !== client ||
-          this.sessionKey !== sessionKey ||
-          !currentKey
-        ) {
-          return;
-        }
-        void this.loadCatalogSession(currentKey, false, true).then(() => {
-          if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
-            reconcile(attempt + 1);
-          }
-        });
-      }, CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS[attempt]);
-    };
-    reconcile(0);
-  };
-
   protected activateComposerPresentation(): void {
     if (this.selected && this.presented) {
       this.composerPresentation?.claim();
@@ -487,20 +434,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft, []);
     }
-    const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
-    window.addEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation);
-    chatState.addCleanup(() =>
-      window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
+    chatState.addCleanup(
+      subscribeBrowserAnnotation((event) => this.receiveBrowserAnnotation(event)),
     );
-    document.addEventListener(CATALOG_SESSION_RELEASED_EVENT, this.handleCatalogSessionReleased);
-    chatState.addCleanup(() => {
-      document.removeEventListener(
-        CATALOG_SESSION_RELEASED_EVENT,
-        this.handleCatalogSessionReleased,
-      );
-      globalThis.clearTimeout(this.catalogReleaseRefreshTimer ?? undefined);
-      this.catalogReleaseRefreshTimer = null;
-    });
+    chatState.addCleanup(this.connectCatalogReleaseReconciler());
     const panelToggleEvents = [
       [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
       [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],

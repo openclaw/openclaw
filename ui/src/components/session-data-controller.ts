@@ -11,11 +11,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
-import {
-  catalogSessionReleasedDetailFromEvent,
-  CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS,
-  type CatalogSessionContinuedDetail,
-} from "../lib/sessions/catalog-key.ts";
 import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -31,14 +26,12 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
-  applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogChanged as applySessionCatalogChangedToData,
   invalidateSessionCatalogs as invalidateSessionCatalogData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
-  requestSessionCatalogRefresh,
   resolveSessionCatalogAgentId,
   scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
@@ -57,6 +50,7 @@ import {
   subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-controller-events.ts";
+import { SessionCatalogReleaseReconciler } from "./session-data-controller-release.ts";
 import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 import { SessionLineageController } from "./session-lineage-controller.ts";
 
@@ -108,7 +102,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
   private cachedSessionResult: SessionsListResult | null = null;
   private stopCatalogBrowserEvents: (() => void) | null = null;
-  private catalogReleaseRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private readonly catalogReleaseReconciler = new SessionCatalogReleaseReconciler(this);
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -200,8 +194,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   hostConnected(): void {
     this.subscriptions.hostConnected();
     this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
-      this.handleCatalogSessionContinued as EventListener,
-      this.handleCatalogSessionReleased,
+      this.catalogReleaseReconciler.handleContinued as EventListener,
+      this.catalogReleaseReconciler.handle,
       this.handleSessionCatalogPageActivation,
     );
   }
@@ -253,10 +247,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   retireSessionCatalogData(): void {
-    if (this.catalogReleaseRefreshTimer !== null) {
-      globalThis.clearTimeout(this.catalogReleaseRefreshTimer);
-      this.catalogReleaseRefreshTimer = null;
-    }
+    this.catalogReleaseReconciler.clear();
     this.sessionScopeGeneration += 1;
     this.pendingCatalogArchives.clear();
     this.sessionsLoading = false;
@@ -335,45 +326,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   handleSessionCatalogChanged(payload: unknown): void {
     applySessionCatalogChangedToData(this, payload);
   }
-
-  private readonly handleCatalogSessionContinued = (
-    event: CustomEvent<CatalogSessionContinuedDetail>,
-  ) => {
-    applySessionCatalogContinuation(this, event.detail);
-  };
-
-  private readonly handleCatalogSessionReleased = (event: Event) => {
-    const detail = catalogSessionReleasedDetailFromEvent(event);
-    const rawAgentId = detail?.agentId.trim() ?? "";
-    const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
-    const currentAgentId = this.sessionCatalogAgentId
-      ? normalizeAgentId(this.sessionCatalogAgentId)
-      : null;
-    const ownsHost = this.sessionCatalogs
-      .find((catalog) => catalog.id === detail?.catalogId)
-      ?.hosts.some((host) => host.hostId === detail?.hostId);
-    if (!detail || !eventAgentId || eventAgentId !== currentAgentId || !ownsHost) {
-      return;
-    }
-    if (this.catalogReleaseRefreshTimer !== null) {
-      globalThis.clearTimeout(this.catalogReleaseRefreshTimer);
-    }
-    const client = this.gatewayClient;
-    const generation = this.sessionScopeGeneration;
-    const reconcile = (attempt: number) => {
-      this.catalogReleaseRefreshTimer = globalThis.setTimeout(() => {
-        this.catalogReleaseRefreshTimer = null;
-        if (client !== this.gatewayClient || generation !== this.sessionScopeGeneration) {
-          return;
-        }
-        void requestSessionCatalogRefresh(this);
-        if (attempt + 1 < CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS.length) {
-          reconcile(attempt + 1);
-        }
-      }, CATALOG_SESSION_RELEASE_RECONCILE_DELAYS_MS[attempt]);
-    };
-    reconcile(0);
-  };
 
   private readonly handleSessionCatalogPageActivation = () => {
     scheduleSessionCatalogRefresh(this);

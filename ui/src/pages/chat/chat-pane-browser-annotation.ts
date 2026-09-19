@@ -1,6 +1,7 @@
-import type {
-  BrowserAnnotationDraft,
-  BrowserAnnotationEvent,
+import {
+  BROWSER_ANNOTATION_EVENT,
+  type BrowserAnnotationDraft,
+  type BrowserAnnotationEvent,
 } from "../../components/browser/browser-annotation.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
 import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
@@ -15,6 +16,11 @@ export function focusBrowserAnnotationComposerAfterUpdate(
       preventScroll: true,
     });
   });
+}
+
+export function subscribeBrowserAnnotation(listener: EventListener): () => void {
+  window.addEventListener(BROWSER_ANNOTATION_EVENT, listener);
+  return () => window.removeEventListener(BROWSER_ANNOTATION_EVENT, listener);
 }
 
 /** Adopts one complete browser annotation without mixing generated context into the user's draft. */

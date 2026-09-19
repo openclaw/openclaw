@@ -59,14 +59,18 @@ suite.define(() => {
     const latestRead = {
       hostId: "gateway:local",
       threadId: "codex-terminal-session",
-      items: [{ type: "agentMessage", text: "Native answer" }],
+      items: [
+        { id: "native-answer", type: "agentMessage", text: "Native answer" },
+        { id: "older-answer", type: "agentMessage", text: "Older answer" },
+      ],
       nextCursor: "older",
     };
     const newerRead = {
       ...latestRead,
       items: [
-        { type: "agentMessage", text: "After exit" },
-        { type: "agentMessage", text: "Native answer" },
+        { id: "after-exit", type: "agentMessage", text: "After exit" },
+        { id: "native-answer", type: "agentMessage", text: "Native answer finalized" },
+        { id: "older-answer", type: "agentMessage", text: "Older answer" },
       ],
     };
     const gateway = await installMockGateway(page, {
@@ -77,17 +81,7 @@ suite.define(() => {
       ],
       methodResponses: {
         "sessions.catalog.list": staleCatalog,
-        "sessions.catalog.read": {
-          sequence: [
-            {
-              hostId: "gateway:local",
-              threadId: "codex-terminal-session",
-              items: [{ type: "agentMessage", text: "Older answer" }],
-            },
-            latestRead,
-            newerRead,
-          ],
-        },
+        "sessions.catalog.read": latestRead,
         "sessions.catalog.continue": { sessionKey: "agent:main:continued-after-exit" },
         "terminal.list": { sessions: [] },
         "terminal.open": {
@@ -102,33 +96,51 @@ suite.define(() => {
     });
     const readCount = () =>
       gateway.getRequests("sessions.catalog.read").then((rows) => rows.length);
+    const catalogListCount = () =>
+      gateway.getRequests("sessions.catalog.list").then((rows) => rows.length);
     await page.goto(`${suite.server.baseUrl}chat`);
+    await gateway.waitForRequest("sessions.catalog.list");
     await expandCodingSection(page);
     const row = page.locator(CATALOG_ROW).filter({ hasText: "Native Codex terminal" });
     await gateway.deferNext("sessions.catalog.read");
     const readsBeforeRefresh = await readCount();
     await row.click();
-    const pane = page.locator("openclaw-chat-pane").filter({ hasText: "Native answer" });
+    const pane = page
+      .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
+      .filter({ hasText: "Native answer" });
     const composer = pane.locator(".agent-chat__composer-combobox > textarea");
     await expect.poll(readCount).toBeGreaterThan(readsBeforeRefresh);
     const readsWhileLoading = await readCount();
     await row.click({ button: "right", force: true });
     await page.locator('wa-dropdown-item[value="terminal"]').click({ force: true });
     await gateway.waitForRequest("terminal.open");
-    await gateway.setMethodResponse("sessions.catalog.list", {
-      sequence: [staleCatalog, staleCatalog, staleCatalog, staleCatalog, codexCatalog(true)],
-    });
+    const listsBeforeRelease = await catalogListCount();
     await gateway.emitGatewayEvent("terminal.exit", {
       sessionId: "codex-terminal-release",
       reason: "process_exit",
       exitCode: 0,
     });
     await page.clock.fastForward(5_100);
+    await gateway.waitForRequest("sessions.catalog.list", { after: listsBeforeRelease });
     await expect.poll(readCount).toBe(readsWhileLoading);
     await gateway.resolveDeferred("sessions.catalog.read", latestRead);
+    await expect.poll(() => pane.getByText("Native answer").count()).toBe(1);
+    const readsBeforeReturn = await readCount();
+    await gateway.deferNext("sessions.catalog.read");
     await row.click();
+    await page.waitForURL(/\/chat/u);
+    await gateway.waitForRequest("sessions.catalog.read", { after: readsBeforeReturn });
+    await gateway.resolveDeferred("sessions.catalog.read", latestRead);
+    await expect
+      .poll(() => pane.evaluate((element) => Reflect.get(element, "catalogLoading")))
+      .toBe(false);
+    await gateway.setMethodResponse("sessions.catalog.list", codexCatalog(true));
+    await gateway.setMethodResponse("sessions.catalog.read", newerRead);
+    const listsBeforeReconcile = await catalogListCount();
+    const readsBeforeReconcile = await readCount();
     await page.clock.fastForward(28_100);
-    await page.clock.fastForward(1_100);
+    await gateway.waitForRequest("sessions.catalog.list", { after: listsBeforeReconcile });
+    await gateway.waitForRequest("sessions.catalog.read", { after: readsBeforeReconcile });
     await expect.poll(() => composer.isEnabled()).toBe(true);
     expect(
       await pane.evaluate((element) =>
@@ -136,7 +148,7 @@ suite.define(() => {
           (message: { content: Array<{ text: string }> }) => message.content[0]?.text,
         ),
       ),
-    ).toEqual(["Older answer", "Native answer", "After exit"]);
+    ).toEqual(["Older answer", "Native answer finalized", "After exit"]);
     await gateway.deferNext("sessions.catalog.continue");
     await composer.fill("Continue after exit");
     await composer.press("Enter");
@@ -147,7 +159,6 @@ suite.define(() => {
   });
   it("discovers a New Session terminal after writer exit and opens it continuable", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1440, height: 900 } });
-    await page.clock.install();
     const gateway = await installMockGateway(page, {
       cliAgentsEnabled: true,
       featureMethods: [...TERMINAL_START_FEATURE_METHODS, "sessions.catalog.read"],
@@ -170,23 +181,29 @@ suite.define(() => {
       workspace: WORKSPACE,
     });
     await page.goto(`${suite.server.baseUrl}new?agent=main&catalog=codex`);
+    await gateway.waitForRequest("sessions.catalog.list");
+    const start = page.locator(".new-session-page__start-submit");
     const message = page.locator(".new-session-page__message");
     await message.fill("Explain the project architecture");
+    await expect.poll(() => start.isEnabled()).toBe(true);
     await message.press("Enter");
+    await gateway.waitForRequest("sessions.catalog.startTerminal");
     await page.waitForURL(`${suite.server.baseUrl}terminal/codex-new-terminal`);
     await page.locator(".tabstrip-tab").waitFor();
-    await gateway.setMethodResponse("sessions.catalog.list", {
-      sequence: [codexCatalog(), codexCatalog(), codexCatalog(true)],
-    });
+    await page.clock.install();
+    const listsBeforeRelease = (await gateway.getRequests("sessions.catalog.list")).length;
     await gateway.emitGatewayEvent("terminal.exit", {
       sessionId: "codex-new-terminal",
       reason: "process_exit",
       exitCode: 0,
     });
     await page.clock.fastForward(5_100);
-    await page.clock.fastForward(28_100);
+    await gateway.waitForRequest("sessions.catalog.list", { after: listsBeforeRelease });
     expect(await page.locator(CATALOG_ROW).count()).toBe(0);
-    await page.clock.fastForward(1_100);
+    await gateway.setMethodResponse("sessions.catalog.list", codexCatalog(true));
+    const listsBeforeReconcile = (await gateway.getRequests("sessions.catalog.list")).length;
+    await page.clock.fastForward(28_100);
+    await gateway.waitForRequest("sessions.catalog.list", { after: listsBeforeReconcile });
     await expandCodingSection(page);
     const row = page.locator(CATALOG_ROW).filter({ hasText: "Native Codex terminal" });
     await row.click();
