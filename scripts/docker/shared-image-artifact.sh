@@ -5,8 +5,6 @@ if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 
 fi
 set -euo pipefail
 
-command_name="${1:?command is required}"
-shift
 artifact_dir=""
 artifact_kind=""
 target_sha=""
@@ -16,6 +14,14 @@ shared_package_sha256="${OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256:-}"
 shared_archive_sha256="${OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256:-}"
 shared_run_id="${OPENCLAW_SHARED_IMAGE_RUN_ID:-}"
 shared_run_attempt="${OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT:-}"
+# gh api has no built-in request deadline, so a stalled connection would otherwise
+# hang until the job-level timeout kills the whole runner job. Both bounds are fixed
+# production values rather than configuration: a shorter deadline could fail healthy
+# verification, and a longer one could outlive the job budget.
+gh_api_get_request_timeout="30s"
+# TERM alone cannot stop a process that catches or blocks it; escalate to KILL after
+# a finite grace so the request deadline stays hard (mirrors workflow-sanity.yml).
+gh_api_get_request_kill_grace="10s"
 
 archive_name="shared-images.tar.zst"
 manifest_path=""
@@ -70,6 +76,7 @@ is_transient_gh_api_get_error() {
   fi
 
   [[ "$error_text" == *"i/o timeout"* ||
+    "$error_text" == *"request deadline"* ||
     "$error_text" =~ [Cc]ontext[[:space:]]+deadline[[:space:]]+exceeded ||
     "$error_text" =~ [Cc]onnection[[:space:]]+(refused|reset) ||
     "$error_text" =~ [Nn]etwork[[:space:]]+is[[:space:]]+unreachable ||
@@ -86,6 +93,10 @@ gh_api_get_with_retry() {
   local label="$1"
   local endpoint="$2"
   local not_found_policy="$3"
+  # Optional timing parameters let the deadline boundary be driven directly without
+  # shortening the deployed bounds; production callers use the fixed defaults.
+  local request_timeout="${4:-$gh_api_get_request_timeout}"
+  local kill_grace="${5:-$gh_api_get_request_kill_grace}"
   local attempt error_file response_file retry_delay retry_dir
   case "$not_found_policy" in
     fail-fast) ;;
@@ -107,10 +118,22 @@ gh_api_get_with_retry() {
   for attempt in 1 2 3; do
     : > "$response_file"
     : > "$error_file"
-    if gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
+    local gh_status=0
+    timeout --signal=TERM --kill-after="$kill_grace" \
+      "$request_timeout" gh api --method GET "$endpoint" \
+      > "$response_file" 2> "$error_file" || gh_status=$?
+    if [[ "$gh_status" -eq 0 ]]; then
       cat "$response_file"
       rm -rf -- "$retry_dir"
       return 0
+    fi
+
+    if [[ "$gh_status" -eq 124 || "$gh_status" -eq 137 ]]; then
+      # timeout(1) killed a stalled gh api request (124 on TERM expiry, 137 after
+      # KILL escalation); record a transient signature so the retry classifier
+      # below treats the hang like any other network stall.
+      printf 'gh: GitHub API GET exceeded the %s request deadline.\n' \
+        "$request_timeout" >> "$error_file"
     fi
 
     if [[ "$attempt" -lt 3 ]] &&
@@ -435,6 +458,14 @@ NODE
   trap - EXIT
 }
 
+# Sourced callers (test/scripts/shared-image-artifact.test.ts) drive the helpers
+# directly; only direct execution parses arguments and dispatches a command.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
+command_name="${1:?command is required}"
+shift
 case "$command_name" in
   pack | load)
     configure_image_artifact_inputs "$@"
