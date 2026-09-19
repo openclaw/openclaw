@@ -76,8 +76,8 @@ describe("stuck session follow-up recovery", () => {
         await vi.advanceTimersByTimeAsync(15_100);
 
         await expect(recovery).resolves.toMatchObject({
-          status: "aborted",
-          action: "abort_embedded_run",
+          status: "force_cleared",
+          action: "force_clear_embedded_run",
           forceCleared: true,
         });
         await vi.advanceTimersByTimeAsync(0);
