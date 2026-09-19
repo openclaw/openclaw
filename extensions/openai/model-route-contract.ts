@@ -72,6 +72,8 @@ export const OPENAI_CHATGPT_MODERN_MODEL_IDS = [
   ...OPENAI_SUBSCRIPTION_ONLY_ROUTE_MODEL_IDS,
 ] as const;
 
+const openAIProviderModernModelIds = new Set<string>(OPENAI_PROVIDER_MODERN_MODEL_IDS);
+const openAIChatGPTModernModelIds = new Set<string>(OPENAI_CHATGPT_MODERN_MODEL_IDS);
 const openAIDualRouteModelIds = new Set<string>(OPENAI_DUAL_ROUTE_MODEL_IDS);
 const openAIPlatformOnlyRouteModelIds = new Set<string>(OPENAI_PLATFORM_ONLY_ROUTE_MODEL_IDS);
 const openAISubscriptionOnlyRouteModelIds = new Set<string>(
@@ -124,6 +126,16 @@ export function resolveOpenAICodexReasoningEfforts(
     ...OPENAI_CODEX_REASONING_EFFORT_ORDER.filter((effort) => supported.delete(effort)),
     ...supported,
   ];
+}
+
+/** First-party ids the unified provider recognizes, whether or not a static route contract exists. */
+export function isOpenAIProviderModernModelId(value: string | undefined): boolean {
+  return openAIProviderModernModelIds.has(normalizeOpenAIRouteMembershipId(value));
+}
+
+/** Ids the ChatGPT catalog may list offline: dual-route and subscription-only contracts. */
+export function isOpenAIChatGPTModernModelId(value: string | undefined): boolean {
+  return openAIChatGPTModernModelIds.has(normalizeOpenAIRouteMembershipId(value));
 }
 
 export function isOpenAIDualRouteModelId(value: string | undefined): boolean {

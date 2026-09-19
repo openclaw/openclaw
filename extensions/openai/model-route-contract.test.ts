@@ -31,6 +31,27 @@ describe("OpenAI model route contract", () => {
     expect(isOpenAISubscriptionOnlyRouteModelId("GPT-5.3-CODEX-SPARK")).toBe(true);
   });
 
+  it("routes a contract-less modern id to the Platform API without an authored base URL", () => {
+    expect(isOpenAIDualRouteModelId("gpt-5.4-nano")).toBe(false);
+    expect(isOpenAIPlatformOnlyRouteModelId("gpt-5.4-nano")).toBe(false);
+    expect(OPENAI_CHATGPT_MODERN_MODEL_IDS).not.toContain("gpt-5.4-nano");
+    expect(resolveUnconfiguredModel("gpt-5.4-nano")).toMatchObject({
+      kind: "routes",
+      defaultRuntimeId: "codex",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+        },
+      ],
+    });
+    // Unknown custom ids keep deferring to observation or authored config.
+    expect(resolveUnconfiguredModel("gpt-future-observed")).toMatchObject({
+      kind: "indeterminate",
+    });
+  });
+
   it("keeps route eligibility aligned with both provider runtime surfaces", () => {
     const provider = buildOpenAIProvider();
     const chatGPTHooks = buildOpenAICodexProviderHooks();
@@ -57,6 +78,10 @@ describe("OpenAI model route contract", () => {
 
     for (const modelId of OPENAI_PROVIDER_MODERN_MODEL_IDS) {
       expect(provider.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
+      // The three membership filters below skip an id that sits in no route set,
+      // so assert the runtime invariant directly: every modern id resolves to at
+      // least one route with nothing authored or observed (gpt-5.4-nano, #148559).
+      expect(resolveUnconfiguredModel(modelId)).toMatchObject({ kind: "routes" });
     }
     for (const modelId of OPENAI_CHATGPT_MODERN_MODEL_IDS) {
       expect(chatGPTHooks.isModernModelRef?.({ provider: "openai", modelId })).toBe(true);
