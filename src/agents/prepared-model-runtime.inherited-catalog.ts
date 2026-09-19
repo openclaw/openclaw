@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
+import { parseModelCatalogJson } from "./model-catalog-json.js";
 
 type SanitizedValue = { changed: boolean; value: unknown };
 
@@ -53,7 +54,7 @@ function sanitizeInheritedProvider(value: unknown): SanitizedValue {
 export function sanitizeInheritedModelsJsonContents(contents: string): string {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(contents);
+    parsed = parseModelCatalogJson(contents);
   } catch {
     return contents;
   }

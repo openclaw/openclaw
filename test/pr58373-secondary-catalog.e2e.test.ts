@@ -140,10 +140,14 @@ describe("PR #58373 secondary catalog runtime proof", () => {
             }),
           ),
         };
-        await fs.writeFile(
-          path.join(mainAgentDir, "models.json"),
-          `${JSON.stringify({ providers: { [provider.providerId]: catalogProvider } }, null, 2)}\n`,
-        );
+        const mainCatalog = JSON.stringify(
+          { providers: { [provider.providerId]: catalogProvider } },
+          null,
+          2,
+        )
+          .replace('"providers": {', '"providers": {\n    // Supported catalog comment.')
+          .replace('"X-Model-Route": "model-route"', '"X-Model-Route": "model-route",');
+        await fs.writeFile(path.join(mainAgentDir, "models.json"), `${mainCatalog}\n`);
         saveAuthProfileStore(
           {
             version: 1,

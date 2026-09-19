@@ -331,9 +331,8 @@ describe("prepared catalog source composition", () => {
     const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
     const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
     fs.mkdirSync(systemAgentDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(systemAgentDir, "models.json"),
-      JSON.stringify({
+    const inheritedCatalog = JSON.stringify(
+      {
         providers: {
           [providerId]: {
             ...configured,
@@ -355,8 +354,13 @@ describe("prepared catalog source composition", () => {
             ],
           },
         },
-      }),
-    );
+      },
+      null,
+      2,
+    )
+      .replace('"providers": {', '"providers": {\n    // Supported catalog comment.')
+      .replace('"X-Model-Route": "keep-model-route"', '"X-Model-Route": "keep-model-route",');
+    fs.writeFileSync(path.join(systemAgentDir, "models.json"), inheritedCatalog);
     const input = normalizePreparedModelRuntimeInput({
       ...facts.input,
       agentId: "ops",
