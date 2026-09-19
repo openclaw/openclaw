@@ -142,6 +142,52 @@ describe("session ingestion", () => {
     ]);
   });
 
+  it("filters assistant process chatter while preserving durable signals and user text", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
+    tempDirs.push(dir);
+    const archiveFile = path.join(dir, "archive.jsonl");
+    const messages = [
+      { role: "assistant", content: "Need commit PR." },
+      { role: "assistant", content: "Now inspect." },
+      {
+        role: "assistant",
+        content: "Oops worktree maybe not created yet due first command still running. poll.",
+      },
+      { role: "assistant", content: "Need commit PR #123" },
+      { role: "assistant", content: "Commit 9f2a3b1 passed CI." },
+      { role: "user", content: "Need commit PR." },
+      { role: "user", content: "Now inspect." },
+    ];
+    await fs.writeFile(
+      archiveFile,
+      `${messages
+        .map((message, index) =>
+          JSON.stringify({
+            type: "message",
+            id: `message-${index}`,
+            timestamp: "2026-04-05T18:00:00.000Z",
+            message: { ...message, timestamp: "2026-04-05T18:00:00.000Z" },
+          }),
+        )
+        .join("\n")}\n`,
+    );
+
+    const scan = await scanSessionIngestionSource({
+      source: foreignSessionIngestionSource("main", archiveFile),
+      seenMessages: {},
+      verifyContent: true,
+      classifyDay: () => "include",
+    });
+
+    expect(scan.candidates.map((candidate) => candidate.snippet)).toEqual([
+      "Assistant: Need commit PR #123",
+      "Assistant: Commit 9f2a3b1 passed CI.",
+      "User: Need commit PR.",
+      "User: Now inspect.",
+    ]);
+    expect(scan.scannedEndIndex).toBe(messages.length);
+  });
+
   it.each([
     { maxCandidates: 1, expected: ["User: Bravo durable note.", "User: Charlie durable note."] },
     { maxCandidates: 2, expected: ["User: Charlie durable note."] },
