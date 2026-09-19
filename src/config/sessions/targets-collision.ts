@@ -2,14 +2,14 @@
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db-registry.js";
 import {
-  createOpenClawAgentDatabasePathMatcher,
-  listOpenClawRegisteredAgentDatabases,
-} from "../../state/openclaw-agent-db-registry.js";
-import {
+  readSessionStoreRegistryRows,
   resolveSqliteTargetFromSessionStorePath,
   resolveUnsuffixedSqliteTargetFromSessionStorePath,
+  type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
+import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";
 
 /** One session store path paired with its owning agent id. */
 export type SessionStoreTarget = {
@@ -38,7 +38,8 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
   options: {
     defaultAgentId: string;
     env?: NodeJS.ProcessEnv;
-    registeredDatabases?: readonly { agentId: string; path: string }[];
+    registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
     onDiagnostic?: (diagnostic: SessionStoreTargetCollisionDiagnostic) => void;
     onSharedTarget?: (selected: SessionStoreTarget, sharedStorePaths: ReadonlySet<string>) => void;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
@@ -46,8 +47,10 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
 ): SessionStoreTarget[] {
   // Ownership must not fall back while the authoritative registry is unreadable:
   // doing so can project the same physical DB under a different configured default.
-  const registeredDatabases =
-    options.registeredDatabases ?? listOpenClawRegisteredAgentDatabases({ env: options.env });
+  const registeredDatabases = readSessionStoreRegistryRows(
+    options.registeredDatabases,
+    options.env,
+  );
   const grouped = new Map<
     string,
     Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string; shared: boolean }>
@@ -73,6 +76,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       env: options.env,
       registeredDatabases,
       isSameDatabasePath,
+      readCandidates: options.readCandidates,
     });
     const sqlitePath = resolvePhysicalGroupKey(grouped, resolved.path ?? target.storePath);
     const group = grouped.get(sqlitePath) ?? [];

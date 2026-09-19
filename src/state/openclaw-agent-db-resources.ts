@@ -10,6 +10,16 @@ export type OpenClawAgentDatabaseAsyncResource = {
   revoke: () => void;
   close: () => Promise<void>;
 };
+export type OpenClawAgentDatabaseReadCandidateResource = Omit<
+  OpenClawAgentDatabaseAsyncResource,
+  "agentId"
+> & { scope?: "sibling-family" };
+type AgentDatabaseResource =
+  | (OpenClawAgentDatabaseAsyncResource & { ownership: "known" })
+  | (OpenClawAgentDatabaseReadCandidateResource & {
+      ownership: "unresolved";
+      agentId?: never;
+    });
 export type AgentDatabaseCloseSelection = {
   path?: string;
   rootPath?: string;
@@ -19,8 +29,8 @@ export type AgentDatabaseCloseSelection = {
 const resources = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseAsyncResources"),
   () => ({
-    active: new Set<OpenClawAgentDatabaseAsyncResource>(),
-    closing: new Map<OpenClawAgentDatabaseAsyncResource, Promise<void> | undefined>(),
+    active: new Set<AgentDatabaseResource>(),
+    closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
     selections: new Set<AgentDatabaseCloseSelection>(),
   }),
 );
@@ -30,14 +40,49 @@ export function hasOpenClawAgentDatabaseAsyncResources(): boolean {
   return resources.active.size > 0 || resources.closing.size > 0;
 }
 
+/** Match captured read custody without inspecting files or inferring their owners. */
+export function matchesAgentDatabaseReadCandidatePath(
+  candidate: Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">,
+  pathname: string,
+): boolean {
+  const capturedPath = path.resolve(candidate.path);
+  const resolvedPath = path.resolve(pathname);
+  if (capturedPath === resolvedPath) {
+    return true;
+  }
+  if (candidate.scope !== "sibling-family") {
+    return false;
+  }
+  const captured = path.parse(capturedPath);
+  const selected = path.parse(resolvedPath);
+  return (
+    selected.dir === captured.dir &&
+    selected.base.startsWith(`${captured.name}.`) &&
+    selected.base.endsWith(captured.ext)
+  );
+}
+
 export function matchesAgentDatabaseClose(
   selection: AgentDatabaseCloseSelection,
-  resource: { agentId: string; path: string },
+  resource:
+    | { agentId: string; path: string; ownership?: "known" }
+    | (Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope"> & {
+        agentId?: never;
+        ownership: "unresolved";
+      }),
 ): boolean {
   return (
-    (selection.path === undefined || selection.path === resource.path) &&
-    (selection.rootPath === undefined || isPathInside(selection.rootPath, resource.path)) &&
-    (selection.agentId === undefined || selection.agentId === resource.agentId)
+    (selection.path === undefined ||
+      selection.path === resource.path ||
+      (resource.ownership === "unresolved" &&
+        matchesAgentDatabaseReadCandidatePath(resource, selection.path))) &&
+    (selection.rootPath === undefined ||
+      isPathInside(selection.rootPath, resource.path) ||
+      (resource.ownership === "unresolved" &&
+        matchesAgentDatabaseReadCandidatePath(resource, selection.rootPath))) &&
+    (selection.agentId === undefined ||
+      resource.ownership === "unresolved" ||
+      selection.agentId === resource.agentId)
   );
 }
 
@@ -45,27 +90,76 @@ export function matchesAgentDatabaseClose(
 export function registerOpenClawAgentDatabaseAsyncResource(
   resource: OpenClawAgentDatabaseAsyncResource,
 ): () => void {
+  return registerAgentDatabaseResource({
+    ...resource,
+    ownership: "known",
+    agentId: normalizeAgentId(resource.agentId),
+  });
+}
+
+/** Retain discovery until the known owner is registered, then release this candidate. */
+export function registerOpenClawAgentDatabaseReadCandidateResource(
+  resource: OpenClawAgentDatabaseReadCandidateResource,
+): () => void {
+  return registerAgentDatabaseResource({ ...resource, ownership: "unresolved" });
+}
+
+function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => void {
   const owned = {
     ...resource,
-    agentId: normalizeAgentId(resource.agentId),
     path: path.resolve(resource.path),
   };
   if (
     [...resources.selections].some((selection) => matchesAgentDatabaseClose(selection, owned)) ||
     [...resources.closing.keys()].some(
-      (closing) => closing.path === owned.path && closing.agentId === owned.agentId,
+      (closing) =>
+        (closing.path === owned.path ||
+          (closing.ownership === "unresolved" &&
+            matchesAgentDatabaseReadCandidatePath(closing, owned.path)) ||
+          (owned.ownership === "unresolved" &&
+            matchesAgentDatabaseReadCandidatePath(owned, closing.path))) &&
+        (closing.ownership === "unresolved" ||
+          owned.ownership === "unresolved" ||
+          closing.agentId === owned.agentId),
     )
   ) {
     throw new Error(`Agent database resources are closing: ${owned.path}`);
   }
+  const unregister = () => resources.active.delete(owned);
+  getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
+    closeAgentDatabaseResource(owned),
+  );
   resources.active.add(owned);
-  getOpenClawDatabaseMaintenanceScope()?.own(owned, "agent-resources", async () => {
-    owned.revoke();
-    await owned.close();
-    resources.active.delete(owned);
-    resources.closing.delete(owned);
-  });
-  return () => resources.active.delete(owned);
+  return unregister;
+}
+
+function closeAgentDatabaseResource(
+  resource: AgentDatabaseResource,
+  onCloseError?: (pathname: string, error: unknown) => void,
+): Promise<void> {
+  let operation = resources.closing.get(resource);
+  if (!operation) {
+    operation = Promise.resolve().then(() => resource.close());
+    resources.closing.set(resource, operation);
+    void operation
+      .then(
+        () => {
+          resources.active.delete(resource);
+          resources.closing.delete(resource);
+        },
+        () => {
+          // Keep exact custody even if the actor unregisters while its close fails.
+          resources.closing.set(resource, undefined);
+        },
+      )
+      .catch(() => {});
+  }
+  if (onCloseError) {
+    void operation.catch((error: unknown) => onCloseError(resource.path, error)).catch(() => {});
+  }
+  // Retain closing custody before revocation can synchronously attempt admission.
+  resource.revoke();
+  return operation;
 }
 
 export function revokeAgentDatabaseResources(
@@ -78,26 +172,7 @@ export function revokeAgentDatabaseResources(
     if (!matchesAgentDatabaseClose(selection, resource)) {
       continue;
     }
-    resource.revoke();
-    let operation = resources.closing.get(resource);
-    if (!operation) {
-      operation = Promise.resolve().then(() => resource.close());
-      resources.closing.set(resource, operation);
-      void operation
-        .then(
-          () => {
-            resources.active.delete(resource);
-            resources.closing.delete(resource);
-          },
-          (error: unknown) => {
-            // Keep exact custody even if the actor unregisters while its close fails.
-            resources.closing.set(resource, undefined);
-            onCloseError?.(resource.path, error);
-          },
-        )
-        .catch(() => {});
-    }
-    pending.push(operation);
+    pending.push(closeAgentDatabaseResource(resource, onCloseError));
   }
   return pending;
 }

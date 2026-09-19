@@ -63,6 +63,12 @@ their established raw-row parser behavior; a fresh reader, policy change or
 owner replacement must cross admission again. Pending keys make that admission
 incremental without caching session identity or permission results.
 
+Typed worker reads can continue an existing committed reader admission for one
+retained request. The continuation expires with its source admission or connection
+and remains bound to the physical file, main-key policy, and readiness. It cannot
+admit an unrelated pooled read or replace strict validation when that proof is
+missing, transactional, changed, or revoked.
+
 Gateway startup reuses valid canonical receipts for the same physical generation;
 they do not replace integrity checks. Stores needing fresh proof are certified up
 to two at a time, using the same disk-work bound as database preflight. Two

@@ -3395,7 +3395,7 @@ src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
-src/state/openclaw-agent-db-registry-listing.ts	3
+src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-registry.ts	5
 src/state/openclaw-agent-db-schema.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	4

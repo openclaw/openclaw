@@ -8,13 +8,30 @@ import {
   type UsageCostWorkerInput,
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import {
+  registerOpenClawAgentDatabaseAsyncResource,
+  registerOpenClawAgentDatabaseReadCandidateResource,
+} from "../../state/openclaw-agent-db-resources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  sessionHistoryCleanupError,
+  unwrapSessionTranscriptWorkerReply,
+} from "./session-history-worker-errors.js";
+import {
+  measureSessionStoreTargetInventoryInputBytes,
+  type SessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
+import type {
+  SessionStoreTargetInventoryRequest,
+  SessionStoreTargetInventoryResult,
+} from "./session-store-target-inventory.js";
 import type {
   SessionEntryListWorkerInput,
+  SessionTargetInventoryWorkerInput,
+  SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
   SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
@@ -28,12 +45,16 @@ export const historyPages = new WorkerTaskPool<
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionEntryListWorkerInput
+  | SessionTargetInventoryWorkerInput
+  | SessionIdentityEvidenceWorkerInput
   | SessionUsageCacheWorkerInput,
   SessionTranscriptWorkerReply<
     | "history-page"
     | "session-row-presence"
     | "session-members"
     | "session-entry-list"
+    | "session-target-inventory"
+    | "session-identity-evidence"
     | "usage-cache"
   >
 >({
@@ -249,4 +270,147 @@ export function acquireHistoryDatabaseResource(
     resource = owned;
   }
   return resource;
+}
+
+/** Keep captured discovery aliases until the existing history worker retires its readers. */
+export async function withSessionHistoryWorkerReadCandidates<T>(
+  candidates: readonly SessionStoreReadCandidate[],
+  operation: (scope: {
+    assertCurrent: () => void;
+    readTargetInventory: (
+      request: SessionStoreTargetInventoryRequest,
+    ) => Promise<SessionStoreTargetInventoryResult>;
+  }) => Promise<T>,
+): Promise<T> {
+  historyClearTimeout(historyLane.idleTimer);
+  historyLane.pending++;
+  try {
+    let revoked = false;
+    let closing: Promise<void> | undefined;
+    let nativeCleanupPending = false;
+    let dispatched = false;
+    let outcome: { value: T } | { error: unknown };
+    const assertCurrent = () => {
+      if (revoked) {
+        throw new WorkerTaskError("Session target discovery was revoked", "unavailable");
+      }
+    };
+    const releases: Array<() => void> = [];
+    const release = () => {
+      for (const unregister of releases.toReversed()) {
+        unregister();
+      }
+    };
+    const retire = (): Promise<void> => {
+      closing ??= (async () => {
+        nativeCleanupPending = true;
+        try {
+          await rotateDatabaseWorkers(historyLane);
+          nativeCleanupPending = false;
+        } finally {
+          closing = undefined;
+        }
+      })();
+      return closing;
+    };
+    const close = async () => {
+      await retire();
+      release();
+    };
+    const retained = new Set<string>();
+    try {
+      for (const candidate of candidates) {
+        for (const pathname of [candidate.path, candidate.physicalPath]) {
+          const key = JSON.stringify([pathname, candidate.scope]);
+          if (retained.has(key)) {
+            continue;
+          }
+          retained.add(key);
+          releases.push(
+            registerOpenClawAgentDatabaseReadCandidateResource({
+              path: pathname,
+              scope: candidate.scope,
+              revoke: () => {
+                revoked = true;
+              },
+              close,
+            }),
+          );
+        }
+      }
+      assertCurrent();
+      const value = await operation({
+        assertCurrent,
+        readTargetInventory: async (request) => {
+          const reply = await historyPages.run(
+            () => {
+              assertCurrent();
+              dispatched = true;
+              historyLane.nativeSequence++;
+              return { kind: "session-target-inventory", request };
+            },
+            {
+              inputBytes: measureSessionStoreTargetInventoryInputBytes(request),
+              timeoutMs: 60_000,
+            },
+          );
+          const result = unwrapSessionTranscriptWorkerReply<
+            | "history-page"
+            | "session-row-presence"
+            | "session-members"
+            | "session-entry-list"
+            | "session-target-inventory"
+            | "session-identity-evidence"
+            | "usage-cache"
+          >(reply);
+          if (
+            typeof result === "boolean" ||
+            Array.isArray(result) ||
+            (result.kind !== "session-target-inventory" &&
+              result.kind !== "session-target-registry-required")
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of target inventory",
+            );
+          }
+          if (result.kind === "session-target-registry-required") {
+            // Native discovery may already have opened other candidates. Settle
+            // their worker before continuing through the registry's read owner.
+            await retire();
+          }
+          assertCurrent();
+          return result;
+        },
+      });
+      assertCurrent();
+      outcome = { value };
+    } catch (error) {
+      outcome = { error };
+    }
+    // Discovery custody includes lexical aliases. Keep it until physical readers
+    // settle; a later close through an alias must never miss a retained handle.
+    if (dispatched) {
+      try {
+        await retire();
+      } catch (cleanupError) {
+        outcome = {
+          error:
+            "error" in outcome
+              ? sessionHistoryCleanupError(outcome.error, cleanupError, "worker retirement")
+              : cleanupError,
+        };
+      }
+    }
+    if (!nativeCleanupPending) {
+      release();
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    assertCurrent();
+    return outcome.value;
+  } finally {
+    historyLane.pending--;
+    armDatabaseWorkerIdleRetirement(historyLane);
+  }
 }

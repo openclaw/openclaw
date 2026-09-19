@@ -9,15 +9,29 @@ const handleLeases = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, { release: () => void }>(),
 );
 
+type StateDatabaseOpenOptions = {
+  existingOnly?: boolean;
+  readOnly?: boolean;
+  timeout?: number;
+  enableForeignKeyConstraints?: false;
+};
+
 export function openTrackedStateDatabase(
   pathname: string,
-  options?: {
-    existingOnly?: boolean;
-    readOnly?: boolean;
-    timeout?: number;
-    enableForeignKeyConstraints?: false;
-  },
+  options?: StateDatabaseOpenOptions,
 ): DatabaseSync {
+  const result = openTrackedStateDatabaseResult(pathname, options);
+  if (result.status === "unavailable") {
+    throw result.error;
+  }
+  return result.database;
+}
+
+/** Only native open failure with a released lease is an ordinary read failure. */
+export function openTrackedStateDatabaseResult(
+  pathname: string,
+  options?: StateDatabaseOpenOptions,
+): { status: "available"; database: DatabaseSync } | { status: "unavailable"; error: unknown } {
   const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
   try {
     const location = options?.existingOnly ? resolveExistingSqliteFileUri(pathname) : pathname;
@@ -27,10 +41,10 @@ export function openTrackedStateDatabase(
           enableForeignKeyConstraints: options?.enableForeignKeyConstraints,
         });
     handleLeases.set(database, lease);
-    return database;
+    return { status: "available", database };
   } catch (error) {
     lease.release();
-    throw error;
+    return { status: "unavailable", error };
   }
 }
 

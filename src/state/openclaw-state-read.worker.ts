@@ -7,8 +7,12 @@ import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-co
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
-import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
+import {
+  readOpenClawStateReadOnlyLocation,
+  withOpenClawStateReadOnlyLocation,
+} from "./openclaw-state-db-read-connection.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -36,6 +40,7 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
     (input.command.type === "admit" ||
+      input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "audit.run.inspect" &&
         isRecord(input.command.input) &&
         typeof input.command.input.now === "number" &&
@@ -64,6 +69,28 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
         const { command } = input;
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
+        }
+        if (command.type === "agentDatabaseRegistry.read") {
+          const result = readOpenClawStateReadOnlyLocation(
+            ({ db }) => {
+              sourceAdmitted = true;
+              return readRegisteredAgentDatabaseRows(db, input.databasePath, false);
+            },
+            input.databasePath,
+            input.location,
+            undefined,
+            input.expectedIdentity,
+            input.snapshotRoot,
+          );
+          return {
+            ok: true,
+            type: command.type,
+            sourceAdmitted,
+            result:
+              result.status === "available"
+                ? { status: "available", entries: result.value }
+                : { status: "unavailable" },
+          };
         }
         return withOpenClawStateReadOnlyLocation(
           ({ db }) => {

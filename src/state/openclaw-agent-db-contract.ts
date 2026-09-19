@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 // v21 records canonical-session invalidation under node, window and policy mutations.
 // v20 records authoritative cold transcript archives; older readers cannot treat absent raw rows as empty history.
@@ -48,6 +48,10 @@ export type OpenClawRegisteredAgentDatabase = {
   lastSeenAt: number;
   sizeBytes: number | null;
 };
+
+export type OpenClawAgentDatabaseRegistryReadResult =
+  | { status: "available"; entries: OpenClawRegisteredAgentDatabase[] }
+  | { status: "unavailable" };
 
 export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "owned"; agentId: string }

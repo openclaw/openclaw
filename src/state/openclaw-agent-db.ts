@@ -79,6 +79,10 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import {
+  matchesAgentDatabaseReadCandidatePath,
+  type OpenClawAgentDatabaseReadCandidateResource,
+} from "./openclaw-agent-db-resources.js";
+import {
   assertCanonicalAgentPersistenceVersion,
   assertExistingAgentSchemaOwner,
   assertSupportedAgentSchemaVersion,
@@ -593,6 +597,52 @@ export function getOpenClawAgentDatabaseIfOpen(
   assertAgentDatabaseMaintenanceAccess(database.db);
   observeOpenClawDatabaseMaintenanceResource(database.db);
   return database;
+}
+
+/** Pin only admitted native readers already present in captured discovery families. */
+export function retainOpenClawAgentDatabaseReadCandidates(
+  candidates: readonly Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">[],
+  env: NodeJS.ProcessEnv,
+): { databases: readonly OpenClawAgentDatabase[]; release: () => void } {
+  const retained: Array<{ database: OpenClawAgentDatabase; release: () => void }> = [];
+  const release = () => {
+    for (const reader of retained.toReversed()) {
+      reader.release();
+    }
+  };
+  try {
+    for (const database of cache.databases.values()) {
+      if (
+        !database.db.isOpen ||
+        database.db.isTransaction ||
+        cache.incognito.has(database) ||
+        !candidates.some((candidate) =>
+          matchesAgentDatabaseReadCandidatePath(candidate, database.path),
+        )
+      ) {
+        continue;
+      }
+      let admitted: OpenClawAgentDatabase | undefined;
+      try {
+        admitted = getOpenClawAgentDatabaseIfOpen({
+          agentId: database.agentId,
+          path: database.path,
+          env,
+        });
+      } catch {
+        // A refused cached writer cannot supply a read continuation. Fresh reads
+        // retain the existing independent read-only schema and ownership checks.
+        continue;
+      }
+      if (admitted === database) {
+        retained.push({ database, release: retainAgentDatabase(database.db) });
+      }
+    }
+    return { databases: retained.map(({ database }) => database), release };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 /** Lists process-held incognito databases without opening new sentinel handles. */

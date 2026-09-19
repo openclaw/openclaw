@@ -15,6 +15,7 @@ import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
+import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
@@ -26,6 +27,7 @@ import {
 import { listSessionMembers } from "./session-sharing-store.js";
 import type { SessionMember } from "./session-sharing-store.kernel.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import type { SessionStoreTargetInventoryResult } from "./session-store-target-inventory.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
@@ -48,6 +50,8 @@ import type {
   SessionMembersWorkerInput,
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
+  SessionIdentityEvidenceWorkerInput,
+  SessionIdentityEvidenceWorkerResult,
   SessionUsageCacheWorkerInput,
 } from "./session-transcript-worker.types.js";
 
@@ -59,6 +63,9 @@ export type SessionHistoryWorkerDatabase = {
     inputBytes: number,
   ) => Promise<SessionHistoryWorkerResult>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
+  readIdentityEvidence: (
+    input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
+  ) => Promise<SessionIdentityEvidenceResult[]>;
   readEntries: (
     scope: SessionEntryListWorkerInput["scope"],
   ) => Promise<SessionEntryListWorkerResult["entries"]>;
@@ -162,6 +169,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
         | Omit<SessionRowPresenceWorkerInput, "database">
         | Omit<SessionMembersWorkerInput, "database">
         | Omit<SessionEntryListWorkerInput, "database">
+        | Omit<SessionIdentityEvidenceWorkerInput, "database">
         | Omit<SessionUsageCacheWorkerInput, "database">,
       inputBytes: number,
       receive: (
@@ -170,6 +178,8 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
           | boolean
           | SessionMember[]
           | SessionEntryListWorkerResult
+          | SessionStoreTargetInventoryResult
+          | SessionIdentityEvidenceWorkerResult
           | SessionCostUsageCacheReadResult,
       ) => TResult,
     ): Promise<TResult> => {
@@ -193,6 +203,8 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
             | "session-row-presence"
             | "session-members"
             | "session-entry-list"
+            | "session-target-inventory"
+            | "session-identity-evidence"
             | "usage-cache"
           >(reply),
         );
@@ -222,6 +234,9 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
             typeof value === "boolean" ||
             Array.isArray(value) ||
             value.kind === "session-entry-list" ||
+            value.kind === "session-target-inventory" ||
+            value.kind === "session-target-registry-required" ||
+            value.kind === "session-identity-evidence" ||
             value.kind === "usage-refresh-lock"
           ) {
             throw new Error("Session history worker returned metadata instead of history");
@@ -282,6 +297,23 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
               throw new Error("Session history worker returned another result instead of entries");
             }
             return value.entries;
+          },
+        ),
+      readIdentityEvidence: async (input) =>
+        await runRequest(
+          () => ({ kind: "session-identity-evidence", ...input }),
+          JSON.stringify(input).length * 2,
+          (value) => {
+            if (
+              typeof value === "boolean" ||
+              Array.isArray(value) ||
+              value.kind !== "session-identity-evidence"
+            ) {
+              throw new Error(
+                "Session history worker returned another result instead of identity evidence",
+              );
+            }
+            return value.evidence;
           },
         ),
     };

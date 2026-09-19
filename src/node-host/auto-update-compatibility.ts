@@ -13,7 +13,7 @@ import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.j
 import { checkGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { readAgentDatabasePreflightTargets } from "../state/openclaw-agent-db-registry-listing.js";
+import { readAgentDatabasePreflightTargets } from "../state/openclaw-agent-db-registry.read.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import {
   parsePackageOpenClawSchemaVersions,

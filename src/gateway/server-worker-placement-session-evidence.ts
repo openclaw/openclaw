@@ -1,14 +1,8 @@
 import { getRuntimeConfig } from "../config/config.js";
-import type { SessionStoreTargetsReadCache } from "../config/sessions/targets-read-availability.js";
+import { readPlacementSessionIdentityEvidence } from "../config/sessions/session-placement-evidence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import type {
@@ -17,18 +11,6 @@ import type {
 } from "./worker-environments/placement-session-retirement.js";
 
 const log = createSubsystemLogger("gateway/placement-session-evidence");
-
-const loadPlacementSessionEvidenceRuntime = createLazyRuntimeModule(async () => {
-  const [sessionTargetsReadAvailability, sessionAccessor] = await Promise.all([
-    import("../config/sessions/targets-read-availability.js"),
-    import("../config/sessions/session-accessor.js"),
-  ]);
-  return {
-    readSessionIdentityEvidenceBatch: sessionAccessor.readSessionIdentityEvidenceBatch,
-    resolveExistingAgentSessionStoreTargetsReadOnlyResult:
-      sessionTargetsReadAvailability.resolveExistingAgentSessionStoreTargetsReadOnlyResult,
-  };
-});
 
 type PlacementSessionIdentity = {
   placement: WorkerSessionPlacementRecord;
@@ -69,69 +51,32 @@ export async function createWorkerPlacementSessionEvidenceResolver(
 ): Promise<PlacementSessionEvidenceResolver> {
   try {
     const cfg = getRuntimeConfig();
-    const runtime = await loadPlacementSessionEvidenceRuntime();
     const identities = placements.flatMap((placement) =>
       resolvePlacementSessionIdentities(cfg, placement),
     );
-    const targetsReadCache: SessionStoreTargetsReadCache = new Map();
-    const targetResultsByAgentId = new Map(
-      [
-        ...new Set(
-          identities
-            .filter((identity) => !isIncognitoSessionKey(identity.sessionKey))
-            .map((identity) => identity.agentId),
-        ),
-      ].map(
-        (agentId) =>
-          [
-            agentId,
-            runtime.resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, agentId, {
-              cache: targetsReadCache,
-            }),
-          ] as const,
-      ),
+    const subjects = new Map(
+      placements.map((placement) => [
+        placement,
+        {
+          agentId: placement.agentId,
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+        },
+      ]),
     );
-    const prepared = identities.flatMap((identity) => {
-      if (isIncognitoSessionKey(identity.sessionKey)) {
-        return [
-          {
-            identity,
-            target: {
-              agentId: identity.agentId,
-              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: identity.agentId }),
-            },
-          },
-        ];
-      }
-      const targetResult = targetResultsByAgentId.get(identity.agentId);
-      return targetResult?.available
-        ? targetResult.targets.map((target) => ({ identity, target }))
-        : [];
-    });
-    const evidence = prepared.length
-      ? runtime.readSessionIdentityEvidenceBatch(
-          prepared.map(({ identity, target }) => ({
-            agentId: target.agentId,
-            sessionId: identity.placement.sessionId,
-            sessionKey: identity.sessionKey,
-            storePath: target.storePath,
-          })),
-        )
-      : [];
+    const evidence = await readPlacementSessionIdentityEvidence(
+      cfg,
+      identities.map((identity) => ({
+        agentId: identity.agentId,
+        sessionId: identity.placement.sessionId,
+        sessionKey: identity.sessionKey,
+      })),
+    );
     const evidenceByPlacement = new Map<WorkerSessionPlacementRecord, PlacementSessionEvidence>(
       placements.map((placement) => [placement, "absent"]),
     );
-    for (const identity of identities) {
-      if (isIncognitoSessionKey(identity.sessionKey)) {
-        continue;
-      }
-      const targetResult = targetResultsByAgentId.get(identity.agentId);
-      if (!targetResult?.available && targetResult?.reason !== "database-missing") {
-        evidenceByPlacement.set(identity.placement, "unknown");
-      }
-    }
     for (const [index, result] of evidence.entries()) {
-      const placement = prepared[index]?.identity.placement;
+      const placement = identities[index]?.placement;
       if (!placement) {
         continue;
       }
@@ -140,7 +85,18 @@ export async function createWorkerPlacementSessionEvidenceResolver(
         evidenceByPlacement.set(placement, result.status);
       }
     }
-    return async (placement) => evidenceByPlacement.get(placement) ?? "unknown";
+    return async (placement) => {
+      const subject = subjects.get(placement);
+      if (
+        !subject ||
+        subject.agentId !== placement.agentId ||
+        subject.sessionId !== placement.sessionId ||
+        subject.sessionKey !== placement.sessionKey
+      ) {
+        return "unknown";
+      }
+      return evidenceByPlacement.get(placement) ?? "unknown";
+    };
   } catch (error) {
     // "unknown" keeps retirement fail-open, but a silent catch would hide a broken
     // evidence pipeline (bad config, store corruption) behind indefinite retention.

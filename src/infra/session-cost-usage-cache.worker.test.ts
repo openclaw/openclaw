@@ -10,10 +10,13 @@ import {
   createSessionEntryWithTranscript,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
+import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
+import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import * as usageCacheSqlite from "./session-cost-usage-cache.sqlite.js";
@@ -250,6 +253,13 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     await fs.writeFile(steadyFile, usageLine("unchanged"));
     expect(await refreshCostUsageCacheForAgent({ agentId })).toBe("refreshed");
     await fs.appendFile(growingFile, usageLine("awaiting-write"));
+    const placement = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase(),
+    }).startDispatch({
+      agentId,
+      sessionId: "missing-placement-session",
+      sessionKey: `agent:${agentId}:missing-placement-session`,
+    });
 
     const writeEntered = createDeferred();
     const releaseWrite = createDeferred();
@@ -312,13 +322,21 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
         requestRefresh: false,
       });
       const partial = loadCostUsageSummaryFromCache(summaryParams);
-      reads.push(fresh, partial);
-      const [freshResult, partialResult] = await withTestTimeout(
-        Promise.all([fresh, partial]),
+      const evidence = createWorkerPlacementSessionEvidenceResolver([placement]).then((resolve) =>
+        resolve(placement),
+      );
+      reads.push(fresh, partial, evidence);
+      const [freshResult, partialResult, placementEvidence] = await withTestTimeout(
+        Promise.all([fresh, partial, evidence]),
         10_000,
         "Usage reads waited for the blocked refresh writer",
       );
       expect(refreshFinished).toBe(false);
+      expect(placementEvidence).toBe("absent");
+      expect(observed.refreshWorkers.size).toBeGreaterThan(0);
+      for (const worker of observed.refreshWorkers) {
+        expect(worker.threadId).not.toBe(-1);
+      }
       expect(freshResult.cacheStatus).toMatchObject({ status: "fresh", cachedFiles: 1 });
       expect(freshResult.summaries[0]).toMatchObject({ totalTokens: 10 });
       expect(partialResult.totals.totalTokens).toBe(20);

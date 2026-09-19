@@ -4,6 +4,7 @@ import type {
 } from "../../infra/session-cost-usage-worker.types.js";
 import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionHistoryWorkerResult } from "./session-history-types.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
@@ -16,6 +17,8 @@ import type {
   SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
   SessionEntryListWorkerInput,
+  SessionTargetInventoryWorkerInput,
+  SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
   SessionModelContextWorkerInput,
   SessionRowPresenceWorkerInput,
@@ -86,6 +89,8 @@ serveWorkerTasks(
       | SessionModelContextWorkerInput
       | SessionEntryWorkerInput
       | SessionEntryListWorkerInput
+      | SessionTargetInventoryWorkerInput
+      | SessionIdentityEvidenceWorkerInput
       | SessionTranscriptHistoryWorkerInput
       | SessionRowPresenceWorkerInput
       | SessionMembersWorkerInput
@@ -122,6 +127,39 @@ serveWorkerTasks(
       }
     }
     try {
+      if (request.kind === "session-target-inventory") {
+        const { readSessionStoreTargetInventory } =
+          await import("./session-store-target-inventory.js");
+        return { ok: true, value: readSessionStoreTargetInventory(request.request) };
+      }
+      if (request.kind === "session-identity-evidence") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { readSessionIdentityEvidenceInDatabase } =
+          await import("./session-accessor.sqlite-entry-availability.js");
+        const { readWithCanonicalSessionReaderContinuation } =
+          await import("./session-canonical-key.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) =>
+                readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+                  readSessionIdentityEvidenceInDatabase(database, request.identities),
+                ),
+              { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+            );
+            const evidence: SessionIdentityEvidenceResult[] = result.found
+              ? result.value
+              : request.identities.map(() =>
+                  result.reason === "database-missing"
+                    ? { status: "absent" }
+                    : { status: "unknown", reason: result.reason },
+                );
+            return { kind: "session-identity-evidence" as const, evidence };
+          })),
+        };
+      }
       if (request.kind === "session-entry-list") {
         const { listSessionEntriesReadOnly } = await import("./session-accessor.sqlite-entry.js");
         return {

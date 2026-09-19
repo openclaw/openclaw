@@ -77,6 +77,26 @@ resolution retain their native owners. Checkout-deletion reference checks and
 final exact-row authority checks remain synchronous; prepared listings do not
 grant deletion or session authority. Schemas, retention, and update behavior are unchanged.
 
+Worker-placement session evidence moves durable target inventory and bounded
+identity reads to that same session-transcript worker. Target discovery requests
+registry rows only when ownership depends on them; cold reads use the existing
+shared-state fixed-read worker and host registry memo. Native read failures become
+unavailability only after reader cleanup and worker retirement settle. Discovery captures
+configured paths, legacy sibling families, and environment before waiting; unknown
+physical owners retain conservative close custody until their readers retire.
+Closing an agent, path, or matching root revokes pending discovery. Missing reads
+do not create databases, and current evidence takes precedence over unknown and
+absent evidence. Incognito evidence keeps its process-held native owner.
+
+A retained, already-admitted native reader can continue its committed canonical
+admission for one worker request. The canonical owner binds that continuation to
+the live source connection, physical file, policy, and readiness. Missing or revoked
+continuations retain strict fresh-reader validation; the worker does not publish
+borrowed admission into its reader cache. Malformed rows retain their existing
+per-row uncertainty within a valid continuation. Placement retirement still uses
+its existing live placement, claim, and environment checks; this read migration
+changes no destructive-retirement permission, schema, retention, or update behavior.
+
 Observed-project discovery and the CLI's lossless worktree cleanup result read
 managed worktree registry records through the shared-state worker. The read
 captures its database before waiting and preserves record ordering, cleanup
