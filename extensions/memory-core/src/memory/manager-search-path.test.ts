@@ -32,19 +32,24 @@ describe("searchPathKeyword", () => {
     ["unicode61", "README.md"],
     ["trigram", "common"],
     ["trigram", "README.md"],
+    ["unicode61", "成语"],
+    ["trigram", "成语"],
   ] as const)(
-    "resolves first chunks only within the retained %s window for %s",
+    "bounds first-chunk work with stale statistics for %s query %s",
     async (ftsTokenizer, query) => {
       const { db } = createMemorySearchDb({ ftsTokenizer });
       try {
+        insertKeywordFixture(db, { id: "seed", path: "seed.md" });
+        // Analyze an almost-empty index before it grows, as during an upgrade.
+        db.exec("PRAGMA analysis_limit=1000; ANALYZE main");
         db.prepare(
           "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', '', 0, 0)",
-        ).run("memory/common/00-empty/README.md");
+        ).run("memory/common/成语/00-empty/README.md");
         for (let index = 0; index < 64; index++) {
           for (let chunk = 2; chunk >= 0; chunk--) {
             insertKeywordFixture(db, {
               id: `path-${index}-chunk-${chunk}`,
-              path: `memory/common/${String(index).padStart(3, "0")}/README.md`,
+              path: `memory/common/成语/${String(index).padStart(3, "0")}/README.md`,
               source: index % 2 === 0 ? "memory" : "sessions",
               startLine: chunk * 5 + 1,
               endLine: chunk * 5 + 4,
@@ -57,19 +62,20 @@ describe("searchPathKeyword", () => {
           examinedChunkLines++;
           return line;
         });
-        db.exec(`
-          ALTER TABLE memory_index_chunks RENAME TO observed_chunks;
-          CREATE VIEW memory_index_chunks AS
-            SELECT id, path, source, observe_path_chunk_line(start_line) AS start_line,
-                   end_line, text FROM observed_chunks;
-        `);
 
+        const queryPlans: string[] = [];
         let fetchedTextBytes = 0;
         const prepare = db.prepare.bind(db);
         const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-          const statement = prepare(sql);
+          // Observe sorting work without replacing the indexed chunks table.
+          const statement = prepare(
+            sql.replaceAll("candidate.start_line", "observe_path_chunk_line(candidate.start_line)"),
+          );
           statement.all = new Proxy(statement.all.bind(statement), {
             apply(all, _receiver, values) {
+              for (const row of prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...values)) {
+                queryPlans.push(String(row.detail));
+              }
               const rows = all(...values);
               for (const row of rows) {
                 if (typeof row.text === "string") {
@@ -95,6 +101,8 @@ describe("searchPathKeyword", () => {
           { id: "path-0-chunk-0", snippet: "body 0/0 " + "x".repeat(191) },
           { id: "path-2-chunk-0", snippet: "body 2/0 " + "x".repeat(191) },
         ]);
+        expect(queryPlans.length).toBeGreaterThan(0);
+        expect(queryPlans.filter((detail) => /\bSCAN (?:c|candidate)\b/.test(detail))).toEqual([]);
         expect(examinedChunkLines).toBeGreaterThan(0);
         expect(examinedChunkLines).toBeLessThanOrEqual(16);
         expect(fetchedTextBytes).toBeLessThanOrEqual(4 * 200 * 4);
