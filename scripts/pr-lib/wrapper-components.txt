@@ -1249,7 +1249,9 @@ src/shared/sandbox-workspace-paths.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
+src/skills/lifecycle/upload-store-commit.ts
 src/skills/lifecycle/upload-store-error.ts
+src/skills/lifecycle/upload-store.sqlite.ts
 src/skills/lifecycle/workspace-skill-write.ts
 src/skills/workshop/proposal-origin-validation.ts
 src/skills/workshop/store-record.ts
