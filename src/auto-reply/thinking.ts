@@ -325,7 +325,12 @@ export function resolveThinkingProfile(params: {
     return buildOffOnlyThinkingProfile();
   }
 
-  const profile = buildBaseThinkingProfile();
+  // Qwen chat templates apply their own default effort (xhigh for Qwen 3.8) when a request
+  // omits reasoning_effort. High maps to that tier, so an unset level keeps the backend's
+  // depth instead of dropping to the generic medium fallback.
+  const profile = buildBaseThinkingProfile(
+    context.compat?.thinkingFormat === "qwen-chat-template" ? "high" : undefined,
+  );
   appendCatalogAdvancedThinkingLevels(
     profile,
     context.compat,

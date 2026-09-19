@@ -290,7 +290,9 @@ family, the provider maps OpenClaw thinking levels to DashScope's top-level
 `enable_thinking` request flag: disabled thinking sends `enable_thinking: false`,
 any other level sends `enable_thinking: true`. Custom models can opt into an
 alternate chat-template thinking payload by setting
-`compat.thinkingFormat: "qwen-chat-template"` on the model entry.
+`compat.thinkingFormat: "qwen-chat-template"` on the model entry; enabled levels
+then also send `chat_template_kwargs.reasoning_effort` with the Qwen 3.8 tier
+mapping above.
 
 Token Plan models are also marked reasoning-capable. `kimi-k2.7-code` and
 `MiniMax-M2.5` are thinking-only, so OpenClaw keeps thinking enabled even when

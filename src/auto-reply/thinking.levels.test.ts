@@ -608,6 +608,28 @@ describe("listThinkingLevels", () => {
     ).toEqual(["off", "minimal", "low", "medium", "high"]);
   });
 
+  it("defaults Qwen chat-template models without a provider profile to high", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(null);
+    const qwenCompat = { thinkingFormat: "qwen-chat-template" };
+    const catalog = [
+      { provider: "local-qwen", id: "qwen-template", reasoning: true, compat: qwenCompat },
+      {
+        provider: "local-qwen",
+        id: "qwen-template-no-high",
+        reasoning: true,
+        compat: qwenCompat,
+        thinkingLevelMap: { high: null },
+      },
+      { provider: "local-qwen", id: "generic", reasoning: true },
+    ];
+    const resolveDefault = (model: string) =>
+      resolveThinkingDefaultForModel({ provider: "local-qwen", model, catalog });
+
+    expect(resolveDefault("qwen-template")).toBe("high");
+    expect(resolveDefault("qwen-template-no-high")).toBe("medium");
+    expect(resolveDefault("generic")).toBe("medium");
+  });
+
   it("honors provider-owned thinking maps before compat and derives OpenClaw Ultra", () => {
     const catalog = [
       {

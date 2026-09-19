@@ -52,6 +52,7 @@ import {
 import {
   log,
   resolvePromptCacheKey,
+  resolveQwenChatTemplateReasoningEffort,
   sortTransportToolsByName,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
@@ -206,17 +207,25 @@ function resolveOpenAICompletionsEffectiveContextTokens(
     : undefined;
 }
 
-function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
+function setQwenChatTemplateThinking(
+  params: Record<string, unknown>,
+  enabled: boolean,
+  reasoningEffort: string | undefined,
+): void {
+  const thinking = reasoningEffort
+    ? { enable_thinking: enabled, reasoning_effort: reasoningEffort }
+    : { enable_thinking: enabled };
   const existing = params.chat_template_kwargs;
   params.chat_template_kwargs =
     existing && typeof existing === "object" && !Array.isArray(existing)
-      ? { ...(existing as Record<string, unknown>), enable_thinking: enabled }
-      : { enable_thinking: enabled };
+      ? { ...(existing as Record<string, unknown>), ...thinking }
+      : thinking;
 }
 
 /** Return whether the binary control replaces scalar reasoning effort. */
 function applyBinaryCompletionsThinkingParams(params: {
   compatThinkingFormat: string;
+  level: string | undefined;
   modelReasoning: boolean;
   payload: Record<string, unknown>;
   thinkingEnabled: boolean;
@@ -227,7 +236,11 @@ function applyBinaryCompletionsThinkingParams(params: {
   const enabled = params.thinkingEnabled;
   switch (params.compatThinkingFormat) {
     case "qwen-chat-template":
-      setQwenChatTemplateThinking(params.payload, enabled);
+      setQwenChatTemplateThinking(
+        params.payload,
+        enabled,
+        resolveQwenChatTemplateReasoningEffort(params.level),
+      );
       return true;
     case "qwen":
       params.payload.enable_thinking = enabled;
@@ -559,6 +572,7 @@ export function buildOpenAICompletionsRequest(
   } else {
     const suppressScalarEffort = applyBinaryCompletionsThinkingParams({
       compatThinkingFormat: compat.thinkingFormat,
+      level: reasoning.level,
       modelReasoning: model.reasoning,
       payload: params,
       thinkingEnabled: thinkingEnabled ?? false,
