@@ -1513,15 +1513,25 @@ export function buildGatewayCronService(params: {
         assertCurrent();
         let converged = true;
         for (const reconcile of [
-          reconcileHeartbeatMonitorJobs,
-          reconcileSkillCollectionReviewJobs,
+          () =>
+            reconcileHeartbeatMonitorJobs({
+              cron,
+              cfg,
+              logger: cronServiceLogger,
+              commitGuard: assertCurrent,
+              // A disabled scheduler cannot tick monitors, so converge them as
+              // disabled instead of leaving enabled rows behind (#144207).
+              cronEnabled,
+            }),
+          () =>
+            reconcileSkillCollectionReviewJobs({
+              cron,
+              cfg,
+              logger: cronServiceLogger,
+              commitGuard: assertCurrent,
+            }),
         ]) {
-          const { ok } = await reconcile({
-            cron,
-            cfg,
-            logger: cronServiceLogger,
-            commitGuard: assertCurrent,
-          });
+          const { ok } = await reconcile();
           assertCurrent();
           converged &&= ok;
         }
