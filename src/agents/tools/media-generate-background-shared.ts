@@ -156,6 +156,13 @@ function waitForMediaGenerationCompletionHandoffRetry(delayMs: number): Promise<
   });
 }
 
+class MediaGenerationCompletionHandoffPendingTimeoutError extends Error {
+  constructor() {
+    super("completion handoff was still pending when the handoff deadline expired");
+    this.name = "MediaGenerationCompletionHandoffPendingTimeoutError";
+  }
+}
+
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
@@ -166,7 +173,11 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   while (outcome.status === "pending") {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      throw new Error("cron continuation did not become ready before the handoff deadline");
+      // Pending means the handoff was already accepted into the durable
+      // session-delivery queue (or is settling into it), so delivery survives
+      // this caller. Surface a distinguishable outcome instead of a generic
+      // error so the scheduler does not record a false delivery failure.
+      throw new MediaGenerationCompletionHandoffPendingTimeoutError();
     }
     // Pending means the original cron run still owns the continuation. Keep the
     // task live and cap backoff until delivery, unavailability, or the deadline.
@@ -544,17 +555,30 @@ export function scheduleMediaGenerationTaskCompletion<
         });
       }
     } catch (error) {
-      terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
-        formatErrorMessage(error),
-      );
-      params.onWakeFailure(
-        `${params.toolName} completion wake failed after successful generation`,
-        {
-          taskId: params.handle?.taskId,
-          runId: params.handle?.runId,
-          error,
-        },
-      );
+      if (error instanceof MediaGenerationCompletionHandoffPendingTimeoutError) {
+        // The durable session-delivery queue owns a pending handoff; it drains
+        // when the requester's active run ends. Complete as deferred-pending
+        // instead of recording a delivery failure that will never happen.
+        log.info(
+          `${params.toolName} completion handoff is queued behind the requester's active run; delivery completes when that run ends`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+          },
+        );
+      } else {
+        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
+          formatErrorMessage(error),
+        );
+        params.onWakeFailure(
+          `${params.toolName} completion wake failed after successful generation`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+            error,
+          },
+        );
+      }
     }
     terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
     try {
