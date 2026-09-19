@@ -134,7 +134,63 @@ describe("listSessionCatalogEntries", () => {
     );
     expect(listSessionCatalogEntries({ agentId: "beta", config, runtime })).toEqual([]);
     expect(listSessionEntries).toHaveBeenCalledOnce();
-    expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+    expect(listSessionEntries).toHaveBeenCalledWith({
+      agentId: "beta",
+      projection: "list",
+      readOnly: true,
+    });
+  });
+
+  // Published contract: catalog results are metadata-only on both paths, so plugins cannot
+  // start depending on a saved prompt payload that the Gateway snapshot path never carried.
+  it("returns metadata-only entries from the snapshot path and the listing fallback", () => {
+    const config = { agents: { list: [{ id: "alpha" }] } } as OpenClawConfig;
+    const storedEntry = {
+      sessionId: "session-1",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: { codex: { sessionCatalog: { sourceHostId: "node:n1" } } },
+      skillsSnapshot: { prompt: "saved catalog prompt", skills: [] },
+      systemPromptReport: { sections: [] },
+    };
+    const project = (entry: Record<string, unknown>) => {
+      const { skillsSnapshot: _prompt, systemPromptReport: _report, ...rest } = entry;
+      return rest;
+    };
+    // Mirrors the accessor: "list" omits the two payload fields, "full" keeps them.
+    const listSessionEntries = vi.fn((params: { projection?: string }) => [
+      {
+        sessionKey: "agent:alpha:session-1",
+        entry: params.projection === "list" ? project(storedEntry) : storedEntry,
+      },
+    ]);
+    const runtime = {
+      agent: { session: { listSessionEntries } },
+    } as unknown as PluginRuntime;
+
+    const fallback = listSessionCatalogEntries({ agentId: "alpha", config, runtime });
+    const snapshot = listSessionCatalogEntries({
+      agentId: "alpha",
+      config,
+      runtime,
+      sessionEntries: {
+        entriesForAgent: () => [
+          { sessionKey: "agent:alpha:session-1", entry: project(storedEntry) },
+        ],
+      },
+    } as unknown as Parameters<typeof listSessionCatalogEntries>[0]);
+
+    for (const entries of [fallback, snapshot]) {
+      expect(entries).toHaveLength(1);
+      const entry = entries[0]?.entry;
+      expect(entry?.skillsSnapshot).toBeUndefined();
+      expect(entry?.systemPromptReport).toBeUndefined();
+      // Fields catalog adoption and ownership matching actually read must survive.
+      expect(entry?.sessionId).toBe("session-1");
+      expect(entry?.agentHarnessId).toBe("codex");
+      expect(entry?.modelSelectionLocked).toBe(true);
+      expect(entry?.pluginExtensions).toEqual(storedEntry.pluginExtensions);
+    }
   });
 });
 

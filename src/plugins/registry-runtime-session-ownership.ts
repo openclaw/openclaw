@@ -301,6 +301,7 @@ export function createPluginSessionOwnership(
     const entries = registryParams.runtime.agent.session.listSessionEntries({
       ...(agentId ? { agentId } : {}),
       ...(storePath ? { storePath } : {}),
+      projection: "list",
       readOnly: true,
     });
     for (const { sessionKey, entry } of entries) {
@@ -342,6 +343,7 @@ export function createPluginSessionOwnership(
       const markerEntries = registryParams.runtime.agent.session.listSessionEntries({
         agentId: marker.agentId,
         storePath: marker.storePath,
+        projection: "list",
         readOnly: true,
       });
       const matches = markerEntries.filter(({ entry }) => entry.sessionId === marker.sessionId);

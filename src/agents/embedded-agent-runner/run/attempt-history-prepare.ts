@@ -103,6 +103,7 @@ export async function prepareEmbeddedAttemptHistory(
           agentId: sessionAgentId,
           storePath,
           clone: false,
+          projection: "list",
         })
           .map(({ entry }) => entry)
           .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
