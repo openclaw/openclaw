@@ -24,6 +24,12 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
+
+// The $include file chain and the object/array traversal inside one document
+// share one nesting budget: the recursive resolver descends one frame per
+// level, so a single cap across chained files keeps the whole resolution below
+// the call stack limit while real-world configs (tens of levels) never hit it.
+export const MAX_CONFIG_OBJECT_DEPTH = 512;
 const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */
@@ -173,6 +179,7 @@ function deepMerge(target: unknown, source: unknown): unknown {
 class IncludeProcessor {
   private visited = new Set<string>();
   private depth = 0;
+  private objectDepth = 0;
 
   constructor(
     private basePath: string,
@@ -188,12 +195,32 @@ class IncludeProcessor {
   }
 
   process(obj: unknown, logicalPath: readonly string[] = [], hasArrayAncestor = false): unknown {
+    if (Array.isArray(obj) || isPlainObject(obj)) {
+      // Container values recurse one frame per nesting level; a deep document
+      // without this cap dies with RangeError instead of a diagnosable error.
+      if (this.objectDepth >= MAX_CONFIG_OBJECT_DEPTH) {
+        throw new ConfigIncludeError(
+          `Config object nesting exceeds the maximum depth (${MAX_CONFIG_OBJECT_DEPTH}) at: ${logicalPath.join(".") || "root"}`,
+          this.basePath,
+        );
+      }
+      this.objectDepth += 1;
+      try {
+        return this.processContainer(obj, logicalPath, hasArrayAncestor);
+      } finally {
+        this.objectDepth -= 1;
+      }
+    }
+    return obj;
+  }
+
+  private processContainer(
+    obj: unknown[] | Record<string, unknown>,
+    logicalPath: readonly string[],
+    hasArrayAncestor: boolean,
+  ): unknown {
     if (Array.isArray(obj)) {
       return obj.map((item, index) => this.process(item, [...logicalPath, String(index)], true));
-    }
-
-    if (!isPlainObject(obj)) {
-      return obj;
     }
 
     if (!(INCLUDE_KEY in obj)) {
@@ -325,6 +352,7 @@ class IncludeProcessor {
     );
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
+    nested.objectDepth = this.objectDepth;
 
     return {
       value: nested.process(parsed, logicalPath, hasArrayAncestor),
