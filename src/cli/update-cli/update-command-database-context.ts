@@ -5,8 +5,8 @@ import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { formatUpdateAncestryBlockMessage } from "./update-command-handoff.js";
 import { captureOwnedManagedUpdatePreflightContext } from "./update-command-managed-context.js";
+import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import {
-  collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";

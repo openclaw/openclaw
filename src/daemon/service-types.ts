@@ -12,6 +12,8 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 
 /** Arguments required to render/install a managed gateway service. */
 export type GatewayServiceInstallArgs = {
+  /** Original live caller fence, retained through native publication and activation. */
+  assertCurrent?: () => void;
   /** Required by managed writers when explicit runtime intent is already stored. */
   runtimePinUpdate?: DaemonRuntimePinUpdate;
   env: GatewayServiceEnv;

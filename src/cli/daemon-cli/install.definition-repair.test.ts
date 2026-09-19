@@ -27,6 +27,8 @@ const native = vi.hoisted(() => ({
   source: "",
   command: vi.fn<() => Promise<GatewayServiceCommandConfig>>(),
   systemctl: vi.fn<typeof import("../../daemon/systemd-exec.js").execSystemctlUser>(),
+  serviceRuntime:
+    vi.fn<typeof import("../../daemon/systemd-runtime.js").readSystemdServiceRuntime>(),
   config: {
     gateway: { mode: "local", port: 19137, auth: { mode: "token", token: "fixture-token" } },
   },
@@ -71,6 +73,11 @@ vi.mock("../../daemon/systemd-exec.js", async (original) => ({
   assertSystemdAvailable: async () => {},
   execSystemctlUser: native.systemctl,
 }));
+vi.mock("../../daemon/systemd-runtime.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/systemd-runtime.js")>()),
+  isSystemdServiceEnabled: async () => true,
+  readSystemdServiceRuntime: native.serviceRuntime,
+}));
 vi.mock("../../daemon/systemd-user-transport.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-user-transport.js")>()),
   resolveSystemdUserTransport: async () => undefined,
@@ -100,6 +107,11 @@ vi.mock("../../daemon/systemd-system.js", () => ({
 vi.mock("../../daemon/systemd-scope.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-scope.js")>()),
   assertNoSystemGatewayOwnership: async () => {},
+  isSystemdServiceAbsent: async () => false,
+  findSystemdGatewayInstallation: async () => ({
+    kind: "user",
+    user: { scope: "user", unitName: "openclaw-gateway.service", unitPath: native.source },
+  }),
   findInstalledSystemdGatewayScope: async () => ({
     scope: "user",
     unitName: "openclaw-gateway.service",
@@ -123,7 +135,7 @@ afterEach(() => {
 });
 
 async function fixture(
-  edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreign-root",
+  edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation",
   layout: "direct" | "user-prefix shim" = "direct",
 ) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
@@ -191,6 +203,10 @@ async function fixture(
     stderr: "",
     termination: "exit",
   }));
+  native.serviceRuntime.mockResolvedValue({
+    status: "stopped",
+    systemd: { scope: "user", managerUid: process.getuid?.() ?? 501 },
+  });
   const existing = {
     programArguments: [
       process.execPath,
@@ -228,12 +244,15 @@ async function fixture(
       `[Service]\n${edit}=${edit === "Nice" ? "7" : "/operator/private-hook"}`,
     );
   }
-  if (edit === "foreign-root") {
-    const foreign = path.join(home, "foreign-package");
+  if (edit === "foreign-root" || edit === "old-installation") {
+    const foreign = path.join(home, edit);
     await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
     await fs.writeFile(
       path.join(foreign, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+      JSON.stringify({
+        name: edit === "old-installation" ? "openclaw" : "operator-package",
+        version: "2026.9.5",
+      }),
     );
     await fs.writeFile(path.join(foreign, "dist", "index.js"), "// foreign package\n");
     original = original.replace(entry, path.join(foreign, "dist", "index.js"));
@@ -350,6 +369,41 @@ it.skipIf(process.platform === "win32").each(["direct", "user-prefix shim"] as c
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "refreshes an eligible same-version installation onto the candidate root through the updater installer",
+  async () => {
+    const f = await fixture("old-installation");
+    const previous = await native.command();
+    expect(previous.programArguments).not.toContain(path.join(native.root, "dist", "index.js"));
+    await runDaemonInstall({ force: true, json: true });
+    const result = response();
+    expect(result.ok, result.error).toBe(true);
+    expect((await native.command()).programArguments).toContain(
+      path.join(native.root, "dist", "index.js"),
+    );
+    expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
+    expect(native.serviceRuntime).toHaveBeenCalled();
+    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "leaves an old installation unchanged when its native runtime cannot be inspected",
+  async () => {
+    const f = await fixture("old-installation");
+    native.serviceRuntime.mockResolvedValue({
+      status: "unknown",
+      detail: "fixture runtime unavailable",
+    });
+    const before = await fs.readdir(path.dirname(f.source));
+    await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
+    expect(response().error).toContain("unknown or foreign installation");
+    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
+    expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
+  },
+);
+
 it.skipIf(process.platform === "win32").each([false, true])(
   "preserves the previous definition when unit publication runs out of space (new environment file=%s)",
   async (fileBacked) => {
@@ -389,12 +443,14 @@ it.skipIf(process.platform === "win32").each([false, true])(
     expect(injected).toBe(true);
     const result = response();
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("previous definition was restored");
+    expect(result.error).toContain(
+      fileBacked ? "previous definition was restored" : "previous definition was left unchanged",
+    );
     expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN:");
     expect(result.error).not.toContain("UPDATE_NATIVE_AUTHORITY");
     expect(result.definitionBackup).toBeUndefined();
     expect(result.warnings).toContainEqual(
-      expect.stringMatching(/previous definition was restored:.*ENOSPC/u),
+      expect.stringMatching(/previous definition was (?:restored|left unchanged):.*ENOSPC/u),
     );
     expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
     const receipt = await expectDefinitionBackups(f);
@@ -407,7 +463,9 @@ it.skipIf(process.platform === "win32").each([false, true])(
     expect(getUpdateRun(f.runId)?.steps).toContainEqual(
       expect.objectContaining({
         step: expect.stringContaining("warning:managed-service-reconciliation"),
-        detail: expect.stringMatching(/previous definition was restored:.*ENOSPC/u),
+        detail: expect.stringMatching(
+          /previous definition was (?:restored|left unchanged):.*ENOSPC/u,
+        ),
       }),
     );
   },

@@ -171,6 +171,15 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 ## Overview and update status
 
+The Gateway service row compares its installed package with the active CLI.
+If they resolve to different installations, status names both package paths and
+versions. It recommends `openclaw doctor --fix` or `openclaw gateway install --force`
+when service installation is allowed, or reports the installation owner's refusal.
+This local diagnostic remains available when the Gateway connection fails,
+including a protocol mismatch. JSON exposes the comparison as
+`gatewayService.installationDrift`.
+If local session state requires Doctor, status prints any installation drift to stderr alongside the original error and preserves the failure exit status.
+
 - The **Sessions** overview counts stored conversation rows, including archived
   rows. Running turns and recent activity are separate from this inventory.
 - Overview includes Gateway + node host service install/runtime status when

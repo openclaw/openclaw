@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity, resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
@@ -15,6 +16,7 @@ import {
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { listUpdateRuns, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -92,6 +94,7 @@ export async function beginDoctorMaintenance(params: {
       release(): Promise<void>;
       finish(cfg: OpenClawConfig): Promise<void>;
       warnings?: string[];
+      failureFacts?: UpdateFailureFact[];
     }
   | undefined
 > {
@@ -112,7 +115,10 @@ export async function beginDoctorMaintenance(params: {
     | undefined;
   const coordinators: Array<{ release(): void }> = [];
   const warnings: string[] = [];
+  const failureFacts: UpdateFailureFact[] = [];
   let repairStoresMayBeOpen = false;
+  // Service safety outlives database handles released for an update child.
+  let retainStoppedInstallation = false;
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let inspectingActivation = false;
   let parentMustStopGateway = false;
@@ -161,13 +167,18 @@ export async function beginDoctorMaintenance(params: {
       assertCustody?.();
       const recovery = stopped?.windowsTaskAutoStartRecovery;
       try {
-        await settle(async () => {
-          await serviceMaintenance?.maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped);
-        });
+        if (!retainStoppedInstallation) {
+          await settle(async () => {
+            await serviceMaintenance?.maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
+              stopped,
+              true,
+            );
+          });
+        }
       } finally {
         if (!cleanupFailure) {
           await settle(async () => {
-            await recovery?.complete();
+            await recovery?.complete(!retainStoppedInstallation);
           });
         }
       }
@@ -178,7 +189,34 @@ export async function beginDoctorMaintenance(params: {
     assertCustody?.();
     const before = stopped;
     const root = params.root;
-    if (!before?.stopped || !before.serviceEnv || !root) {
+    if (!before?.serviceEnv || !root) {
+      return;
+    }
+    if (!before.stopped) {
+      const verdict = before.serviceUpdateVerdict;
+      if (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh) {
+        const { inspectGatewayServiceInstallationDrift } =
+          await import("../daemon/service-layout.js");
+        const drift = await inspectGatewayServiceInstallationDrift(
+          { packageRootReal: verdict.root },
+          root,
+        );
+        if (drift) {
+          const { formatGatewayServiceInstallationDrift } =
+            await import("../cli/daemon-cli/shared.js");
+          const message = formatGatewayServiceInstallationDrift(
+            drift,
+            undefined,
+            before.serviceEnv,
+            {
+              stopped: true,
+              port: before.servicePort,
+            },
+          );
+          warnings.push(message);
+          params.runtime.log(message);
+        }
+      }
       return;
     }
     try {
@@ -204,33 +242,73 @@ export async function beginDoctorMaintenance(params: {
           assertUpdateAdmissionCurrent?.();
         };
         assertMaintenanceCurrent();
-        const current = await settle(() =>
-          readGatewayServiceState(service, {
-            env: serviceEnv,
-            requireEffective: true,
-            requireLoadedCommand: true,
-            // A stopped unit may be collected. Reload only its metadata under
-            // live custody of the recorded manager, then revalidate the launcher.
-            ...(process.platform === "linux" && before.serviceManagerUid !== undefined
-              ? {
-                  loadForInspection: {
-                    managerUid: before.serviceManagerUid,
-                    assertCurrent: assertMaintenanceCurrent,
-                    assertReadCurrent: assertCurrent,
-                  },
-                }
-              : {}),
-          }),
-        );
+        const readCurrent = () =>
+          settle(() =>
+            readGatewayServiceState(service, {
+              env: serviceEnv,
+              requireEffective: true,
+              requireLoadedCommand: true,
+              // A stopped unit may be collected. Reload only its metadata under
+              // live custody of the recorded manager, then revalidate the launcher.
+              ...(process.platform === "linux" && before.serviceManagerUid !== undefined
+                ? {
+                    loadForInspection: {
+                      managerUid: before.serviceManagerUid,
+                      assertCurrent: assertMaintenanceCurrent,
+                      assertReadCurrent: assertCurrent,
+                    },
+                  }
+                : {}),
+            }),
+          );
+        let current = await readCurrent();
         assertMaintenanceCurrent();
         assertDoctorServiceSelection(env, current.env);
-        await settle(() =>
+        const installation = await settle(() =>
           revalidateManagedGatewayServiceAfterUpdate({
             state: current,
             root,
             preManagedServiceStop: before,
           }),
         );
+        if (installation.kind === "owned" && installation.requiresInstallRootRefresh) {
+          const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all(
+            [import("./doctor-gateway-services.js"), import("./doctor-prompter.js")],
+          );
+          await settle(() =>
+            maybeRepairGatewayServiceConfig(
+              cfg,
+              "local",
+              params.runtime,
+              createDoctorPrompter({ runtime: params.runtime, options: params.options }),
+              {
+                serviceMaintenance: {
+                  managerUid: before.serviceManagerUid,
+                  assertCurrent: assertMaintenanceCurrent,
+                  assertReadCurrent: assertCurrent,
+                },
+              },
+            ),
+          );
+          assertMaintenanceCurrent();
+          current = await readCurrent();
+          assertDoctorServiceSelection(env, current.env);
+          const repaired = await settle(() =>
+            revalidateManagedGatewayServiceAfterUpdate({
+              state: current,
+              root,
+              preManagedServiceStop: before,
+            }),
+          );
+          assertMaintenanceCurrent();
+          if (repaired.kind === "owned" && !repaired.requiresInstallRootRefresh) {
+            return current;
+          }
+          const message = `Gateway service still targets ${installation.root}; Doctor could not reconcile it with ${root}. The previous installation remains stopped because state compatibility is unverified. Run ${formatCliCommand("openclaw gateway install --force", env)} from the intended install.`;
+          warnings.push(message);
+          params.runtime.log(message);
+          return undefined;
+        }
         assertMaintenanceCurrent();
         await settle(() =>
           service.restart({
@@ -243,6 +321,9 @@ export async function beginDoctorMaintenance(params: {
         assertMaintenanceCurrent();
         return current;
       });
+      if (!state) {
+        return;
+      }
       const port = await resolveUpdatedGatewayRestartPort({
         config: cfg,
         serviceEnv: state.env,
@@ -281,6 +362,34 @@ export async function beginDoctorMaintenance(params: {
       if (hasCommandProcessCleanupError(error)) {
         cleanupFailure ??= { error };
         throw error;
+      }
+      if (error instanceof GatewayServiceAuthorityError) {
+        const { formatDaemonServiceInstallCommand } = await import("../cli/daemon-cli/shared.js");
+        const serviceEnv = before.serviceEnv;
+        const outcome = error.outcome ?? "recovery-pending";
+        const recovery =
+          outcome === "unchanged"
+            ? "The previous service definition was left unchanged."
+            : outcome === "restored"
+              ? "The previous service definition was restored from its captured backup."
+              : "Restoration was not verified; inspect the current service before replacing it.";
+        const message = `Doctor could not finish Gateway installation or activation under its maintenance authority (${outcome}). ${recovery} Run \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`; after the active maintenance or update finishes, run \`${formatDaemonServiceInstallCommand(serviceEnv, before.servicePort)}\` from the active CLI. Reason: ${error.message}`;
+        failureFacts.push(
+          createUpdateFailureFact(
+            {
+              check: "gateway-restoration",
+              code: `${error.code}-${outcome}`,
+              message,
+            },
+            serviceEnv,
+          ),
+        );
+        warnings.push(message);
+        params.runtime.error(message);
+        if (outcome === "recovery-pending") {
+          throw new UpdateDoctorError(message, failureFacts, { cause: error });
+        }
+        return;
       }
       if (error instanceof UpdateDoctorError) {
         throw error;
@@ -403,7 +512,8 @@ export async function beginDoctorMaintenance(params: {
           }
           // Even an owning continuation leaves native activation with its parent.
           if (parentActivation === undefined || staleReplacement) {
-            inspection.serviceUpdateVerdict.refreshDefinition = false;
+            inspection.serviceUpdateVerdict.refreshDefinition =
+              inspection.serviceUpdateVerdict.requiresInstallRootRefresh === true;
             try {
               stopped = await maybeStopManagedServiceBeforeMutableUpdate({
                 updateInstallKind: "package",
@@ -477,6 +587,10 @@ export async function beginDoctorMaintenance(params: {
         }
         throw error;
       }
+      stopped?.windowsTaskAutoStartRecovery?.beginMutation();
+      retainStoppedInstallation =
+        stopped?.serviceUpdateVerdict?.kind === "owned" &&
+        stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
       repairStoresMayBeOpen = true;
     });
   } catch (error) {
@@ -518,6 +632,7 @@ export async function beginDoctorMaintenance(params: {
   let custody: "held" | "restoring" | "released" = "held";
   const maintenance = {
     warnings,
+    failureFacts,
     run: <T>(operation: () => T) => resources!.run(operation),
     releaseState: () => settle(releaseState),
     async release() {

@@ -32,6 +32,7 @@ import {
   type PluginUpdateWarning,
 } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
@@ -52,6 +53,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   signal?: AbortSignal;
   requirePluginHealth?: boolean;
   expectedVersion?: string;
+  gatewayPort?: number;
 }): Promise<boolean> {
   const { config, env } = params;
   const readiness = captureUpdateGatewayReadinessOwner({
@@ -62,7 +64,8 @@ export async function verifyPreviousGatewayForUpdate(params: {
     readiness.assertCurrent();
     params.assertCurrent?.();
   };
-  const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
+  const port =
+    params.gatewayPort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env }));
   const [installedVersion, expectedBuildId] = await Promise.all([
     readPackageVersion(params.root),
     readBuiltGatewayBuildId(params.root),
@@ -95,7 +98,37 @@ export async function verifyPreviousGatewayForUpdate(params: {
   );
 }
 
-export function recordPreviousGatewayVerification(
+export async function verifyPreviousManagedGatewayForUpdate(
+  params: Parameters<typeof verifyPreviousGatewayForUpdate>[0] & {
+    service: PreManagedServiceStop;
+    onVerification: (verified: boolean) => void;
+  },
+): Promise<void> {
+  const verdict = params.service.serviceUpdateVerdict;
+  const installationDrift = verdict?.kind === "owned" && verdict.requiresInstallRootRefresh;
+  const identity = installationDrift
+    ? await (await import("./update-command-package.js")).readPackageUpdateIdentity(params.root)
+    : undefined;
+  params.assertCurrent?.();
+  let verified = false;
+  params.onVerification(false);
+  if (!installationDrift || identity?.version) {
+    verified = await verifyPreviousGatewayForUpdate({
+      ...params,
+      expectedVersion: identity?.version ?? undefined,
+      gatewayPort: params.service.servicePort,
+    });
+    params.onVerification(verified);
+    if (verified && identity?.version) {
+      params.service.serviceIdentity = { ...identity, version: identity.version };
+    }
+  }
+  // Recovery retains the observed verdict even if its receipt cannot be written.
+  params.assertCurrent?.();
+  recordPreviousGatewayVerification(params.opts.run, verified);
+}
+
+function recordPreviousGatewayVerification(
   run: UpdateCommandOptions["run"],
   verified: boolean,
 ): void {

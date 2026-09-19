@@ -2003,15 +2003,13 @@ describe("launchd install", () => {
       (caught: unknown) => caught,
     );
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "launchctl bootstrap failed: Operation not permitted",
-    );
-    expect((error as Error).message).toContain(
-      "The previous LaunchAgent supervision could not be restored.",
-    );
-    expect((error as Error).cause).toBeInstanceOf(Error);
-    expect(((error as Error).cause as Error).message).toContain("could not determine whether");
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("launchctl bootstrap failed: Operation not permitted"),
+      }),
+      expect.objectContaining({ message: expect.stringContaining("could not determine whether") }),
+    ]);
     expect(state.files.has(plistPath)).toBe(true);
     expect(launchctlCommandNames()).toEqual(["print", "print", "enable", "bootstrap", "print"]);
   });

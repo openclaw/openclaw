@@ -15,12 +15,52 @@ import { fixture, native, readRetainedReceipt } from "./service-definition-backu
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   publishServiceFile,
+  readServiceFileState,
 } from "./service-stage.js";
 import { stageSystemdService } from "./systemd-install.js";
 import { restartSystemdService } from "./systemd-lifecycle.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 
 describe("service definition backup receipts", () => {
+  it.each(["linux", "darwin", "win32"] as const)(
+    "reports unchanged without publishing or activating an untouched %s receipt",
+    async (platform) => {
+      const f = await fixture(platform);
+      const before = await readServiceFileState(f.sourcePath);
+      const rename = vi.spyOn(fs, "rename");
+      const unlink = vi.spyOn(fs, "unlink");
+      native.identity.mockClear();
+      native.task.mockClear();
+      native.launchctl.mockClear();
+      await expect(f.capture.compensate()).resolves.toBe(false);
+      expect(await readServiceFileState(f.sourcePath)).toEqual(before);
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+      expect(rename).not.toHaveBeenCalled();
+      expect(unlink).not.toHaveBeenCalled();
+      expect(native.identity.mock.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(
+        false,
+      );
+      expect(native.task.mock.calls.some(([args]) => args[0] !== "/Query")).toBe(false);
+      expect(native.launchctl.mock.calls.some(([args]) => args[0] !== "print")).toBe(false);
+    },
+  );
+
+  it("reports restoration for an acknowledged publication with the original bytes", async () => {
+    const f = await fixture("linux");
+    await publishServiceFile({
+      filePath: f.sourcePath,
+      contents: f.original,
+      mode: 0o600,
+      definitionTransaction: f.capture.hooks,
+    });
+    native.identity.mockClear();
+    await expect(f.capture.compensate()).resolves.toBe(true);
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(
+      native.identity.mock.calls.filter(([, args]) => args.includes("daemon-reload")),
+    ).toHaveLength(1);
+  });
+
   it("accepts an acknowledged restoration without replacing an open Windows launcher again", async () => {
     const f = await fixture("win32");
     await f.install();

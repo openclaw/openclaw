@@ -1,9 +1,16 @@
 /** Native service control/inspection only; payload launchers own their full environment. */
 import { extractErrorCode } from "../infra/errors.js";
-import { createSanitizedCommandError } from "../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  createSanitizedCommandError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  GatewayServiceAuthorityError,
+} from "./service-update-authority.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   code: number;
@@ -23,9 +30,9 @@ export async function execFileUtf8(
     windowsHide?: boolean;
   } = {},
 ): Promise<ExecResult> {
-  assertGatewayServiceUpdateCurrent();
+  const scoped = assertGatewayServiceUpdateCurrent();
   try {
-    const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
+    const { stdout, stderr, code, termination, signal, cleanup } = await runCommandWithTimeout(
       [command, ...args],
       {
         baseEnv: resolveServiceManagerEnv(options.env),
@@ -36,6 +43,12 @@ export async function execFileUtf8(
         timeoutMs: options.timeout,
       },
     );
+    // Mutation scopes cannot compensate while an earlier writer may still run.
+    // Unscoped status probes retain their ordinary timeout diagnostics.
+    if (scoped && cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
+    assertGatewayServiceUpdateCurrent();
     const diagnostic =
       termination === "exit"
         ? ""
@@ -52,6 +65,9 @@ export async function execFileUtf8(
       termination,
     };
   } catch (error) {
+    if (error instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     const errorCode = extractErrorCode(error);
     // Launch diagnostics omit argv; preserve errno separately so daemon owners

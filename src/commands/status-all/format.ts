@@ -56,6 +56,7 @@ type StatusManagedService = {
   managedByOpenClaw?: boolean;
   loadedText: string;
   runtimeShort?: string | null;
+  installationDrift?: string;
   runtime?: {
     status?: string | null;
     pid?: number | null;
@@ -161,7 +162,8 @@ function formatStatusServiceValue(params: StatusManagedService): string {
   const runtimeText = inspectionFailed
     ? redactSensitiveText(runtimeSuffix, { mode: "tools" })
     : runtimeSuffix;
-  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}`;
+  const installationWarning = params.installationDrift ? ` · ${params.installationDrift}` : "";
+  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}${installationWarning}`;
 }
 
 /** Returns the dashboard URL when the Control UI is enabled for the current gateway binding. */

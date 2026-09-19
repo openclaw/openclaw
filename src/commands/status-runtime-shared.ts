@@ -2,8 +2,10 @@
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
@@ -131,6 +133,25 @@ async function resolveStatusLastHeartbeat(params: {
 // Default bound for service-manager probes when status runs without an explicit
 // --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
 const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
+
+/** Preserve independent service diagnostics when local status collection refuses state. */
+export async function reportStatusScanFailure(
+  error: unknown,
+  runtime: RuntimeEnv,
+  timeoutMs?: number,
+): Promise<never> {
+  try {
+    const { installationDrift } = await getDaemonStatusSummary(
+      timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS,
+    );
+    if (installationDrift) {
+      runtime.error(sanitizeTerminalText(installationDrift));
+    }
+  } catch {
+    // Optional diagnostics must not replace the original collection or schema refusal.
+  }
+  throw error;
+}
 
 /** Resolves launchd/systemd summaries for the gateway and node services together. */
 export async function resolveStatusServiceSummaries(timeoutMs?: number) {

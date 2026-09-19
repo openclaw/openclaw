@@ -4,6 +4,7 @@
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import { reportStatusScanFailure } from "./status-runtime-shared.ts";
 
 type StatusJsonCommandOptions = {
   deep?: boolean;
@@ -33,10 +34,11 @@ export async function runStatusJsonCommand(params: {
   ) => Promise<Parameters<typeof resolveStatusJsonOutput>[0]["scan"]>;
 }) {
   assertStatusUsageAgentScope(params.opts);
-  const scan = await params.scanStatusJsonFast(
-    { timeoutMs: params.opts.timeoutMs, all: params.opts.all },
-    params.runtime,
-  );
+  const scan = await params
+    .scanStatusJsonFast({ timeoutMs: params.opts.timeoutMs, all: params.opts.all }, params.runtime)
+    .catch((error: unknown) =>
+      reportStatusScanFailure(error, params.runtime, params.opts.timeoutMs),
+    );
   const updateRunStatus = readUpdateRunStatus();
   writeRuntimeJson(params.runtime, {
     ...(await resolveStatusJsonOutput({

@@ -26,8 +26,10 @@ it.each([
   { platform: "darwin", fault: "oversized command" },
   { platform: "linux", fault: "none" },
   { platform: "darwin", fault: "none" },
+  { platform: "linux", fault: "sealed definition" },
+  { platform: "linux", fault: "source checkout" },
 ] as const)(
-  "selects package, runtime and state only with verified service ownership ($platform, $fault)",
+  "keeps the invoking install while selecting only verified service state ($platform, $fault)",
   async ({ platform, fault }) => {
     const home = tempDirs.make("openclaw-service-selection-");
     const requested = path.join(home, "current", "lib", "node_modules", "openclaw");
@@ -35,6 +37,11 @@ it.each([
     const recordedNode = path.join(home, "old", "bin", "node");
     const recordedState = path.join(home, ".openclaw-recorded");
     await Promise.all([writePackageRoot(requested, "1.0.0"), writePackageRoot(recorded, "1.0.0")]);
+    if (fault === "source checkout") {
+      await fs.writeFile(path.join(recorded, ".git"), "gitdir: fixture\n");
+      await fs.mkdir(path.join(recorded, "src"));
+      await fs.mkdir(path.join(recorded, "extensions"));
+    }
     await withEnvAsync(
       {
         HOME: home,
@@ -73,13 +80,18 @@ it.each([
                     : 2001,
             },
           }),
+          readDefinitionMutationCapability: async () =>
+            fault === "sealed definition"
+              ? { kind: "sealed", reason: "foreign-owner" }
+              : { kind: "writable" },
         });
         vi.spyOn(service, "resolveGatewayService").mockReturnValue(native);
 
         const prepared = await prepareUpdateCommand({ dryRun: true });
         const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
         const env = await resolveUpdateCommandAdmissionEnv({ root, opts: {} });
-        const selected = fault === "none";
+        const sealed = fault === "sealed definition";
+        const selected = fault === "none" || sealed;
         const state = selected ? recordedState : path.join(home, ".openclaw");
         expect
           .soft({
@@ -89,20 +101,29 @@ it.each([
             config: resolveConfigPath(env),
           })
           .toEqual({
-            root: selected ? recorded : requested,
-            node: selected ? recordedNode : undefined,
+            root: sealed ? recorded : requested,
+            node: sealed ? recordedNode : undefined,
             state,
             config: path.join(state, "openclaw.json"),
           });
         const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-          root: selected ? recorded : requested,
+          root: requested,
           updateInstallKind: "package",
           shouldRestart: true,
           phase: "inspect",
           jsonMode: true,
         });
-        expect(inspection.serviceUpdateVerdict?.kind).toBe(selected ? "owned" : "unavailable");
-        if (!selected) {
+        const foreign = sealed || fault === "source checkout";
+        expect(inspection.serviceUpdateVerdict?.kind).toBe(
+          foreign ? "foreign" : selected ? "owned" : "unavailable",
+        );
+        if (selected && !sealed) {
+          expect(inspection.serviceUpdateVerdict).toMatchObject({
+            root: recorded,
+            requiresInstallRootRefresh: true,
+          });
+        }
+        if (!selected && !foreign) {
           expect(inspection.serviceMutationSkipMessage).toContain(
             "Restart the Gateway you launched manually",
           );

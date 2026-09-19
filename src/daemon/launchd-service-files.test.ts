@@ -3,9 +3,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { installLaunchAgent } from "./launchd-install.js";
+import { installLaunchAgent, stageLaunchAgent } from "./launchd-install.js";
 import {
-  publishLaunchAgentPlist,
   readExistingLaunchAgentPlist,
   resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
@@ -104,7 +103,7 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
   });
 
   it.each(
-    [0o600, 0o640].flatMap((mode) =>
+    [0o600, 0o640, 0o1600].flatMap((mode) =>
       ["publication ownership", "install activation"].map((failure) => ({ mode, failure })),
     ),
   )(
@@ -147,23 +146,21 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
         }
         await rename(from, to);
       });
-      const replacement = "synthetic replacement";
       if (failure === "publication ownership") {
         native.ownership.mockImplementation(async () => {
-          if ((await fs.readFile(plistPath, "utf8")) === replacement) {
+          if (!(await fs.readFile(plistPath)).equals(binaryPlist)) {
             throw new Error("synthetic ownership conflict");
           }
         });
       }
+      const install = failure === "publication ownership" ? stageLaunchAgent : installLaunchAgent;
       await expect(
-        failure === "publication ownership"
-          ? publishLaunchAgentPlist({ label, plistPath, contents: replacement })
-          : installLaunchAgent({
-              env,
-              stdout: new PassThrough(),
-              programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
-              environment: { FIXTURE: "replacement" },
-            }),
+        install({
+          env,
+          stdout: new PassThrough(),
+          programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
+          environment: { FIXTURE: "replacement" },
+        }),
       ).rejects.toThrow(
         failure === "publication ownership"
           ? "synthetic ownership conflict"

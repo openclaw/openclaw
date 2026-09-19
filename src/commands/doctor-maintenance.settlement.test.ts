@@ -15,12 +15,14 @@ const boundary = vi.hoisted(() => ({
   read: vi.fn<typeof readGatewayServiceState>(),
   command: vi.fn<GatewayService["readCommand"]>(),
   revalidate: vi.fn(),
+  repair: vi.fn(async () => ({})),
   restart: vi.fn(),
   health: vi.fn(),
   resume: vi.fn(),
   complete: vi.fn(),
   close: vi.fn(),
   release: vi.fn(),
+  unlock: vi.fn(),
   log: vi.fn(),
   native: vi.fn(() => {
     throw new Error("Doctor settlement controls cannot start or inspect native processes");
@@ -90,8 +92,18 @@ vi.mock("../daemon/service-operation-lock.js", () => ({
   withGatewayServiceOperationLock: async (
     _env: NodeJS.ProcessEnv,
     run: (assertCurrent: () => void) => Promise<unknown>,
-  ) => run(() => {}),
+  ) => {
+    try {
+      return await run(() => {});
+    } finally {
+      boundary.unlock();
+    }
+  },
 }));
+vi.mock("./doctor-gateway-services.js", () => ({
+  maybeRepairGatewayServiceConfig: boundary.repair,
+}));
+vi.mock("./doctor-prompter.js", () => ({ createDoctorPrompter: () => ({}) }));
 vi.mock("../cli/update-cli/update-command-service-plan.js", () => ({
   resolveUpdatedGatewayRestartPort: async () => 18789,
 }));
@@ -148,6 +160,7 @@ beforeEach(() => {
     runtime: { status: "stopped" },
   });
   boundary.health.mockResolvedValue({ healthy: true });
+  boundary.revalidate.mockResolvedValue(stopped.serviceUpdateVerdict);
   boundary.native.mockImplementation(() => {
     throw new Error("Doctor settlement controls cannot start or inspect native processes");
   });
@@ -253,12 +266,22 @@ it.each(["forced", "uncertain"] as const)(
 );
 
 it.each(
-  (["inspection", "autostart"] as const).flatMap((phase) =>
+  (["inspection", "autostart", "installation"] as const).flatMap((phase) =>
     (["forced", "uncertain"] as const).map((cleanup) => ({ phase, cleanup })),
   ),
 )(
   "settles restoration $phase and retains unknown cleanup ($cleanup)",
   async ({ phase, cleanup }) => {
+    if (phase === "installation") {
+      stopped.serviceUpdateVerdict = {
+        kind: "owned",
+        root: "/synthetic/service-install",
+        fingerprint: "fixture",
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
+      boundary.revalidate.mockResolvedValueOnce(stopped.serviceUpdateVerdict);
+    }
     const maintenance = await begin();
     if (!maintenance) {
       throw new Error("The repair did not acquire maintenance");
@@ -270,8 +293,13 @@ it.each(
         barrier.retain();
         return await read(...args);
       });
-    } else {
+    } else if (phase === "autostart") {
       boundary.resume.mockImplementation(async () => barrier.retain());
+    } else {
+      boundary.repair.mockImplementation(async () => {
+        barrier.retain();
+        return {};
+      });
     }
     const work = maintenance.finish({}).catch((error: unknown) => error);
     try {
@@ -283,9 +311,15 @@ it.each(
       ]);
       expect(boundary.restart).not.toHaveBeenCalled();
       expect(boundary.health).not.toHaveBeenCalled();
+      expect(boundary.unlock).not.toHaveBeenCalled();
       if (phase === "autostart") {
         expect(boundary.complete).not.toHaveBeenCalled();
         expect(boundary.read).not.toHaveBeenCalled();
+      } else if (phase === "installation") {
+        expect(boundary.read).toHaveBeenCalledOnce();
+        expect(boundary.revalidate).toHaveBeenCalledOnce();
+        expect(boundary.resume).not.toHaveBeenCalled();
+        expect(boundary.complete).toHaveBeenCalledExactlyOnceWith(false);
       }
     } finally {
       barrier.cleanup.resolve(cleanup);
@@ -294,8 +328,13 @@ it.each(
     const error = await work;
     if (cleanup === "forced") {
       expect(error).toBeUndefined();
-      expect(boundary.restart).toHaveBeenCalledOnce();
+      expect(boundary.restart).toHaveBeenCalledTimes(phase === "installation" ? 0 : 1);
       expect(boundary.health).toHaveBeenCalledOnce();
+      if (phase === "installation") {
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+        expect(boundary.revalidate).toHaveBeenCalledTimes(2);
+        expect(boundary.repair).toHaveBeenCalledOnce();
+      }
       expect(boundary.log).toHaveBeenCalledWith(
         "Gateway restarted and verified after Doctor repair.",
       );

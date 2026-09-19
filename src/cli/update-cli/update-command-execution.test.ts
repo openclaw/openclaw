@@ -130,14 +130,24 @@ describe("mutable update execution", () => {
 
   it.each([
     ["measured startup", undefined, true, undefined],
+    ["different service installation", undefined, true, undefined],
     ["explicit allowance", 450_000, true, undefined],
     ["explicit deadline", 30_000, false, undefined],
     ["terminal version mismatch", undefined, false, "version"],
     ["replaced executor", undefined, false, "executor"],
   ] as const)(
     "preserves previous Gateway verification through slow readiness (%s)",
-    async (_allowance, timeoutMs, verified, failure) =>
+    async (allowance, timeoutMs, verified, failure) =>
       withTestDir({ prefix: "previous-gateway-readiness-" }, async (root) => {
+        const installationDrift = allowance === "different service installation";
+        const cliRoot = installationDrift ? path.join(root, "cli-install") : root;
+        if (installationDrift) {
+          await fs.mkdir(cliRoot);
+          await fs.writeFile(
+            path.join(cliRoot, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          );
+        }
         const readyAtMs = 400_000;
         mockProcessPlatform("linux");
         let elapsedMs = 0;
@@ -242,7 +252,20 @@ describe("mutable update execution", () => {
             if (phase === "prepare") {
               stoppedAtMs = elapsedMs;
             }
-            return inspectOrStopService(phase);
+            const stopped = inspectOrStopService(phase);
+            return installationDrift
+              ? {
+                  ...stopped,
+                  servicePort: address.port,
+                  serviceUpdateVerdict: {
+                    kind: "owned",
+                    root,
+                    fingerprint: "service-fingerprint",
+                    refreshDefinition: true,
+                    requiresInstallRootRefresh: true,
+                  },
+                }
+              : stopped;
           });
           mocks.runPackageUpdate.mockImplementation(
             async (
@@ -257,7 +280,7 @@ describe("mutable update execution", () => {
           );
           const params = {
             ...executionParams("package"),
-            root,
+            root: cliRoot,
             timeoutMs,
             updateStepTimeoutMs: timeoutMs ?? 20 * 60_000,
           };
@@ -281,6 +304,9 @@ describe("mutable update execution", () => {
             execution?.previousVerified,
             JSON.stringify({ readyObservedAtMs, stoppedAtMs }),
           ).toBe(verified);
+          if (installationDrift) {
+            expect(execution?.preManagedServiceStop?.serviceIdentity).toEqual({ version: "1.0.0" });
+          }
           if (verified) {
             expect(readyObservedAtMs).toBeGreaterThanOrEqual(readyAtMs);
             expect(stoppedAtMs).toBeGreaterThanOrEqual(readyObservedAtMs!);

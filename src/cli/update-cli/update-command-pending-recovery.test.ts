@@ -77,7 +77,7 @@ function materialSnapshot(root: string) {
 
 function pendingPackageInvocation(
   params: {
-    redirected?: boolean;
+    serviceDrift?: boolean;
     alias?: boolean;
     existingRun?: boolean;
     manager?: "npm" | "pnpm" | "bun";
@@ -89,9 +89,9 @@ function pendingPackageInvocation(
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
   const source = path.join(home, "prefix", "lib", "node_modules", "openclaw");
-  const target = path.join(home, "service-prefix", "lib", "node_modules", "openclaw");
+  const serviceRoot = path.join(home, "service-prefix", "lib", "node_modules", "openclaw");
   const control = path.join(home, "control");
-  for (const root of [source, target]) {
+  for (const root of [source, serviceRoot]) {
     fs.mkdirSync(path.join(root, "dist"), { recursive: true });
     fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"1.0.0"}\n');
     fs.writeFileSync(path.join(root, "dist", "entry.js"), "// installed entrypoint\n");
@@ -137,8 +137,14 @@ function pendingPackageInvocation(
     readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
   });
   const readCommand = vi.fn(async () =>
-    params.redirected
-      ? { programArguments: [process.execPath, path.join(target, "dist", "entry.js"), "gateway"] }
+    params.serviceDrift
+      ? {
+          programArguments: [
+            process.execPath,
+            path.join(serviceRoot, "dist", "entry.js"),
+            "gateway",
+          ],
+        }
       : null,
   );
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({ ...service, readCommand });
@@ -161,7 +167,7 @@ function pendingPackageInvocation(
     .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence"));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-  const addPending = (root = params.redirected ? target : source) => {
+  const addPending = (root = params.serviceDrift ? serviceRoot : source) => {
     const anchor = resolvePackageActivationAnchor(root);
     fs.mkdirSync(anchor, { mode: 0o700 });
     // A crash during sealing is already pending, even before a complete journal exists.
@@ -174,7 +180,7 @@ function pendingPackageInvocation(
     home,
     state,
     source,
-    target,
+    serviceRoot,
     runId: process.env.OPENCLAW_UPDATE_RUN_ID,
     restore() {
       vi.unstubAllEnvs();
@@ -203,7 +209,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
   it.each([
     { name: "source with absent history" },
     { name: "canonical source behind an alias", alias: true },
-    { name: "redirected service target", redirected: true, existingRun: true },
+    { name: "managed service in another prefix", serviceDrift: true, existingRun: true },
     {
       name: "pnpm caller with another profile",
       manager: "pnpm" as const,
@@ -215,6 +221,9 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
   ])("refuses $name before writable preparation or run admission", async (params) => {
     const f = pendingPackageInvocation(params);
     try {
+      f.writers.manager.mockRejectedValue(
+        new Error("Package manager selection reached before retained recovery admission"),
+      );
       const opts: UpdateCommandOptions = { json: true, yes: true };
       f.addPending();
       const before = materialSnapshot(f.home);
@@ -223,7 +232,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         expect.objectContaining({
           status: "error",
           reason: "update-recovery-pending",
-          ...(params.redirected ? { root: f.target } : {}),
+          ...(params.serviceDrift ? { root: f.serviceRoot } : {}),
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         }),
       );
@@ -239,16 +248,21 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
     }
   });
 
-  it.each([false, true])(
-    "reports pending after lease acquisition with existing history=%s without changing retained material",
-    async (existingRun) => {
-      const f = pendingPackageInvocation({ existingRun });
+  it.each([
+    { existingRun: false, serviceDrift: false },
+    { existingRun: true, serviceDrift: false },
+    { existingRun: false, serviceDrift: true },
+    { existingRun: true, serviceDrift: true },
+  ])(
+    "reports pending after lease acquisition (existing history=$existingRun, service drift=$serviceDrift) without changing retained material",
+    async ({ existingRun, serviceDrift }) => {
+      const f = pendingPackageInvocation({ existingRun, serviceDrift });
       const withExecutor = updateExecutor.withUpdateCommandExecutor;
       let anchor: string | undefined;
       let record: ReturnType<typeof ledger.getUpdateRun> | undefined;
       const retainedMaterial = () => ({
         source: materialSnapshot(f.source),
-        target: materialSnapshot(f.target),
+        service: materialSnapshot(f.serviceRoot),
         anchor: anchor ? materialSnapshot(anchor) : undefined,
         config: fs.readFileSync(path.join(f.state, "openclaw.json")),
         triage: fs.readFileSync(path.join(f.home, "triage.json")),
@@ -275,6 +289,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
             async (executor) =>
               operation({
                 async enter(root, enterOptions) {
+                  expect(root).toBe(f.source);
                   const fence = await executor.enter(root, enterOptions);
                   if (!anchor) {
                     anchor = f.addPending();
@@ -301,6 +316,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           expect.objectContaining({
             status: "error",
             reason: "update-recovery-pending",
+            root: serviceDrift ? f.serviceRoot : f.source,
             recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
           }),
         );

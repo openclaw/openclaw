@@ -6,6 +6,7 @@ import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
+import { resolveManagedServiceNodeRunner } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
@@ -13,6 +14,7 @@ import {
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -33,7 +35,6 @@ import {
   inspectManagedGatewayServiceBeforeUpdate,
   observedSystemdManagerUid,
   resolveGatewayServiceManagementBlockMessageForUpdate,
-  resolveManagedServiceNodeRunner,
 } from "./update-command-service-plan.js";
 import { isManagedGatewayServiceOffline } from "./update-command-service-publication.js";
 import {
@@ -100,9 +101,11 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   const inspection = await inspectManagedGatewayServiceBeforeUpdate({
     ...params,
     retainedCommand: verdict?.kind === "owned" || verdict?.kind === "unresolved",
+    allowInstallRootChange: params.allowInstallRootChange && !verdict,
   });
   if (
-    params.allowInstallRootChange &&
+    (params.allowInstallRootChange ||
+      (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh)) &&
     before &&
     verdict?.kind === "owned" &&
     verdict.refreshDefinition &&
@@ -411,7 +414,8 @@ async function stopManagedServiceBeforeMutableUpdate(
       root: params.root,
       state: serviceState,
       preManagedServiceStop: params.expectedService,
-      allowInstallRootChange: params.allowInstallRootChange,
+      allowInstallRootChange:
+        params.allowInstallRootChange ?? params.updateInstallKind === "package",
     }),
   );
   assertCurrent();
@@ -437,6 +441,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     serviceDefinitionEnv:
       resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     serviceNodeRunner: resolveManagedServiceNodeRunner(serviceState.command),
+    servicePort: parseTcpPortFromArgs(serviceState.command?.programArguments) ?? undefined,
     ...(process.platform === "linux"
       ? { serviceManagerUid: observedSystemdManagerUid(serviceState) }
       : {}),
