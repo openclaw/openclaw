@@ -400,6 +400,55 @@ describe("cron runs query options", () => {
     });
   });
 
+  it("forwards plural status filters as arrays", async () => {
+    await runCronRuns([
+      "job-1",
+      "--statuses",
+      "ok",
+      "error",
+      "--delivery-statuses",
+      "delivered",
+      "unknown",
+    ]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      statuses: ["ok", "error"],
+      deliveryStatuses: ["delivered", "unknown"],
+      limit: 50,
+    });
+  });
+
+  it("forwards plural and singular filters together", async () => {
+    await runCronRuns(["job-1", "--status", "error", "--statuses", "ok"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.runs", expect.anything(), {
+      id: "job-1",
+      status: "error",
+      statuses: ["ok"],
+      limit: 50,
+    });
+  });
+
+  it.each([
+    ["--statuses", "failed"],
+    ["--delivery-statuses", "failed"],
+  ])("rejects an invalid plural enum %s=%s", async (flag, value) => {
+    await expect(runCronRuns(["job-1", flag, value])).rejects.toMatchObject({
+      message: expect.stringContaining(
+        `option '${flag} <status...>' argument '${value}' is invalid.`,
+      ),
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plural status flag with no value", async () => {
+    await expect(runCronRuns(["job-1", "--statuses"])).rejects.toMatchObject({
+      message: expect.stringContaining("argument missing"),
+    });
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
   it("preserves the existing request defaults and --id alias", async () => {
     await runCronRuns(["--id", "job-1"]);
 
