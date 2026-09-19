@@ -211,6 +211,7 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
     sessionKey: string;
+    agentId?: string;
     reason: string;
   }) => Promise<void>;
   unbindSessionBindings?: (params: {
@@ -218,6 +219,7 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     bindingId?: string;
     reason: string;
   }) => Promise<SessionBindingRecord[]>;
+  logWarn?: (message: string, meta?: Record<string, unknown>) => void;
 }): void {
   const listSnapshotTasks = params.listTaskRecords ?? (() => params.snapshotTasks);
   const emptyAcpEntry = {
@@ -230,10 +232,16 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   } satisfies AcpSessionStoreEntry;
   setTaskRegistryMaintenanceRuntimeForTests({
     listAcpSessionEntries: params.listAcpSessionEntries ?? (async () => params.acpEntries ?? []),
-    readAcpSessionEntry: () => params.acpEntry ?? emptyAcpEntry,
+    readAcpSessionEntry: ({ sessionKey }) =>
+      params.acpEntry ??
+      params.acpEntries?.find(
+        (entry) => entry.sessionKey.trim().toLowerCase() === sessionKey.trim().toLowerCase(),
+      ) ??
+      emptyAcpEntry,
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     loadCloseAcpSession: params.loadCloseAcpSession ?? (async () => params.closeAcpSession),
     unbindSessionBindings: params.unbindSessionBindings,
+    logWarn: params.logWarn,
     listSessionEntries: () => [],
     resolveStorePath: () => "",
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
