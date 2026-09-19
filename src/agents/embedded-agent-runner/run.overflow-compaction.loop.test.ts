@@ -351,7 +351,9 @@ describe("embedded run retry dispatch", () => {
     try {
       await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterTurnError);
       expect(onContextAccountingEvent.mock.calls).toEqual([
-        [{ kind: "model", contextTokens: undefined }],
+        // `admitted` is false here: this fixture reports stopReason "stop" with
+        // no usage, so the producer cannot claim the provider accepted a turn.
+        [{ kind: "model", contextTokens: undefined, admitted: false }],
         [{ kind: "compaction", tokensAfter: 40 }],
       ]);
     } finally {

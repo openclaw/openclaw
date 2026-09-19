@@ -466,7 +466,19 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
         expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
         expect(subscription.hasSuccessfulModelResponse()).toBe(completed?.stopReason === "stop");
-        expect(onContextAccountingEvent.mock.calls).toEqual([[{ kind: "model", contextTokens }]]);
+        // `admitted` mirrors the production contract: only a turn the provider
+        // actually completed with real usage may renew a recovery budget, so a
+        // zero-usage `error` result reports false while billed turns report true.
+        expect(onContextAccountingEvent.mock.calls).toEqual([
+          [
+            {
+              kind: "model",
+              contextTokens,
+              admitted:
+                completed?.stopReason !== "error" && (completed?.usage?.totalTokens ?? 0) > 0,
+            },
+          ],
+        ]);
         expect(
           onAgentEvent.mock.calls
             .map(([event]) => event)
@@ -663,7 +675,17 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           },
         );
         expect(onContextAccountingEvent.mock.calls).toEqual([
-          [{ kind: "model", contextTokens: undefined }],
+          [
+            {
+              kind: "model",
+              contextTokens: undefined,
+              // Admission tracks whether the provider actually completed a
+              // billable turn, independent of whether it reported a context
+              // number: the explicitly-unknown variant still bills usage, while
+              // the transport-zero variant bills nothing.
+              admitted: unknownContext,
+            },
+          ],
         ]);
         const usageEvents = onAgentEvent.mock.calls
           .map(([event]) => event)

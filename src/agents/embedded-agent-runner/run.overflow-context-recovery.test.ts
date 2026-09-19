@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -58,11 +59,15 @@ vi.mock("./tool-result-truncation.js", () => ({
 }));
 
 vi.mock("./run/session-bootstrap.js", async () => {
-  const { buildContextEngineCompactionSessionTarget } = await vi.importActual<
-    typeof import("./run/session-bootstrap.js")
-  >("./run/session-bootstrap.js");
+  const { buildContextEngineCompactionSessionTarget, isNonReducingCompaction } =
+    await vi.importActual<typeof import("./run/session-bootstrap.js")>(
+      "./run/session-bootstrap.js",
+    );
   return {
     buildContextEngineCompactionSessionTarget,
+    // Real implementation: the no-op budget invariant under test is this
+    // predicate's contract, so stubbing it would make the regression vacuous.
+    isNonReducingCompaction,
     isNoRealConversationCompactionNoop: mocks.isNoRealConversationCompactionNoop,
     resetNoRealConversationTokenSnapshot: mocks.resetNoRealConversationTokenSnapshot,
   };
@@ -923,5 +928,140 @@ describe("recoverEmbeddedRunOverflow", () => {
     }
     expect(result.userText).toContain("/reset");
     expect(result.userText).toContain("/new");
+  });
+
+  it("terminates after three no-progress compactions instead of looping forever", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+    const noopCompaction = () =>
+      ({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "Compacted session",
+          tokensBefore: 45_211,
+          tokensAfter: 45_211,
+        },
+      }) as CompactionResult;
+
+    // No successful model turn happens anywhere in this loop: the engine keeps
+    // committing compactions that free nothing and the retried prompt keeps
+    // overflowing. Each attempt must stay charged so recovery is bounded.
+    for (let round = 1; round <= MAX_OVERFLOW_COMPACTION_ATTEMPTS; round += 1) {
+      mocks.compact.mockResolvedValueOnce(noopCompaction());
+      const input = makeInput({ state });
+      const result = await recoverEmbeddedRunOverflow(input);
+
+      // Reassembly is still prepared, so a recoverable run continues: this is
+      // what keeps a no-op from being reported as blocked on its first round.
+      expect(result).toMatchObject({ action: "retry" });
+      expect(input.markOwnedTranscriptRetry).toHaveBeenCalled();
+      expect(state.overflowCompactionAttempts).toBe(round);
+    }
+
+    // Budget spent: the next overflow surfaces rather than compacting again.
+    const exhausted = await recoverEmbeddedRunOverflow(makeInput({ state }));
+    expect(exhausted).toMatchObject({ action: "surface", kind: "context_overflow" });
+    expect(mocks.compact).toHaveBeenCalledTimes(MAX_OVERFLOW_COMPACTION_ATTEMPTS);
+    expect(
+      mocks.info.mock.calls.some(([message]) =>
+        String(message).includes("auto-compaction succeeded"),
+      ),
+    ).toBe(false);
+  });
+
+  it("renews the budget after a no-progress compaction once the model really progresses", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+    mocks.compact.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "Compacted session", tokensBefore: 45_211, tokensAfter: 45_211 },
+    } as CompactionResult);
+    await recoverEmbeddedRunOverflow(makeInput({ state }));
+    expect(state.overflowCompactionAttempts).toBe(1);
+
+    // Real progress, not a refund, is what returns the budget: the provider
+    // admitted the retried prompt and produced a usable turn.
+    state.observeContextAccounting({ kind: "model", contextTokens: 20_000, admitted: true });
+    expect(state.overflowCompactionAttempts).toBe(0);
+  });
+
+  it("still exhausts the budget when compaction keeps reducing but the prompt keeps failing", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+    let tokens = 150_000;
+
+    // Every round genuinely frees context, so every round is billed. Recovery
+    // must remain bounded and stop after MAX_OVERFLOW_COMPACTION_ATTEMPTS.
+    for (let round = 1; round <= 3; round += 1) {
+      mocks.compact.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "Compacted session",
+          tokensBefore: tokens,
+          tokensAfter: tokens - 10_000,
+        },
+      } as CompactionResult);
+      tokens -= 10_000;
+      const result = await recoverEmbeddedRunOverflow(makeInput({ state }));
+      expect(result).toMatchObject({ action: "retry" });
+      expect(state.overflowCompactionAttempts).toBe(round);
+    }
+
+    // Fourth overflow: the budget is spent, so the run is surfaced rather than
+    // compacted again.
+    const exhausted = await recoverEmbeddedRunOverflow(makeInput({ state }));
+    expect(exhausted).toMatchObject({ action: "surface", kind: "context_overflow" });
+    expect(mocks.compact).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the budget charged when the provider rejects the retried prompt", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+
+    mocks.compact.mockResolvedValueOnce(successfulCompaction());
+    await recoverEmbeddedRunOverflow(makeInput({ state }));
+    expect(state.overflowCompactionAttempts).toBe(1);
+
+    // The producer emits a model event for rejected, aborted and truncated
+    // responses too. None of them proves the prompt was admitted, so none may
+    // renew the budget - otherwise the overflow that should be charged would
+    // clear its own cost and the three-attempt bound could never be reached.
+    for (const rejected of [
+      { kind: "model", contextTokens: undefined, admitted: false },
+      { kind: "model", contextTokens: 45_211, admitted: false },
+      { kind: "model", contextTokens: undefined },
+    ] as const) {
+      state.observeContextAccounting(rejected);
+      expect(state.overflowCompactionAttempts).toBe(1);
+    }
+  });
+
+  it("still charges the overflow budget for compactions that freed context", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+
+    // 150_000 -> 80_000 is real progress, so this one is billed.
+    mocks.compact.mockResolvedValueOnce(successfulCompaction());
+    const result = await recoverEmbeddedRunOverflow(makeInput({ state }));
+
+    expect(result).toMatchObject({ action: "retry" });
+    expect(state.overflowCompactionAttempts).toBe(1);
+    expect(
+      mocks.info.mock.calls.some(([message]) =>
+        String(message).includes("auto-compaction succeeded"),
+      ),
+    ).toBe(true);
+  });
+
+  it("resets the overflow budget once a model turn is admitted", async () => {
+    const state = createEmbeddedRunContextRecoveryState();
+
+    mocks.compact.mockResolvedValueOnce(successfulCompaction());
+    await recoverEmbeddedRunOverflow(makeInput({ state }));
+    expect(state.overflowCompactionAttempts).toBe(1);
+
+    // The retried prompt was admitted by the provider: that overflow episode is
+    // over, so a later unrelated overflow must start from a full budget.
+    state.observeContextAccounting({ kind: "model", contextTokens: 45_211, admitted: true });
+
+    expect(state.overflowCompactionAttempts).toBe(0);
   });
 });

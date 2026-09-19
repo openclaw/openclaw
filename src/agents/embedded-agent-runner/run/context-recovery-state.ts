@@ -26,6 +26,15 @@ export function createEmbeddedRunContextRecoveryState() {
       if (event.kind === "compaction") {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
+        return;
+      }
+      // Only a turn the provider actually admitted ends the overflow episode the
+      // budget was spent on. The producer also emits model events for rejected,
+      // aborted and overflow responses; renewing on those would let the very
+      // rejection that should be charged clear the counter instead, so the
+      // three-attempt bound could never be reached.
+      if (event.admitted === true) {
+        state.overflowCompactionAttempts = 0;
       }
     },
     retainTimeoutRecoveryMarker(marker: EmbeddedRunTimeoutRecoveryMarker) {

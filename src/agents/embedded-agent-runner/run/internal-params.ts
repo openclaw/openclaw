@@ -17,7 +17,13 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
-  | { kind: "model"; contextTokens: number | undefined }
+  /**
+   * `admitted` reports whether the provider actually accepted this prompt and
+   * produced a usable turn. The producer emits a model event for rejected,
+   * aborted and overflow-length responses as well, so consumers that renew a
+   * per-episode recovery budget must key off this flag, not off the event.
+   */
+  | { kind: "model"; contextTokens: number | undefined; admitted?: boolean }
 >;
 
 /** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */

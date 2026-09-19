@@ -1,3 +1,4 @@
+import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import {
   emitAgentEvent,
@@ -207,6 +208,26 @@ export function createEmbeddedModelState(
             contextTokens: deriveSessionTotalTokens({
               lastCallUsage: normalizeUsage(message.usage),
             }),
+            // A model event is emitted for rejected, aborted and truncated
+            // responses too. Only a turn the provider actually completed with
+            // real usage counts as admitted; "length" means the prompt was
+            // accepted but the reply was cut off, which still proves admission.
+            //
+            // Silent overflow is the exception: some providers answer with a
+            // successful-looking `stop`, or a `length` stop with no output, while
+            // the usage already exceeds the window. Those responses carry real
+            // token counts but are the overflow itself, so the shared
+            // `isContextOverflow` owner classifies them here rather than this
+            // module re-deriving the thresholds.
+            admitted:
+              (message.stopReason === "stop" ||
+                message.stopReason === "toolUse" ||
+                message.stopReason === "length") &&
+              hasNonzeroUsage(normalizeUsage(message.usage)) &&
+              !isContextOverflow(
+                message,
+                params.contextWindowTokens ?? params.session.model?.contextWindow,
+              ),
           });
       }
     },

@@ -158,6 +158,38 @@ export function isNoRealConversationCompactionNoop(params: {
   );
 }
 
+/**
+ * Reports a committed compaction that freed no context.
+ *
+ * `compacted: true` only says the engine wrote a compaction entry; it does not
+ * say the prompt got smaller. When the engine reports both token counts and
+ * `tokensAfter` did not drop below `tokensBefore`, the transcript is unchanged
+ * in size, so retrying the same prompt cannot succeed and the overflow budget
+ * must not be charged for it.
+ *
+ * Engines that omit either count are treated as progress: the counts are
+ * optional in the contract, and an absent measurement is not evidence of a
+ * no-op.
+ */
+export function isNonReducingCompaction(params: {
+  compacted?: boolean;
+  result?: { tokensBefore?: number; tokensAfter?: number };
+}): boolean {
+  if (params.compacted !== true) {
+    return false;
+  }
+  const { tokensBefore, tokensAfter } = params.result ?? {};
+  if (
+    typeof tokensBefore !== "number" ||
+    typeof tokensAfter !== "number" ||
+    !Number.isFinite(tokensBefore) ||
+    !Number.isFinite(tokensAfter)
+  ) {
+    return false;
+  }
+  return tokensAfter >= tokensBefore;
+}
+
 export async function resetNoRealConversationTokenSnapshot(params: {
   sessionTarget: SessionTranscriptRuntimeTarget | undefined;
   sessionPersistence?: RunEmbeddedAgentParams["sessionPersistence"];
