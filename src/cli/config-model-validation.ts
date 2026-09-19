@@ -539,11 +539,11 @@ export async function checkTouchedTextModelRefs(params: {
       errors: [`Unable to validate changed model references before writing: ${detail}`],
     };
   }
-  const validationValuesByPath = new Map(
-    collectTextModelRefs(validationConfig).map((ref) => [ref.path, ref.value]),
+  const validationRefsByPath = new Map(
+    collectTextModelRefs(validationConfig).map((ref) => [ref.path, ref]),
   );
   const modelEnvWasExpanded = [...authoredValuesByPath].some(
-    ([path, value]) => validationValuesByPath.get(path) !== value,
+    ([path, value]) => validationRefsByPath.get(path)?.value !== value,
   );
   const formatError = (ref: TouchedModelRef, error: string) => {
     const redactDependency = Boolean(params.redactDependencyValues && ref.dependency);
@@ -554,9 +554,6 @@ export async function checkTouchedTextModelRefs(params: {
       { suppressDetail: modelEnvWasExpanded || redactDependency },
     );
   };
-  const validationRefsByPath = new Map(
-    collectTextModelRefs(validationConfig).map((ref) => [ref.path, ref]),
-  );
   const validationRosterConfig = hasAgentRosterProperty(validationConfig)
     ? validationConfig
     : (migratePersistedImplicitMainRoster(validationConfig).config as OpenClawConfig);
