@@ -181,3 +181,31 @@ describe("CLI native continuity projection", () => {
     },
   );
 });
+
+describe("CLI usage projection", () => {
+  it("uses terminal cumulative usage for settled metadata while preserving the last call", () => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    const lastCallUsage = { input: 11, output: 7, total: 18 };
+    const diagnosticUsage = { input: 21, output: 9, total: 30 };
+
+    const result = buildCliRunResult({
+      context,
+      output: {
+        text: "done",
+        usage: lastCallUsage,
+        diagnosticUsage,
+      },
+      bindingFlushOk: true,
+      usedHistoryPrompt: false,
+      userTurnHandled: true,
+      sessionBindingDisabled: false,
+      preparedContextAgentMeta: {},
+    });
+
+    expect(result.meta.agentMeta).toMatchObject({
+      usage: diagnosticUsage,
+      lastCallUsage,
+      diagnosticUsage,
+    });
+  });
+});

@@ -94,6 +94,7 @@ import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { deriveTranscriptOutputTokens } from "./transcript-output-usage.js";
 
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
@@ -361,11 +362,7 @@ function deriveTranscriptUsageSnapshot(
   trailingMessages: AgentMessage[],
 ): SessionTranscriptUsageSnapshot | undefined {
   const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  const outputRaw = usage.output;
-  const outputTokens =
-    typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
-      ? outputRaw
-      : undefined;
+  const outputTokens = deriveTranscriptOutputTokens(usage);
   if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
     return undefined;
   }

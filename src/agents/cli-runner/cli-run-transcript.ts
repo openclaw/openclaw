@@ -23,7 +23,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { StopReason } from "../../llm/types.js";
+import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
@@ -147,17 +147,81 @@ export async function persistApprovedCliUserTurnTranscript(
   return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
 }
 
+type CliTranscriptUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  contextUsage?: NonNullable<Usage["contextUsage"]>;
+};
+
+const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+  contextUsage: { state: "unavailable" },
+} as const;
+
+/**
+ * Transcript counters account for the whole turn; `contextUsage` stays the latest call's
+ * prompt size so context readers never size the window from a multi-call aggregate.
+ */
+function resolveCliTranscriptUsage(
+  lastCallUsage: CliTranscriptUsage | undefined,
+  turnUsage: CliTranscriptUsage | undefined,
+): CliTranscriptUsage {
+  if (!lastCallUsage) {
+    return CLI_TRANSCRIPT_UNAVAILABLE_USAGE;
+  }
+  const counters = turnUsage ?? lastCallUsage;
+  if (lastCallUsage.contextUsage) {
+    return { ...counters, contextUsage: lastCallUsage.contextUsage };
+  }
+  const promptTokens =
+    (lastCallUsage.input ?? 0) + (lastCallUsage.cacheRead ?? 0) + (lastCallUsage.cacheWrite ?? 0);
+  return {
+    ...counters,
+    contextUsage:
+      promptTokens > 0
+        ? {
+            state: "available",
+            promptTokens,
+            totalTokens: promptTokens + (lastCallUsage.output ?? 0),
+          }
+        : { state: "unavailable" },
+  };
+}
+
+/**
+ * Only a backend that reports its turn total separately from the latest call gets a context
+ * marker. Other backends keep unmarked counters, which context readers do not treat as fresh.
+ */
+function buildCliAssistantTranscriptUsage(
+  lastCallUsage: CliTranscriptUsage | undefined,
+  turnUsage: CliTranscriptUsage | undefined,
+): Usage {
+  const usage = turnUsage ? resolveCliTranscriptUsage(lastCallUsage, turnUsage) : lastCallUsage;
+  const counters = buildUsageWithNoCost({
+    input: usage?.input,
+    output: usage?.output,
+    cacheRead: usage?.cacheRead,
+    cacheWrite: usage?.cacheWrite,
+    totalTokens: usage?.total,
+  });
+  return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
+}
+
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  /** Latest model-call usage. */
+  usage?: CliTranscriptUsage;
+  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
+  turnUsage?: CliTranscriptUsage;
   stopReason: StopReason;
   yielded?: true;
 }): Promise<{
@@ -225,13 +289,7 @@ export async function persistCliAssistantTranscript(params: {
           },
           content: [{ type: "text", text: params.text }],
           stopReason: params.stopReason,
-          usage: buildUsageWithNoCost({
-            input: params.usage?.input,
-            output: params.usage?.output,
-            cacheRead: params.usage?.cacheRead,
-            cacheWrite: params.usage?.cacheWrite,
-            totalTokens: params.usage?.total,
-          }),
+          usage: buildCliAssistantTranscriptUsage(params.usage, params.turnUsage),
         }),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.
