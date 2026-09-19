@@ -110,17 +110,19 @@ function requireBrowser(): Browser {
 
 async function createSurface(params: {
   basePath: string;
+  colorScheme?: "dark" | "light";
   deferredMethods?: string[];
   pending: PendingApprovalSnapshot;
   recordVideo?: boolean;
   viewport: { height: number; width: number };
 }): Promise<ApprovalSurface> {
+  const colorScheme = params.colorScheme ?? "dark";
   const rawVideoDir =
     params.recordVideo && CAPTURE_UI_PROOF
       ? createControlUiE2eArtifactDir("mobile-raw", ARTIFACT_DIR)
       : undefined;
   const context = await requireBrowser().newContext({
-    colorScheme: "dark",
+    colorScheme,
     hasTouch: params.viewport.width <= MOBILE_VIEWPORT.width,
     isMobile: params.viewport.width <= MOBILE_VIEWPORT.width,
     locale: "en-US",
@@ -199,6 +201,43 @@ async function waitForStableApprovalPaint(page: Page): Promise<void> {
       );
     })
     .toBe(true);
+}
+
+async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
+  await page.emulateMedia({ colorScheme: mode });
+  await page.evaluate((nextMode) => {
+    const root = document.documentElement;
+    root.dataset.themeMode = nextMode;
+    root.dataset.themeResolved = nextMode;
+    root.classList.toggle("wa-light", nextMode === "light");
+    root.classList.toggle("wa-dark", nextMode === "dark");
+    root.style.colorScheme = nextMode;
+  }, mode);
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+}
+
+async function allowOnceContrastRatio(page: Page): Promise<number> {
+  return page.getByRole("button", { name: "Allow once" }).evaluate((element) => {
+    const style = getComputedStyle(element);
+    const parseRgb = (value: string): [number, number, number] => {
+      const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+      if (!match) {
+        throw new Error(`Unexpected color value: ${value}`);
+      }
+      return [Number(match[1]), Number(match[2]), Number(match[3])];
+    };
+    const channel = (value: number) => {
+      const scaled = value / 255;
+      return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = (rgb: [number, number, number]) =>
+      0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+    const foreground = luminance(parseRgb(style.color));
+    const background = luminance(parseRgb(style.backgroundColor));
+    const lighter = Math.max(foreground, background);
+    const darker = Math.min(foreground, background);
+    return (lighter + 0.05) / (darker + 0.05);
+  });
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {
@@ -418,6 +457,29 @@ suite.define(() => {
     } finally {
       await closeRecordedSurface(mobile, "approval-page-mobile.webm");
     }
+  });
+
+  it("keeps the Allow once label readable in light theme", async () => {
+    const pending = pendingApproval("");
+    const surface = await createSurface({
+      basePath: "",
+      colorScheme: "light",
+      pending,
+      viewport: DESKTOP_VIEWPORT,
+    });
+
+    const response = await surface.page.goto(approvalUrl(""));
+    expect(response?.status()).toBe(200);
+    await waitForApprovalPage(surface.page);
+    await surface.gateway.waitForRequest("approval.get");
+    await setThemeMode(surface.page, "light");
+    await waitForStableApprovalPaint(surface.page);
+
+    const allowButton = surface.page.getByRole("button", { name: "Allow once" });
+    await allowButton.waitFor();
+    expect(await allowButton.getAttribute("class")).toContain("primary");
+    expect(await allowOnceContrastRatio(surface.page)).toBeGreaterThanOrEqual(4.5);
+    expect(surface.pageErrors).toEqual([]);
   });
 
   it("renders plugin identity as chips with a severity accent", async () => {
