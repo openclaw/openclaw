@@ -98,12 +98,15 @@ test.each(["separate", "shared", "single", "empty"] as const)(
       let inserted = false;
       for (const method of ["health", "status"] as const) {
         let reads = 0;
+        let selectedRows = 0;
+        let rowOwnerReads = 0;
         let httpAtRead: number | undefined;
         let traffic: Promise<void> | undefined;
         let write: Promise<void> | undefined;
         const completedReads: number[] = [];
         const read = vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
           const result = originalRead(...args);
+          selectedRows += result.length;
           // Exercise costly resident selection independently of fixture size.
           readWorkMs += 20;
           reads += 1;
@@ -124,12 +127,23 @@ test.each(["separate", "shared", "single", "empty"] as const)(
               });
             }
           }
-          return result;
+          return result.map(
+            (row) =>
+              new Proxy(row, {
+                get(target, key, receiver) {
+                  if (key === "agentId") {
+                    rowOwnerReads += 1;
+                  }
+                  return Reflect.get(target, key, receiver);
+                },
+              }),
+          );
         });
         try {
           if (method === "health") {
             const response = await rpcReq<HealthSummary>(ws, "health", { probe: true });
             expect(response.ok).toBe(true);
+            expect(response.payload?.sessions).toEqual(response.payload?.agents[0]?.sessions);
             expect(
               response.payload?.agents.map((agent) => [agent.agentId, agent.sessions.count]),
             ).toEqual(agentIds.map((agentId) => [agentId, 12]));
@@ -170,6 +184,12 @@ test.each(["separate", "shared", "single", "empty"] as const)(
           await Promise.all([traffic, write, flushImmediate()]);
           const physicalStores = layout === "shared" ? 1 : agentCount;
           expect(reads).toBe(physicalStores);
+          expect
+            .soft(
+              rowOwnerReads,
+              `${method}: classify ${selectedRows} resident rows once across ${physicalStores} stores and ${agentCount} configured agents`,
+            )
+            .toBeLessThanOrEqual(selectedRows);
           expect(completedReads).toEqual(Array.from({ length: reads }, (_, index) => index + 1));
           if (layout === "separate") {
             expect(httpAtRead).toBeLessThan(physicalStores);
