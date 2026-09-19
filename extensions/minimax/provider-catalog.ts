@@ -16,7 +16,9 @@ export function buildMinimaxModelDiscovery(
   authMode: "api_key" | "oauth" = "api_key",
 ): OpenAICompatibleModelDiscoveryOptions {
   const usesOpenAI = api === "openai-completions";
-  const basePath = new URL(baseUrl).pathname.replace(/\/+$/, "");
+  // Configured bases are operator input. A base that cannot parse must reach the
+  // shared strict catalog run, which reports it as unavailable instead of throwing.
+  const basePath = URL.canParse(baseUrl) ? new URL(baseUrl).pathname.replace(/\/+$/, "") : "";
   return {
     endpointPath: usesOpenAI || basePath.endsWith("/v1") ? "models" : "v1/models",
     // Anthropic API keys use X-Api-Key; OpenAI-compatible catalogs and portal
