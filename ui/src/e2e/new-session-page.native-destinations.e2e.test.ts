@@ -277,6 +277,14 @@ suite.define(() => {
       const folder = page.getByRole("textbox", { name: "Existing absolute folder on this node" });
       await folder.waitFor();
       expect(await folder.inputValue()).toBe("");
+      await page.setViewportSize({ width: 320, height: 700 });
+      await folder.fill("/workspace/native-project");
+      const folderBox = await folder.boundingBox();
+      expect(folderBox).not.toBeNull();
+      expect(folderBox!.width).toBeGreaterThan(80);
+      expect(folderBox!.x).toBeGreaterThanOrEqual(0);
+      expect(folderBox!.x + folderBox!.width).toBeLessThanOrEqual(320);
+      await folder.click({ trial: true });
       expect(await page.getByRole("combobox", { name: "Where", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
     } finally {

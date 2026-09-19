@@ -1278,9 +1278,11 @@ wa-popover.new-session-page__where-popover::part(body) {
   }
 
   .new-session-page__triggers {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
+    display: grid;
+    /* Keep identity/project beside destination/checkout without growing extra rows. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+    align-items: center;
+    gap: 2px 4px;
     width: calc(100% - 8px);
     margin-inline: 4px;
     margin-block-end: 8px;
@@ -1295,7 +1297,8 @@ wa-popover.new-session-page__where-popover::part(body) {
     .new-session-page__select--agent
     .agent-select--compact
     .agent-select__trigger {
-    height: 32px;
+    height: 44px;
+    max-width: 100%;
     padding-inline: 6px;
     color: var(--text);
     font-size: 14px;
@@ -1304,7 +1307,12 @@ wa-popover.new-session-page__where-popover::part(body) {
   }
 
   .new-session-page__triggers > span.new-session-page__select {
+    min-width: 0;
     width: 100%;
+  }
+
+  .new-session-page__select--agent openclaw-agent-select {
+    max-width: 100%;
   }
 
   .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
@@ -1312,13 +1320,22 @@ wa-popover.new-session-page__where-popover::part(body) {
     max-width: 100%;
   }
 
-  .new-session-page__triggers > span.new-session-page__select ~ span.new-session-page__select {
-    margin-block-start: 6px;
+  .new-session-page__catalog-unavailable,
+  .new-session-page__runtime,
+  .new-session-page__triggers > .new-session-page__menu-field,
+  .new-session-page__triggers > span.new-session-page__select:last-of-type:nth-of-type(odd) {
+    grid-column: 1 / -1;
+  }
+
+  .new-session-page__triggers > .new-session-page__menu-field {
+    min-width: 0;
+    flex-wrap: wrap;
   }
 
   .new-session-page__trigger-label {
     flex: 0 1 auto;
     min-width: 0;
+    max-width: 100%;
   }
 
   .new-session-page__trigger {
@@ -1335,6 +1352,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 
   .new-session-page__triggers
     :is(.new-session-page__target-icon, .new-session-page__trigger-chevron) {
+    flex-shrink: 0;
     color: var(--muted);
   }
 

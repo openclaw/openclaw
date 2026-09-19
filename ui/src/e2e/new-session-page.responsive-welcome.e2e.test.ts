@@ -10,6 +10,96 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it.each([1, 2])("keeps setup selectors in two phone rows with %s agents", async (agentCount) => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          workspace: "/workspace/openclaw",
+          workspaceGit: true,
+          featureMethods: ["projects.list", "sessions.create", "worktrees.branches"],
+          methodResponses: {
+            "agents.list": {
+              agents: [
+                {
+                  id: "main",
+                  name: "Roboclaw",
+                  workspace: "/workspace/openclaw",
+                  workspaceGit: true,
+                },
+                {
+                  id: "research",
+                  name: "Research",
+                  workspace: "/workspace/research",
+                  workspaceGit: true,
+                },
+              ].slice(0, agentCount),
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "worktrees.branches": {
+              branches: [{ kind: "local", name: "main" }],
+              defaultBranch: "main",
+              headBranch: "main",
+              repositoryStatus: "git",
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const checkout = page.locator("#new-session-checkout-trigger");
+        await checkout.click();
+        await page
+          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+          .click();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+        const selectors = page.locator(
+          ".new-session-page__triggers .agent-select__trigger, .new-session-page__triggers > span > .new-session-page__trigger",
+        );
+        await expect.poll(() => selectors.count()).toBe(agentCount + 2);
+        for (const width of [390, 320, 430, 560, 1280]) {
+          await page.setViewportSize({ width, height: 900 });
+          await captureNewSessionComposerUiProof(suite, page, `mobile-setup-${width}.png`);
+          const layout = await selectors.evaluateAll((buttons) =>
+            buttons.map((button) => {
+              const box = button.getBoundingClientRect();
+              return {
+                row: Math.round(box.top + box.height / 2),
+                left: box.left,
+                right: box.right,
+                height: box.height,
+              };
+            }),
+          );
+          expect(new Set(layout.map((box) => box.row)).size).toBe(width <= 560 ? 2 : 1);
+          for (const [index, box] of layout.entries()) {
+            expect(box.left).toBeGreaterThanOrEqual(0);
+            expect(box.right).toBeLessThanOrEqual(width);
+            expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
+            const next = layout[index + 1];
+            if (next && box.row === next.row) {
+              expect(box.right).toBeLessThanOrEqual(next.left);
+            }
+          }
+        }
+        await page.setViewportSize({ width: 320, height: 700 });
+        await checkout.click();
+        const baseRef = page.locator("#new-session-worktree-base-ref");
+        await baseRef.fill("feature/mobile-layout-with-a-long-branch-name");
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => checkout.textContent())
+          .toContain("feature/mobile-layout-with-a-long-branch-name");
+        const triggerRow = page.locator(".new-session-page__triggers");
+        expect(
+          await triggerRow.evaluate((element) => element.scrollWidth <= element.clientWidth),
+        ).toBe(true);
+        await captureNewSessionComposerUiProof(suite, page, "mobile-setup-long-branch.png");
+      },
+    );
+  });
+
   it("keeps empty-state suggestions desktop-only across viewport changes", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {

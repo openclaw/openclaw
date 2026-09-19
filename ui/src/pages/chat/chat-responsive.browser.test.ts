@@ -3507,7 +3507,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const focused = await readPosition();
 
       expect(focused).toBe(unfocused);
-      expect(focused).toBe("14px");
+      expect(focused).toBe("6px");
     });
   });
 

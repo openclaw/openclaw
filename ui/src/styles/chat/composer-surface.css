@@ -1036,7 +1036,7 @@
   }
 
   .agent-chat__composer-shell {
-    --chat-composer-bottom-gap: calc(14px + var(--safe-area-bottom, 0px));
+    --chat-composer-bottom-gap: calc(6px + var(--safe-area-bottom, 0px));
 
     margin-block: var(--chat-composer-top-margin, 0px) var(--chat-composer-bottom-gap);
     gap: 6px;
@@ -1058,7 +1058,7 @@
   }
 
   .agent-chat__composer-shell {
-    --chat-composer-bottom-gap: 14px;
+    --chat-composer-bottom-gap: 6px;
   }
 }
 
