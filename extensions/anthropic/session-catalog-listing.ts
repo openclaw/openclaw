@@ -11,7 +11,10 @@ import {
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
-import { listClaudeSessions } from "./session-catalog-discovery.js";
+import {
+  listClaudeSessionsWithStatus,
+  locateClaudeSessionFile,
+} from "./session-catalog-discovery.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
@@ -66,7 +69,8 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
+  const scan = await listClaudeSessionsWithStatus(resolvedHome, resolvedScanOptions);
+  const records = scan.records.filter((record) => {
     if (!search) {
       return true;
     }
@@ -81,6 +85,7 @@ export async function listLocalClaudeSessionPage(
   return {
     sessions: page,
     ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    ...(scan.error ? { error: scan.error } : {}),
   };
 }
 
@@ -93,15 +98,31 @@ export async function readLocalClaudeTranscriptPage(
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
-  let filePath = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).find(
-    (record) => record.threadId === params.threadId,
-  )?.filePath;
+  const firstScan = await listClaudeSessionsWithStatus(resolvedHome, resolvedScanOptions);
+  const excludedSessionIds = new Set(firstScan.excludedSessionIds);
+  let partialScan = firstScan.error !== undefined;
+  let filePath = firstScan.records.find((record) => record.threadId === params.threadId)?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
-    filePath = (
-      await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, forceRefresh: true })
-    ).find((record) => record.threadId === params.threadId)?.filePath;
+    const refreshed = await listClaudeSessionsWithStatus(resolvedHome, {
+      ...resolvedScanOptions,
+      forceRefresh: true,
+    });
+    partialScan ||= refreshed.error !== undefined;
+    for (const excludedSessionId of refreshed.excludedSessionIds) {
+      excludedSessionIds.add(excludedSessionId);
+    }
+    filePath = refreshed.records.find((record) => record.threadId === params.threadId)?.filePath;
+  }
+  if (!filePath && partialScan) {
+    // Catalog presentation is intentionally byte-bounded, but a caller with a specific thread ID
+    // must retain transcript access when that session lies beyond the presentation scan frontier.
+    filePath = await locateClaudeSessionFile(resolvedHome, params.threadId, {
+      configDir: resolvedScanOptions.configDir,
+      forceRefresh: true,
+      excludedSessionIds,
+    });
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
