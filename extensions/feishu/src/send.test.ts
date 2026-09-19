@@ -104,6 +104,7 @@ beforeEach(() => {
   mockResolveFeishuAccount.mockReturnValue({
     accountId: "default",
     configured: true,
+    config: { resolveSenderNames: true },
   });
   mockCreateFeishuClient.mockReturnValue({
     im: {
@@ -112,6 +113,11 @@ beforeEach(() => {
         get: mockClientGet,
         list: mockClientList,
         patch: mockClientPatch,
+      },
+    },
+    contact: {
+      user: {
+        get: vi.fn().mockResolvedValue({ data: { user: {} } }),
       },
     },
   });
@@ -149,6 +155,136 @@ describe("getMessageFeishu", () => {
       ...expected,
     });
   }
+
+  it("attributes merge_forward sub-messages with sender names and timestamps", async () => {
+    const contactGet = vi.fn().mockImplementation(async (params: { path: { user_id: string } }) => {
+      if (params.path.user_id === "ou_alice") {
+        return { data: { user: { name: "Alice" } } };
+      }
+      if (params.path.user_id === "ou_bob") {
+        return { data: { user: { name: "Bob" } } };
+      }
+      return { data: { user: {} } };
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+      contact: {
+        user: {
+          get: contactGet,
+        },
+      },
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_merge",
+            chat_id: "oc_merge",
+            msg_type: "merge_forward",
+            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+          },
+          {
+            message_id: "om_a",
+            upper_message_id: "om_merge",
+            msg_type: "text",
+            create_time: "1710000000000",
+            sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+            body: { content: JSON.stringify({ text: "hello" }) },
+          },
+          {
+            message_id: "om_b",
+            upper_message_id: "om_merge",
+            msg_type: "text",
+            create_time: "1710000001000",
+            sender: { id: "ou_bob", id_type: "open_id", sender_type: "user" },
+            body: { content: JSON.stringify({ text: "world" }) },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_merge",
+    });
+
+    expectParsedMessage(result, {
+      messageId: "om_merge",
+      chatId: "oc_merge",
+      contentType: "merge_forward",
+      content:
+        "[Merged and Forwarded Messages]\n" +
+        "- [2024-03-09T16:00:00.000Z] Alice: hello\n" +
+        "- [2024-03-09T16:00:01.000Z] Bob: world",
+    });
+    expect(contactGet).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps merge_forward sender ids when resolveSenderNames is disabled", async () => {
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { resolveSenderNames: false },
+    });
+    const contactGet = vi.fn();
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+      contact: {
+        user: {
+          get: contactGet,
+        },
+      },
+    });
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_merge",
+            chat_id: "oc_merge",
+            msg_type: "merge_forward",
+            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+          },
+          {
+            message_id: "om_a",
+            upper_message_id: "om_merge",
+            msg_type: "text",
+            create_time: "1710000000000",
+            sender: { id: "ou_alice", id_type: "open_id", sender_type: "user" },
+            body: { content: JSON.stringify({ text: "hello" }) },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_merge",
+    });
+
+    expectParsedMessage(result, {
+      messageId: "om_merge",
+      chatId: "oc_merge",
+      contentType: "merge_forward",
+      content: "[Merged and Forwarded Messages]\n- [2024-03-09T16:00:00.000Z] ou_alice: hello",
+    });
+    expect(contactGet).not.toHaveBeenCalled();
+  });
 
   it("sends text without requiring Feishu runtime text helpers", async () => {
     mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {

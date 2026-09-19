@@ -144,6 +144,7 @@ describe("Feishu message content over the real Lark SDK", () => {
                   msg_type: "text",
                   body: { content: JSON.stringify({ text: "forwarded context" }) },
                   create_time: "1710000000000",
+                  sender: { id: "ou_forwarded", id_type: "open_id", sender_type: "user" },
                 },
               ],
             },
@@ -218,6 +219,7 @@ describe("Feishu message content over the real Lark SDK", () => {
             appId: "cli_feishu_content_107947",
             appSecret: "loopback-placeholder", // pragma: allowlist secret
             domain: "feishu",
+            resolveSenderNames: false,
             actions: { sticker: true },
             stickerSets: {
               cli_feishu_content_107947: { file_sticker_received: ["赞👍"] },
@@ -268,7 +270,8 @@ describe("Feishu message content over the real Lark SDK", () => {
       ).resolves.toMatchObject({
         messageId: "om_loopback_merge_forward",
         contentType: "merge_forward",
-        content: "[Merged and Forwarded Messages]\n- forwarded context",
+        content:
+          "[Merged and Forwarded Messages]\n- [2024-03-09T16:00:00.000Z] ou_forwarded: forwarded context",
       });
 
       await expect(

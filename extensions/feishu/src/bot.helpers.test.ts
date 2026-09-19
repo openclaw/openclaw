@@ -113,6 +113,7 @@ describe("parseMessageContent media captions", () => {
         upper_message_id: "om_forward",
         msg_type: "post",
         create_time: "2000",
+        sender: { id: "ou_post", id_type: "open_id" },
         body: {
           content: JSON.stringify({
             post: {
@@ -134,14 +135,50 @@ describe("parseMessageContent media captions", () => {
         upper_message_id: "om_forward",
         msg_type: "sticker",
         create_time: "1000",
+        sender: { id: "ou_sticker", id_type: "open_id" },
         body: { content: JSON.stringify({ file_key: "file_forwarded_sticker" }) },
       },
     ];
     const before = structuredClone(items);
     expect(parseMergeForwardContent(items)).toBe(
-      '[Merged and Forwarded Messages]\n- <sticker key="file_forwarded_sticker"/>\n- Forwarded\n\n**Status** *[Docs](https://example.com)*',
+      "[Merged and Forwarded Messages]\n" +
+        '- [1970-01-01T00:00:01.000Z] ou_sticker: <sticker key="file_forwarded_sticker"/>\n' +
+        "- [1970-01-01T00:00:02.000Z] ou_post: Forwarded\n\n**Status** *[Docs](https://example.com)*",
     );
     expect(items).toEqual(before);
+  });
+
+  it("attributes merge_forward sub-messages with resolved sender names and timestamps", () => {
+    const items = [
+      { message_id: "om_forward", msg_type: "merge_forward" },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "text",
+        create_time: "1710000000000",
+        sender: { id: "ou_alice", id_type: "open_id" },
+        body: { content: JSON.stringify({ text: "hello" }) },
+      },
+      {
+        upper_message_id: "om_forward",
+        msg_type: "text",
+        create_time: "1710000001000",
+        sender: { id: "ou_bob", id_type: "open_id" },
+        body: { content: JSON.stringify({ text: "world" }) },
+      },
+    ];
+
+    expect(
+      parseMergeForwardContent(items, {
+        senderNames: new Map([
+          ["ou_alice", "Alice"],
+          ["ou_bob", "Bob"],
+        ]),
+      }),
+    ).toBe(
+      "[Merged and Forwarded Messages]\n" +
+        "- [2024-03-09T16:00:00.000Z] Alice: hello\n" +
+        "- [2024-03-09T16:00:01.000Z] Bob: world",
+    );
   });
 });
 
