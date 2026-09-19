@@ -63,6 +63,7 @@ import {
   buildStructuredFallbackSummary,
   createSummaryQualityRetentionPlan,
   extractOpaqueIdentifiers,
+  formatRequiredAskContext,
   nestRequiredSummaryHeadings,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -89,8 +90,6 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
-const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -824,18 +823,6 @@ function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => vo
   return `${heading}${cappedSummary}`;
 }
 
-function formatRequiredAskContext(rawAsk: string): string {
-  const source = rawAsk.trim();
-  if (source.length <= MAX_REQUIRED_ASK_CONTEXT_CHARS) {
-    return source;
-  }
-  const contentBudget =
-    MAX_REQUIRED_ASK_CONTEXT_CHARS - REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER.length;
-  const headBudget = Math.floor(contentBudget / 2);
-  const tailBudget = contentBudget - headBudget;
-  return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
-}
-
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
   for (const message of messages.toReversed()) {
     if (message.role === "user") {
@@ -1034,9 +1021,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
-        budgetCompactionSummary(body, suffix, maxChars, qualityRetention),
-      );
+      const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) => {
+        const candidate = budgetCompactionSummary(body, suffix, maxChars, qualityRetention);
+        // Below the owner's cap the fit is searching for a cheaper artifact. A candidate
+        // under the plan's minimum has dropped the required facts, and the audited path
+        // cancels on it. Dense CJK prose makes those truncated candidates cheap enough that
+        // the search settled on one even when the facts fit; skipping them makes it pay for
+        // the required facts at their own cost and trim the discardable prose instead.
+        return candidate.qualityRetentionInfeasible && maxChars < MAX_COMPACTION_SUMMARY_CHARS
+          ? undefined
+          : candidate;
+      });
       if (!fitted.ok) {
         throw fitted.error;
       }
