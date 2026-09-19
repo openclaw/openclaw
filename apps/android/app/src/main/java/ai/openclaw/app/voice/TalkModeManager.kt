@@ -269,6 +269,10 @@ class TalkModeManager internal constructor(
   val statusText: StateFlow<String> = LocaleResolvingStateFlow(status) { it.text.resolveNativeText() }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
+  /** Why Talk last failed, until Talk starts again; relay failures end Talk without any other visible trace. */
+  val failureText: StateFlow<String?> =
+    LocaleResolvingStateFlow(status) { if (it.state == TalkStatusState.TalkFailure) it.text.resolveNativeText() else null }
+
   private fun setStatus(
     text: NativeText,
     state: TalkStatusState = TalkStatusState.Active,
@@ -1410,7 +1414,7 @@ class TalkModeManager internal constructor(
     val stopped =
       synchronized(realtimeCapturePauseLock) {
         if (generation != startGeneration.get()) return
-        setStatus(status)
+        setTalkFailure(status)
         stopRealtimeRelay(closeSession = false, preserveStatus = true)
         disableRealtimeModeLocked()
       }

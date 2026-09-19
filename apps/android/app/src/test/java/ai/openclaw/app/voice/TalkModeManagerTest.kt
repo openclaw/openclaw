@@ -501,6 +501,7 @@ class TalkModeManagerTest {
 
     installRealtimeSession(manager, "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
+    assertNull(manager.failureText.value)
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"error"}""")
 
@@ -510,6 +511,8 @@ class TalkModeManagerTest {
       "Talk failed: Realtime provider closed unexpectedly.",
       manager.statusText.value,
     )
+    // Chat renders this after Talk ends; the status line alone is not shown there.
+    assertEquals(manager.statusText.value, manager.failureText.value)
   }
 
   @Test
@@ -1594,6 +1597,7 @@ class TalkModeManagerTest {
           proof.manager.statusText.value
             .contains("audio playback device error"),
         )
+        assertEquals(proof.manager.statusText.value, proof.manager.failureText.value)
         assertFalse(proof.manager.isSpeaking.value)
       }
     }
@@ -2508,6 +2512,36 @@ class TalkModeManagerTest {
         awaitState { oldStart.isCompleted }
         assertTrue("An obsolete start error must not disable its replacement", proof.manager.isEnabled.value)
         assertTrue(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
+  fun rejectedSessionStartLeavesAFailureNoticeUntilTalkStartsAgain() =
+    runBlocking {
+      val creates =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      withStartedTalk(interceptRequest = { request, socket ->
+        if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && creates.incrementAndGet() == 2) {
+          val id = request.getValue("id").jsonPrimitive.content
+          socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"provider unavailable"}}""")
+          true
+        } else {
+          false
+        }
+      }) { proof ->
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        assertNull(proof.manager.failureText.value)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { !proof.manager.isEnabled.value }
+        assertFalse(proof.manager.isListening.value)
+        // Chat shows this notice once Talk ends; without it a rejected start leaves no trace there.
+        assertEquals("Start failed: UNAVAILABLE: provider unavailable", proof.manager.failureText.value)
+
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        assertNull(proof.manager.failureText.value)
       }
     }
 
