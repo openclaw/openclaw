@@ -537,8 +537,12 @@ function buildExecExitOutcome(params: {
   timeoutSec: number | null | undefined;
   processContinuationAvailable: boolean;
 }): ExecProcessOutcome {
+  // An "exit" reason without a captured code means the run terminated without
+  // ever reporting a status (a PTY host can close silently). An unknown code is
+  // not evidence of success, so it takes the failure path.
+  const hasCapturedExitCode = params.exit.exitCode !== null;
   const exitCode = params.exit.exitCode ?? 0;
-  const isNormalExit = params.exit.reason === "exit";
+  const isNormalExit = params.exit.reason === "exit" && hasCapturedExitCode;
   const isShellFailure = exitCode === 126 || exitCode === 127;
   const status: ExecProcessOutcome["status"] =
     isNormalExit && !isShellFailure ? "completed" : "failed";
