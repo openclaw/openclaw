@@ -240,18 +240,28 @@ it("retains canonical metadata when an unmigrated backend locator blocks status 
     const manager = new AcpSessionManager(deps);
     try {
       await expect(manager.getSessionStatus(target)).rejects.toBe(repairError);
-      for (const discardPersistentState of [false, true]) {
-        await expect(
-          manager.closeSession({
-            ...target,
-            reason: "reset",
-            clearMeta: true,
-            discardPersistentState,
-            allowBackendUnavailable: true,
-          }),
-        ).rejects.toBe(repairError);
-        expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
-      }
+      // Non-discarding close must still reject: the residue record is retained
+      // and the owner-repair verdict protects it from silent mutation.
+      await expect(
+        manager.closeSession({
+          ...target,
+          reason: "reset",
+          clearMeta: true,
+          discardPersistentState: false,
+          allowBackendUnavailable: true,
+        }),
+      ).rejects.toBe(repairError);
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toEqual(before);
+      // Discarding close proceeds: the residue record is being destroyed, so
+      // its provenance verdict cannot block teardown (issue #151859).
+      await manager.closeSession({
+        ...target,
+        reason: "reset",
+        clearMeta: true,
+        discardPersistentState: true,
+        allowBackendUnavailable: true,
+      });
+      expect(readAcpSessionEntry({ ...target, databasePath })?.acp).toBeUndefined();
       expect(runtime.close).not.toHaveBeenCalled();
     } finally {
       await disposeAcpSessionManagerInstance(manager, "test-complete");
