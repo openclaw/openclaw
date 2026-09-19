@@ -43,6 +43,13 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     retrospective:
       /(?:지난\s*(?:번|주|달)|저번|예전|어제).{0,24}(?:논의했|(?:이야기|얘기|대화)했|말했|언급했|결정했)/u,
   },
+  {
+    intent:
+      /\b(?:erinner(?:st|t|en|e)?(?:\s+(?:dich|du|sie|euch|mich))?|wei[ßs]t\s+du\s+noch|letzte\s+(?:woche|mal)|gestern|neulich|nochmal|schon\s+mal|besprochen|gesprochen|entschieden|vereinbart|abgemacht)\b/iu,
+    future:
+      /\b(?:morgen|nächste[mnrs]?|kommende[mnrs]?|bald|später|demnächst|künftig|übermorgen|zukünftig)\b/iu,
+    retrospective: /(?:gestern|letzte\s+woche|neulich|schon\s+mal)/iu,
+  },
 ];
 
 export function hasRecallIntent(message: string): boolean {
