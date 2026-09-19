@@ -2,6 +2,7 @@
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
+export const RECENT_HISTORY_CONTEXT_MARKER = "[Recent chat messages - for context]";
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
@@ -36,15 +37,16 @@ export function buildHistoryContext(params: {
   historyText: string;
   currentMessage: string;
   lineBreak?: string;
+  historyKind?: "pending" | "recent";
 }): string {
   const { historyText, currentMessage } = params;
   const lineBreak = params.lineBreak ?? "\n";
   if (!historyText.trim()) {
     return currentMessage;
   }
-  return [HISTORY_CONTEXT_MARKER, historyText, "", CURRENT_MESSAGE_MARKER, currentMessage].join(
-    lineBreak,
-  );
+  const marker =
+    params.historyKind === "recent" ? RECENT_HISTORY_CONTEXT_MARKER : HISTORY_CONTEXT_MARKER;
+  return [marker, historyText, "", CURRENT_MESSAGE_MARKER, currentMessage].join(lineBreak);
 }
 
 /** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
@@ -363,6 +365,7 @@ export function buildHistoryContextFromEntries(params: {
   formatEntry: (entry: HistoryEntry) => string;
   lineBreak?: string;
   excludeLast?: boolean;
+  historyKind?: "pending" | "recent";
 }): string {
   const lineBreak = params.lineBreak ?? "\n";
   const entries = params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
@@ -374,5 +377,6 @@ export function buildHistoryContextFromEntries(params: {
     historyText,
     currentMessage: params.currentMessage,
     lineBreak,
+    historyKind: params.historyKind,
   });
 }

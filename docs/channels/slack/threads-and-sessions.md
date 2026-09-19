@@ -20,7 +20,7 @@ How Slack conversations map to OpenClaw sessions, and where replies land.
 - Slack channel, MPIM, Agent View, and Assistant View thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`). Ordinary DM reply threads remain a UI affordance on the base DM session.
 - OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
-- `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
+- `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable). Room thread seeding is also bounded by `historyLimit`.
 - `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
 - `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
 - Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
@@ -57,3 +57,34 @@ Slack Agent View (`features.agent_view`) is Slack's messaging experience for AI 
 Slack never states which experience an app uses, so OpenClaw records Agent View from the first of these signals it sees: an `app_context_changed` event, a DM that carries `app_context`, or the threadless `assistant.threads.setSuggestedPrompts` call OpenClaw makes when a member opens the **Messages** tab. Slack answers that call with `ok` or `internal_error` for Agent View apps and with `not_agent_app` for Assistant View apps, so both `ok` and `internal_error` count as evidence; transport failures stay inconclusive and are retried on the next open. A DM whose `thread_ts` equals its own `ts` is recognized as a Slack-managed root on its own. Until one of these signals has been seen, a plain DM root follows ordinary DM routing.
 
 The marker is durable and keyed by account, workspace, and Slack app ID, so Agent View survives Gateway restarts once the app ID is known. Socket Mode reads the app ID from the app token at startup. HTTP mode learns it from the first signed event after startup and logs `slack app id <id> learned from signed event` once. Relay mode has no app ID source, so its marker lives only in the running process. Existing apps on `features.assistant_view` keep Assistant View threads instead; see [Additional manifest settings](/channels/slack/manifest-and-scopes#additional-manifest-settings).
+
+## Recent room history
+
+Admitted channel and group turns fetch a recent window from Slack, including after
+a Gateway restart. `channels.slack.historyLimit` bounds the window (default `50`,
+with `messages.groupChat.historyLimit` as a fallback). Account overrides apply.
+With `requireMention: true`, messages that do not satisfy the configured mention
+or implicit-mention gates do not start agent turns or automatic history reads.
+
+Slack remains authoritative: edits, deletions, retention, token scopes, and
+availability govern retrieval. There is no separate OpenClaw message archive.
+Recovery does not rewrite prior agent transcripts.
+New recent windows respect the active session boundary; initial thread seeding
+keeps its existing `thread.initialHistoryLimit` behavior. The current message,
+debounced source messages, and later messages are excluded from the recent window.
+Initial thread history uses its existing rendering path once. With
+`thread.historyScope: "channel"`, the recent window uses the channel timeline
+while initial thread seeding remains separate.
+
+Thread-scoped history reads only that thread. Slack returns thread replies oldest
+first, so automatic thread recovery stops after three pages. If that cannot reach
+the recent end, OpenClaw logs an omission rather than presenting an old prefix as
+recent. Filtering and Slack page limits can also produce a shorter window. A read
+failure omits automatic history but does not discard the addressed message.
+Recent-window media recovery attempts at most four image attachments, including
+failed attempts. Current-message and explicit-reply media keep their separate limits.
+
+Set `historyLimit: 0` to disable automatic room history, including initial room
+thread history. Explicit reply and thread-starter context remain separate.
+The existing `message(action="read")` tool can page through older Slack messages
+after restarts or session resets, subject to Slack access and retention.

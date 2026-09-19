@@ -1,4 +1,7 @@
 // Slack tests cover dispatch.preview fallback plugin behavior.
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   projectAgentToolActivity,
   projectProgressCardChannelUpdate,
@@ -356,7 +359,6 @@ function createPreparedSlackMessage(params?: {
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
       historyLimit: 0,
-      channelHistories: new Map(),
       allowFrom: [],
       dispatchReplyFromConfig: params?.dispatchReplyFromConfig,
       setSlackSessionStatus: params?.setSlackSessionStatus ?? (async () => true),
@@ -391,7 +393,6 @@ function createPreparedSlackMessage(params?: {
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
     isRoomish: false,
-    historyKey: "history-key",
     preview: "",
     ackReactionValue: "eyes",
     ackReactionMessageTs: params?.ackReactionMessageTs,
@@ -1237,13 +1238,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         await import("openclaw/plugin-sdk/channel-inbound");
       const { createMessageReceiptFromOutboundResults } =
         await import("openclaw/plugin-sdk/channel-outbound");
+      const workspaceRoot = realpathSync(tmpdir());
       const cfg = {
         agents: {
-          entries: {
-            root: { workspace: "/tmp/.openclaw/workspace-root" },
-            alice: { workspace: "/tmp/.openclaw/workspace-alice" },
-            bob: { workspace: "/tmp/.openclaw/workspace-bob" },
-          },
+          entries: Object.fromEntries(
+            ["root", "alice", "bob"].map((id) => [id, { workspace: path.join(workspaceRoot, id) }]),
+          ),
         },
         broadcast: { "slack:C123": agents },
       };
@@ -1273,7 +1273,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           queuedFinal: dispatcher.sendFinalReply({
             text: `Reply from ${ctx.AgentId}`,
             ...(withMedia
-              ? { mediaUrl: `/tmp/.openclaw/workspace-${ctx.AgentId}/attachment.txt` }
+              ? { mediaUrl: path.join(workspaceRoot, ctx.AgentId, "attachment.txt") }
               : {}),
           }),
           counts: dispatcher.getQueuedCounts(),
@@ -1326,10 +1326,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           "channel:C123",
           expect.stringContaining(`Reply from ${agentId}`),
           expect.objectContaining({
-            ...(withMedia
-              ? { mediaUrl: `/tmp/.openclaw/workspace-${agentId}/attachment.txt` }
-              : {}),
-            mediaLocalRoots: expect.arrayContaining([`/tmp/.openclaw/workspace-${agentId}`]),
+            ...(withMedia ? { mediaUrl: path.join(workspaceRoot, agentId, "attachment.txt") } : {}),
+            mediaLocalRoots: expect.arrayContaining([path.join(workspaceRoot, agentId)]),
           }),
         );
       }

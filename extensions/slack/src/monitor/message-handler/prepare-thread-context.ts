@@ -172,6 +172,10 @@ export async function resolveSlackThreadContextData(params: {
   >;
   effectiveDirectMedia: SlackMediaResult[] | null;
   eventScope?: SlackEventScope;
+  historyEnabled?: boolean;
+  historyLimit?: number;
+  excludedMessageIds?: ReadonlySet<string>;
+  assertHistoryCurrent?: () => void;
 }): Promise<SlackThreadContextData> {
   const botIdentity = {
     botUserId: params.ctx.botUserId,
@@ -319,17 +323,49 @@ export async function resolveSlackThreadContextData(params: {
     logVerbose("slack: retained current-bot thread starter as assistant root context");
   }
 
-  const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
+  const threadInitialHistoryLimit = Math.min(
+    params.account.config?.thread?.initialHistoryLimit ?? 20,
+    params.historyLimit ?? Number.POSITIVE_INFINITY,
+  );
 
-  if (threadInitialHistoryLimit > 0 && shouldLoadInitialThreadHistory) {
+  if (
+    params.historyEnabled !== false &&
+    threadInitialHistoryLimit > 0 &&
+    shouldLoadInitialThreadHistory
+  ) {
     const currentBotRootTs = starter?.ts ?? params.threadTs;
+    let historyOmitted = false;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
       client: params.eventScope?.client ?? params.ctx.app.client,
       currentMessageTs: params.message.ts,
       limit: threadInitialHistoryLimit,
+      excludedMessageIds: params.excludedMessageIds,
+      assertCurrent: params.assertHistoryCurrent,
+      onOmission: (reason) => {
+        historyOmitted = true;
+        params.ctx.logger.warn(
+          {
+            channelId: params.message.channel,
+            threadTs: params.threadTs,
+            teamId: params.eventScope?.teamId ?? params.ctx.teamId,
+            accountId: params.account.accountId,
+            reason,
+          },
+          "Slack automatic thread history omitted",
+        );
+      },
     });
+    if (historyOmitted) {
+      return {
+        threadStarterBody,
+        threadHistoryBody,
+        shouldSeedInitialThreadContext,
+        threadLabel,
+        threadStarterMedia,
+      };
+    }
 
     const enrichedStarter =
       starter && threadStarterBody && threadStarterBody !== starter.text
@@ -408,6 +444,7 @@ export async function resolveSlackThreadContextData(params: {
       const userMap = await resolveSlackThreadUserMap({
         ctx: params.ctx,
         messages: filteredThreadHistory,
+        eventScope: params.eventScope,
       });
       if (omittedHistoryCount > 0 || omittedCurrentBotHistoryCount > 0) {
         logVerbose(

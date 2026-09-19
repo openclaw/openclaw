@@ -57,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
