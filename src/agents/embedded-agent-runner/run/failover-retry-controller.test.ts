@@ -182,6 +182,43 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     expect(mocks.sleepWithAbort).toHaveBeenCalledWith(120000, undefined);
   });
 
+  it("yields long rate-limit retry floors to a configured model fallback", async () => {
+    const controller = createController(
+      vi.fn(async () => false),
+      true,
+    );
+    const onRetry = vi.fn();
+
+    await expect(
+      controller.maybeRetryTransient({
+        reason: "rate_limit",
+        retryAfterMs: 105_340_000,
+        onRetry,
+      }),
+    ).resolves.toBe(false);
+
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(0);
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("retry floor 105340000ms exceeds 60000ms"),
+    );
+  });
+
+  it("keeps short rate-limit retries ahead of a configured model fallback", async () => {
+    const controller = createController(
+      vi.fn(async () => false),
+      true,
+    );
+
+    await expect(
+      controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs: 60_000 }),
+    ).resolves.toBe(true);
+
+    expect(mocks.sleepWithAbort).toHaveBeenCalledWith(60_000, undefined);
+    expect(controller.transientRetryCount).toBe(1);
+  });
+
   it.each([false, true])(
     "declines an unrepresentable provider floor (projected=%s)",
     async (projected) => {
