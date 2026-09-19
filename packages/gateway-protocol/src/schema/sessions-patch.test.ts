@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateSessionsPatchParams } from "../index.js";
+import { validateSessionsPatchManyParams, validateSessionsPatchParams } from "../index.js";
 
 describe("session patch schema", () => {
   it("accepts explicit runtime selections and clearing the runtime pin", () => {
@@ -68,5 +68,16 @@ describe("session patch schema", () => {
         expectedMarkedUnreadAt: -1,
       }),
     ).toBe(false);
+  });
+
+  it("accepts null-only threadId and rejects a new thread value", () => {
+    expect(validateSessionsPatchParams({ key: "agent:main:main", threadId: null })).toBe(true);
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:main" }],
+        patch: { threadId: null },
+      }),
+    ).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", threadId: "12345" })).toBe(false);
   });
 });
