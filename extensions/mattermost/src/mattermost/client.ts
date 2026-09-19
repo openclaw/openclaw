@@ -753,8 +753,18 @@ export async function updateMattermostPost(
   }
   if (params.props !== undefined) {
     payload.props = params.props;
+  } else if (params.message !== undefined && /\B@(channel|all|here)\b/i.test(params.message)) {
+    // PatchPost may add its mention-suppression prop before applying the patch,
+    // replacing an omitted props map. Preserve the current map in that case;
+    // pin, reaction, and file state still remain server-owned omitted fields.
+    const current = MattermostPostSchema.parse(await client.request<unknown>(`/posts/${postId}`));
+    if (current.id !== postId) {
+      throw new Error("Mattermost post lookup returned a different post id");
+    }
+    payload.props = current.props ?? {};
   }
-  return await client.request<MattermostPost>(`/posts/${postId}`, {
+  // Partial edits must preserve omitted message, pin, and reaction state.
+  return await client.request<MattermostPost>(`/posts/${postId}/patch`, {
     method: "PUT",
     body: JSON.stringify(payload),
   });
