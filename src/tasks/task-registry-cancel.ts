@@ -240,6 +240,22 @@ export async function cancelTaskById(params: {
       if (task.runtime === "cron") {
         // The live cron service owns the abort signal; registry finalization below
         // keeps CLI/Gateway callers aligned while the run unwinds.
+        // The run owns terminal outcomes published while backend cancellation waits.
+        const settled = withTaskRegistryMutation(
+          () => {
+            const current = tasks.get(task.taskId);
+            if (current && isTerminalTaskStatus(current.status)) {
+              return current.status === "cancelled"
+                ? { found: true, cancelled: true, task: cloneTaskRecord(current) }
+                : notCancelled(`Task became ${current.status} while cancellation was in progress.`);
+            }
+            return undefined;
+          },
+          () => notCancelledFromCache("Task persistence failed."),
+        );
+        if (settled) {
+          return settled;
+        }
       } else if (!childSessionKey) {
         return notCancelled(
           isHarnessOwnedSubagentTask(task)
