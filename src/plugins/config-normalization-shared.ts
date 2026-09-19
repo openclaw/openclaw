@@ -51,7 +51,10 @@ export type NormalizePluginId = (id: string) => string;
 /** Default plugin id normalizer for already-canonical ids. */
 const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
 
-function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): string[] {
+export function normalizePluginConfigList(
+  value: unknown,
+  normalizePluginId: NormalizePluginId,
+): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -215,9 +218,9 @@ export function normalizePluginsConfigWithResolverCore(
   const memorySlot = resolveSlotSelection("memory", config?.slots?.memory);
   return {
     enabled: config?.enabled !== false,
-    allow: normalizeList(config?.allow, normalizePluginId),
-    deny: normalizeList(config?.deny, normalizePluginId),
-    loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
+    allow: normalizePluginConfigList(config?.allow, normalizePluginId),
+    deny: normalizePluginConfigList(config?.deny, normalizePluginId),
+    loadPaths: normalizePluginConfigList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot.kind === "off" ? null : memorySlot.pluginId,
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
