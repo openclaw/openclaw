@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   buildChannelInboundEventContext,
@@ -33,6 +33,7 @@ async function buildAdmittedContext(
     resolveGatewayContext,
   };
   const dispose = registerChannelIngressHostOwner(owner);
+  onTestFinished(dispose);
   const channelIngress = await resolveStableChannelMessageIngress({
     channelId: "test",
     accountId: "acct:primary",
@@ -53,26 +54,22 @@ async function buildAdmittedContext(
     ...(authentication ? { policy: { minIdentifierAuthentication: "unverified" } } : {}),
     allowFrom,
   });
-  try {
-    const buildContext = createHostChannelInboundEventContextBuilder(
-      buildChannelInboundEventContext,
-      owner,
-    );
-    return buildContext({
-      channel: "test",
-      accountId: "acct:primary",
-      messageId: "msg-1",
-      from: "test:route:dm-1",
-      sender: { id: participantId },
-      conversation: { kind: "direct", id: "dm-1" },
-      route: { agentId: "main", routeSessionKey: "agent:main:test:dm:dm-1" },
-      reply: { to: "test:route:dm-1" },
-      message: { rawBody: "hello" },
-      channelIngress,
-    });
-  } finally {
-    dispose();
-  }
+  const buildContext = createHostChannelInboundEventContextBuilder(
+    buildChannelInboundEventContext,
+    owner,
+  );
+  return buildContext({
+    channel: "test",
+    accountId: "acct:primary",
+    messageId: "msg-1",
+    from: "test:route:dm-1",
+    sender: { id: participantId },
+    conversation: { kind: "direct", id: "dm-1" },
+    route: { agentId: "main", routeSessionKey: "agent:main:test:dm:dm-1" },
+    reply: { to: "test:route:dm-1" },
+    message: { rawBody: "hello" },
+    channelIngress,
+  });
 }
 
 function inspectChannelContext(context: object) {

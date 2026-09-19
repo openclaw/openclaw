@@ -4,6 +4,7 @@ import { buildChannelInboundEventContext } from "../channels/inbound-event/conte
 import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
+  copyChannelParticipantAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   readChannelContextGatewayContextResolver,
 } from "../channels/message-access/admission-evidence.js";
@@ -19,6 +20,7 @@ import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-
 import { createPluginRegistry } from "./registry.js";
 import {
   bindGatewayContextResolver,
+  getCanonicalGatewayContextResolver,
   hasGatewayContextOwner,
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -36,8 +38,8 @@ function createRuntimeBuilder(params: {
   const registryBuilder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
-      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
       subagent,
+      channel: { inbound: { buildContext: buildChannelInboundEventContext } },
     } as PluginRuntime,
     activateGlobalSideEffects: false,
   });
@@ -171,6 +173,39 @@ describe("bundled channel ingress runtime ownership", () => {
       expect(hasGatewayContextOwner(retainedResolver!, gatewayContextResolver)).toBe(true);
       markPluginRegistryRetired(channel.registryBuilder.registry);
       expect(retainedResolver?.()).toBeUndefined();
+    },
+  );
+
+  it.each(["retired", "replaced"] as const)(
+    "revokes copied Gateway resolution when the channel is %s while Gateway remains live",
+    async (lifecycle) => {
+      // A typed sentinel observes callback invocation without a fabricated Gateway context.
+      const gatewayReached = new Error("Live Gateway resolver reached");
+      const gatewayContextResolver: GatewayContextResolver = () => {
+        throw gatewayReached;
+      };
+      const first = createRuntimeBuilder({
+        origin: "bundled",
+        id: "gateway-channel-owner",
+        gatewayContextResolver,
+      });
+      const ingress = await resolveIngress("person-a", { channelId: first.record.id });
+      const context = first.buildContext(contextParams({ ingress, channelId: first.record.id }));
+      const copied = { ...context };
+      copyChannelParticipantAdmissionEvidence(context, copied);
+      const retained = readChannelContextGatewayContextResolver(copied);
+      expect(() => retained?.()).toThrow(gatewayReached);
+      if (!retained) {
+        throw new Error("Expected registered channel Gateway resolution");
+      }
+      expect(getCanonicalGatewayContextResolver(retained)).toBe(gatewayContextResolver);
+      if (lifecycle === "retired") {
+        markPluginRegistryRetired(first.registryBuilder.registry);
+      } else {
+        createRuntimeBuilder({ origin: "bundled", id: first.record.id, gatewayContextResolver });
+      }
+      expect(gatewayContextResolver).toThrow(gatewayReached);
+      expect(retained()).toBeUndefined();
     },
   );
 

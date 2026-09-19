@@ -1,5 +1,6 @@
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createChannelAdmissionDecisionReceipt,
@@ -434,8 +435,18 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
     preparation,
     valid ? combineChannelAdmissionEvidence(sources) : unknownChannelAdmissionEvidence(),
   );
-  if (valid && params.owner?.resolveGatewayContext) {
-    state.gatewayResolverByPreparation.set(preparation, params.owner.resolveGatewayContext);
+  const owner = params.owner;
+  const gatewayResolver = owner?.resolveGatewayContext;
+  if (valid && owner && gatewayResolver) {
+    const channelId = params.channelId;
+    const epoch = owner.epoch;
+    // Context copies retain this exact channel lifetime, not just the longer-lived Gateway.
+    const resolveCurrent: GatewayContextResolver = () =>
+      readChannelIngressHostOwner(channelId) === owner && owner.epoch === epoch && owner.isLive()
+        ? gatewayResolver()
+        : undefined;
+    bindGatewayContextResolver(resolveCurrent, gatewayResolver);
+    state.gatewayResolverByPreparation.set(preparation, resolveCurrent);
   }
   return preparation;
 }
