@@ -1,6 +1,9 @@
 // Memory Wiki tests cover ingest plugin behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
 import { deferred } from "./deferred.test-helpers.js";
@@ -9,6 +12,8 @@ import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
+const execFileAsync = promisify(execFile);
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 describe("ingestMemoryWikiSource", () => {
   it("copies a local text file into sources markdown", async () => {
@@ -65,6 +70,114 @@ hello from source
 `);
     await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
       "[meeting notes](sources/meeting-notes.md)",
+    );
+  });
+
+  it("breaks a hardlink before writing the ingested page", async () => {
+    const rootDir = await createTempDir("memory-wiki-ingest-hardlink-");
+    const inputPath = path.join(rootDir, "meeting-notes.txt");
+    const externalPath = path.join(rootDir, "outside.md");
+    await fs.writeFile(inputPath, "updated source\n", "utf8");
+    await fs.writeFile(externalPath, "keep external content\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+      initialize: true,
+    });
+    const pagePath = path.join(config.vault.path, "sources", "meeting-notes.md");
+    await fs.link(externalPath, pagePath);
+
+    await expect(ingestMemoryWikiSource({ config, inputPath })).resolves.toMatchObject({
+      created: false,
+    });
+    const externalAfter = await fs.readFile(externalPath, "utf8");
+    const pageAfter = await fs.readFile(pagePath, "utf8");
+    expect(externalAfter).toBe("keep external content\n");
+    expect(pageAfter).toContain("updated source");
+    process.stdout.write(
+      "REAL_MEMORY_WIKI_HARDLINK_PROOF created=false pageUpdated=true externalUnchanged=true\n",
+    );
+  });
+
+  it("preserves the external target through the OpenClaw CLI", async () => {
+    const rootDir = await createTempDir("memory-wiki-cli-hardlink-");
+    const tempHome = path.join(rootDir, "home");
+    const inputPath = path.join(rootDir, "meeting-notes.txt");
+    const externalPath = path.join(rootDir, "outside.md");
+    const vaultPath = path.join(rootDir, "vault");
+    const workspacePath = path.join(rootDir, "workspace");
+    const configPath = path.join(tempHome, "openclaw.json");
+    await fs.mkdir(tempHome, { recursive: true });
+    await fs.mkdir(workspacePath, { recursive: true });
+    await fs.writeFile(inputPath, "updated source\n", "utf8");
+    await fs.writeFile(externalPath, "keep external content\n", "utf8");
+    const { config } = await createVault({ rootDir: vaultPath, initialize: true });
+    const pagePath = path.join(config.vault.path, "sources", "meeting-notes.md");
+    await fs.link(externalPath, pagePath);
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: { defaults: { workspace: workspacePath } },
+        plugins: {
+          enabled: true,
+          load: { paths: [path.join(repoRoot, "extensions", "memory-wiki")] },
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+              config: { vault: { path: config.vault.path } },
+            },
+          },
+        },
+        logging: { level: "silent", consoleLevel: "silent" },
+      }),
+      "utf8",
+    );
+
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.join(repoRoot, "scripts", "run-node.mts"),
+        "wiki",
+        "ingest",
+        inputPath,
+        "--json",
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CI: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_ENV: undefined,
+          VITEST: undefined,
+          HOME: tempHome,
+          USERPROFILE: tempHome,
+          OPENCLAW_HOME: tempHome,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
+          OPENCLAW_DEV_SOURCE_ROOT: repoRoot,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+          OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192",
+          OPENCLAW_DISABLE_UPDATE_CHECK: "1",
+          OPENCLAW_NO_RESPAWN: "1",
+        },
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: 120_000,
+      },
+    );
+    const cliResult = JSON.parse(result.stdout) as {
+      created: boolean;
+      pagePath: string;
+    };
+    const externalAfter = await fs.readFile(externalPath, "utf8");
+    const pageAfter = await fs.readFile(pagePath, "utf8");
+    expect(cliResult).toMatchObject({ created: false, pagePath: "sources/meeting-notes.md" });
+    expect(externalAfter).toBe("keep external content\n");
+    expect(pageAfter).toContain("updated source");
+    process.stdout.write(
+      "REAL_OPENCLAW_MEMORY_WIKI_CLI_PROOF command=wiki-ingest-json status=0 created=false pageUpdated=true externalUnchanged=true\n",
     );
   });
 

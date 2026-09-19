@@ -1,7 +1,7 @@
 // Memory Wiki plugin module implements ingest behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -14,6 +14,7 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
+import { writeGuardedVaultPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 type IngestMemoryWikiSourceResult = {
@@ -43,18 +44,19 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
 
 function isEmptyExistingSourcePage(error: unknown): boolean {
   return (
-    typeof error === "object" &&
-    error !== null &&
-    ((error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error as NodeJS.ErrnoException).code === "EISDIR")
+    error instanceof FsSafeError &&
+    (error.code === "not-found" || error.code === "not-file" || error.code === "hardlink")
   );
 }
 
-async function readExistingSourcePage(pagePath: string): Promise<string> {
+async function readExistingSourcePage(
+  vault: Awaited<ReturnType<typeof fsRoot>>,
+  pagePath: string,
+): Promise<string> {
   let readError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return await fs.readFile(pagePath, "utf8");
+      return await vault.readText(pagePath, { maxBytes: Infinity });
     } catch (error) {
       readError = error;
     }
@@ -86,8 +88,17 @@ async function ingestMemoryWikiSourceUnlocked(params: {
   const pageStem = slugifyWikiPageStem(title);
   const pageId = `source.${slug}`;
   const pageRelativePath = path.join("sources", `${pageStem}.md`);
-  const pagePath = path.join(params.config.vault.path, pageRelativePath);
-  const created = !(await pathExists(pagePath));
+  const vault = await fsRoot(params.config.vault.path);
+  const pageStat = await vault.stat(pageRelativePath).catch((error: unknown) => {
+    if (
+      error instanceof FsSafeError &&
+      (error.code === "not-found" || error.code === "path-alias")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+  const created = !pageStat;
   const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
 
   const markdown = renderWikiMarkdown({
@@ -120,13 +131,15 @@ async function ingestMemoryWikiSourceUnlocked(params: {
     ].join("\n"),
   });
 
-  const existing = created ? "" : await readExistingSourcePage(pagePath);
+  const existing = created ? "" : await readExistingSourcePage(vault, pageRelativePath);
   params.signal?.throwIfAborted();
-  await fs.writeFile(
-    pagePath,
-    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
-    "utf8",
-  );
+  await writeGuardedVaultPage({
+    vault,
+    pagePath: pageRelativePath,
+    content: existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
+    pageStat,
+    pageLabel: "ingested source page",
+  });
   params.signal?.throwIfAborted();
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "ingest",
