@@ -193,7 +193,7 @@ describe("echo cache — reply_to_guid reflections", () => {
       expectedKind: "dispatch",
     },
   ] as const)("$label", async ({ cachedScope, message, expectedKind }) => {
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope: cachedScope,
       text: "Reflected reply",
       messageId: outboundGuid,
@@ -211,7 +211,7 @@ describe("echo cache — reply_to_guid reflections", () => {
 
   it("keeps a matching self-chat inline reply after the reflection window", async () => {
     useFakeTimersAt();
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope: SELF_CHAT_SCOPE,
       text: "Reflected reply",
       messageId: outboundGuid,

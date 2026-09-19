@@ -575,7 +575,7 @@ describe("iMessage monitor last-route updates", () => {
     const outboundGuid = "p:0/outbound-parent-guid";
     const reflectedText = "reflected reply";
     const legitimateText = "legitimate self-chat follow-up";
-    rememberPersistedIMessageEcho({
+    await rememberPersistedIMessageEcho({
       scope: `default:imessage:${DEFAULT_SENDER}`,
       text: reflectedText,
       messageId: outboundGuid,
