@@ -192,6 +192,11 @@ run_negative_control() {
 run_positive_hops() {
   local lane=positive
   setup_lane "$lane" 18792
+  local preservation=scripts/e2e/lib/upgrade-survivor/first-hop-config-preservation.mjs
+  local candidate_version
+  candidate_version="$(tar -xOf "$CANDIDATE_PACKAGE" package/package.json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+  node "$preservation" seed "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR" "$candidate_version"
+  openclaw config validate --json >"$ARTIFACT_DIR/$lane-config-admission.json"
   local first_pid
   first_pid="$(cat "$ARTIFACT_DIR/$lane-before.pid")"
 
@@ -216,6 +221,15 @@ run_positive_hops() {
   record_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   assert_no_residue "$ARTIFACT_DIR/$lane-first-transaction-residue.txt"
   record_service_state "$ARTIFACT_DIR/$lane-service-after-first.txt"
+  # Check before mock configuration can overwrite evidence from the old updater.
+  node "$preservation" assert-hop "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
+  openclaw config validate --json >"$ARTIFACT_DIR/$lane-first-config-validation.json"
+  openclaw doctor --fix --non-interactive \
+    >"$ARTIFACT_DIR/$lane-repair-doctor.stdout" 2>"$ARTIFACT_DIR/$lane-repair-doctor.stderr"
+  node "$preservation" assert-repair "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
+  openclaw doctor --fix --non-interactive \
+    >"$ARTIFACT_DIR/$lane-fresh-doctor.stdout" 2>"$ARTIFACT_DIR/$lane-fresh-doctor.stderr"
+  node "$preservation" assert-doctor "$OPENCLAW_CONFIG_PATH" "$ARTIFACT_DIR"
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44212
 
   run_update "$lane-second" "$FUTURE_PACKAGE"
