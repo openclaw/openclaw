@@ -20,12 +20,14 @@ import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-rea
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { registerUserModelAuthProfileSecrets } from "../../state/user-model-accounts.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type {
   AuthProfileStore,
   AuthProfileRowRead,
   PersistedAuthProfileStoreInspection,
+  UserModelAuthProfile,
 } from "./types.js";
 
 /** Decode worker-read facts with the same store/state coercion as synchronous reads. */
@@ -296,4 +298,25 @@ export async function readSharedAuthProfileRows(
   );
   context.admission.assertCurrent();
   return result ?? missing;
+}
+
+/** Read one selected account on the canonical actor; redaction remains caller-owned. */
+export async function readUserModelAuthProfileAsync(
+  authProfileId: string,
+  context: OpenClawStateWorkerContext,
+): Promise<UserModelAuthProfile | undefined> {
+  const profile = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "authProfiles.personal",
+        input: { profileId: authProfileId, artifactPreserving: isArtifactPreservingStateRead() },
+      }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  if (profile) {
+    registerUserModelAuthProfileSecrets(profile.credential);
+  }
+  return profile;
 }

@@ -5,11 +5,9 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import {
-  reloadSharedAuthStoreOwnership,
-  SHARED_AUTH_STORE_STATE_KEY,
-} from "../agents/auth-profiles/path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { ModelAuthStatusResult } from "./server-methods/models-auth-status.types.js";

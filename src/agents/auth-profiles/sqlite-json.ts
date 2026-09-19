@@ -24,6 +24,7 @@ export const PRIMARY_ROW_KEY = "primary";
 // in STATE_SECRET_CONFIG_STATE_KEY_PREFIXES so git backups never carry them.
 export const SHARED_STORE_STATE_KEY = "authProfiles.store";
 export const SHARED_STATE_STATE_KEY = "authProfiles.state";
+export const SHARED_AUTH_STORE_STATE_KEY = "auth.sharedStore";
 
 // Callers own transactions; opening another here would nest.
 export function readSharedAuthKvCell(db: DatabaseSync, stateKey: string): string | undefined {

@@ -13,8 +13,6 @@ import {
 import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
-export { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
-
 // The Gateway lock makes state-directory contents process-stable. Cache both
 // outcomes to keep reconnects free of freshness polling; Doctor invalidates
 // the entry after its exclusive legacy import removes the retired file.

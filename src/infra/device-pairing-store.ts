@@ -23,7 +23,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.js";
+import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type {
   DeviceAuthToken,

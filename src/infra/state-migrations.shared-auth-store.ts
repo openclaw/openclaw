@@ -10,7 +10,6 @@ import {
   inspectSharedAuthStoreOwnership,
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
-  SHARED_AUTH_STORE_STATE_KEY,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
@@ -23,6 +22,7 @@ import {
   type SharedAuthLegacyStateRow as StateRow,
   type SharedAuthLegacyStoreRow as StoreRow,
 } from "../agents/auth-profiles/shared-store-bootstrap.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabaseOwnerId,

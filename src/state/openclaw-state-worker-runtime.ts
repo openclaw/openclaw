@@ -1,5 +1,7 @@
-import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/path-resolve.js";
-import { readAuthProfileRows } from "../agents/auth-profiles/sqlite-json.js";
+import {
+  readAuthProfileRows,
+  SHARED_AUTH_STORE_STATE_KEY,
+} from "../agents/auth-profiles/sqlite-json.js";
 import { isMissingDatabasePath } from "../agents/auth-profiles/sqlite-read-pool.js";
 import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import {

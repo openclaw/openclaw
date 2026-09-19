@@ -13,7 +13,6 @@ import {
 } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import { readUserModelAuthProfileAsync } from "../../state/user-model-accounts.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import type { createExternalAuthRuntime } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
@@ -57,6 +56,7 @@ import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
+  readUserModelAuthProfileAsync,
 } from "./sqlite-read.js";
 import {
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
