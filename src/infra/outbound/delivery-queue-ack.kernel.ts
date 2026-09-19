@@ -1,6 +1,5 @@
 // Canonical outbound settlement returns cleanup facts only after custody commits.
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
-import { loadDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-bound.js";
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   completeDeliveryQueueEntryInDatabase,
@@ -132,31 +131,27 @@ export function ackDeliveryInDatabase(
       deleteDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
     }
   };
-  if (options && "expectedPlatformSendAttemptId" in options) {
-    const settled = transitionOwnedDeliveryQueueEntryInDatabase(
-      database,
-      {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        id,
-        platformSendAttemptId: options.expectedPlatformSendAttemptId ?? null,
-      },
-      (entry) => {
-        // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-        settle(entry as QueuedDelivery);
-      },
-    );
-    if (!settled) {
-      throw new Error(`Delivery platform claim was lost: ${id}`);
-    }
-  } else {
-    const current = loadDeliveryQueueEntryInDatabase(
-      database,
-      OUTBOUND_DELIVERY_QUEUE_NAME,
+  // A claimless caller has no owner to assert, so an unclaimed row settles and an
+  // already-missing row is a no-op; either way it must never touch a live claim.
+  const platformSendAttemptId =
+    options && "expectedPlatformSendAttemptId" in options
+      ? (options.expectedPlatformSendAttemptId ?? null)
+      : null;
+  const settled = transitionOwnedDeliveryQueueEntryInDatabase(
+    database,
+    {
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       id,
-      "pending",
-    );
-    // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-    settle(current as QueuedDelivery | null);
+      platformSendAttemptId,
+      allowMissingEntry: !(options && "expectedPlatformSendAttemptId" in options),
+    },
+    (entry) => {
+      // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
+      settle(entry as QueuedDelivery);
+    },
+  );
+  if (!settled) {
+    throw new Error(`Delivery platform claim was lost: ${id}`);
   }
   return spoolPaths;
 }

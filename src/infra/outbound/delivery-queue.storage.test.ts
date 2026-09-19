@@ -475,6 +475,27 @@ describe("delivery-queue storage", () => {
       await expect(ackDelivery("nonexistent-id", tmpDir())).resolves.toBeUndefined();
     });
 
+    it("claimless ack rejects a live-claimed row instead of deleting it", async () => {
+      const stateDir = tmpDir();
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1",
+        payloads: [{ text: "claimless-ack-guard" }],
+      });
+      const attemptId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+      if (!attemptId) {
+        throw new Error("test invariant: the unclaimed row must accept a platform claim");
+      }
+
+      await expect(ackDelivery(id, stateDir)).rejects.toThrow(
+        `Delivery platform claim was lost: ${id}`,
+      );
+
+      const pending = await loadPendingDelivery(id, stateDir);
+      expect(pending).toMatchObject({ id, producerClaimId: attemptId });
+      expect(readStatus(id)).toBe("pending");
+    });
+
     it("removes acked entries from pending recovery", async () => {
       const id = await enqueueTextDelivery({
         channel: "directchat",
