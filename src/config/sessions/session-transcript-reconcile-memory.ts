@@ -106,6 +106,7 @@ export function createMemoryTranscriptProjectionSource(
     isCurrentPlan(plan: PreparedSessionTranscriptProjectionMetadata) {
       return (
         snapshot?.sessionId === plan.sessionId &&
+        snapshot.generation === plan.sourceTranscriptGeneration &&
         snapshot.maxSeq === plan.sourceIndexedSeq &&
         snapshot.transcriptUpdatedAt === plan.sourceTranscriptUpdatedAt &&
         snapshotMatches()
