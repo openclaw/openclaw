@@ -235,6 +235,10 @@ describe("terminal file upload", () => {
     expect(await stagedName("COM¹.txt")).toBe("_COM¹.txt");
     expect(await stagedName("LPT³.log")).toBe("_LPT³.log");
     expect(Buffer.byteLength(await stagedName("🦞".repeat(100)), "utf8")).toBeLessThanOrEqual(180);
+    expect(await stagedName(`${"a".repeat(179)}.b`)).toBe("a".repeat(179));
+    expect(await stagedName(`${"b".repeat(179)} c`)).toBe("b".repeat(179));
+    expect(await stagedName(`${"c".repeat(175)}🦞.d`)).toBe(`${"c".repeat(175)}🦞`);
+    expect(await stagedName(`CON${" ".repeat(177)}x`)).toBe("_CON");
     expect(await stagedName("..")).toBe("upload");
   });
 
