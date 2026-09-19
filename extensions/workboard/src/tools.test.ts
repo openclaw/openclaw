@@ -174,7 +174,9 @@ describe("workboard tools", () => {
     );
     expect(claimed.card).toMatchObject({
       status: "running",
-      metadata: { claim: { ownerId: "main", token: "[redacted]" } },
+      // Claim ownership is scoped to the calling session, not the agent, so the owner
+      // is the sessionKey ("session-1"), not the agentId ("main").
+      metadata: { claim: { ownerId: "session-1", token: "[redacted]" } },
     });
     const token = (claimed.token as string | undefined) ?? "";
 
@@ -640,5 +642,171 @@ describe("workboard tools", () => {
       }),
     );
     expect(claimed.card).toMatchObject({ status: "review" });
+  });
+
+  it("claims through the tool with a session-scoped owner and fences a sibling session", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    await stores.cards.register("card-fence", {
+      version: 1,
+      card: {
+        id: "card-fence",
+        title: "Fenced work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "main",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const claimTool = (sessionKey: string) =>
+      expectDefined(
+        new Map(
+          createWorkboardTools({ store, context: { agentId: "main", sessionKey } }).map((tool) => [
+            tool.name,
+            tool,
+          ]),
+        ).get("workboard_claim"),
+        "workboard_claim",
+      );
+    const mutateTool = (sessionKey: string, name: string) =>
+      expectDefined(
+        new Map(
+          createWorkboardTools({ store, context: { agentId: "main", sessionKey } }).map((tool) => [
+            tool.name,
+            tool,
+          ]),
+        ).get(name),
+        name,
+      );
+
+    // Session 1 claims the card; the persisted owner is the sessionKey, not the agentId.
+    const claimed = readPayload(
+      await claimTool("session-1").execute("claim-1", { id: "card-fence" }),
+    );
+    expect(claimed.card).toMatchObject({
+      status: "running",
+      metadata: { claim: { ownerId: "session-1" } },
+    });
+
+    // A sibling session of the SAME agent holds no token and no longer matches the
+    // session-scoped claim owner, so the claim fence blocks it from completing the card
+    // (the pre-fix bug: an agent-scoped owner let any sibling session mutate it).
+    await expect(
+      mutateTool("session-2", "workboard_complete").execute("complete-2", {
+        id: "card-fence",
+        summary: "hijacked",
+      }),
+    ).rejects.toThrow(/claimed/);
+
+    // The owning session (or a caller presenting the token) can still act on it.
+    const token = (claimed.token as string | undefined) ?? "";
+    const released = readPayload(
+      await mutateTool("session-1", "workboard_release").execute("release-1", {
+        id: "card-fence",
+        token,
+        status: "review",
+      }),
+    );
+    expect(released.card).toMatchObject({ status: "review" });
+  });
+
+  it("bounds an over-long session key to a stable claim owner within the persisted cap", async () => {
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    await stores.cards.register("card-long", {
+      version: 1,
+      card: {
+        id: "card-long",
+        title: "Long session key",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        agentId: "main",
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const longSessionKey = `agent:main:dashboard:${"x".repeat(400)}`;
+    const claimTool = expectDefined(
+      new Map(
+        createWorkboardTools({
+          store,
+          context: { agentId: "main", sessionKey: longSessionKey },
+        }).map((tool) => [tool.name, tool]),
+      ).get("workboard_claim"),
+      "workboard_claim",
+    );
+
+    // A bare agentId always fit the 120-char claim-owner cap; a long sessionKey does
+    // not, so it is hashed to a stable, bounded owner instead of throwing on persist.
+    const claimed = readPayload(await claimTool.execute("claim-long", { id: "card-long" }));
+    const owner = (claimed.card as { metadata?: { claim?: { ownerId?: string } } }).metadata?.claim
+      ?.ownerId;
+    expect(owner).toBeDefined();
+    expect(owner).not.toBe(longSessionKey);
+    expect((owner ?? "").length).toBeLessThanOrEqual(120);
+    expect(owner).toMatch(/^owner:[0-9a-f]{64}$/);
+  });
+
+  it("gives each session of one agent its own worker-capacity slot", async () => {
+    // The capacity slot keys on claim.ownerId (workboardCardSlotOwner returns it), so
+    // making the owner per-session (the fence fix) makes the slot per-session too. This
+    // demonstrates that documented tradeoff and its true, narrow shape: the slot is a
+    // per-owner serialization guard ("one active card per owner slot", enforced by the
+    // store's claimIfOwnerAvailable owner_busy check), NOT a global concurrency cap. So
+    // two sessions of one agent get two independent slots (loosening the per-owner
+    // spread), while a single session still serializes onto its own one active card.
+    const { store, stores } = createWorkboardSqliteTestHarness();
+    for (const id of ["card-a", "card-b", "card-c"]) {
+      await stores.cards.register(id, {
+        version: 1,
+        card: {
+          id,
+          title: `Work ${id}`,
+          status: "todo",
+          priority: "normal",
+          labels: [],
+          agentId: "main",
+          position: 1000,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      });
+    }
+    const claimTool = (sessionKey: string) =>
+      expectDefined(
+        new Map(
+          createWorkboardTools({ store, context: { agentId: "main", sessionKey } }).map((tool) => [
+            tool.name,
+            tool,
+          ]),
+        ).get("workboard_claim"),
+        "workboard_claim",
+      );
+
+    // Session 1 claims card A and now holds an active slot under owner "session-1".
+    const claimedA = readPayload(await claimTool("session-1").execute("claim-a", { id: "card-a" }));
+    expect(claimedA.card).toMatchObject({
+      status: "running",
+      metadata: { claim: { ownerId: "session-1" } },
+    });
+
+    // A sibling session of the SAME agent claims a different card and succeeds: it owns a
+    // distinct capacity slot ("session-2"), where a per-agent slot would have collided and
+    // blocked it. This is the loosened per-owner throttling the PR documents.
+    const claimedB = readPayload(await claimTool("session-2").execute("claim-b", { id: "card-b" }));
+    expect(claimedB.card).toMatchObject({
+      status: "running",
+      metadata: { claim: { ownerId: "session-2" } },
+    });
+
+    // The guard still serializes within one owner: session 1 already has an active card,
+    // so claiming a second card under the same slot is rejected as owner_busy. The slot is
+    // a real per-owner limit — the fix only re-keys it from agent to session.
+    await expect(claimTool("session-1").execute("claim-c", { id: "card-c" })).rejects.toThrow(
+      /already has active Workboard work/,
+    );
   });
 });
