@@ -9,6 +9,7 @@ import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { takeGraphemes } from "../../lib/graphemes.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   isSessionKeyAddressable,
@@ -112,7 +113,7 @@ function renderDashboardCard(
   const tag = target ? literal`a` : literal`div`;
   const author = dashboardAuthor(row, data.fallbackAgentId);
   const title = resolveSessionDisplayName(row.key, row);
-  const initial = author.label.trim().charAt(0).toLocaleUpperCase() || "?";
+  const initial = takeGraphemes(author.label.trim(), 1).toLocaleUpperCase() || "?";
   return staticHtml`<article class="dashboard-card" data-dashboard-session=${row.key}>
     <${tag} class="dashboard-card__main" href=${target?.href ?? nothing} aria-label=${target ? title : nothing}>
       ${renderDashboardPreview(row, gatewaySnapshot, previewError)}
