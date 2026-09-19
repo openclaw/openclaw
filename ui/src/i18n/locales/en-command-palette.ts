@@ -142,6 +142,7 @@ const enCommandPalette = {
       clearDescription: "Clear chat history",
       redirectDescription: "Abort and restart with a new message",
       steerDescription: "Inject a message into the active run",
+      exportDescription: "Download this conversation as Markdown",
       categories: {
         session: "Session",
         model: "Model",

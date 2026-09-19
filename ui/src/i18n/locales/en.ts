@@ -3442,8 +3442,9 @@ export const en: TranslationMap & {
       resettingThread: "Resetting session...",
       stoppingCurrentRun: "Stopping current run...",
       chatHistoryCleared: "Chat history cleared.",
-      exportingThread: "Exporting session...",
       emptyExport: "There are no messages to export yet.",
+      exportPathUnsupported:
+        "Control UI exports Markdown through your browser. Run /export without a file path.",
       unknownCommand: "Unknown command: `{command}`",
       options: "Options: {options}.",
       sessionUnavailable: "Session capability is unavailable",

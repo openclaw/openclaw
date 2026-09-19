@@ -186,14 +186,17 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
 
 const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
   steer: "chat.commands.steerDescription",
+  "export-session": "chat.commands.exportDescription",
 };
 
 const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
   steer: "Inject a message into the active run",
+  "export-session": "Download this conversation as Markdown",
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
   steer: "<message>",
+  "export-session": undefined,
 };
 
 function normalizeUiKey(command: CommandLike): string {
@@ -285,7 +288,9 @@ function toSlashCommand(
     ...(COMMAND_DESCRIPTION_KEYS[command.key]
       ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
       : {}),
-    args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
+    args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
+      ? COMMAND_ARGS_OVERRIDES[command.key]
+      : formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
