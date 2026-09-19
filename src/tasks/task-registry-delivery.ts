@@ -4,10 +4,6 @@ import { channelSupportsThreadDelivery } from "../channels/thread-addressing.js"
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import {
-  isGatewayRestartDraining,
-  runWithGatewayDetachedWorkContinuation,
-} from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
@@ -22,11 +18,8 @@ import {
   shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import { getTaskFlowById } from "./task-flow-runtime-internal.js";
-import {
-  getTaskDeliveryState,
-  updateTask,
-  upsertTaskDeliveryState,
-} from "./task-registry-mutation.js";
+import { runTaskDeliveryWithDetachedAdmission } from "./task-registry-delivery-admission.js";
+import { getTaskDeliveryState, updateTask } from "./task-registry-mutation.js";
 import { cloneTaskRecord, pickPreferredRunIdTask } from "./task-registry-records.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
@@ -45,6 +38,7 @@ import type {
   TaskRecord,
 } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
+import { captureTaskStateNotificationAcknowledger } from "./task-state-notification-ack.async.js";
 
 type TaskDeliveryOwner = {
   sessionKey?: string;
@@ -170,38 +164,6 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
   return await runTaskDeliveryWithDetachedAdmission(taskId, async () =>
     maybeDeliverTaskTerminalUpdateUnderAdmission(taskId),
   );
-}
-
-async function runTaskDeliveryWithDetachedAdmission(
-  taskId: string,
-  deliver: () => Promise<TaskRecord | null>,
-): Promise<TaskRecord | null> {
-  ensureTaskRegistryReady({ refreshProjection: false });
-  let admitted = false;
-  try {
-    return await runWithGatewayDetachedWorkContinuation(async () => {
-      admitted = true;
-      return await deliver();
-    }, "tasks:delivery");
-  } catch (error) {
-    // Late lifecycle callbacks must not leak a rejected detached promise after
-    // restart closes admission. An already-admitted delivery still reports its
-    // own failures instead of hiding them behind a concurrent restart.
-    if (!admitted && isGatewayRestartDraining()) {
-      return withTaskRegistryMutation(
-        () => {
-          ensureTaskRegistryReady();
-          const current = tasks.get(taskId);
-          return current ? cloneTaskRecord(current) : null;
-        },
-        () => {
-          const current = tasks.get(taskId);
-          return current ? cloneTaskRecord(current) : null;
-        },
-      );
-    }
-    throw error;
-  }
 }
 
 type TaskTerminalDelivery = {
@@ -530,8 +492,9 @@ export async function maybeDeliverTaskStateChangeUpdate(
   taskId: string,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
-  return await runTaskDeliveryWithDetachedAdmission(taskId, async () =>
-    maybeDeliverTaskStateChangeUpdateUnderAdmission(taskId, latestEvent),
+  const requestedEvent = latestEvent ? Object.freeze({ ...latestEvent }) : undefined;
+  return await runTaskDeliveryWithDetachedAdmission(taskId, async (assertCurrent) =>
+    maybeDeliverTaskStateChangeUpdateUnderAdmission(taskId, requestedEvent, assertCurrent),
   );
 }
 
@@ -541,29 +504,15 @@ type TaskStateChangeDelivery = {
   owner: TaskDeliveryOwner;
   ownerSessionKey: string;
   eventText: string;
+  queued: false | Promise<TaskRecord | null>;
+  acknowledge: () => Promise<TaskRecord | null>;
 };
 type PreparedTaskStateChangeDelivery = { result: TaskRecord | null } | TaskStateChangeDelivery;
 
-function recordTaskStateChangeDelivery(
-  taskId: string,
-  latestEvent: TaskEventRecord,
-): TaskRecord | null {
-  const current = tasks.get(taskId);
-  if (!current) {
-    return null;
-  }
-  const deliveryState = getTaskDeliveryState(taskId);
-  upsertTaskDeliveryState({
-    taskId,
-    requesterOrigin: deliveryState?.requesterOrigin,
-    lastNotifiedEventAt: Math.max(deliveryState?.lastNotifiedEventAt ?? 0, latestEvent.at),
-  });
-  return updateTask(taskId, { lastEventAt: Date.now() });
-}
-
 function prepareTaskStateChangeDelivery(
   taskId: string,
-  latestEvent?: TaskEventRecord,
+  latestEvent: TaskEventRecord | undefined,
+  bindAcknowledgement: ReturnType<typeof captureTaskStateNotificationAcknowledger>["bind"],
 ): PreparedTaskStateChangeDelivery {
   const current = tasks.get(taskId);
   if (!current || !shouldAutoDeliverTaskStateChange(current)) {
@@ -573,7 +522,8 @@ function prepareTaskStateChangeDelivery(
   if (!latestEvent || (deliveryState?.lastNotifiedEventAt ?? 0) >= latestEvent.at) {
     return { result: cloneTaskRecord(current) };
   }
-  const eventText = formatTaskStateChangeMessage(current, latestEvent);
+  const event = latestEvent;
+  const eventText = formatTaskStateChangeMessage(current, event);
   if (!eventText) {
     return { result: cloneTaskRecord(current) };
   }
@@ -588,11 +538,20 @@ function prepareTaskStateChangeDelivery(
         }),
       };
     }
+    const acknowledge = bindAcknowledgement(current, event.at);
+    const prepared = {
+      current,
+      latestEvent: event,
+      owner,
+      ownerSessionKey,
+      eventText,
+      acknowledge,
+    };
     if (!canDeliverTaskToRequesterOrigin(owner)) {
       queueTaskSystemEvent(current, eventText, owner);
-      return { result: recordTaskStateChangeDelivery(taskId, latestEvent) };
+      return { ...prepared, queued: acknowledge() };
     }
-    return { current, latestEvent, owner, ownerSessionKey, eventText };
+    return { ...prepared, queued: false };
   } catch (error) {
     taskRegistryLog.warn("Failed to deliver background task state change", {
       taskId,
@@ -603,21 +562,60 @@ function prepareTaskStateChangeDelivery(
   }
 }
 
+async function settleQueuedAcknowledgementAfterPreparationFailure(
+  pending: Promise<TaskRecord | null> | undefined,
+  preparationError: unknown,
+): Promise<void> {
+  if (!pending) {
+    return;
+  }
+  const [settlement] = await Promise.allSettled([pending]);
+  if (settlement.status === "rejected") {
+    throw new AggregateError(
+      [preparationError, settlement.reason],
+      "Task state-change preparation and acknowledgement failed",
+      { cause: preparationError },
+    );
+  }
+}
+
 async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
   taskId: string,
-  latestEvent?: TaskEventRecord,
+  latestEvent: TaskEventRecord | undefined,
+  assertCurrent: () => void,
 ): Promise<TaskRecord | null> {
-  const initial = withTaskRegistryMutation(
-    () => {
-      ensureTaskRegistryReady();
-      return prepareTaskStateChangeDelivery(taskId, latestEvent);
-    },
-    () => ({ result: null }),
-  );
+  const acknowledgement = captureTaskStateNotificationAcknowledger(assertCurrent);
+  let queuedAcknowledgement: Promise<TaskRecord | null> | undefined;
+  let initial: PreparedTaskStateChangeDelivery;
+  try {
+    initial = await acknowledgement.prepare(() =>
+      withTaskRegistryMutation(
+        () => {
+          ensureTaskRegistryReady();
+          const prepared = prepareTaskStateChangeDelivery(
+            taskId,
+            latestEvent,
+            acknowledgement.bind,
+          );
+          if (!("result" in prepared) && prepared.queued) {
+            queuedAcknowledgement = prepared.queued;
+          }
+          return prepared;
+        },
+        () => ({ result: null }),
+      ),
+    );
+  } catch (error) {
+    await settleQueuedAcknowledgementAfterPreparationFailure(queuedAcknowledgement, error);
+    throw error;
+  }
   if ("result" in initial) {
     return initial.result;
   }
   try {
+    if (initial.queued) {
+      return await initial.queued;
+    }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
     const invocation: {
       send?: { facts: TaskStateChangeDelivery; pending: ReturnType<typeof sendMessage> };
@@ -625,46 +623,54 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
     } = {};
     let immediate: TaskRecord | null | undefined;
     try {
-      immediate = withTaskRegistryMutation(
-        () => {
-          const fresh = prepareTaskStateChangeDelivery(taskId, latestEvent);
-          if ("result" in fresh) {
-            return fresh.result;
-          }
-          const { current, latestEvent: event, owner, ownerSessionKey, eventText } = fresh;
-          const requesterAgentId = owner.agentId;
-          const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
-            task: current,
-            latestEvent: event,
-            owner,
-          });
-          invocation.send = {
-            facts: fresh,
-            pending: sendMessage({
-              channel: owner.requesterOrigin?.channel,
-              to: owner.requesterOrigin?.to ?? "",
-              accountId: owner.requesterOrigin?.accountId,
-              threadId: owner.requesterOrigin?.threadId,
-              content: eventText,
-              agentId: requesterAgentId,
-              idempotencyKey,
-              mirror: { sessionKey: ownerSessionKey, agentId: requesterAgentId, idempotencyKey },
-            }),
-          };
-          return undefined;
-        },
-        () => null,
+      immediate = await acknowledgement.prepare(() =>
+        withTaskRegistryMutation(
+          () => {
+            assertCurrent();
+            const fresh = prepareTaskStateChangeDelivery(taskId, latestEvent, acknowledgement.bind);
+            if ("result" in fresh) {
+              return fresh.result;
+            }
+            if (fresh.queued) {
+              queuedAcknowledgement = fresh.queued;
+              return undefined;
+            }
+            const { current, latestEvent: event, owner, ownerSessionKey, eventText } = fresh;
+            const requesterAgentId = owner.agentId;
+            const idempotencyKey = resolveTaskStateChangeIdempotencyKey({
+              task: current,
+              latestEvent: event,
+              owner,
+            });
+            invocation.send = {
+              facts: fresh,
+              pending: sendMessage({
+                channel: owner.requesterOrigin?.channel,
+                to: owner.requesterOrigin?.to ?? "",
+                accountId: owner.requesterOrigin?.accountId,
+                threadId: owner.requesterOrigin?.threadId,
+                content: eventText,
+                agentId: requesterAgentId,
+                idempotencyKey,
+                mirror: { sessionKey: ownerSessionKey, agentId: requesterAgentId, idempotencyKey },
+              }),
+            };
+            return undefined;
+          },
+          () => null,
+        ),
       );
     } catch (error) {
       if (!invocation.send) {
+        await settleQueuedAcknowledgementAfterPreparationFailure(queuedAcknowledgement, error);
         throw error;
       }
       invocation.cleanupFailure = { error };
     }
     if (!invocation.send) {
-      return immediate ?? null;
+      return queuedAcknowledgement ? await queuedAcknowledgement : (immediate ?? null);
     }
-    const { current, latestEvent: event, owner } = invocation.send.facts;
+    const { current, owner, acknowledge } = invocation.send.facts;
     const sendResult = await invocation.send.pending.catch((error: unknown) => {
       if (invocation.cleanupFailure) {
         throw new AggregateError(
@@ -684,40 +690,36 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         },
       );
     }
-    return withTaskRegistryMutation(
-      () => {
-        if (sendResult.deliveryStatus === "suppressed") {
-          if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
-            throw new Error(
-              `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
-            );
-          }
-          taskRegistryLog.warn("Background task state change delivery was not confirmed", {
-            taskId,
-            ownerKey: current.ownerKey,
-            requesterOrigin: owner.requesterOrigin,
-            suppressionReason: sendResult.suppressionReason,
-          });
-        }
-        return recordTaskStateChangeDelivery(taskId, event);
-      },
-      () => null,
-    );
+    if (sendResult.deliveryStatus === "suppressed") {
+      if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
+        throw new Error(
+          `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        );
+      }
+      taskRegistryLog.warn("Background task state change delivery was not confirmed", {
+        taskId,
+        ownerKey: current.ownerKey,
+        requesterOrigin: owner.requesterOrigin,
+        suppressionReason: sendResult.suppressionReason,
+      });
+    }
+    return await acknowledge();
   } catch (error) {
-    return withTaskRegistryMutation(
-      () => {
-        const current = tasks.get(taskId);
-        taskRegistryLog.warn("Failed to deliver background task state change", {
-          taskId,
-          ownerKey: initial.current.ownerKey,
-          error,
-        });
-        return current ? cloneTaskRecord(current) : null;
-      },
-      () => {
-        const current = tasks.get(taskId);
-        return current ? cloneTaskRecord(current) : null;
-      },
-    );
+    taskRegistryLog.warn("Failed to deliver background task state change", {
+      taskId,
+      ownerKey: initial.current.ownerKey,
+      error,
+    });
+    const readCurrent = () => {
+      const current = tasks.get(taskId);
+      return current ? cloneTaskRecord(current) : null;
+    };
+    try {
+      return await acknowledgement.prepare(() =>
+        withTaskRegistryMutation(readCurrent, readCurrent),
+      );
+    } catch {
+      return readCurrent();
+    }
   }
 }

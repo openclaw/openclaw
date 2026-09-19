@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type {
   DetachedRunningTaskCreateParams,
@@ -8,6 +7,8 @@ import type {
   CreatedDetachedTaskRun,
 } from "./detached-task-runtime-contract.js";
 import {
+  captureTaskMutationContext,
+  type TaskMutationContext,
   finishTaskMutation,
   retainTaskMutationFlowEffects,
 } from "./task-executor-mutation-effects.async.js";
@@ -31,18 +32,12 @@ import {
   ensureTaskRegistryReadyAsync,
   runTaskRegistryWorkerMutation,
 } from "./task-registry-state.js";
-import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
+import type { TaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
 type FlowStore = ReturnType<typeof getTaskFlowRegistryStore>;
-export type CoreTaskCreation = {
-  task: TaskRecord;
-  context: OpenClawStateWorkerContext;
-  store: TaskRegistryStore;
-  flowStore: FlowStore;
-  assertStores: () => void;
-};
+export type CoreTaskCreation = TaskMutationContext & { task: TaskRecord };
 
 type CreatedTaskRunReceipt = {
   task: TaskRecord;
@@ -97,16 +92,8 @@ async function createTaskRun(
   params: CreateTaskRecordParams,
   assertCurrent?: () => void,
 ): Promise<CoreTaskCreation> {
-  const context = captureOpenClawStateWorkerContext();
-  const store = getTaskRegistryStore();
-  const flowStore = getTaskFlowRegistryStore();
+  const { context, store, flowStore, assertStores } = captureTaskMutationContext();
   const input = { params: structuredClone(params), taskId: crypto.randomUUID(), now: Date.now() };
-  const assertStores = () => {
-    context.admission.assertCurrent();
-    if (getTaskRegistryStore() !== store || getTaskFlowRegistryStore() !== flowStore) {
-      throw new Error("Initial task mutation lost its selected registry owners");
-    }
-  };
   const assertCreationCurrent = () => {
     assertStores();
     assertCurrent?.();

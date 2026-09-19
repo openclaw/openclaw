@@ -102,6 +102,7 @@ export function isTaskRegistryWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
+    case "tasks.acknowledgeStateChange":
     case "tasks.createRecord":
     case "tasks.finalizeActive":
     case "tasks.settleUnstarted":

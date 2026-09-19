@@ -1,6 +1,6 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { CoreTaskCreation } from "./task-executor-create.async.js";
 import {
+  type TaskMutationContext,
   finishTaskMutation,
   retainTaskMutationFlowEffects,
 } from "./task-executor-mutation-effects.async.js";
@@ -23,28 +23,31 @@ const log = createSubsystemLogger("tasks/executor");
 
 /** One acknowledged row finishes publication and flow effects before its caller advances. */
 export async function settleTaskRecordTransitionAsync(
-  creation: CoreTaskCreation,
+  creation: TaskMutationContext,
   command: Extract<
     TaskInitialWorkerCommand,
-    { type: "tasks.settleUnstarted" | "tasks.finalizeActive" }
+    { type: "tasks.settleUnstarted" | "tasks.finalizeActive" | "tasks.acknowledgeStateChange" }
   >,
   assertCurrent: () => void,
 ): Promise<TaskRecordTransitionReceipt | null> {
   const { context, store, flowStore, assertStores } = creation;
-  const { taskId, expectedTask } = command.input;
+  const { taskId } = command.input;
   assertCurrent();
-  // Activity observers may reenter persistence, so flush before worker admission.
-  try {
-    assertTaskRegistryOwnerCurrent(context, store);
-    const projected = tasks.get(taskId);
-    if (projected && matchesTaskPersistenceReceipt(projected, expectedTask)) {
-      flushTaskActivity(taskId);
+  if (command.type !== "tasks.acknowledgeStateChange") {
+    const { expectedTask } = command.input;
+    // Activity observers may reenter persistence, so flush before worker admission.
+    try {
+      assertTaskRegistryOwnerCurrent(context, store);
+      const projected = tasks.get(taskId);
+      if (projected && matchesTaskPersistenceReceipt(projected, expectedTask)) {
+        flushTaskActivity(taskId);
+      }
+    } catch (error) {
+      log.warn("Retained task transition no longer owns the active activity projection", {
+        taskId,
+        error,
+      });
     }
-  } catch (error) {
-    log.warn("Retained task transition no longer owns the active activity projection", {
-      taskId,
-      error,
-    });
   }
   assertCurrent();
   const scope = { taskId };

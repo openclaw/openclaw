@@ -29,6 +29,7 @@ import type {
 import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
 import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
+import { acknowledgeTaskStateNotification } from "../tasks/task-state-notification-ack.operation.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
 
@@ -163,6 +164,21 @@ export function createInMemoryTaskRegistryStore(
               this.upsertTaskWithDeliveryState({ task, deliveryState }),
             deferCommit: (publish) => publish(),
             onCommitted() {},
+          }),
+        "tasks.acknowledgeStateChange": (input) =>
+          acknowledgeTaskStateNotification(input, {
+            readCurrent: () => ({
+              task: state.tasks.get(input.taskId),
+              deliveryState: state.deliveryStates.get(input.taskId),
+            }),
+            write: (write) => write(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+            onFailure() {},
           }),
         "tasks.finalizeActive": (input) => transitionRecord({ kind: "state", ...input }),
         "flows.createForTask": unsupported,

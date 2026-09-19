@@ -49,9 +49,38 @@ vi.mock("./task-registry-state.js", () => ({
 }));
 vi.mock("./task-registry-mutation.js", () => ({
   updateTask: storage.update,
-  upsertTaskDeliveryState: storage.upsertDelivery,
   getTaskDeliveryState: (taskId: string) => storage.delivery.get(taskId),
 }));
+vi.mock("./task-state-notification-ack.async.js", async () => {
+  const { sameTaskRunScope } = await import("./task-registry-records.js");
+  return {
+    captureTaskStateNotificationAcknowledger: (assertCurrent: () => void) => ({
+      async prepare<T>(consume: () => T): Promise<T> {
+        assertCurrent();
+        return consume();
+      },
+      bind(task: TaskRecord, eventAt: number) {
+        assertCurrent();
+        const expected = { ...task };
+        return async (): Promise<TaskRecord | null> => {
+          assertCurrent();
+          const current = storage.tasks.get(expected.taskId);
+          if (!current || !sameTaskRunScope(current, expected)) {
+            return null;
+          }
+          const delivery = storage.delivery.get(expected.taskId);
+          storage.upsertDelivery({
+            taskId: expected.taskId,
+            requesterOrigin: delivery?.requesterOrigin,
+            lastNotifiedEventAt: Math.max(delivery?.lastNotifiedEventAt ?? 0, eventAt),
+          });
+          assertCurrent();
+          return storage.update(expected.taskId, { lastEventAt: Date.now() });
+        };
+      },
+    }),
+  };
+});
 vi.mock("./task-flow-runtime-internal.js", () => ({ getTaskFlowById: () => undefined }));
 vi.mock("./task-registry-runtime-loaders.js", () => ({
   loadTaskRegistryDeliveryRuntime: async () => ({ sendMessage: storage.send }),

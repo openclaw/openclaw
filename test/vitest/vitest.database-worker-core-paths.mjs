@@ -54,6 +54,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/conversation-binding.sqlite.test.ts",
   "src/state/backup-run-records.test.ts",
   "src/tasks/task-registry.async-restore.test.ts",
+  "src/tasks/task-registry-state-notification.test.ts",
   "src/tasks/task-registry-flow-sync.test.ts",
   "src/tasks/task-registry-live-flow.worker.test.ts",
   "src/tasks/task-registry.restore-ownership.test.ts",

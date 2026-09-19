@@ -4,7 +4,8 @@ import * as sqlitePostCommit from "../infra/sqlite-post-commit.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
-import { updateTask, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { commitTaskDeliveryFixture } from "./task-registry-delivery.test-support.js";
+import { updateTask } from "./task-registry-mutation.js";
 import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
 import { deleteTaskRecordById, resetTaskRegistryForTests } from "./task-registry-query.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
@@ -292,7 +293,7 @@ describe("worker publication scope", () => {
         if (change === "no-op refresh") {
           withTaskRegistryMutation(() => {});
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else if (change === "unrelated row") {
           expect(updateTask(other.taskId, { task: "Other changed" })).not.toBeNull();
         } else if (change === "row ABA") {
@@ -427,7 +428,7 @@ describe("worker publication during canonical reads", () => {
         if (change === "activity") {
           emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task }));
         } else if (change === "delivery") {
-          upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 42 });
+          commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 42 });
         } else {
           const database = createProjectionTransactionDatabase();
           const lookup = vi
