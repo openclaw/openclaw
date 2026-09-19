@@ -159,6 +159,32 @@ export class DevicesDialogController {
     );
   }
 
+  /**
+   * Switching the exec approvals target throws away an unsaved policy draft, so
+   * it confirms through the same single-dialog slot as the destructive actions:
+   * a reconnect aborts it and it cannot stack on another prompt. There is no
+   * request to place, so the post-await revalidation is only that this dialog is
+   * still the page's current one — a false result must leave every field alone.
+   */
+  async confirmExecApprovalsDiscard(): Promise<boolean> {
+    if (this.host.pendingDialog()) {
+      return false;
+    }
+    const controller = new AbortController();
+    this.host.setPendingDialog(controller);
+    const confirmed = await showConfirmDialog({
+      title: t("devices.execApprovals.discardPromptTitle"),
+      message: t("devices.execApprovals.discardPromptBody"),
+      confirmLabel: t("devices.execApprovals.discardConfirm"),
+      danger: true,
+      signal: controller.signal,
+    });
+    if (this.host.pendingDialog() === controller) {
+      this.host.setPendingDialog(null);
+    }
+    return confirmed && !controller.signal.aborted;
+  }
+
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
   // scope and current authority are revalidated before the operation runs.

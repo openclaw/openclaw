@@ -321,6 +321,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
           aria-label=${t("devices.execApprovals.host")}
           .value=${live(state.target)}
           ?disabled=${state.disabled}
+          .value=${live(state.target)}
           @change=${(event: Event) => {
             const target = event.target as HTMLSelectElement;
             const value = target.value;
@@ -352,6 +353,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
                 aria-label=${t("devices.execApprovals.node")}
                 .value=${live(nodeValue)}
                 ?disabled=${state.disabled || !hasNodes}
+                .value=${live(nodeValue)}
                 @change=${(event: Event) => {
                   const target = event.target as HTMLSelectElement;
                   const value = target.value.trim();

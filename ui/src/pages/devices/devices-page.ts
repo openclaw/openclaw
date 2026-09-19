@@ -486,6 +486,29 @@ class DevicesPage extends OpenClawLightDomElement {
         }));
   }
 
+  // Retargeting discards the draft for the target being left, so a dirty form
+  // asks first. Cancelling restores nothing because nothing is written until the
+  // operator confirms: the target, the form, the scope and the dirty flag are
+  // still the ones the selector was rendered from, and the re-render puts the
+  // selector itself back on that target.
+  private async changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
+    const devices = this.pageState;
+    if (devices.execApprovalsDirty && !(await this.dialogs.confirmExecApprovalsDiscard())) {
+      this.requestUpdate();
+      return;
+    }
+    if (this.pageState !== devices) {
+      return;
+    }
+    this.execApprovalsTarget = kind;
+    this.execApprovalsTargetNodeId = nodeId;
+    devices.execApprovalsSnapshot = null;
+    devices.execApprovalsForm = null;
+    devices.execApprovalsDirty = false;
+    devices.execApprovalsSelectedAgent = null;
+    this.requestUpdate();
+  }
+
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
     return this.execApprovalsTarget === "node" && this.execApprovalsTargetNodeId
       ? { kind: "node", nodeId: this.execApprovalsTargetNodeId }
@@ -606,15 +629,8 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.context.runtimeConfig.save();
             }
           },
-          onExecApprovalsTargetChange: (kind, nodeId) => {
-            this.execApprovalsTarget = kind;
-            this.execApprovalsTargetNodeId = nodeId;
-            devices.execApprovalsSnapshot = null;
-            devices.execApprovalsForm = null;
-            devices.execApprovalsDirty = false;
-            devices.execApprovalsSelectedAgent = null;
-            this.requestUpdate();
-          },
+          onExecApprovalsTargetChange: (kind, nodeId) =>
+            void this.changeExecApprovalsTarget(kind, nodeId),
           onExecApprovalsSelectAgent: (agentId) => {
             devices.execApprovalsSelectedAgent = agentId;
             this.requestUpdate();
