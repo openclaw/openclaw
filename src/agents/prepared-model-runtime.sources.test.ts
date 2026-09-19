@@ -339,12 +339,14 @@ describe("prepared catalog source composition", () => {
             apiKey: "system-agent-key",
             headers: {
               Authorization: "Bearer system-agent",
+              Cookie: "provider-session=system-agent",
               "X-Catalog-Route": "keep-provider-route",
             },
             models: [
               {
                 id: "inherited-model",
                 headers: {
+                  cookie: "model-session=system-agent",
                   "X-Auth-Token": "system-agent-token",
                   "X-Model-Route": "keep-model-route",
                 },

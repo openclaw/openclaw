@@ -56,6 +56,7 @@ describe("PR #58373 secondary catalog runtime proof", () => {
       const providerRequests: Array<{
         authorization: string | undefined;
         catalogRoute: string | undefined;
+        cookie: string | undefined;
         method: string;
         modelRoute: string | undefined;
         url: string;
@@ -97,6 +98,7 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           providerRequests.push({
             authorization: request.headers.authorization,
             catalogRoute: request.headers["x-catalog-route"] as string | undefined,
+            cookie: request.headers.cookie,
             method: request.method ?? "",
             modelRoute: request.headers["x-model-route"] as string | undefined,
             url: request.url ?? "",
@@ -125,12 +127,14 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           ...catalogProviderBase,
           headers: {
             Authorization: "Bearer system-agent-catalog-key",
+            Cookie: "provider-session=system-agent",
             "X-Catalog-Route": "provider-route",
           },
           models: catalogProviderBase.models.map((model) =>
             Object.assign({}, model, {
               headers: {
                 Authorization: "Bearer system-agent-model-key",
+                cookie: "model-session=system-agent",
                 "X-Model-Route": "model-route",
               },
             }),
@@ -239,27 +243,19 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           {
             authorization: "Bearer secondary-account-b",
             catalogRoute: "provider-route",
+            cookie: undefined,
             method: "POST",
             modelRoute: "model-route",
             url: "/v1/responses",
           },
         ]);
 
-        await disconnectGatewayClient(gateway.client);
-        await gateway.server.close();
         saveSecondaryAuth("secondary-account-c");
-        gateway = await startGatewayWithClient({
-          cfg: updatedConfig,
-          configPath,
-          token: TOKEN,
-          clientDisplayName: "pr58373-proof-reassigned",
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-        });
-        await gateway.server.startupSettled;
         await runSecondaryTurn("pr58373-secondary-account-c");
         expect(providerRequests[1]).toEqual({
           authorization: "Bearer secondary-account-c",
           catalogRoute: "provider-route",
+          cookie: undefined,
           method: "POST",
           modelRoute: "model-route",
           url: "/v1/responses",
