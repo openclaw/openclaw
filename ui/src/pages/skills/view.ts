@@ -192,7 +192,11 @@ export function renderSkills(props: SkillsProps) {
                         ? t("skillsPage.disconnected")
                         : t("skillsPage.empty"),
                     )
-                  : groups.map((group) => renderSkillGroup(group, props))
+                  : repeat(
+                      groups,
+                      (group) => group.id,
+                      (group) => renderSkillGroup(group, props),
+                    )
             }
           `,
       { wide: true, carapace: props.surface === "discovery" },
