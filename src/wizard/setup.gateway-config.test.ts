@@ -192,6 +192,45 @@ describe("configureGatewayForSetup", () => {
     },
   );
 
+  it.each(["quickstart", "advanced"] as const)(
+    "%s preserves an existing trusted-proxy config without an auth prompt",
+    async (flow) => {
+      // Rerunning onboarding must not downgrade an identity-bearing gateway to
+      // token auth, and must not mint a token beside the kept trustedProxy block.
+      const baseConfig = {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-user"],
+            },
+          },
+          trustedProxies: ["10.0.0.5"],
+        },
+      };
+      const prompter = createPrompter({ selectQueue: [], textQueue: [] });
+      const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, () =>
+        configureGatewayForSetup({
+          flow,
+          baseConfig,
+          nextConfig: baseConfig,
+          localPort: 18789,
+          quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+          prompter,
+          runtime: createRuntime(),
+        }),
+      );
+      expect(result.nextConfig.gateway?.auth).toEqual(baseConfig.gateway.auth);
+      expect(result.nextConfig.gateway?.auth?.token).toBeUndefined();
+      expect(result.nextConfig.gateway?.trustedProxies).toEqual(["10.0.0.5"]);
+      expect(prompter.select).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway access protection" }),
+      );
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
+
   it("seeds advanced gateway prompts from explicit classic options", async () => {
     const gatewayDefaults = resolveQuickstartGatewayDefaults(
       {},

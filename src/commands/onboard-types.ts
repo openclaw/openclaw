@@ -5,6 +5,7 @@
  * interactive and non-interactive setup.
  */
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
@@ -21,7 +22,13 @@ export type AuthChoice = BuiltInAuthChoice | (string & {});
 
 /** Auth choice groups are plugin-owned ids plus the core `custom` bucket. */
 export type AuthChoiceGroupId = "custom" | (string & {});
-export type GatewayAuthChoice = "token" | "password";
+/**
+ * Modes onboarding can act on. The wizard only mints a token or collects a
+ * password; every other mode the operator already configured is carried through
+ * the setup write untouched, so this stays aligned with the config owner
+ * `GatewayAuthMode` rather than a two-value subset that silently drops it.
+ */
+export type GatewayAuthChoice = GatewayAuthMode;
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
 export type TailscaleMode = "off" | "serve" | "funnel";
