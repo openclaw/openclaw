@@ -394,7 +394,7 @@ it.each(["completed", "interrupted"] as const)(
         );
         const nextUser = text(humanMessages[userIndex]?.content);
         expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
-        expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
+        expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeLessThan(userIndex);
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
           .messages.findLast(

@@ -14,6 +14,7 @@ import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { isSelfHostedProviderId } from "../../model-provider-local.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
@@ -33,7 +34,6 @@ const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 // the existing model fallback chain to try the next configured candidate.
 const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 const LOCAL_PROVIDER_AUTH_MARKERS = new Set(["custom-local", "ollama-local"]);
-const SELF_HOSTED_PROVIDER_ID_PREFIXES = ["ollama", "lmstudio", "vllm", "sglang", "llama-cpp"];
 
 type IdleTimeoutProviderConfig = {
   apiKey?: unknown;
@@ -122,16 +122,6 @@ function isBareProviderHostname(hostname: string): boolean {
     return false;
   }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(hostname);
-}
-
-function isSelfHostedProviderId(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  if (!normalized || normalized === "ollama-cloud") {
-    return false;
-  }
-  return SELF_HOSTED_PROVIDER_ID_PREFIXES.some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
-  );
 }
 
 function findConfiguredProviderConfig(

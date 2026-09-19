@@ -406,7 +406,7 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(providerText(lastUser?.content).endsWith(approved)).toBe(true);
           expect(providerText(lastUser?.content).split(approved)).toHaveLength(2);
           expect(foregroundMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
-          expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(
+          expect(foregroundMessages.findIndex(isModelRuntimeContextCarrier)).toBeLessThan(
             userIndex,
           );
           expect(foregroundContexts[0]!.at(-1)).toMatchObject({
