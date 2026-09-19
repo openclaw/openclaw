@@ -275,7 +275,10 @@ export async function waitForCompletedDirectCronDelivery(params: {
   signal?: AbortSignal;
 }): Promise<boolean> {
   // SQLite producer leases fence cross-process sends for at most 30 seconds.
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // Poll through the full lease window: 121 checks at 250ms spacing reach the
+  // 30s boundary, so a send that completes exactly when its lease expires is
+  // still observed instead of being abandoned one check early.
+  for (let attempt = 0; attempt < 121; attempt += 1) {
     const status = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, params.id);
     if (status === "completed") {
       return true;
@@ -297,7 +300,7 @@ export async function waitForCompletedDirectCronDelivery(params: {
     ) {
       return false;
     }
-    if (attempt < 119) {
+    if (attempt < 120) {
       await sleepWithAbort(250, params.signal);
     }
   }
