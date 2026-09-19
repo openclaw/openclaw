@@ -60,6 +60,25 @@ describe("goal elapsed presentation", () => {
     expect(view.elapsed()).toBe(elapsed);
   });
 
+  it("keeps unchanged elapsed text stable across chat renders while retaining live ticks", () => {
+    const view = mountGoal(goal);
+    const label = view.container.querySelector(".agent-chat__goal-elapsed")!;
+    const observer = new MutationObserver(() => {});
+    observer.observe(label, { childList: true, characterData: true, subtree: true });
+    try {
+      for (let renderIndex = 0; renderIndex < 5; renderIndex++) {
+        vi.advanceTimersByTime(100);
+        view.draw(goal);
+      }
+      expect(observer.takeRecords()).toHaveLength(0);
+      vi.advanceTimersByTime(1_000);
+      expect(view.elapsed()).toBe("2m 01s");
+      expect(observer.takeRecords().length).toBeGreaterThan(0);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
   it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
     const view = mountGoal(goal);
     vi.advanceTimersByTime(1_000);

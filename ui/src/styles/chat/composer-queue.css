@@ -129,7 +129,10 @@
 }
 
 .chat-queue__item {
-  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+  --chat-queue-row-surface: var(
+    --chat-queue-row-base,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
 
   position: relative;
   display: grid;
@@ -185,13 +188,16 @@
     --chat-queue-row-surface: color-mix(
       in srgb,
       var(--text-strong) 3%,
-      var(--composer-attached-surface, var(--chat-composer-surface))
+      var(--chat-queue-row-base, var(--composer-attached-surface, var(--chat-composer-surface)))
     );
   }
 }
 
 .chat-queue__item--steered {
-  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+  --chat-queue-row-surface: var(
+    --chat-queue-row-base,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
@@ -200,7 +206,7 @@
   --chat-queue-row-surface: color-mix(
     in srgb,
     var(--text-strong) 4%,
-    var(--composer-attached-surface, var(--chat-composer-surface))
+    var(--chat-queue-row-base, var(--composer-attached-surface, var(--chat-composer-surface)))
   );
 }
 
@@ -274,7 +280,7 @@
   --chat-queue-row-surface: color-mix(
     in srgb,
     var(--danger) 8%,
-    var(--composer-attached-surface, var(--chat-composer-surface))
+    var(--chat-queue-row-base, var(--composer-attached-surface, var(--chat-composer-surface)))
   );
 }
 

@@ -1,0 +1,179 @@
+/* Keep the existing opaque surfaces when backdrop filtering is unavailable. */
+@supports (backdrop-filter: blur(6px)) or (-webkit-backdrop-filter: blur(6px)) {
+  :root
+    .agent-chat__composer-shell
+    :is(
+      .session-progress-card--composer,
+      .agent-chat__goal-float .agent-chat__goal,
+      .chat-queue,
+      .agent-chat__composer-overlay .chat-composer-neighbor-card,
+      .agent-chat__composer-overlay .agent-chat__composer-errors,
+      .agent-chat__composer-overlay .agent-chat__talk-status.callout,
+      .agent-chat__composer-overlay .compaction-indicator,
+      .agent-chat__composer-overlay .agent-chat__run-status,
+      .agent-chat__disabled-banner:not(.agent-chat__disabled-banner--replacement),
+      .agent-chat__question-dock .chat-question-panel
+    ) {
+    --composer-overlay-muted: color-mix(in srgb, var(--text-strong) 45%, var(--muted));
+    --composer-overlay-surface: color-mix(
+      in srgb,
+      var(--composer-overlay-base, var(--composer-attached-surface)) 84%,
+      transparent
+    );
+
+    background-color: var(--composer-overlay-surface);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+
+  .agent-chat__composer-overlay,
+  .agent-chat__question-dock {
+    --composer-overlay-base: var(--chat-composer-surface);
+  }
+
+  .agent-chat__composer-overlay .compaction-indicator {
+    --composer-overlay-base: var(--panel-strong);
+  }
+
+  .agent-chat__composer-overlay .compaction-indicator--fallback {
+    color: color-mix(in srgb, var(--warn-strong) 35%, var(--text-strong));
+  }
+
+  .agent-chat__composer-overlay .compaction-indicator--fallback-cleared {
+    color: color-mix(in srgb, var(--ok) 35%, var(--text-strong));
+  }
+
+  .agent-chat__composer-overlay .agent-chat__talk-status.callout {
+    --composer-overlay-base: var(--secondary);
+  }
+
+  .agent-chat__composer-shell > .agent-chat__disabled-banner {
+    --composer-overlay-base: var(--secondary);
+  }
+
+  .agent-chat__composer-shell > .agent-chat__disabled-banner.info {
+    --composer-overlay-base: var(--bg);
+  }
+
+  .agent-chat__composer-shell
+    > .agent-chat__disabled-banner.info
+    .agent-chat__disabled-banner-detail {
+    color: var(--composer-overlay-muted);
+  }
+
+  .agent-chat__composer-overlay .agent-chat__composer-errors {
+    --composer-overlay-base: color-mix(in srgb, var(--danger) 8%, var(--chat-composer-surface));
+  }
+
+  :root[data-theme-mode="light"] .agent-chat__composer-overlay .agent-chat__composer-errors {
+    --composer-overlay-base: color-mix(in srgb, var(--danger) 14%, var(--chat-composer-surface));
+  }
+
+  .agent-chat__goal-float :is(.agent-chat__goal--budget_limited, .agent-chat__goal--usage_limited) {
+    --composer-overlay-base: color-mix(in srgb, var(--warn) 10%, var(--card));
+  }
+
+  .agent-chat__goal-float .agent-chat__goal--blocked {
+    --composer-overlay-base: color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
+  }
+
+  /* The queue paints the glass once. Rows only add their hover/error tint. */
+  .chat-queue {
+    --chat-queue-row-base: transparent;
+  }
+
+  .agent-chat__composer-shell .chat-queue__item--failed .chat-queue__badge,
+  .agent-chat__composer-shell .chat-queue__item--failed .chat-queue__error-text {
+    color: color-mix(in srgb, var(--danger) 35%, var(--text-strong));
+  }
+
+  .agent-chat__composer-shell .chat-queue__steer,
+  .agent-chat__composer-shell .chat-queue__item--failed .chat-queue__retry,
+  .agent-chat__composer-shell .chat-queue__item:hover .chat-queue__steer {
+    color: color-mix(in srgb, var(--accent) 35%, var(--text-strong));
+  }
+
+  /* Secondary text needs a stronger foreground over light or dark attachments. */
+  .agent-chat__composer-shell
+    :is(
+      .session-progress-card--composer .session-progress-card__heading-actions,
+      .session-progress-card--composer
+        .session-progress-card__summary-count:not(
+          [data-outcome="failed"],
+          [data-outcome="timeout"]
+        ),
+      .session-progress-card--composer
+        .session-progress-card__step--completed
+        .session-progress-card__step-text,
+      .session-progress-card--composer
+        .session-progress-card__step--pending
+        .session-progress-card__step-text,
+      .agent-chat__goal-float .agent-chat__goal-objective,
+      .agent-chat__goal-float .agent-chat__goal-elapsed,
+      .agent-chat__goal-float .agent-chat__goal-detail-usage,
+      .agent-chat__goal-float .agent-chat__goal-detail-duration,
+      .agent-chat__goal-float .agent-chat__goal-detail-note,
+      .agent-chat__goal-float .agent-chat__goal-detail-meta,
+      .agent-chat__composer-overlay .chat-composer-neighbor-card__copy span,
+      .chat-question-panel__progress,
+      .chat-question-panel__skip
+    ) {
+    color: var(--composer-overlay-muted);
+  }
+
+  .agent-chat__composer-shell
+    .agent-chat__goal-float
+    :is(
+      .agent-chat__goal--blocked,
+      .agent-chat__goal--budget_limited,
+      .agent-chat__goal--usage_limited
+    )
+    :is(
+      .agent-chat__goal-label,
+      .agent-chat__goal-objective,
+      .agent-chat__goal-elapsed,
+      .agent-chat__goal-detail-objective,
+      .agent-chat__goal-detail-note,
+      .agent-chat__goal-detail-meta,
+      .agent-chat__goal-detail-usage,
+      .agent-chat__goal-detail-duration
+    ) {
+    color: color-mix(in srgb, var(--text-strong) 65%, var(--muted));
+  }
+
+  .agent-chat__goal-float
+    :is(
+      .agent-chat__goal--blocked,
+      .agent-chat__goal--budget_limited,
+      .agent-chat__goal--usage_limited
+    )
+    .agent-chat__goal-action-label {
+    color: var(--text-strong);
+  }
+
+  .agent-chat__composer-shell .agent-chat__composer-overlay .chat-error,
+  .agent-chat__composer-shell
+    .agent-chat__composer-overlay
+    .chat-composer-neighbor-card--danger
+    strong,
+  .agent-chat__composer-shell
+    .session-progress-card--composer
+    .session-progress-card__summary
+    .session-progress-card__summary-count:is([data-outcome="failed"], [data-outcome="timeout"]) {
+    color: color-mix(in srgb, var(--danger) 35%, var(--text-strong));
+  }
+
+  .agent-chat__composer-shell
+    .agent-chat__composer-overlay
+    .chat-composer-neighbor-card--warn
+    strong {
+    color: color-mix(in srgb, var(--warn) 35%, var(--text-strong));
+  }
+
+  @media (max-width: 768px),
+    (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+    .agent-chat__composer-shell.agent-chat__composer-shell--question-composer {
+      background: transparent;
+    }
+  }
+}

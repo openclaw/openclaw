@@ -1465,13 +1465,30 @@ openclaw-chat-video-player {
   outline: none;
 }
 
-/* Bare composers need this fade to cover transcript underlap. A progress card owns
-   that boundary itself; painting behind it exposes a veil above the card. */
+/* Attached cards own the transcript boundary; a fade behind them hides their backdrop. */
 .chat-main__conversation
-  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+  > .agent-chat__composer-shell:not(
+    :has(
+      > :is(
+        .agent-chat__progress-float,
+        .chat-queue,
+        .agent-chat__goal-float,
+        .agent-chat__question-dock
+      )
+    )
+  )::before,
 .chat-main__conversation
   > openclaw-plugin-view[data-plugin-composer]
-  .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+  .agent-chat__composer-shell:not(
+    :has(
+      > :is(
+        .agent-chat__progress-float,
+        .chat-queue,
+        .agent-chat__goal-float,
+        .agent-chat__question-dock
+      )
+    )
+  )::before {
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(

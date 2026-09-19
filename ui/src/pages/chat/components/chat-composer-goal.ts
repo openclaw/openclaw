@@ -40,7 +40,13 @@ function createGoalElapsedRef(goal: SessionGoal) {
     if (!(element instanceof HTMLElement)) {
       return;
     }
-    element.textContent = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
+    const updateElapsed = () => {
+      const elapsed = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
+      if (element.textContent !== elapsed) {
+        element.textContent = elapsed;
+      }
+    };
+    updateElapsed();
     if (goal.status !== "active") {
       return;
     }
@@ -51,7 +57,7 @@ function createGoalElapsedRef(goal: SessionGoal) {
         clearGoalElapsedTimer(element);
         return;
       }
-      element.textContent = formatGoalElapsed(goalElapsedMs(goal, Date.now()));
+      updateElapsed();
     }, 1000);
     goalElapsedTimers.set(element, timer);
   };

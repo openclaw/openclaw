@@ -1,4 +1,5 @@
 import "../../../styles/chat/composer-surface.css";
+import "../../../styles/chat/composer-overlay.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
