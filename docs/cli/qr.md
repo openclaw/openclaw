@@ -31,6 +31,30 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+## Connect your phone without editing settings
+
+If the Gateway is only reachable on this computer, run `openclaw qr` in an
+interactive terminal. It offers **Same Wi-Fi or local network** and **Tailscale**,
+checks that an address is available, and explains who will be able to connect.
+Confirm to save the network settings and restart the Gateway. Once the phone
+address is ready, the command continues with the QR code. Existing authentication
+and unrelated settings are preserved.
+
+Local-network access listens on all interfaces: use a trusted network and keep
+your firewall enabled. Plaintext LAN pairing still grants limited access.
+Tailscale uses private Serve access, not public Funnel, and requires Tailscale on
+both devices. Cancel or select **Not now** before confirmation to leave settings
+and the running Gateway unchanged.
+
+If saving succeeds but restart or readiness fails, the command explains how to
+finish and does not issue a setup code. The saved settings remain in place; run
+`openclaw gateway status` or `openclaw gateway restart`, then `openclaw qr` again.
+
+Piped/noninteractive runs, `--json`, `--setup-code-only`, `--remote`, and explicit
+URL or credential overrides never start this setup flow or change network
+settings. Use an interactive `openclaw qr` first, or supply an already reachable
+address with `--url`.
+
 ## Options
 
 - `--remote`: prefer `gateway.remote.url`; falls back to `gateway.tailscale.mode=serve|funnel` if that URL is unset. Ignores `device-pair` plugin `publicUrl`.

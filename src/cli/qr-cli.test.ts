@@ -1,4 +1,5 @@
 // QR CLI tests cover QR command registration and terminal output behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
@@ -7,10 +8,15 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../shared/device-bootstrap-profile.js";
-import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
+import {
+  createCliRuntimeCapture,
+  createCliTtyMock,
+  mockRuntimeModule,
+} from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
+  setupQrPhoneAccess: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -34,6 +40,7 @@ vi.doMock("../runtime.js", async () => {
     runtime,
   );
 });
+vi.mock("./qr-setup.js", () => ({ setupQrPhoneAccess: mocks.setupQrPhoneAccess }));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
@@ -120,6 +127,7 @@ function createLocalGatewayEnvPasswordRefAuth(secretId: string) {
 }
 
 describe("registerQrCli", () => {
+  const tty = createCliTtyMock();
   function createProgram() {
     const program = new Command();
     registerQrCli(program);
@@ -185,6 +193,7 @@ describe("registerQrCli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    tty.set(false);
     resetRuntimeCapture();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
@@ -194,6 +203,7 @@ describe("registerQrCli", () => {
   });
 
   afterEach(() => {
+    tty.restore();
     vi.unstubAllEnvs();
   });
 
@@ -526,7 +536,70 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("exits with error when gateway config is not pairable", async () => {
+  it.each([
+    { args: [], profile: PAIRING_SETUP_BOOTSTRAP_PROFILE },
+    { args: ["--limited"], profile: PAIRING_SETUP_BOOTSTRAP_PROFILE },
+    { args: ["--voice-node"], profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE },
+  ])(
+    "guides interactive loopback recovery and continues QR output ($args)",
+    async ({ args, profile }) => {
+      tty.set(true);
+      loadConfig.mockReturnValue({
+        gateway: { bind: "loopback", auth: { mode: "token", token: "tok" } },
+      });
+      mocks.setupQrPhoneAccess.mockResolvedValue({
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.1.8",
+          auth: { mode: "token", token: "tok" },
+        },
+      });
+      await runQr(args);
+      expect(mocks.setupQrPhoneAccess).toHaveBeenCalledExactlyOnceWith();
+      expect(renderTerminal).toHaveBeenCalledOnce();
+      expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          profile,
+        }),
+      );
+      expect(issueDevicePairSetupBootstrapToken.mock.invocationCallOrder[0]).toBeGreaterThan(
+        expectDefined(mocks.setupQrPhoneAccess.mock.invocationCallOrder[0], "recovery call"),
+      );
+    },
+  );
+
+  it.each([
+    ["--json"],
+    ["--setup-code-only"],
+    ["--json", "--setup-code-only"],
+    ["--token", "override-token"],
+    ["--password", "override-password"],
+  ])("does not prompt or mutate for machine output or overrides (%j)", async (...args) => {
+    tty.set(true);
+    loadConfig.mockReturnValue({
+      gateway: { bind: "loopback", auth: { mode: "token", token: "tok" } },
+    });
+    await expectQrExit(args);
+    expect(mocks.setupQrPhoneAccess).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
+    expect(runtimeLog).not.toHaveBeenCalled();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("never prints a QR when recovery is cancelled or fails", async () => {
+    tty.set(true);
+    loadConfig.mockReturnValue({
+      gateway: { bind: "loopback", auth: { mode: "token", token: "tok" } },
+    });
+    mocks.setupQrPhoneAccess.mockRejectedValueOnce(
+      new Error("Phone setup cancelled. Nothing changed."),
+    );
+    await expectQrExit([]);
+    expect(renderTerminal).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
+  });
+
+  it("exits with actionable guidance when stdin is not interactive", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "loopback",
@@ -538,6 +611,9 @@ describe("registerQrCli", () => {
 
     const output = runtime.error.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("only bound to loopback");
+    expect(output).toContain("interactive terminal");
+    expect(mocks.setupQrPhoneAccess).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("uses gateway.remote.url when --remote is set (ignores device-pair publicUrl)", async () => {

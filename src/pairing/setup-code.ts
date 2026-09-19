@@ -95,12 +95,14 @@ type PairingSetupResolution =
   | {
       ok: false;
       error: string;
+      reason?: "loopback";
     };
 
 type ResolveUrlResult = {
   url?: string;
   source?: string;
   error?: string;
+  reason?: "loopback";
 };
 
 function describeSecureMobilePairingFix(source?: string): string {
@@ -406,8 +408,9 @@ export async function resolvePairingGatewayUrl(
   }
 
   return {
+    reason: "loopback",
     error:
-      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
+      "Your Gateway is only bound to loopback, so your phone cannot reach it. Run openclaw qr in an interactive terminal to set up phone access, or use --url with an existing secure Gateway address.",
   };
 }
 
@@ -523,7 +526,11 @@ export async function resolvePairingSetupFromConfig(
   });
 
   if (!urlResult.url) {
-    return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
+    return {
+      ok: false,
+      error: urlResult.error ?? "Gateway URL unavailable.",
+      ...(urlResult.reason ? { reason: urlResult.reason } : {}),
+    };
   }
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
