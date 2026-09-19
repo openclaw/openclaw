@@ -116,6 +116,14 @@ actor GatewayConnection: Observable {
             hasher.combine(self.socketGeneration)
             hasher.combine(self.endpointRevision)
         }
+
+        func matches(_ endpoint: EndpointSnapshot) -> Bool {
+            self.endpointRevision == endpoint.revision && self.route.matches(endpoint)
+        }
+
+        func authBinding() async -> GatewayAuthBinding? {
+            await self.client.authBinding(ifCurrentConnectionGeneration: self.socketGeneration)
+        }
     }
 
     struct PushDelivery: Sendable {
@@ -182,6 +190,7 @@ actor GatewayConnection: Observable {
         case devicePairList = "device.pair.list"
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
+        case deviceTokenRotate = "device.token.rotate"
         case execApprovalList = "exec.approval.list"
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"

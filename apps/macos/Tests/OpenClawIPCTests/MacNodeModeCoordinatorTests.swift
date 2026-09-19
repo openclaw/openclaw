@@ -202,6 +202,130 @@ struct MacNodeModeCoordinatorDeviceAuthTests {
         #expect(status.diagnostic == "The gateway received the connection request, "
             + "but this device must be approved first.")
     }
+
+    @Test func `only structured missing auth on an owner bound secretless endpoint triggers repair`() throws {
+        let endpoint = try GatewayConnection.EndpointSnapshot(
+            config: (
+                url: #require(URL(string: "wss://gateway.example.invalid")),
+                token: nil,
+                password: nil),
+            routeAuthority: nil,
+            deviceAuthGatewayID: "gateway-a")
+        let missing = GatewayConnectAuthError(
+            message: "gateway token required",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMissing.rawValue,
+            canRetryWithDeviceToken: false)
+        let mismatch = GatewayConnectAuthError(
+            message: "gateway token mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        #expect(MacNodeModeCoordinator.shouldAttemptNodeCredentialRepair(
+            after: missing,
+            endpoint: endpoint))
+        #expect(!MacNodeModeCoordinator.shouldAttemptNodeCredentialRepair(
+            after: mismatch,
+            endpoint: endpoint))
+        #expect(!MacNodeModeCoordinator.shouldAttemptNodeCredentialRepair(
+            after: missing,
+            endpoint: GatewayConnection.EndpointSnapshot(
+                config: (endpoint.config.url, "explicit-token", nil),
+                routeAuthority: nil,
+                deviceAuthGatewayID: "gateway-a")))
+        #expect(!MacNodeModeCoordinator.shouldAttemptNodeCredentialRepair(
+            after: missing,
+            endpoint: GatewayConnection.EndpointSnapshot(
+                config: (endpoint.config.url, nil, "explicit-password"),
+                routeAuthority: nil,
+                deviceAuthGatewayID: "gateway-a")))
+        #expect(!MacNodeModeCoordinator.shouldAttemptNodeCredentialRepair(
+            after: missing,
+            endpoint: GatewayConnection.EndpointSnapshot(
+                config: endpoint.config,
+                routeAuthority: nil,
+                deviceAuthGatewayID: nil)))
+    }
+
+    @Test func `credential repair budget allows one attempt per endpoint device and manual reset`() {
+        let first = MacNodeCredentialRepairKey(
+            endpointGeneration: 4,
+            gatewayID: "gateway-a",
+            deviceID: "device-a")
+        let replacement = MacNodeCredentialRepairKey(
+            endpointGeneration: 5,
+            gatewayID: "gateway-a",
+            deviceID: "device-a")
+        var budget = MacNodeCredentialRepairBudget()
+
+        let admittedFirst = budget.claim(first)
+        let rejectedDuplicate = budget.claim(first)
+        let admittedReplacement = budget.claim(replacement)
+        #expect(admittedFirst)
+        #expect(!rejectedDuplicate)
+        #expect(admittedReplacement)
+        budget.reset()
+        let admittedAfterReset = budget.claim(replacement)
+        #expect(admittedAfterReset)
+    }
+
+    @Test func `repair failure survives matching disconnect and exhausted retry`() throws {
+        let key = MacNodeCredentialRepairKey(
+            endpointGeneration: 4,
+            gatewayID: "gateway-a",
+            deviceID: "device-a")
+        var status = MacNodeCredentialRepairStatus()
+
+        let initial = status.recordFailure(
+            key: key,
+            diagnostic: "The Gateway did not reissue this device's node credential.")
+        let disconnected = status.stateAfterDisconnect(
+            attemptKey: key,
+            attemptGeneration: 4,
+            currentGeneration: 4,
+            reason: "gateway token required",
+            diagnostic: nil)
+        let exhausted = status.stateAfterExhaustedAttempt(for: key)
+
+        #expect(initial.recoveryAction == .repairCredential)
+        #expect(disconnected == initial)
+        #expect(exhausted == initial)
+        #expect(try #require(disconnected?.operatorStatusLine).label == "Mac node needs repair")
+    }
+
+    @Test func `replacement endpoint and successful repair retire stale repair presentation`() {
+        let failed = MacNodeCredentialRepairKey(
+            endpointGeneration: 4,
+            gatewayID: "gateway-a",
+            deviceID: "device-a")
+        let replacement = MacNodeCredentialRepairKey(
+            endpointGeneration: 5,
+            gatewayID: "gateway-b",
+            deviceID: "device-a")
+        var status = MacNodeCredentialRepairStatus()
+        _ = status.recordFailure(key: failed, diagnostic: "repair failed")
+
+        let staleDisconnect = status.stateAfterDisconnect(
+            attemptKey: failed,
+            attemptGeneration: 4,
+            currentGeneration: 5,
+            reason: "stale disconnect",
+            diagnostic: nil)
+        let replacementDisconnect = status.stateAfterDisconnect(
+            attemptKey: replacement,
+            attemptGeneration: 5,
+            currentGeneration: 5,
+            reason: "replacement unavailable",
+            diagnostic: "replacement diagnostic")
+
+        #expect(staleDisconnect == nil)
+        #expect(replacementDisconnect == .unavailable(
+            reason: "replacement unavailable",
+            diagnostic: "replacement diagnostic"))
+
+        status.clear()
+        #expect(status.failure == nil)
+        #expect(status.stateAfterExhaustedAttempt(for: failed) == nil)
+    }
 }
 
 struct MacNodeModeCoordinatorTests {
@@ -459,6 +583,12 @@ struct MacNodeModeCoordinatorTests {
         #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
         #expect(unavailable?.diagnostic == nil)
         #expect(unavailable?.isDegraded == false)
+
+        let repairable = MacNodeChannelState.unavailable(
+            reason: "Mac node needs repair",
+            recoveryAction: .repairCredential)
+        #expect(repairable.recoveryAction == .repairCredential)
+        #expect(repairable.operatorStatusLine?.label == "Mac node needs repair")
     }
 
     @Test func `worker stderr never becomes part of the operator status headline`() throws {
