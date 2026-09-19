@@ -52,7 +52,6 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
-import { sanitizeInheritedModelsJsonContents } from "./prepared-model-runtime.inherited-catalog.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
@@ -64,6 +63,7 @@ import {
   prepareWorkspacePluginRegistries,
   type PreparedInboundRegistryLoader,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { sanitizeInheritedModelsJsonContents } from "./prepared-model-runtime.inherited-catalog.js";
 import { hasSameOAuthProviderGeneration } from "./prepared-model-runtime.oauth-providers.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { createPreparedPluginGeneration } from "./prepared-model-runtime.plugin-generation.js";

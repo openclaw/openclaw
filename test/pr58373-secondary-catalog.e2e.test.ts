@@ -127,13 +127,14 @@ describe("PR #58373 secondary catalog runtime proof", () => {
             Authorization: "Bearer system-agent-catalog-key",
             "X-Catalog-Route": "provider-route",
           },
-          models: catalogProviderBase.models.map((model) => ({
-            ...model,
-            headers: {
-              Authorization: "Bearer system-agent-model-key",
-              "X-Model-Route": "model-route",
-            },
-          })),
+          models: catalogProviderBase.models.map((model) =>
+            Object.assign({}, model, {
+              headers: {
+                Authorization: "Bearer system-agent-model-key",
+                "X-Model-Route": "model-route",
+              },
+            }),
+          ),
         };
         await fs.writeFile(
           path.join(mainAgentDir, "models.json"),
