@@ -9,6 +9,8 @@ export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
 }[keyof Operations];
 
 export type SqliteWorkerBackend<Operations extends SqliteWorkerOperations> = {
+  /** Load command prerequisites before synchronous execution enters native work. */
+  prepare?(command: SqliteWorkerCommand<Operations>): void | Promise<void>;
   execute(command: SqliteWorkerCommand<Operations>): Operations[keyof Operations]["output"];
   /** Synchronously reject native state that requires retirement before releasing the operation. */
   assertSettled?(): void;
@@ -42,6 +44,7 @@ export type SqliteWorkerRequest = {
   workerStateLifecycle?: { deadlineNs: bigint };
   lifecyclePreparation?: MessagePort;
   operationAdmission?: MessagePort;
+  stateDatabasePath?: string;
 } & (
   | {
       type: "open";
@@ -49,6 +52,7 @@ export type SqliteWorkerRequest = {
       sourceLoaderUrl?: string;
       databasePath: string;
       existingIdentity?: string;
+      openAdmission?: "input" | "identity";
       input: Uint8Array;
     }
   | { type: "execute"; input: Uint8Array }
@@ -66,6 +70,7 @@ export type SqliteWorkerReply = {
   | {
       ok: false;
       retire?: true;
+      openOutcome?: "refused-before-agent-open";
       openNotEntered?: true;
       error: {
         name: string;

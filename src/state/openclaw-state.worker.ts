@@ -1,9 +1,6 @@
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import {
-  SQLITE_WORKER_PREPARE_COMMAND,
-  type SqliteWorkerPreparedBackend,
-} from "../infra/sqlite-worker-contract.js";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -14,10 +11,7 @@ import {
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
-import type {
-  OpenClawStateWorkerOperations,
-  OpenClawStateWorkerInspectionOperations,
-} from "./openclaw-state-worker-contract.js";
+import type { OpenClawStateWorkerBackend } from "./openclaw-state-worker-contract.js";
 
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
@@ -25,9 +19,7 @@ let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 export function createSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string },
-): SqliteWorkerPreparedBackend<
-  OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations
-> {
+): OpenClawStateWorkerBackend {
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
@@ -38,18 +30,14 @@ export function createSqliteWorkerBackend(
 export function openExistingSqliteWorkerBackend(
   _input: undefined,
   context: { databasePath: string },
-): SqliteWorkerPreparedBackend<
-  OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations
-> {
+): OpenClawStateWorkerBackend {
   return createSharedStateWorkerBackend(context);
 }
 
 function createSharedStateWorkerBackend(
   context: { databasePath: string },
   initialDatabase?: OpenClawStateDatabase,
-): SqliteWorkerPreparedBackend<
-  OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations
-> {
+): OpenClawStateWorkerBackend {
   let nativeDatabase = initialDatabase;
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;

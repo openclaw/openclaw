@@ -25,8 +25,12 @@ import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
-import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  openClawStateDatabaseCache,
+  requireOpenClawStateDatabaseIdentity,
+} from "./openclaw-state-db-cache.js";
 import type {
+  OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
@@ -97,6 +101,11 @@ export function assertAgentDatabaseMaintenanceAccess(database: DatabaseSync): vo
   maintenanceHandles.get(database)?.();
 }
 
+/** Maintenance retains its host-local mutation owner until that owner has a Worker facet. */
+export function hasAgentDatabaseMaintenanceAuthority(): boolean {
+  return maintenanceAuthority.getStore() !== undefined;
+}
+
 export function runWithAgentDatabaseMaintenanceAuthority<T>(
   authority: OpenClawStateLeaseContext,
   databasePath: string,
@@ -146,50 +155,64 @@ export function claimOpenClawAgentDatabaseLease(
   );
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   runOpenClawStateWriteTransaction(
-    (database) => {
-      ensureAgentDatabaseLeaseSchema(database.db);
-      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-      const maintenance = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("state_leases")
-          .select("owner")
-          .where("scope", "=", AGENT_DATABASE_MAINTENANCE_LEASE.scope)
-          .where("lease_key", "=", AGENT_DATABASE_MAINTENANCE_LEASE.key)
-          .where("expires_at", ">", Date.now()),
-      );
-      const authority = maintenanceAuthority.getStore();
-      if (maintenance || authority) {
-        // The updater's Doctor may use normal agent stores only inside its own
-        // live canonical-mutation scope. Plain maintenance and foreign tasks
-        // remain excluded; neither a saved owner nor a missing/expired row grants access.
-        if (
-          !authority ||
-          authority.databasePath !== path.resolve(database.path) ||
-          !prepareStateDatabaseCanonicalMutation(database.path)
-        ) {
-          throw new Error(
-            "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
-          );
-        }
-        authority.authority.assertOwnedInTransaction(database.db);
-      }
-      assertAgentDeletionPathFence(database, deletionFence);
-      executeSqliteQuerySync(
-        database.db,
-        db.insertInto("agent_database_leases").values({
-          lease_id: leaseId,
-          agent_id: agentId,
-          path: params.path,
-          owner_pid: process.pid,
-          owner_start_time: ownerStartTime,
-          opened_at: Date.now(),
-        }),
-      );
-    },
+    (database) =>
+      claimAgentDatabaseLeaseInDatabase(
+        database,
+        { leaseId, agentId, path: params.path, ownerPid: process.pid, ownerStartTime },
+        deletionFence,
+      ),
     { env: params.env },
   );
   return leaseId;
+}
+
+function claimAgentDatabaseLeaseInDatabase(
+  database: OpenClawStateDatabase,
+  owner: Pick<
+    OpenClawAgentDatabaseWorkerLeaseReceipt,
+    "leaseId" | "agentId" | "path" | "ownerPid" | "ownerStartTime"
+  >,
+  deletionFence: ReturnType<typeof prepareAgentDeletionPathFence>,
+): void {
+  ensureAgentDatabaseLeaseSchema(database.db);
+  const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+  const maintenance = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("state_leases")
+      .select("owner")
+      .where("scope", "=", AGENT_DATABASE_MAINTENANCE_LEASE.scope)
+      .where("lease_key", "=", AGENT_DATABASE_MAINTENANCE_LEASE.key)
+      .where("expires_at", ">", Date.now()),
+  );
+  const authority = maintenanceAuthority.getStore();
+  if (maintenance || authority) {
+    // The updater's Doctor may use normal agent stores only inside its own
+    // live canonical-mutation scope. Plain maintenance and foreign tasks
+    // remain excluded; neither a saved owner nor a missing/expired row grants access.
+    if (
+      !authority ||
+      authority.databasePath !== path.resolve(database.path) ||
+      !prepareStateDatabaseCanonicalMutation(database.path)
+    ) {
+      throw new Error(
+        "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
+      );
+    }
+    authority.authority.assertOwnedInTransaction(database.db);
+  }
+  assertAgentDeletionPathFence(database, deletionFence);
+  executeSqliteQuerySync(
+    database.db,
+    db.insertInto("agent_database_leases").values({
+      lease_id: owner.leaseId,
+      agent_id: owner.agentId,
+      path: owner.path,
+      owner_pid: owner.ownerPid,
+      owner_start_time: owner.ownerStartTime,
+      opened_at: Date.now(),
+    }),
+  );
 }
 
 export function releaseOpenClawAgentDatabaseLease(
@@ -258,6 +281,56 @@ export type OpenClawAgentDatabaseWorkerLeaseReceipt = {
   sharedStateIdentity: string;
 };
 
+/** Preparation grants no access; claim repeats admission on the captured shared owner. */
+export function prepareOpenClawAgentDatabaseWorkerLease(
+  params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  sharedDatabase: OpenClawStateDatabase,
+  leaseId: string,
+): { receipt: OpenClawAgentDatabaseWorkerLeaseReceipt; claim(): string } {
+  const database = {
+    db: sharedDatabase.db,
+    path: sharedDatabase.path,
+    walMaintenance: sharedDatabase.walMaintenance,
+  };
+  const identity = requireOpenClawStateDatabaseIdentity(database);
+  const assertCurrent = () => {
+    if (!database.db.isOpen || requireOpenClawStateDatabaseIdentity(database) !== identity) {
+      throw new Error("Prepared agent database lease lost its original shared owner");
+    }
+  };
+  assertCurrent();
+  const ownerPid = process.pid;
+  const receipt = Object.freeze({
+    leaseId,
+    agentId: normalizeAgentId(params.agentId),
+    path: path.resolve(params.path),
+    ownerPid,
+    ownerStartTime: getFileLockProcessStartTime(ownerPid),
+    sharedStatePath: database.path,
+    sharedStateIdentity: identity.key,
+  });
+  const options = {
+    database,
+    path: database.path,
+    env: { ...(params.env ?? process.env) },
+  };
+  return {
+    receipt,
+    claim() {
+      assertCurrent();
+      const deletionFence = prepareAgentDeletionPathFence(
+        { agentId: receipt.agentId, path: receipt.path },
+        options,
+      );
+      runOpenClawStateWriteTransaction((current) => {
+        assertCurrent();
+        claimAgentDatabaseLeaseInDatabase(current, receipt, deletionFence);
+      }, options);
+      return receipt.leaseId;
+    },
+  };
+}
+
 /** Capture the exact admitted claim so its parent can finish cleanup after native Worker exit. */
 export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
   leaseId: string,
@@ -294,34 +367,42 @@ export function releaseExitedOpenClawAgentDatabaseWorkerLease(
   runOpenClawStateWriteTransaction(
     (database) => {
       assertExistingDatabaseIdentity(receipt.sharedStatePath, receipt.sharedStateIdentity);
-      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("agent_database_leases")
-          .select(["agent_id", "path", "owner_pid", "owner_start_time"])
-          .where("lease_id", "=", receipt.leaseId),
-      );
-      if (!row) {
-        return;
-      }
-      if (
-        row.agent_id !== receipt.agentId ||
-        row.path !== receipt.path ||
-        row.owner_pid !== receipt.ownerPid ||
-        row.owner_start_time !== receipt.ownerStartTime
-      ) {
-        throw new Error("SQLite reclamation Worker lease cleanup receipt no longer matches");
-      }
-      executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("agent_database_leases").where("lease_id", "=", receipt.leaseId),
-      );
+      releaseExitedOpenClawAgentDatabaseLeaseInDatabase(database.db, receipt);
     },
     {
       path: receipt.sharedStatePath,
       env: { OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(receipt.sharedStatePath) },
     },
+  );
+}
+
+/** The caller owns the original shared transaction and has joined the exact native Worker exit. */
+export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
+  database: DatabaseSync,
+  receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
+): void {
+  const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("agent_database_leases")
+      .select(["agent_id", "path", "owner_pid", "owner_start_time"])
+      .where("lease_id", "=", receipt.leaseId),
+  );
+  if (!row) {
+    return;
+  }
+  if (
+    row.agent_id !== receipt.agentId ||
+    row.path !== receipt.path ||
+    row.owner_pid !== receipt.ownerPid ||
+    row.owner_start_time !== receipt.ownerStartTime
+  ) {
+    throw new Error("SQLite reclamation Worker lease cleanup receipt no longer matches");
+  }
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("agent_database_leases").where("lease_id", "=", receipt.leaseId),
   );
 }
 

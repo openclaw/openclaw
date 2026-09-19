@@ -4,11 +4,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
+import type { OpenClawAgentDatabaseRegistrationCommit } from "./openclaw-agent-db-registry.js";
+import {
+  isStateDatabaseReadAdmissionInvalidatedError,
+  type OpenClawStateDatabaseReadAdmission,
+} from "./openclaw-state-db-async-lifecycle.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -67,6 +73,62 @@ export function invalidateRegisteredAgentDatabasesMemo(
   if (registry.memo?.pathname === pathname) {
     registry.memo = { pathname, token: Symbol(pathname) };
   }
+}
+
+/** Publish only registration witnessed at COMMIT, under its original shared generation. */
+export function captureOpenClawAgentDatabaseRegistration(params: {
+  agentId: string;
+  agentPath: string;
+  admission: OpenClawStateDatabaseReadAdmission;
+}) {
+  const options = { path: params.admission.databasePath };
+  let active = false;
+  let committed = false;
+  let finished = false;
+  return {
+    begin() {
+      if (finished) {
+        throw new Error("Agent database registration admission is closed");
+      }
+      if (!active) {
+        active = true;
+        invalidateRegisteredAgentDatabasesMemo(options);
+      }
+    },
+    recordCommitted(receipt: OpenClawAgentDatabaseRegistrationCommit) {
+      if (
+        finished ||
+        !active ||
+        receipt.agentId !== params.agentId ||
+        receipt.agentPath !== params.agentPath ||
+        receipt.stateDatabasePath !== params.admission.databasePath ||
+        receipt.stateDatabaseIdentity !== params.admission.identity.key
+      ) {
+        throw new Error("Agent registration commit differs from its captured owner");
+      }
+      committed = true;
+    },
+    finish() {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      try {
+        params.admission.assertCurrent();
+      } catch (error) {
+        if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+          return;
+        }
+        throw error;
+      }
+      if (active) {
+        invalidateRegisteredAgentDatabasesMemo(options);
+      }
+      if (committed) {
+        sessionChanges.emit({ all: true, scope: "stores" });
+      }
+    },
+  };
 }
 
 function cloneRegisteredAgentDatabases(

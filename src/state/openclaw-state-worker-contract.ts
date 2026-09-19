@@ -24,6 +24,7 @@ import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-con
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
@@ -47,6 +48,7 @@ import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker
 import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
@@ -202,3 +204,17 @@ export type OpenClawStateWorkerInspectionOperations = {
   "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
   "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
 };
+
+/** Only the retiring native owner's host can dispatch its exact cleanup receipt. */
+export type OpenClawStateWorkerCleanupOperations = {
+  "agentDatabases.releaseExitedLease": {
+    input: OpenClawAgentDatabaseWorkerLeaseReceipt;
+    output: void;
+  };
+};
+
+export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
+  OpenClawStateWorkerOperations &
+    OpenClawStateWorkerInspectionOperations &
+    OpenClawStateWorkerCleanupOperations
+>;

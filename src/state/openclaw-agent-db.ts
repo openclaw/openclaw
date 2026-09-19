@@ -57,6 +57,7 @@ import {
   assertOpenClawAgentDatabaseLease,
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
+  type prepareOpenClawAgentDatabaseWorkerLease,
 } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
@@ -77,6 +78,7 @@ import {
   isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
+  type OpenClawAgentDatabaseRegistrationCommit,
 } from "./openclaw-agent-db-registry.js";
 import {
   assertCanonicalAgentPersistenceVersion,
@@ -191,8 +193,13 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 /** Open or return a cached per-agent database after schema and owner validation. */
 export function openOpenClawAgentDatabase(
   options: OpenClawAgentDatabaseOptions,
+  preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
+  onRegistrationCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
 ): OpenClawAgentDatabase {
-  const run = () => runSqliteIntegrityOperationSync(openOpenClawAgentDatabaseSteps(options));
+  const run = () =>
+    runSqliteIntegrityOperationSync(
+      openOpenClawAgentDatabaseSteps(options, undefined, preparedLease, onRegistrationCommitted),
+    );
   const scope = getOpenClawDatabaseMaintenanceScope();
   return scope ? scope.run(run) : run();
 }
@@ -204,6 +211,8 @@ export const { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseAdmissio
 function* openOpenClawAgentDatabaseSteps(
   options: OpenClawAgentDatabaseOptions,
   pending?: PendingAgentDatabaseOpen,
+  preparedLease?: ReturnType<typeof prepareOpenClawAgentDatabaseWorkerLease>,
+  onRegistrationCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const agentId = normalizeAgentId(options.agentId);
   assertAgentDatabaseAdmitted(agentId, { env: options.env });
@@ -214,6 +223,9 @@ function* openOpenClawAgentDatabaseSteps(
   // A live successful cache entry is authoritative; failed entries remain only for disposal.
   const opened = getOpenClawAgentDatabaseIfOpen(databaseOptions);
   if (opened) {
+    if (preparedLease) {
+      throw new Error("A prepared Worker lease cannot adopt an existing agent database handle");
+    }
     cache.databases.delete(pathname);
     cache.databases.set(pathname, opened);
     return opened;
@@ -297,11 +309,15 @@ function* openOpenClawAgentDatabaseSteps(
       ? { OPENCLAW_SUPERVISOR_MODE: "external" }
       : {}),
   };
-  const leaseId = claimOpenClawAgentDatabaseLease({
-    agentId,
-    path: pathname,
-    env: leaseEnvironment,
-  });
+  if (
+    preparedLease &&
+    (preparedLease.receipt.agentId !== agentId || preparedLease.receipt.path !== pathname)
+  ) {
+    throw new Error("Prepared agent database lease belongs to another store");
+  }
+  const leaseId = preparedLease
+    ? preparedLease.claim()
+    : claimOpenClawAgentDatabaseLease({ agentId, path: pathname, env: leaseEnvironment });
   if (pending) {
     pending.assertHeld = () =>
       assertOpenClawAgentDatabaseLease(leaseId, {
@@ -331,6 +347,10 @@ function* openOpenClawAgentDatabaseSteps(
     db.enableLoadExtension(false);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
+    if (preparedLease) {
+      // Worker TEMP policy precedes schema/session caches and any exposed connection.
+      db.exec("PRAGMA temp_store = FILE");
+    }
     registerOpenClawAgentDatabaseIdentity(db);
     finishPhase("open");
     // Eviction churn must avoid migration/convergence and registry busy waits.
@@ -421,7 +441,10 @@ function* openOpenClawAgentDatabaseSteps(
       });
     }
     if (!isValidatedReopen) {
-      registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
+      registerOpenClawAgentDatabase(
+        { agentId, path: pathname, env: options.env },
+        onRegistrationCommitted,
+      );
       setOpenClawAgentDatabaseValidation(database);
     }
     cache.terminal.clear(pathname);

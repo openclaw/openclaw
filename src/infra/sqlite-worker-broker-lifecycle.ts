@@ -96,6 +96,9 @@ export function createSqliteWorkerLifecycle({
         try {
           await enqueueClose(actor, maintenanceScope);
           actor.backendClosed = true;
+          if (!process.versions.bun) {
+            actor.markNativeStopped();
+          }
         } catch (error) {
           errors.push(error);
           fail(actor.slot, error instanceof Error ? error : new Error(String(error)));

@@ -157,6 +157,37 @@ export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>
   return resolveSqliteWorkerBroker().open<Operations>(options);
 }
 
+/** Admit the canonical per-agent execution group through its retained host owner. */
+export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions,
+  custody: {
+    stateContext?: SqliteWorkerStateContext;
+    stateDatabasePath?: string;
+    onNativeStopped?: (stopped: Promise<void>) => void;
+    assertCurrent(): void;
+    createAdmission: SqliteWorkerAdmissionFactory;
+  },
+): Promise<SqliteWorkerStore<Operations> | undefined> {
+  if (!isMainThread) {
+    return Promise.reject(
+      new SqliteWorkerError("Agent admission requires its host owner", "unavailable"),
+    );
+  }
+  custody.assertCurrent();
+  return withCallerErrors(
+    resolveSqliteWorkerBroker().open<Operations>(
+      options,
+      custody.stateContext,
+      () => custody.assertCurrent(),
+      {
+        createAdmission: custody.createAdmission,
+        stateDatabasePath: custody.stateDatabasePath,
+        onNativeStopped: custody.onNativeStopped,
+      },
+    ),
+  );
+}
+
 /** Host-internal admission for the canonical shared-state actor. */
 export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   options: Omit<SqliteWorkerStoreOptions, "input">,

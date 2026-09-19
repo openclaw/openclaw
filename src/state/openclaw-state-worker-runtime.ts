@@ -93,6 +93,7 @@ import {
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
+import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
@@ -106,12 +107,15 @@ import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-sta
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
+  OpenClawStateWorkerCleanupOperations,
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 import { executeUserProfileCommand } from "./user-profiles.worker.js";
 
-type Operations = OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations;
+type Operations = OpenClawStateWorkerOperations &
+  OpenClawStateWorkerInspectionOperations &
+  OpenClawStateWorkerCleanupOperations;
 
 export function executeSharedStateCommand(
   command: Exclude<
@@ -122,6 +126,13 @@ export function executeSharedStateCommand(
   open: () => OpenClawStateDatabase,
   hasNativeDatabase: boolean,
 ): Operations[keyof Operations]["output"] {
+  if (command.type === "agentDatabases.releaseExitedLease") {
+    return executeAgentDatabaseCleanupCommand(
+      command,
+      open(),
+      getSqliteWorkerStateContext().environment,
+    );
+  }
   if (command.type === "audit.events.list") {
     return listAuditEventsInDatabase(open().db, command.input);
   }

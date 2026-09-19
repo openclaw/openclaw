@@ -59,13 +59,14 @@ export function registerOpenClawAgentDatabaseAsyncResource(
     throw new Error(`Agent database resources are closing: ${owned.path}`);
   }
   resources.active.add(owned);
-  getOpenClawDatabaseMaintenanceScope()?.own(owned, "agent-resources", async () => {
+  const unregister = () => resources.active.delete(owned);
+  getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", async () => {
     owned.revoke();
     await owned.close();
     resources.active.delete(owned);
     resources.closing.delete(owned);
   });
-  return () => resources.active.delete(owned);
+  return unregister;
 }
 
 export function revokeAgentDatabaseResources(

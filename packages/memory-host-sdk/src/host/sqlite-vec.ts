@@ -39,7 +39,7 @@ function assertSqliteVecAvailable(db: DatabaseSync, source: string): void {
   }
 }
 
-function loadExtensionAndVerify(db: DatabaseSync, extensionPath: string): void {
+export function loadSqliteVecExtensionFromPath(db: DatabaseSync, extensionPath: string): void {
   // Import can outlive disposal. Node 24.15 cannot safely enable loading on a
   // closed handle, so revalidate before the synchronous native-load section.
   if (!db.isOpen) {
@@ -61,14 +61,14 @@ export async function loadSqliteVecExtension(params: {
   try {
     const resolvedPath = normalizeOptionalString(params.extensionPath);
     if (resolvedPath) {
-      loadExtensionAndVerify(params.db, resolvedPath);
+      loadSqliteVecExtensionFromPath(params.db, resolvedPath);
       return { ok: true, extensionPath: resolvedPath };
     }
 
     try {
       const sqliteVec = await loadSqliteVecModule();
       const extensionPath = sqliteVec.getLoadablePath();
-      loadExtensionAndVerify(params.db, extensionPath);
+      loadSqliteVecExtensionFromPath(params.db, extensionPath);
       return { ok: true, extensionPath };
     } catch (err) {
       // Optional-dep installs sometimes land only the platform-specific variant
@@ -88,7 +88,7 @@ export async function loadSqliteVecExtension(params: {
         };
       }
       try {
-        loadExtensionAndVerify(params.db, variant.extensionPath);
+        loadSqliteVecExtensionFromPath(params.db, variant.extensionPath);
         return { ok: true, extensionPath: variant.extensionPath };
       } catch (variantErr) {
         const message = formatErrorMessage(variantErr);

@@ -323,20 +323,32 @@ argument. After waiting, the helper rejects a closed or replaced handle rather
 than opening a replacement on its behalf. Keep the original borrow alive until
 the operation settles. The caller still owns transactions and authorization.
 For large native publications, `openOpenClawAgentSqliteWorkerStore(options, borrowedDb, { moduleUrl, input })`
-retains the original borrowed handle, physical identity, and a separate agent lease
-for a pooled SQLite Worker connection. Its `run(operation, assertCurrent)` joins
-the existing agent writer queue. The operation receives only the retained store's
-`execute` method; finish it before calling `close()`. Close revokes new work,
-drains accepted operations, closes native storage, and then releases custody.
+retains the original borrowed handle and physical identity. Its
+`run(operation, assertCurrent)` joins the existing agent writer queue and borrows
+the canonical agent executor for the complete operation. The module exports
+`bindSqliteWorkerBackend(input, { databasePath, database, admit })`; it uses the
+supplied connection and closes only its own temporary state. It must not open or
+close the agent database. The operation receives only the bound backend's
+`execute` method; finish it before calling `close()`. Client close revokes new work,
+drains its accepted operations, and releases its original borrow. The canonical
+executor owns the native connection, lease, idle reuse, and final close.
 
 A backend used with this owner requests `transaction` admission after BEGIN and
-`commit` admission immediately before COMMIT through
-`requestSqliteWorkerOperationAdmission`. The host checks current authority at
+`commit` admission immediately before COMMIT through the supplied `admit` callback.
+The host checks the canonical connection and current caller authority at
 both points without waiting synchronously for the native transaction. An accepted
 commit grant orders the commit before later revocation; an earlier refusal rolls
 back. Callers must preserve committed or unknown outcomes and never replay them.
 Private file owners can use `runSqliteWorkerStoreWrite` with their own admission
 and lifetime; it does not supply the shared agent queue or lease.
+
+Worker backends can load module prerequisites asynchronously in `prepare(command)`.
+Preparation carries captured state/runtime facts and performs no native work.
+After it settles, `execute(command)` enters fresh synchronous authority scopes;
+connection-bound execution revalidates authority before native work. Extension
+loading, transactions, and domain callbacks remain synchronous. Agent connection policy, including TEMP
+storage, belongs to the canonical connection owner and cannot be reset when a
+publication binds.
 
 Backends whose failure handling can leave an unusable native connection implement
 synchronous `assertSettled()`. The broker calls it after a command returns or

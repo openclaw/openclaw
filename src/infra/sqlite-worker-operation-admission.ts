@@ -10,7 +10,19 @@ const GRANTED = 1;
 const REFUSED = 2;
 const ADMISSION_TIMEOUT_MS = 5_000;
 
-type SqliteWorkerAdmissionRequest = {
+/** Only the factory's admission before agent open may certify this refusal. */
+export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerOpenRefusedError"),
+  () =>
+    class OpenRefusedError extends Error {
+      constructor(readonly originalError: unknown) {
+        super("SQLite worker admission was refused before agent open", { cause: originalError });
+        this.name = "SqliteWorkerOpenRefusedError";
+      }
+    },
+);
+
+export type SqliteWorkerAdmissionRequest = {
   stage: "open" | "prepare" | "transaction" | "commit";
   facts: unknown;
 };

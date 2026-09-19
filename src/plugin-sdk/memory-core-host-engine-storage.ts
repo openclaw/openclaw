@@ -35,6 +35,7 @@ export {
   isTransientMemoryReadError,
   listMemoryFiles,
   loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
   matchesExtraMemoryPathEntry,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,
