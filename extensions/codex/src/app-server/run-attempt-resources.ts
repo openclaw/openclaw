@@ -411,12 +411,19 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         );
       } finally {
         if (!retained) {
-          const bindingReleased =
-            !isIncognitoSessionKey(params.sessionKey) ||
-            (await connection.bindingStore.mutate(connection.bindingIdentity, {
-              kind: "clear",
-              threadId: thread.threadId,
-            }));
+          const bindingReleased = !isIncognitoSessionKey(params.sessionKey)
+            ? true
+            : thread.clientId
+              ? await connection.bindingStore.mutate(
+                  connection.bindingIdentity,
+                  {
+                    kind: "clear",
+                    threadId: thread.threadId,
+                    clientId: thread.clientId,
+                  },
+                  connection.assertCurrent,
+                )
+              : false;
           if (bindingReleased) {
             await releaseThreadSubscription();
           }

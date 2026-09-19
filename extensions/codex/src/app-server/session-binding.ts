@@ -211,10 +211,7 @@ type CodexAppServerBindingMutation =
       kind: "reclaim-generation";
       expectedPreviousSessionId: string;
     }
-  | {
-      kind: "clear";
-      threadId?: string;
-    };
+  | { kind: "clear"; threadId?: string; clientId?: string };
 
 export type CodexSessionGenerationAdoptionResult = "adopted" | "current" | "absent" | "conflict";
 
@@ -989,6 +986,8 @@ export function createCodexAppServerBindingStore(
                 (!ownsGeneration ||
                   (mutation.threadId !== undefined &&
                     active?.binding.threadId !== mutation.threadId) ||
+                  (mutation.clientId !== undefined &&
+                    active?.binding.clientId !== mutation.clientId) ||
                   active?.binding.connectionScope === "supervision"))
             ) {
               return { result: false };
