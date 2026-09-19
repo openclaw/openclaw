@@ -205,7 +205,6 @@ describe("check-workflows", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("python3 is 3.9.6");
     expect(result.stderr).toContain("pre-commit 4.6.2 requires Python >=3.10");
-    // The floor is checked before any temporary environment work begins.
     expect(existsSync(markerPath)).toBe(false);
   });
 

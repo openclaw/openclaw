@@ -19,14 +19,16 @@ function commandExists(command: string, args: readonly string[] = ["--version"])
   return !result.error && result.status === 0;
 }
 
-/** Reads the version an interpreter reports (for example "3.9.6"), or undefined. */
-function readPythonVersion(command: string): string | undefined {
+function probePythonVersion(
+  command: string,
+): { runnable: false } | { runnable: true; version?: string } {
   const result = spawnSync(command, ["--version"], { encoding: "utf8" });
   if (result.error || result.status !== 0) {
-    return undefined;
+    return { runnable: false };
   }
   const match = /Python (\d+\.\d+(?:\.\d+)?)/u.exec(`${result.stdout ?? ""}${result.stderr ?? ""}`);
-  return match?.[1];
+  const version = match?.[1];
+  return version ? { runnable: true, version } : { runnable: true };
 }
 
 function isBelowPythonFloor(version: string, floor: string): boolean {
@@ -71,13 +73,13 @@ function exitWithFailure(failure: NonNullable<ReturnType<typeof runChecked>>): n
 }
 
 function runPreCommitFromTempVenv(hookArgs: string[]): boolean {
-  if (!commandExists("python3", ["--version"])) {
+  const pythonProbe = probePythonVersion("python3");
+  if (!pythonProbe.runnable) {
     return false;
   }
-  const pythonVersion = readPythonVersion("python3");
-  if (pythonVersion && isBelowPythonFloor(pythonVersion, PRE_COMMIT_PYTHON_FLOOR)) {
+  if (pythonProbe.version && isBelowPythonFloor(pythonProbe.version, PRE_COMMIT_PYTHON_FLOOR)) {
     console.error(
-      `[check-workflows] python3 is ${pythonVersion}, but pre-commit ${PRE_COMMIT_VERSION} requires Python >=${PRE_COMMIT_PYTHON_FLOOR}. Install a newer python3 or a pre-commit runtime.`,
+      `[check-workflows] python3 is ${pythonProbe.version}, but pre-commit ${PRE_COMMIT_VERSION} requires Python >=${PRE_COMMIT_PYTHON_FLOOR}. Install a newer python3 or a pre-commit runtime.`,
     );
     process.exit(1);
   }
