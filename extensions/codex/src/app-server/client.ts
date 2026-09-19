@@ -304,7 +304,10 @@ export class CodexAppServerClient {
     options?: Partial<CodexAppServerStartOptions>,
     assertCurrent?: () => void,
   ): Promise<CodexAppServerClient> {
-    const defaults = resolveCodexAppServerRuntimeOptions().start;
+    // One resolve owns both start defaults and the operator request-timeout budget
+    // so websocket/unix upgrades do not invent a second fixed handshake policy.
+    const runtime = resolveCodexAppServerRuntimeOptions();
+    const defaults = runtime.start;
     const startOptions = {
       ...defaults,
       ...options,
@@ -314,7 +317,11 @@ export class CodexAppServerClient {
       throw new Error("Managed Codex app-server start options must be resolved before spawn.");
     }
     if (startOptions.transport === "websocket" || startOptions.transport === "unix") {
-      return new CodexAppServerClient(createWebSocketTransport(startOptions));
+      return new CodexAppServerClient(
+        createWebSocketTransport(startOptions, {
+          handshakeTimeoutMs: runtime.requestTimeoutMs,
+        }),
+      );
     }
     // The spawn callback runs synchronously before registration; initialization
     // stays blocked until registration finishes, without losing startup errors.

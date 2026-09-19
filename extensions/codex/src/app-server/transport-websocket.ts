@@ -16,9 +16,26 @@ const WEBSOCKET_PING_INTERVAL_MS = 20_000;
 const WEBSOCKET_PONG_TIMEOUT_MS = 20_000;
 const MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS = 5;
 
+function buildCodexAppServerWebSocketOptions(params: {
+  headers: Record<string, string>;
+  handshakeTimeoutMs: number;
+  websocketTransport: boolean;
+}): ClientOptions {
+  return {
+    headers: params.headers,
+    // Codex app-server closes Unix upgrade handshakes that offer compression.
+    perMessageDeflate: false,
+    ...(params.websocketTransport ? { handshakeTimeout: params.handshakeTimeoutMs } : {}),
+  };
+}
+
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
   options: CodexAppServerStartOptions,
+  // Overrides the handshake timeout budget. Tests supply short floors to keep
+  // stalled-handshake regression proofs fast; production passes the resolved
+  // requestTimeoutMs from CodexAppServerClient.start.
+  handshakeOpts?: { handshakeTimeoutMs?: number },
 ): CodexAppServerTransport {
   if (!options.url) {
     throw new Error(
@@ -32,14 +49,13 @@ export function createWebSocketTransport(
     ...options.headers,
     ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
   };
-  const websocketOptions: ClientOptions = {
+  const handshakeTimeoutMs =
+    handshakeOpts?.handshakeTimeoutMs ?? WEBSOCKET_HANDSHAKE_TIMEOUT_MS;
+  const websocketOptions = buildCodexAppServerWebSocketOptions({
     headers,
-    // Codex app-server closes Unix upgrade handshakes that offer compression.
-    perMessageDeflate: false,
-    ...(options.transport === "websocket"
-      ? { handshakeTimeout: WEBSOCKET_HANDSHAKE_TIMEOUT_MS }
-      : {}),
-  };
+    handshakeTimeoutMs,
+    websocketTransport: options.transport === "websocket",
+  });
   const unixSocketPath = resolveCodexAppServerUnixSocketPath(options);
   const socket = unixSocketPath
     ? new WebSocket("ws://localhost/", {
@@ -69,6 +85,16 @@ export function createWebSocketTransport(
     }
     expectedPong = undefined;
   };
+
+  // ws.handshakeTimeout does not abort custom createConnection (Unix) upgrades.
+  // Mirror the same budget with an explicit CONNECTING deadline for both paths.
+  const clearHandshakeDeadline = () => clearTimeout(handshakeDeadline);
+  const handshakeDeadline = setTimeout(() => {
+    if (socket.readyState === WebSocket.CONNECTING) {
+      socket.terminate();
+    }
+  }, handshakeTimeoutMs);
+  handshakeDeadline.unref?.();
 
   const sendHeartbeatPing = () => {
     if (socket.readyState !== WebSocket.OPEN || pongTimeout) {
@@ -136,6 +162,7 @@ export function createWebSocketTransport(
   // `initialize` can be written before the WebSocket open event fires. Buffer
   // whole JSON-RPC frames so stdio and websocket transports share call timing.
   socket.once("open", () => {
+    clearHandshakeDeadline();
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
@@ -146,11 +173,17 @@ export function createWebSocketTransport(
       recordConnectionActivity();
     }
   });
+  // EventEmitter throws on unhandled `error` emits. Callers like CodexAppServerClient
+  // subscribe; raw transport consumers (and handshake timeouts) may only wait on exit.
   socket.once("error", (error) => {
+    clearHandshakeDeadline();
     clearConnectionHealthTimers();
-    events.emit("error", error);
+    if (events.listenerCount("error") > 0) {
+      events.emit("error", error);
+    }
   });
   socket.once("close", (code, reason) => {
+    clearHandshakeDeadline();
     clearConnectionHealthTimers();
     killed = true;
     exitCode = code;
@@ -194,6 +227,7 @@ export function createWebSocketTransport(
     },
   });
   const closeSocket = () => {
+    clearHandshakeDeadline();
     if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
       return;
     }
@@ -216,6 +250,7 @@ export function createWebSocketTransport(
     },
     kill: (signal) => {
       killed = true;
+      clearHandshakeDeadline();
       clearConnectionHealthTimers();
       if (signal === "SIGKILL") {
         socket.terminate();
