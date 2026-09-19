@@ -35,6 +35,7 @@ export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost
 
 export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
   return (
+    !item.custody &&
     isMovableChatQueueItem(item) &&
     (item.sendState === undefined || item.sendState === "waiting-idle") &&
     !item.localCommandName

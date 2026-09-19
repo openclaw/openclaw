@@ -17,6 +17,7 @@ import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
+import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -28,7 +29,11 @@ import {
 import "../../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import {
+  buildPendingInputQueueItems,
+  getChatPendingInputs,
+  loadChatPendingInputs,
+} from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -154,6 +159,23 @@ export function renderChat(props: ChatProps) {
       )
     : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
+  const inputDisplay = selectChatInputDisplay(
+    props.messages,
+    props.queue,
+    pendingInputs?.page.items ?? [],
+  );
+  const transcriptPendingInputs = inputDisplay.pendingInputs.filter(
+    (input) => input.state !== "queued",
+  );
+  const workerSetupPending = ["requested", "provisioning", "syncing", "starting"].includes(
+    props.selectedSession?.placement?.state ?? "",
+  );
+  const workspaceSyncPendingRunIds =
+    (props.selectedSession?.placement?.state === "active" ||
+      props.selectedSession?.placement?.state === "draining") &&
+    props.selectedSession.placement.workspaceResultReconciling === true
+      ? props.selectedSession.activeRunIds
+      : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const openImage = props.onOpenImage
@@ -189,6 +211,8 @@ export function renderChat(props: ChatProps) {
         streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
         queue,
         initialTurnId: props.placementStartup?.initialTurn?.id,
+        // Keep the owner array stable for transcript-cache reuse. The builder
+        // reconciles canonical messages and keeps queued custody rows out.
         pendingInputs: pendingInputs?.page.items,
         runActive: props.runActive === true,
         runWorking,
@@ -269,15 +293,18 @@ export function renderChat(props: ChatProps) {
     ),
     props.presented ?? true,
   );
-  // The composer keeps the outbox queue; only the transcript includes the
-  // placement initial turn, whose retry action belongs to startup.
+  // Accepted queued input is still outside model history. Keep it with the
+  // outbox above the composer until canonical persistence promotes it.
   const defaultComposer = renderChatComposer({
     ...props,
-    displayQueue: selectChatInputDisplay(
-      props.messages,
-      props.queue,
-      pendingInputs?.page.items ?? [],
-    ).queue,
+    displayQueue: [
+      ...inputDisplay.queue,
+      ...buildPendingInputQueueItems(
+        inputDisplay.pendingInputs,
+        workspaceSyncPendingRunIds,
+        workerSetupPending,
+      ),
+    ].toSorted(compareChatQueueOrder),
     anchoredNotices: renderChatComposerNotices(props),
     onRequestUpdate: requestUpdate,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
@@ -334,7 +361,7 @@ export function renderChat(props: ChatProps) {
   const transcriptEmpty =
     !runWorking &&
     props.messages.length === 0 &&
-    (pendingInputs?.page.items.length ?? 0) === 0 &&
+    transcriptPendingInputs.length === 0 &&
     props.toolMessages.length === 0 &&
     props.streamSegments.length === 0 &&
     !props.stream &&

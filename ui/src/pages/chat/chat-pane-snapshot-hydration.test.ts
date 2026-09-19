@@ -71,7 +71,7 @@ describe("stored chat snapshot hydration", () => {
       ["Gateway Author", undefined].map((senderName) => ({ cacheMode, senderName })),
     ),
   )(
-    "keeps one attributed initial source through $cacheMode remount, custody, and promotion ($senderName)",
+    "keeps one attributed initial source through $cacheMode remount and canonical promotion ($senderName)",
     async ({ cacheMode, senderName }) => {
       installTranscriptDomMocks();
       vi.stubGlobal("indexedDB", new IDBFactory());
@@ -179,11 +179,14 @@ describe("stored chat snapshot hydration", () => {
         // jsdom has no decoder; deliver the loaded-preview boundary before custody.
         Object.defineProperty(displayed, "naturalWidth", { value: 1 });
         displayed.dispatchEvent(new Event("load"));
-        const expectRenderedInput = (text: string, author: string | undefined) => {
+        const expectRenderedInput = (
+          text: string,
+          author: string | undefined,
+          image: HTMLImageElement,
+        ) => {
           expect(container.querySelectorAll(".chat-bubble")).toHaveLength(1);
           expect(container.querySelectorAll(".chat-message-image")).toHaveLength(1);
-          expect(container.querySelector(".chat-message-image")).toBe(displayed);
-          expect(displayed.getAttribute("src")).toBe(dataUrl);
+          expect(container.querySelector(".chat-message-image")).toBe(image);
           expect(container.querySelector('[aria-busy="true"]')).toBeNull();
           expect(container.textContent).toContain(text);
           const sender = container.querySelector(".chat-sender-name");
@@ -193,7 +196,8 @@ describe("stored chat snapshot hydration", () => {
             expect(sender?.textContent?.trim()).toBe(author);
           }
         };
-        expectRenderedInput("Keep the attributed initial image", "Local Author");
+        expect(displayed.getAttribute("src")).toBe(dataUrl);
+        expectRenderedInput("Keep the attributed initial image", "Local Author", displayed);
         const metadata = {
           id: "pending:cached-input",
           ...(senderName ? { senderName } : {}),
@@ -216,7 +220,9 @@ describe("stored chat snapshot hydration", () => {
         expect(
           getChatPendingInputs(remounted.state)?.page.items.map((item) => item.message),
         ).toEqual([custodyMessage]);
-        expectRenderedInput(custodyMessage.content, senderName);
+        expect(container.querySelectorAll(".chat-bubble")).toHaveLength(0);
+        expect(container.querySelectorAll(".chat-message-image")).toHaveLength(0);
+        expect(container.textContent).not.toContain(custodyMessage.content);
         expect(container.textContent).not.toContain("Keep the attributed initial image");
         expect(custodyMessage["__openclaw"]).toBe(metadata);
         const canonicalMessage = {
@@ -237,8 +243,26 @@ describe("stored chat snapshot hydration", () => {
         });
         await loadChatHistory(remounted.state);
         renderPane();
+        mediaResponse.resolve(
+          Response.json({
+            available: true,
+            mediaTicket: "canonical-image",
+            mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+          }),
+        );
+        await vi.waitFor(() =>
+          expect(container.querySelectorAll(".chat-message-image")).toHaveLength(1),
+        );
+        const canonicalImage = expectDefined(
+          container.querySelector<HTMLImageElement>(".chat-message-image"),
+          "canonical image",
+        );
+        Object.defineProperty(canonicalImage, "naturalWidth", { value: 1 });
+        canonicalImage.dispatchEvent(new Event("load"));
         expect(remounted.state.chatMessages).toEqual([canonicalMessage]);
-        expectRenderedInput(canonicalMessage.content, senderName);
+        expect(canonicalImage).not.toBe(displayed);
+        expect(canonicalImage.getAttribute("src")).toContain("mediaTicket=canonical-image");
+        expectRenderedInput(canonicalMessage.content, senderName, canonicalImage);
         expect(container.textContent).not.toContain(custodyMessage.content);
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {

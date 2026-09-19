@@ -364,12 +364,15 @@ suite.define(() => {
       await expect.poll(() => userImage.count()).toBe(1);
       await expect.poll(readImage).toEqual({ inline: true, usable: true });
       const transition = await page.evaluateHandle(() => {
-        const frames: { users: number; images: number }[] = [];
+        const frames: { users: number; images: number; queued: number }[] = [];
         let frame: number;
         const observe = () => {
           frames.push({
             users: document.querySelectorAll(".chat-group.user").length,
             images: document.querySelectorAll(".chat-group.user img.chat-message-image").length,
+            queued: document.querySelectorAll(
+              '[data-chat-queue-item="pending-input:accepted-project-input"]',
+            ).length,
           });
           frame = requestAnimationFrame(observe);
         };
@@ -382,21 +385,28 @@ suite.define(() => {
         };
       });
       await gateway.resolveDeferred("chat.startup");
-      await expect.poll(() => metadataRequested).toBe(true);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
+      const queuedCustody = page.locator(
+        '[data-chat-queue-item="pending-input:accepted-project-input"]',
+      );
+      await queuedCustody.waitFor();
+      await pollLocatorText(queuedCustody).toContain(message);
+      expect(metadataRequested).toBe(false);
       expect(await page.locator(".chat-notice").count()).toBe(0);
       if (artifactDir) {
         await writeFile(
           path.join(artifactDir, "preparing.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working, userImage]),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            working,
+            queuedCustody,
+          ]),
         );
       }
-      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-group.user").count()).toBe(0);
       await expect
         .poll(() => page.locator(".chat-group.user img.chat-message-image").count())
-        .toBe(1);
-      await expect.poll(readImage).toEqual({ inline: true, usable: true });
+        .toBe(0);
       const observed = await transition.evaluate(async (sampler) => {
         await new Promise(requestAnimationFrame);
         return sampler.stop();
@@ -406,7 +416,8 @@ suite.define(() => {
         await writeFile(path.join(artifactDir, "custody-frames.json"), JSON.stringify(observed));
       }
       expect(observed.length).toBeGreaterThan(1);
-      expect(observed.every(({ users, images }) => users === 1 && images === 1)).toBe(true);
+      expect(observed.every(({ users, queued }) => users + queued <= 1)).toBe(true);
+      expect(observed.at(-1)).toEqual({ users: 0, images: 0, queued: 1 });
       expect(await working.locator(".chat-reading-indicator").count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await captureProjectUiProof(
@@ -430,7 +441,8 @@ suite.define(() => {
             phase,
           });
           await pollLocatorText(working).toContain(label);
-          expect(await page.locator(".chat-group.user").count()).toBe(1);
+          expect(await page.locator(".chat-group.user").count()).toBe(0);
+          expect(await queuedCustody.count()).toBe(1);
         }
         await captureProjectUiProof(suite, page, "worktree-running-setup.png");
       }
@@ -467,8 +479,12 @@ suite.define(() => {
         );
         await canonicalBubble.waitFor();
         await expect.poll(() => canonicalBubble.count()).toBe(1);
+        await expect.poll(() => queuedCustody.count()).toBe(0);
         await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
+        await expect.poll(() => metadataRequested).toBe(true);
+        releaseMedia();
         await expect.poll(() => canonicalBubble.locator("img.chat-message-image").count()).toBe(1);
+        await expect.poll(readImage).toEqual({ inline: false, usable: true });
         await navigateInApp(page, "new-session");
         await page.locator(".new-session-page__message").waitFor();
         await page.goBack();

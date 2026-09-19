@@ -290,46 +290,6 @@ describe("chat transcript full-message recovery", () => {
     expect(pane.querySelector(".chat-bubble")).toBeNull();
   });
 
-  it("keeps recovered pending-input text until that input leaves the source", async () => {
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockResolvedValue(fullMessage("Accepted input."));
-    const pane = mountTranscript("recovery-pending-input", load);
-    const pendingInputs: ChatThreadProps["pendingInputs"] = [
-      {
-        id: "accepted-1",
-        acceptedAt: 1_000,
-        state: "queued",
-        message: {
-          ...previewMessage,
-          role: "user",
-          __openclaw: { id: "pending:accepted-1", truncated: true },
-        },
-      },
-    ];
-    pane.props.messages = [];
-    pane.props.pendingInputs = pendingInputs;
-    await vi.waitFor(() => expect(pane.textContent).toContain("Accepted input."));
-    pane.requestUpdate();
-    await pane.updateComplete;
-    expect(load).toHaveBeenCalledOnce();
-    expect(pane.textContent).toContain("Accepted input.");
-    await searchTranscript(pane, "Accepted input");
-    expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Accepted input.");
-
-    pane.props.pendingInputs = [];
-    pane.requestUpdate();
-    await pane.updateComplete;
-    load.mockResolvedValue(fullMessage("Revisited input."));
-    pane.props.pendingInputs = pendingInputs;
-    pane.requestUpdate();
-    await pane.updateComplete;
-    expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
-    await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
-    expect(load).toHaveBeenCalledTimes(2);
-  });
-
   it("stops searching recovered text when the source is no longer capped", async () => {
     const load = vi
       .fn<SidebarFullMessageLoader>()
