@@ -1,5 +1,5 @@
 /** Locale-independent Task Scheduler registration and runtime facts. */
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
@@ -38,22 +38,27 @@ export function probeScheduledTaskState(
     "try { $result.lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) } catch {}",
     "$result | ConvertTo-Json -Compress; exit 0",
   ].join("; ");
-  const probe = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    {
-      env: resolveServiceManagerEnv(),
-      encoding: "utf8",
-      timeout: probeTimeoutMs,
-      // CREATE_NO_WINDOW makes Windows PowerShell 5.1 fail without output on some hosts.
-      windowsHide: false,
-    },
-  );
+  let probe: SpawnSyncReturns<string>;
+  try {
+    probe = spawnSync(
+      getWindowsPowerShellExePath(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
+      {
+        env: resolveServiceManagerEnv(),
+        encoding: "utf8",
+        timeout: probeTimeoutMs,
+        // CREATE_NO_WINDOW makes Windows PowerShell 5.1 fail without output on some hosts.
+        windowsHide: false,
+      },
+    );
+  } catch (error) {
+    return { status: "unknown", detail: error instanceof Error ? error.message : String(error) };
+  }
   if (probe.error) {
     if (hasErrnoCode(probe.error, "ETIMEDOUT")) {
       return {
