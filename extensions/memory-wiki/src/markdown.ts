@@ -599,6 +599,8 @@ export function scanWikiPageSummary(params: {
   absolutePath: string;
   relativePath: string;
   raw: string;
+  /** Query readers do not need the compiler/lint link graph. */
+  includeLinks?: boolean;
 }): WikiPageSummaryScanResult {
   const kind = inferWikiPageKind(params.relativePath);
   if (!kind) {
@@ -647,7 +649,10 @@ export function scanWikiPageSummary(params: {
       canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
       aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
       sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-      linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
+      linkTargets:
+        params.includeLinks === false
+          ? []
+          : extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
       claims: normalizeWikiClaims(parsed.frontmatter.claims),
       contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
       questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
