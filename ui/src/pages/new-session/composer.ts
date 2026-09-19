@@ -347,144 +347,151 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         )}
         ${mentionMenu.render(mentionMenuHost, options.requestUpdate)}
         ${emojiMenu.render("new-session", options.textareaController.getTextarea(), options.requestUpdate)}
-        ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
-        ${renderSelectedHumanMentions(
-          options.message,
-          options.mentions,
-          () => options.onInput(options.message, []),
-          mentionMenu.selectedAvatarUrls,
-        )}
-        ${renderAttachmentPreview(attachmentProps)}
-        ${renderAttachmentReadStatus(options.pendingAttachmentReads)}
-        <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
-        <div class="agent-chat__composer-input-row">
-          <div class="agent-chat__composer-combobox">
-            ${
-              slashMenuVisible
-                ? renderSlashMenu(
-                    slashMenuState,
-                    slashMenuHost,
-                    options.message,
+        <div class="agent-chat__composer-body">
+          ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
+          ${renderSelectedHumanMentions(
+            options.message,
+            options.mentions,
+            () => options.onInput(options.message, []),
+            mentionMenu.selectedAvatarUrls,
+          )}
+          ${renderAttachmentPreview(attachmentProps)}
+          ${renderAttachmentReadStatus(options.pendingAttachmentReads)}
+          <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
+          <div class="agent-chat__composer-input-row">
+            <div class="agent-chat__composer-combobox">
+              ${
+                slashMenuVisible
+                  ? renderSlashMenu(
+                      slashMenuState,
+                      slashMenuHost,
+                      options.message,
+                      options.requestUpdate,
+                    )
+                  : nothing
+              }
+              ${
+                skillMenuVisible
+                  ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
+                  : nothing
+              }
+              <textarea
+                ${ref(options.textareaController.ref)}
+                class="new-session-page__message"
+                rows="1"
+                ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
+                ?disabled=${options.submitting || options.messageLocked}
+                ?readonly=${options.dictationActive}
+                placeholder=${animatedPlaceholder}
+                aria-label=${messagePlaceholder}
+                aria-keyshortcuts=${keyShortcuts}
+                .value=${guard([visibleMessage], () => live(visibleMessage))}
+                aria-autocomplete="list"
+                aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
+                aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
+                aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
+                aria-describedby=${menuAnnouncementId}
+                @input=${(event: InputEvent) => {
+                  if (options.dictationActive) {
+                    return;
+                  }
+                  // SAFETY: this input listener is attached directly to the textarea below.
+                  const target = event.target as HTMLTextAreaElement;
+                  adjustTextareaHeight(target);
+                  const mentions = mentionMenuHost.getMentions();
+                  options.onInput(
+                    target.value,
+                    mentions.length
+                      ? updateHumanMentions(
+                          options.message,
+                          target.value,
+                          mentions,
+                          options.textareaController.mentionInput,
+                        )
+                      : undefined,
+                  );
+                  options.textareaController.mentionInput = undefined;
+                  updateMenus(target, event);
+                }}
+                @beforeinput=${(event: InputEvent) => {
+                  // SAFETY: this beforeinput listener belongs to this native textarea.
+                  const target = event.target as HTMLTextAreaElement;
+                  options.textareaController.mentionInput = {
+                    value: target.value,
+                    start: target.selectionStart,
+                    end: target.selectionEnd,
+                    inputType: event.inputType,
+                  };
+                  emojiMenu.complete(
+                    event,
                     options.requestUpdate,
-                  )
-                : nothing
-            }
-            ${
-              skillMenuVisible
-                ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
-                : nothing
-            }
-            <textarea
-              ${ref(options.textareaController.ref)}
-              class="new-session-page__message"
-              rows="1"
-              ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
-              ?disabled=${options.submitting || options.messageLocked}
-              ?readonly=${options.dictationActive}
-              placeholder=${animatedPlaceholder}
-              aria-label=${messagePlaceholder}
-              aria-keyshortcuts=${keyShortcuts}
-              .value=${guard([visibleMessage], () => live(visibleMessage))}
-              aria-autocomplete="list"
-              aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
-              aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
-              aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
-              aria-describedby=${menuAnnouncementId}
-              @input=${(event: InputEvent) => {
-                if (options.dictationActive) {
-                  return;
-                }
-                // SAFETY: this input listener is attached directly to the textarea below.
-                const target = event.target as HTMLTextAreaElement;
-                adjustTextareaHeight(target);
-                const mentions = mentionMenuHost.getMentions();
-                options.onInput(
-                  target.value,
-                  mentions.length
-                    ? updateHumanMentions(
-                        options.message,
-                        target.value,
-                        mentions,
-                        options.textareaController.mentionInput,
-                      )
-                    : undefined,
-                );
-                options.textareaController.mentionInput = undefined;
-                updateMenus(target, event);
-              }}
-              @beforeinput=${(event: InputEvent) => {
-                // SAFETY: this beforeinput listener belongs to this native textarea.
-                const target = event.target as HTMLTextAreaElement;
-                options.textareaController.mentionInput = {
-                  value: target.value,
-                  start: target.selectionStart,
-                  end: target.selectionEnd,
-                  inputType: event.inputType,
-                };
-                emojiMenu.complete(
-                  event,
-                  options.requestUpdate,
-                  !composerLocked &&
-                    !options.nativeTerminal &&
-                    !options.textareaController.composing,
-                );
-              }}
-              @select=${handleSelect}
-              @focus=${handleSelect}
-              @pointerup=${handleSelect}
-              @keyup=${(event: KeyboardEvent) => {
-                emojiMenu.handleKeyup(event);
-                if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
-                  handleSelect(event);
-                }
-              }}
-              @blur=${() => {
-                const emojiWasOpen = emojiMenu.open;
-                options.textareaController.composing = false;
-                emojiMenu.close();
-                if (emojiWasOpen) {
+                    !composerLocked &&
+                      !options.nativeTerminal &&
+                      !options.textareaController.composing,
+                  );
+                }}
+                @select=${handleSelect}
+                @focus=${handleSelect}
+                @pointerup=${handleSelect}
+                @keyup=${(event: KeyboardEvent) => {
+                  emojiMenu.handleKeyup(event);
+                  if (
+                    event.key.startsWith("Arrow") ||
+                    event.key === "Home" ||
+                    event.key === "End"
+                  ) {
+                    handleSelect(event);
+                  }
+                }}
+                @blur=${() => {
+                  const emojiWasOpen = emojiMenu.open;
+                  options.textareaController.composing = false;
+                  emojiMenu.close();
+                  if (emojiWasOpen) {
+                    options.requestUpdate();
+                  }
+                }}
+                @compositionend=${(event: CompositionEvent) => {
+                  options.textareaController.composing = false;
+                  if (event.target instanceof HTMLTextAreaElement) {
+                    updateMenus(event.target);
+                  }
+                }}
+                @keydown=${(event: KeyboardEvent) =>
+                  handleComposerKeydown(
+                    event,
+                    options,
+                    skillMenuHost,
+                    slashMenuHost,
+                    mentionMenuHost,
+                  )}
+                @compositionstart=${() => {
+                  options.textareaController.composing = true;
+                  emojiMenu.close();
+                  mentionMenu.close();
                   options.requestUpdate();
-                }
-              }}
-              @compositionend=${(event: CompositionEvent) => {
-                options.textareaController.composing = false;
-                if (event.target instanceof HTMLTextAreaElement) {
-                  updateMenus(event.target);
-                }
-              }}
-              @keydown=${(event: KeyboardEvent) =>
-                handleComposerKeydown(
-                  event,
-                  options,
-                  skillMenuHost,
-                  slashMenuHost,
-                  mentionMenuHost,
-                )}
-              @compositionstart=${() => {
-                options.textareaController.composing = true;
-                emojiMenu.close();
-                mentionMenu.close();
-                options.requestUpdate();
-              }}
-              @paste=${(event: ClipboardEvent) => {
-                if (options.nativeTerminal && event.clipboardData?.files.length) {
-                  event.preventDefault();
-                  options.onUnsupportedAttachment?.();
-                } else if (!composerLocked && !options.nativeTerminal) {
-                  handleChatAttachmentPaste(event, attachmentProps);
-                }
-              }}
-            ></textarea>
-            <span
-              id=${menuAnnouncementId}
-              class="sr-only"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              >${activeMenuOptionLabel}</span
-            >
+                }}
+                @paste=${(event: ClipboardEvent) => {
+                  if (options.nativeTerminal && event.clipboardData?.files.length) {
+                    event.preventDefault();
+                    options.onUnsupportedAttachment?.();
+                  } else if (!composerLocked && !options.nativeTerminal) {
+                    handleChatAttachmentPaste(event, attachmentProps);
+                  }
+                }}
+              ></textarea>
+              <span
+                id=${menuAnnouncementId}
+                class="sr-only"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                >${activeMenuOptionLabel}</span
+              >
+            </div>
           </div>
         </div>
+
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-lead">
             ${options.nativeTerminal ? nothing : renderNewSessionPlusMenu(options, attachmentProps)}

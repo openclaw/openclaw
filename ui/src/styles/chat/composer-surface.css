@@ -253,6 +253,10 @@
   }
 }
 
+.agent-chat__composer-body {
+  display: contents;
+}
+
 /* Everything docked above the editor. It must stay a flow box with nothing in it
    when there is nothing to show — no minimum height, no padding of its own — so
    an absent attachment or reply preview costs the surface no height at all. */
@@ -920,6 +924,43 @@
     bottom: 0;
     z-index: 3;
     background: var(--chat-composer-surface);
+  }
+
+  .agent-chat__input:has(> .agent-chat__composer-body) {
+    padding: 0;
+    overflow: visible;
+  }
+
+  .agent-chat__composer-body {
+    display: flex;
+    flex: 1 1 auto;
+    scroll-padding-block: var(--space-2);
+    border-start-start-radius: inherit;
+    border-start-end-radius: inherit;
+    flex-direction: column;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .agent-chat__composer-body .agent-chat__composer-combobox {
+    position: static;
+  }
+
+  .agent-chat__composer-body > :is(.agent-chat__composer-lede, .agent-chat__composer-input-row) {
+    flex-shrink: 0;
+  }
+
+  .agent-chat__composer-body:has(.chat-attachments-preview) {
+    padding-block-start: var(--chat-attachment-hit-slop);
+    padding-inline-end: var(--chat-attachment-hit-slop);
+  }
+
+  .agent-chat__composer-body ~ .agent-chat__composer-footer {
+    position: static;
+    border-end-start-radius: inherit;
+    border-end-end-radius: inherit;
   }
 
   .agent-chat__composer-combobox > :is(textarea, input) {

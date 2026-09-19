@@ -10,6 +10,58 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it.each(["/", "$"])(
+    "keeps Start session clickable while the %s menu is open",
+    async (trigger) => {
+      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: [
+            "commands.list",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.create",
+            "sessions.dispatch",
+          ],
+          methodResponses: {
+            "commands.list": {
+              commands: Array.from({ length: 63 }, (_, index) => ({
+                key: "skill-" + index,
+                name: "skill-" + index,
+                description: "Available skill",
+                source: "skill",
+                skillModelVisible: true,
+              })),
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "new");
+        await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
+        await waitForGatewayRecoveryScope(page);
+        const textarea = page.locator(".new-session-page__message");
+        await textarea.pressSequentially(trigger);
+        await expect
+          .poll(() => page.locator(".slash-menu-item:visible").count())
+          .toBeGreaterThanOrEqual(63);
+        const start = page.getByRole("button", { name: "Start session", exact: true });
+        await expect
+          .poll(() =>
+            start.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return element.contains(
+                document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2),
+              );
+            }),
+          )
+          .toBe(true);
+        await start.click({ trial: true });
+        await textarea.press("Escape");
+        await expect.poll(() => page.locator(".slash-menu:visible").count()).toBe(0);
+        expect(await textarea.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await textarea.inputValue()).toBe(trigger);
+      });
+    },
+  );
+
   it("keeps empty-state suggestions desktop-only across viewport changes", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {

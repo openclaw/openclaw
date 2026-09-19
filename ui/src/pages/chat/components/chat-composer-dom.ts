@@ -182,11 +182,39 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
     editing: false,
     events: new AbortController(),
   };
+  const body = el.closest<HTMLElement>(".agent-chat__composer-body");
+  let followEditor = false;
+  let editorWasVisible = false;
+  let bodyHeight = body?.clientHeight ?? 0;
+  const updateEditorViewport = (resized: boolean) => {
+    if (!body || body.clientHeight === 0) {
+      return;
+    }
+    if (!followEditor || el.ownerDocument.activeElement !== el) {
+      bodyHeight = body.clientHeight;
+      editorWasVisible = false;
+      return;
+    }
+    const viewport = body.getBoundingClientRect();
+    let editor = el.getBoundingClientRect();
+    // Aligning an oversized editor can hide its currently visible active line.
+    if (resized && editorWasVisible && editor.height <= viewport.height) {
+      if (editor.bottom > viewport.bottom) {
+        body.scrollTop += editor.bottom - viewport.bottom;
+      } else if (editor.top < viewport.top) {
+        body.scrollTop += editor.top - viewport.top;
+      }
+      editor = el.getBoundingClientRect();
+    }
+    bodyHeight = body.clientHeight;
+    editorWasVisible = editor.bottom > viewport.top && editor.top < viewport.bottom;
+  };
   let width = el.getBoundingClientRect().width;
   const onScroll = () => updateTextareaOverflow(el);
   state.observer =
     typeof ResizeObserver === "function"
       ? new ResizeObserver(() => {
+          updateEditorViewport(body?.clientHeight !== bodyHeight);
           const nextWidth = el.getBoundingClientRect().width;
           if (nextWidth !== width) {
             width = nextWidth;
@@ -233,6 +261,45 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
     el.addEventListener(type, onInteraction, eventOptions);
   }
   el.addEventListener("scroll", onScroll, eventOptions);
+  if (body) {
+    const onEditorIntent = (event: Event) => {
+      if (
+        event instanceof KeyboardEvent &&
+        !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key)
+      ) {
+        return;
+      }
+      if (event.type === "blur" || event.type === "wheel") {
+        followEditor = false;
+      } else if (event.type === "pointerdown") {
+        followEditor = event.target === el;
+      } else if (event.target === el) {
+        followEditor = true;
+      }
+    };
+    for (const type of [
+      "beforeinput",
+      "input",
+      "compositionstart",
+      "keydown",
+      "pointerdown",
+      "wheel",
+      "blur",
+    ]) {
+      body.addEventListener(type, onEditorIntent, { ...eventOptions, capture: true });
+    }
+    body.addEventListener(
+      "scroll",
+      () => {
+        // A resize can clamp scroll before ResizeObserver reports the new box.
+        if (body.clientHeight === bodyHeight) {
+          updateEditorViewport(false);
+        }
+      },
+      eventOptions,
+    );
+    state.observer?.observe(body);
+  }
   composerTextareaResizeObservers.set(el, state);
   state.observer?.observe(el);
   updateTextareaOverflow(el);

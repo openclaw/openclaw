@@ -1212,17 +1212,13 @@
 }
 
 @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .agent-chat__input > .slash-menu {
-    flex: 0 0 auto;
-    position: sticky;
-    top: 0;
-    bottom: auto;
-    max-height: min(28vh, 88px);
-    margin-bottom: 6px;
+  .agent-chat__input > .slash-menu,
+  .agent-chat__composer-body .agent-chat__composer-combobox > .slash-menu {
+    --slash-menu-max-height: min(28vh, 88px);
   }
 
-  .agent-chat__input > :is(.mention-menu, .skill-menu) {
-    --slash-menu-max-height: min(28vh, 88px);
+  .agent-chat__input:has(.agent-chat__composer-body .agent-chat__composer-combobox > .slash-menu) {
+    z-index: 25;
   }
 }
 
