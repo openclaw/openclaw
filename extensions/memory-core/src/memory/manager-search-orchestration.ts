@@ -1,3 +1,7 @@
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -89,7 +93,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     from?: number;
     lines?: number;
   }): Promise<MemoryReadResult> {
-    return await readMemoryFile({
+    // Session-only indexing is local, but explicit file reads still use the workspace owner.
+    const access = this.memoryFiles ? undefined : getAgentWorkspaceAccess(this.workspaceDir);
+    const files = this.memoryFiles ?? access?.memoryFiles;
+    if (access && !files) {
+      throw new WorkspaceAccessUnavailableError("Remote Memory file access is unavailable");
+    }
+    files?.assertCurrent();
+    return await (files?.readFile ?? readMemoryFile)({
       workspaceDir: this.workspaceDir,
       extraPaths: this.settings.extraPaths,
       relPath: params.relPath,
@@ -268,11 +279,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       // No watcher can observe later edits after kernel capacity exhaustion.
       // Record a fresh generation at the search boundary so detached maintenance
       // receives the fact instead of starting from a clean transient manager.
-      if (this.memoryWatchCapacityDegraded) {
+      if (this.memoryWatchCapacityDegraded || this.memoryWatchUnavailable) {
         this.dirty = true;
       }
       const capacitySyncInFlight =
-        this.memoryWatchCapacityDegraded && this.activeBackgroundSearchSyncs.size > 0;
+        (this.memoryWatchCapacityDegraded || this.memoryWatchUnavailable) &&
+        this.activeBackgroundSearchSyncs.size > 0;
       if (
         searchSyncEnabled &&
         !capacitySyncInFlight &&

@@ -22,6 +22,10 @@ import {
   normalizeExtraMemoryPathEntries,
 } from "./internal.js";
 import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "./openclaw-runtime-agent.js";
+import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
@@ -205,8 +209,13 @@ export async function readAgentMemoryFile(params: {
     throw new Error("memory search disabled");
   }
   const contextLimits = resolveMemoryHostAgentContextLimits(params.cfg, params.agentId);
-  return await readMemoryFile({
-    workspaceDir: resolveMemoryHostAgentWorkspaceDir(params.cfg, params.agentId),
+  const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, params.agentId);
+  const access = getAgentWorkspaceAccess(workspaceDir);
+  if (access && !access.memoryFiles) {
+    throw new WorkspaceAccessUnavailableError("Remote Memory file access is unavailable");
+  }
+  return await (access?.memoryFiles?.readFile ?? readMemoryFile)({
+    workspaceDir,
     extraPaths: settings.extraPaths,
     relPath: params.relPath,
     from: params.from,

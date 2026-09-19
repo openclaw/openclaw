@@ -3,10 +3,13 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
+import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
 /** Host-owned workspace files; callers keep their existing allowlists. */
 export type AgentWorkspaceAccess = {
+  /** Native Memory file operations; indexing and session state remain on Gateway. */
+  memoryFiles?: MemoryWorkspaceFiles;
   bridge: Pick<
     SandboxFsBridge,
     "readFile" | "readFileWithSource" | "readDirectory" | "writeFile" | "stat"
@@ -55,6 +58,7 @@ export function registerAgentWorkspaceAccess(
     throw new Error(`Workspace access is already registered: ${key}`);
   }
   const binding: { access?: AgentWorkspaceAccess; active: boolean } = { active: true };
+  const lifetime = new AbortController();
   const assertCurrent = () => {
     if (!binding.active || bindings.get(key) !== binding) {
       throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
@@ -99,11 +103,67 @@ export function registerAgentWorkspaceAccess(
     };
   }
   const boundAccess: AgentWorkspaceAccess = { bridge: Object.freeze(bridge) };
+  const memoryFiles = access.memoryFiles;
+  if (memoryFiles) {
+    const assertMemoryCurrent = () => {
+      assertCurrent();
+      memoryFiles.assertCurrent();
+    };
+    boundAccess.memoryFiles = Object.freeze<MemoryWorkspaceFiles>({
+      assertCurrent: assertMemoryCurrent,
+      async listFiles(...params) {
+        assertMemoryCurrent();
+        const result = await memoryFiles.listFiles(...params);
+        assertMemoryCurrent();
+        return result;
+      },
+      async inspectFile(...params) {
+        assertMemoryCurrent();
+        const result = await memoryFiles.inspectFile(...params);
+        assertMemoryCurrent();
+        return result;
+      },
+      async readFile(params) {
+        assertMemoryCurrent();
+        const result = await memoryFiles.readFile(params);
+        assertMemoryCurrent();
+        return result;
+      },
+      async readForIndexing(filePath) {
+        assertMemoryCurrent();
+        const result = await memoryFiles.readForIndexing(filePath);
+        assertMemoryCurrent();
+        return result;
+      },
+      async buildMultimodalChunk(entry) {
+        assertMemoryCurrent();
+        const result = await memoryFiles.buildMultimodalChunk(entry);
+        assertMemoryCurrent();
+        return result;
+      },
+      async watch(request, onChange, signal) {
+        assertMemoryCurrent();
+        const active = AbortSignal.any([signal, lifetime.signal]);
+        active.throwIfAborted();
+        await memoryFiles.watch(
+          request,
+          (event) => {
+            if (!active.aborted) {
+              assertMemoryCurrent();
+              onChange(event);
+            }
+          },
+          active,
+        );
+      },
+    });
+  }
   binding.access = Object.freeze(boundAccess);
   bindings.set(key, binding);
   return () => {
     // A stopped remote workspace remains remote; never expose stale local files.
     binding.active = false;
+    lifetime.abort();
   };
 }
 

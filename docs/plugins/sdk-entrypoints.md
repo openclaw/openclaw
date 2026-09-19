@@ -104,3 +104,17 @@ Workspace access that has not started or has stopped throws
 `WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
 to recognize this condition through wrapped errors or separate SDK instances.
 The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
+
+The optional `memoryFiles` provider keeps workspace Memory files on the host while
+the native index, embedding providers and original sessions stay on Gateway. It
+supplies discovery, file inspection, reads and change notifications. Both indexing
+and `memory_get` use it; index publication rechecks the host file. The canonical
+source returned with a read supplies provenance, without resolving a stale Gateway
+copy. Stopping the workspace binding revokes retained file access and subscriptions.
+The Memory file worker supports `--files <workspace>` for native file
+operations without opening a host index or receiving embedding credentials. A
+provider can invoke it through its existing subprocess transport.
+`createWorkspaceMemoryFileClient` maps Gateway/host paths and preserves native
+errors for this worker. Supply `request` for one JSON exchange and `subscribe`
+for the `--watch-files` JSON-line stream, plus the binding's abort signal.
+Neither callback depends on Codex; providers own transport and authorization.
