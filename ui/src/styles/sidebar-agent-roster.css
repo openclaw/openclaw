@@ -126,6 +126,10 @@ openclaw-sidebar-agent-roster {
   margin: 0;
 }
 
+.sidebar-agent-roster__header + .sidebar-recent-sessions__group {
+  min-height: 0;
+}
+
 .sidebar-new-session-menu::part(menu) {
   min-width: 180px;
 }
