@@ -348,6 +348,131 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   }
 });
 
+test("projects.list preserves exact-path ranking, locale ties, and the pre-access recent limit", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const repo = await initializeRepository(state.root);
+    const registered = await registerProjectRegistry({ path: repo, name: "Registered" });
+    const otherWorkspace = path.join(state.root, "other");
+    const localeWorkspaceDir = path.join(state.root, "locale");
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { workspace: repo },
+          work: { workspace: repo },
+          other: { workspace: otherWorkspace },
+          "a-b": { workspace: localeWorkspaceDir },
+          a_b: { workspace: localeWorkspaceDir },
+        },
+      },
+    };
+    const localeWorkspace =
+      "workspace:a-b".localeCompare("workspace:a_b") < 0 ? "workspace:a-b" : "workspace:a_b";
+    const tieIds = ["é", "e\u0301"] as const;
+    expect(tieIds[0].localeCompare(tieIds[1])).toBe(0);
+    for (const [index, id] of tieIds.entries()) {
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `INSERT INTO projects
+            (id, display_name, repo_root, source, created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, 'registered', 1, 1)`,
+        )
+        .run(id, index === 0 ? "First tie" : "Second tie", "/work/ties");
+    }
+    const projectRecent = (projectId: string, displayName: string) => ({
+      kind: "project",
+      projectId,
+      displayName,
+    });
+    const cases = [
+      { agent: "main", folder: repo, expected: [projectRecent("workspace:main", "registered")] },
+      { agent: "work", folder: repo, expected: [projectRecent("workspace:work", "registered")] },
+      { agent: "other", folder: repo, expected: [projectRecent(registered.id, "Registered")] },
+      {
+        agent: "main",
+        sessionKey: "global",
+        folder: repo,
+        expected: [projectRecent(registered.id, "Registered")],
+      },
+      {
+        agent: "main",
+        folder: otherWorkspace,
+        expected: [projectRecent("workspace:other", "other")],
+      },
+      {
+        agent: "main",
+        folder: localeWorkspaceDir,
+        expected: [projectRecent(localeWorkspace, "locale")],
+      },
+      { agent: "main", folder: "/work/ties", expected: [projectRecent(tieIds[0], "First tie")] },
+      {
+        agent: "main",
+        folder: repo,
+        projectId: registered.id,
+        expected: [projectRecent(registered.id, "Registered")],
+      },
+      {
+        agent: "main",
+        folder: `${repo}/`,
+        expected: [{ kind: "folder", folder: `${repo}/`, displayName: "registered" }],
+      },
+      {
+        agent: "main",
+        folder: repo,
+        projectId: registered.id,
+        repositoryWorkspaceId: "missing-workspace",
+        expected: [],
+      },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const profile = ensureProfileForEmail(`ranking-${index}@example.test`);
+      replaceSessionEntrySync(
+        {
+          agentId: entry.agent,
+          sessionKey:
+            ("sessionKey" in entry ? entry.sessionKey : undefined) ??
+            `agent:${entry.agent}:ranking-${index}`,
+        },
+        {
+          sessionId: `ranking-${index}`,
+          updatedAt: 100,
+          createdActor: { type: "human", source: "profile", id: profile.id },
+          spawnedCwd: entry.folder,
+          ...("projectId" in entry ? { projectId: entry.projectId } : {}),
+          ...("repositoryWorkspaceId" in entry
+            ? { repositoryWorkspaceId: entry.repositoryWorkspaceId }
+            : {}),
+        },
+      );
+      const result = await invokeProjectMethod(
+        "projects.list",
+        {},
+        cfg,
+        ["operator.write"],
+        profile.id,
+      );
+      expect(result).toMatchObject({ ok: true, payload: { recents: entry.expected } });
+    }
+
+    const limited = ensureProfileForEmail("limited-recents@example.test");
+    for (let index = 0; index < 9; index++) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:limited-${index}` },
+        {
+          sessionId: `limited-${index}`,
+          updatedAt: 100 - index,
+          createdActor: { type: "human", source: "profile", id: limited.id },
+          spawnedCwd: index === 8 ? repo : `/work/folder-${index}`,
+        },
+      );
+    }
+    const read = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"], limited.id);
+    expect(read).toMatchObject({ ok: true, payload: { recents: [] } });
+  } finally {
+    await state.cleanup();
+  }
+});
+
 test("projects.add returns an existing project for the same canonical remote", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {

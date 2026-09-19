@@ -156,23 +156,24 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
   };
 }
 
-function resolvePathProject(
-  projects: readonly ProjectRegistryEntry[],
-  folder: string,
-  sessionKey: string,
-): ProjectRegistryEntry | undefined {
-  const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-  return projects
-    .filter((project) => project.repoRoot === folder)
-    .toSorted((left, right) => {
-      const rank = (project: ProjectRegistryEntry) =>
-        project.source === "workspace" && project.agentId === sessionAgentId
-          ? 0
-          : project.source !== "workspace"
-            ? 1
-            : 2;
-      return rank(left) - rank(right) || left.id.localeCompare(right.id);
-    })[0];
+function indexPathProjects(projects: readonly ProjectRegistryEntry[]) {
+  const byPath = new Map<string, ProjectRegistryEntry>();
+  const byAgent = new Map<string | undefined, ProjectRegistryEntry>();
+  for (const project of projects) {
+    // The registry emits one workspace per unique configured agent.
+    if (project.source === "workspace") {
+      byAgent.set(project.agentId, project);
+    }
+    const previous = byPath.get(project.repoRoot);
+    if (
+      !previous ||
+      (Number(project.source === "workspace") - Number(previous.source === "workspace") ||
+        project.id.localeCompare(previous.id)) < 0
+    ) {
+      byPath.set(project.repoRoot, project);
+    }
+  }
+  return { byPath, byAgent };
 }
 
 function listProjectRecents(
@@ -194,6 +195,7 @@ function listProjectRecents(
   const projectsById = new Map(projects.map((project) => [project.id, project]));
   const seen = new Set<string>();
   const recents: ProjectRecent[] = [];
+  let pathProjects: ReturnType<typeof indexPathProjects> | undefined;
   for (const [sessionKey, entry] of candidates) {
     if (entry.repositoryWorkspaceId) {
       const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
@@ -223,8 +225,13 @@ function listProjectRecents(
     const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
     const execCwd = normalizeOptionalString(entry.execCwd);
     const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
-    const project =
-      explicitProject ?? (folder ? resolvePathProject(projects, folder, sessionKey) : undefined);
+    let project = explicitProject;
+    if (!project && folder) {
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+      const indexed = (pathProjects ??= indexPathProjects(projects));
+      const workspace = indexed.byAgent.get(agentId);
+      project = workspace?.repoRoot === folder ? workspace : indexed.byPath.get(folder);
+    }
     const key = project
       ? `project:${project.id}`
       : folder
