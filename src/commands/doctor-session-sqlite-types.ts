@@ -25,6 +25,10 @@ export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTarg
   return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
 }
 
+export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean {
+  return ["entry_invalid", "transcript_malformed", "transcript_missing"].includes(issue.code);
+}
+
 export type DoctorSessionSqliteRestoreConflict = {
   archivePath: string;
   reason: string;

@@ -17,10 +17,8 @@ import {
   type DoctorConfigCapture,
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
-import {
-  createUpdateFailureFact,
-  normalizeUpdateFailureFacts,
-} from "../infra/update-failure-facts.js";
+import { formatUpdateFailureFact } from "../infra/update-failure-facts-format.js";
+import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -294,6 +292,14 @@ async function runDoctorHealthFlowWithResult(
   } catch (error) {
     const { DoctorStateMigrationRefusalError } =
       await import("../infra/state-migrations.messages.js");
+    const refusalWarnings =
+      error instanceof DoctorStateMigrationRefusalError
+        ? error.failureFacts.map(formatUpdateFailureFact)
+        : [];
+    if (healthContext && refusalWarnings.length > 0) {
+      const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
+      recordDoctorHealthWarnings(healthContext, [], refusalWarnings, { prepend: true });
+    }
     if (error instanceof DoctorStateMigrationRefusalError) {
       const { recordUpdateDoctorRefusal, resolveUpdateDoctorGitRecovery } =
         await import("../commands/doctor-update-refusal.js");
@@ -305,30 +311,17 @@ async function runDoctorHealthFlowWithResult(
     }
     doctorResult = {
       status: "error",
+      ...(!healthContext && refusalWarnings.length > 0 ? { warnings: refusalWarnings } : {}),
       failureFacts:
-        error instanceof UpdateDoctorError
+        error instanceof UpdateDoctorError || error instanceof DoctorStateMigrationRefusalError
           ? error.failureFacts
-          : error instanceof DoctorStateMigrationRefusalError
-            ? normalizeUpdateFailureFacts(
-                error.stepReceipts.flatMap((receipt) =>
-                  receipt.outcome === "refused" && receipt.refusal
-                    ? [
-                        {
-                          check: receipt.id,
-                          code: receipt.refusal.code,
-                          message: receipt.refusal.message,
-                        },
-                      ]
-                    : [],
-                ),
-              )
-            : [
-                createUpdateFailureFact({
-                  check: "doctor",
-                  code: "doctor-failed",
-                  message: error instanceof Error ? error.message : String(error),
-                }),
-              ],
+          : [
+              createUpdateFailureFact({
+                check: "doctor",
+                code: "doctor-failed",
+                message: error instanceof Error ? error.message : String(error),
+              }),
+            ],
     };
     if (maintenance) {
       if (!(error instanceof DoctorStateMigrationRefusalError)) {

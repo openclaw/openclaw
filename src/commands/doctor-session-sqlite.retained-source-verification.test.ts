@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createConfigIO } from "../config/io.js";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -8,7 +9,10 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "../infra/deferred-plugin-migrations.js";
 import {
   readDeferredPluginSessionImport,
   resolveVerifiedSessionSource,
@@ -16,11 +20,13 @@ import {
 } from "../infra/deferred-plugin-session-sources.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { doctorCommand } from "./doctor.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -135,6 +141,180 @@ describe("retained session source verification", () => {
           expect(fs.readFileSync(uncaptured, "utf8")).toBe(bytes);
         }
       });
+    },
+  );
+
+  it.each(["none", "archived", "live"] as const)(
+    "settles plugin work after index-free canonical session repair (remaining history: %s)",
+    async (history) => {
+      await withOpenClawTestState(
+        {
+          label: "deferred-index-free",
+          env: {
+            OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
+        },
+        async (state) => {
+          const cfg: OpenClawConfig = {
+            agents: { entries: { main: { default: true }, ops: {} } },
+            gateway: { mode: "local" },
+          };
+          for (const agentId of ["main", "ops"]) {
+            const directory = state.sessionsDir(agentId);
+            fs.mkdirSync(directory, { recursive: true });
+            fs.writeFileSync(path.join(directory, "sessions.json"), "{}");
+            fs.writeFileSync(
+              path.join(directory, `${agentId}-history.jsonl`),
+              [
+                { type: "session", version: 3, id: `${agentId}-history` },
+                {
+                  type: "message",
+                  id: `${agentId}-user`,
+                  parentId: null,
+                  message: { role: "user", content: "Canonical history" },
+                },
+              ]
+                .map((entry) => JSON.stringify(entry))
+                .join("\n") + "\n",
+            );
+          }
+          const imported = await runDoctorSessionSqlite({
+            cfg,
+            env: state.env,
+            allAgents: true,
+            mode: "import",
+          });
+          expect(imported.totals.importedEntries).toBe(2);
+          const manifest = migrationRun.readSessionSqliteMigrationManifest(
+            imported.migrationRun!.manifestPath,
+          )!;
+          const originals = new Map<string, Buffer>();
+          for (const target of manifest.targets) {
+            expect(fs.existsSync(target.storePath)).toBe(false);
+            for (const move of target.completedMoves) {
+              originals.set(move.archivePath, fs.readFileSync(move.archivePath));
+              if (history === "live" && move.kind === "transcript") {
+                fs.copyFileSync(move.archivePath, move.sourcePath);
+              }
+            }
+            if (history === "archived") {
+              for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+                if (move.kind !== "transcript") {
+                  continue;
+                }
+                // An older import retained primary history as a protected archive.
+                move.kind = "unreferenced-jsonl";
+                move.artifact!.classification = "protected";
+                move.artifact!.reason = "unreferenced-history";
+              }
+            }
+          }
+          fs.writeFileSync(imported.migrationRun!.manifestPath, JSON.stringify(manifest));
+          const pluginId = "session-fixture";
+          const pluginRoot = state.path("session-plugin");
+          fs.mkdirSync(pluginRoot);
+          fs.writeFileSync(
+            path.join(pluginRoot, "package.json"),
+            JSON.stringify({
+              name: "@example/session-fixture",
+              version: "1.0.0",
+              openclaw: { extensions: ["./index.cjs"] },
+            }),
+          );
+          fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
+          fs.writeFileSync(
+            path.join(pluginRoot, "openclaw.plugin.json"),
+            JSON.stringify({
+              id: pluginId,
+              configSchema: {
+                type: "object",
+                properties: { fixture: { type: "boolean" } },
+                additionalProperties: false,
+              },
+              doctorContract: {
+                stateMigrations: [
+                  { id: "session-state", phase: "after-session-repair", doctorOnly: true },
+                ],
+              },
+            }),
+          );
+          fs.writeFileSync(
+            path.join(pluginRoot, "doctor-contract-api.cjs"),
+            `module.exports = { stateMigrations: [{ id: "session-state", label: "Synthetic session state", phase: "after-session-repair", doctorOnly: true, detectLegacyState: () => null, migrateLegacyState: () => { throw new Error("No plugin inputs exist"); } }] };\n`,
+          );
+          cfg.plugins = {
+            allow: [pluginId],
+            load: { paths: [pluginRoot] },
+            entries: { [pluginId]: { enabled: true, config: { fixture: true } } },
+          };
+          await state.writeConfig(cfg);
+          recordDeferredPluginMigrations({
+            env: state.env,
+            pending: [
+              {
+                pluginId,
+                reason: "Retained session migration has not completed.",
+                command: "openclaw doctor --fix",
+                requiresStateMigration: true,
+                configPaths: [["plugins", "entries", pluginId, "config"]],
+              },
+            ],
+          });
+          const io = createConfigIO({ env: state.env, configPath: state.configPath });
+          const editConfig = async () => {
+            const snapshot = await io.readConfigFileSnapshot();
+            await io.writeConfigFile(
+              {
+                ...snapshot.sourceConfig,
+                plugins: {
+                  ...snapshot.sourceConfig.plugins,
+                  entries: { [pluginId]: { enabled: true, config: { fixture: false } } },
+                },
+              },
+              {
+                explicitSetPaths: [["plugins", "entries", pluginId, "config", "fixture"]],
+                skipRuntimeSnapshotRefresh: true,
+              },
+            );
+          };
+          await expect(editConfig()).rejects.toThrow("Cannot edit retained config");
+          const repair = noteSessionTranscriptHealth({ cfg, env: state.env, shouldRepair: true });
+          if (history === "live") {
+            await expect(repair).rejects.toThrow(
+              "restore the matching sessions.json from a backup",
+            );
+            expect(readDeferredPluginMigrations({ env: state.env })).toHaveLength(1);
+            await expect(editConfig()).rejects.toThrow("Cannot edit retained config");
+            for (const target of manifest.targets) {
+              for (const move of target.completedMoves) {
+                if (move.kind === "transcript") {
+                  expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
+                }
+              }
+            }
+          } else {
+            await repair;
+            expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
+            const row = withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) =>
+                db
+                  .prepare("SELECT status, finished_at FROM migration_runs WHERE id = ?")
+                  .get(`deferred-plugin-migration:${pluginId}`),
+              { env: state.env },
+            );
+            expect(row?.status).toBe("completed");
+            expect(row?.finished_at).not.toBeNull();
+            await editConfig();
+            expect(
+              (await io.readConfigFileSnapshot()).sourceConfig.plugins?.entries?.[pluginId]?.config,
+            ).toEqual({ fixture: false });
+          }
+          for (const [file, bytes] of originals) {
+            expect(fs.readFileSync(file)).toEqual(bytes);
+          }
+        },
+      );
     },
   );
 

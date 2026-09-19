@@ -99,6 +99,11 @@ for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
 Changed originals and active files
 outside the receipt still need inspection.
+When the legacy index and live transcript inputs are gone, verified historical
+archives keep their existing receipts. They do not require a new legacy-index
+receipt or block post-session plugin repair. The plugin's completion releases
+its retained configuration. Unverified live inputs still require their matching
+index; Doctor names the missing source and the recovery action.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,
