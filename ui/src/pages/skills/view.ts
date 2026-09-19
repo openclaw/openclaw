@@ -255,12 +255,18 @@ function renderSkillsToolbar(
     >
     <button
       type="button"
-      class="btn"
+      class="btn skills-toolbar__refresh"
       ?disabled=${skillControlsLocked(props) || !props.connected}
+      aria-busy=${props.loading}
+      aria-label=${t("common.refresh")}
       @click=${props.onRefresh}
     >
-      ${props.loading ? t("common.loading") : t("common.refresh")}
+      <span class="btn__label">${t("common.refresh")}</span>
+      ${props.loading ? html`<span class="btn__spinner" aria-hidden="true"></span>` : nothing}
     </button>
+    <span class="sr-only" role="status" aria-live="polite"
+      >${props.loading ? t("common.loading") : nothing}</span
+    >
   </div>`;
 }
 
