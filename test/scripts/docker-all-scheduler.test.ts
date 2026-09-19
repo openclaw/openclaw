@@ -202,6 +202,149 @@ function candidateFixture(packageName = "openclaw", packageVersion = "2026.8.1")
   };
 }
 
+// The fake lane invokes the real packaged-inventory probe. This is scheduler/probe
+// routing proof, not Docker installation or a native release-package qualification.
+function frozenSweepFixture(packagedIds: string[]) {
+  const root = tempDirs.make("openclaw-frozen-sweep-");
+  const target = path.join(root, "frozen target");
+  const staging = path.join(root, "staging");
+  const packaged = path.join(staging, "package");
+  const observations = path.join(root, "observations.jsonl");
+  const runner = path.join(root, "fake-pnpm");
+  mkdirSync(target, { recursive: true });
+  mkdirSync(packaged, { recursive: true });
+  const packageJson = {
+    name: "openclaw",
+    version: "2026.9.2",
+    files: ["dist/", "!dist/extensions/external/**"],
+  };
+  for (const base of [target, packaged]) {
+    writeFileSync(path.join(base, "package.json"), JSON.stringify(packageJson));
+  }
+  for (const id of ["alpha", "beta", "external", "qa-lab", "acpx", "source-only"]) {
+    const dir = path.join(target, "extensions", id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify({ id }));
+    if (id === "source-only") {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ openclaw: { build: { bundledDist: false } } }),
+      );
+    }
+  }
+  const support = path.join(target, "extensions", "runtime-support");
+  mkdirSync(support, { recursive: true });
+  writeFileSync(
+    path.join(support, "package.json"),
+    JSON.stringify({ name: "@openclaw/runtime-support" }),
+  );
+  writeFileSync(path.join(support, "index.ts"), "export {};\n");
+  // Never import target-owned inventory code. Only its inert source manifests matter.
+  const poison = path.join(target, "scripts/lib");
+  mkdirSync(poison, { recursive: true });
+  writeFileSync(
+    path.join(poison, "bundled-plugin-build-entries.mjs"),
+    'throw new Error("target owner executed");\n',
+  );
+  for (const id of packagedIds) {
+    const dir = path.join(packaged, "dist/extensions", id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify({ id }));
+  }
+  const cli = path.join(packaged, "plugins-list.mjs");
+  writeFileSync(
+    cli,
+    [
+      'import fs from "node:fs"; import path from "node:path"; import { fileURLToPath } from "node:url";',
+      'const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist/extensions");',
+      'console.log(JSON.stringify({ plugins: fs.readdirSync(root).map(id => ({ id, origin: "bundled", rootDir: path.join(root, id) })) }));',
+    ].join("\n"),
+  );
+  const packagePath = path.join(root, "frozen.tgz");
+  execFileSync("tar", ["-czf", packagePath, "-C", staging, "package"]);
+  execFileSync("git", ["init", "-q"], { cwd: target });
+  execFileSync("git", ["add", "."], { cwd: target });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-qm",
+      "frozen fixture",
+    ],
+    { cwd: target },
+  );
+  const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: target,
+    encoding: "utf8",
+  }).trim();
+  const probe = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
+  writeFileSync(
+    runner,
+    [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs"); const { spawnSync } = require("node:child_process");',
+      "const lane = process.env.OPENCLAW_DOCKER_ALL_LANE_NAME;",
+      `fs.appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ lane, ids: process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS ?? null }) + "\\n");`,
+      'if (!lane.startsWith("bundled-plugin-install-uninstall-")) process.exit(0);',
+      `const result = spawnSync(process.execPath, [${JSON.stringify(probe)}, "select"], { encoding: "utf8", env: { ...process.env, OPENCLAW_ENTRY: ${JSON.stringify(cli)} } });`,
+      'process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || "");',
+      "process.exit(result.status ?? 1);",
+    ].join("\n"),
+  );
+  chmodSync(runner, 0o755);
+  return { root, target, observations, runner, packagePath, selectedSha };
+}
+
+function runFrozenSweep(
+  fixture: ReturnType<typeof frozenSweepFixture>,
+  overrides: NodeJS.ProcessEnv = {},
+) {
+  return spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 30_000,
+    env: {
+      ...process.env,
+      OPENCLAW_DOCKER_E2E_REPO_ROOT: fixture.target,
+      OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: process.cwd(),
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: fixture.selectedSha,
+      OPENCLAW_CURRENT_PACKAGE_TGZ: fixture.packagePath,
+      OPENCLAW_CURRENT_PACKAGE_VERSION: "2026.9.2",
+      OPENCLAW_CURRENT_PACKAGE_SHA256: sha256(fixture.packagePath),
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: undefined,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: undefined,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: undefined,
+      OPENCLAW_DOCKER_ALL_LANES: "bundled-plugin-install-uninstall-0,plugin-binding-command-escape",
+      OPENCLAW_DOCKER_ALL_BUILD: "0",
+      OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+      OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      OPENCLAW_DOCKER_ALL_START_STAGGER_MS: "0",
+      OPENCLAW_DOCKER_ALL_STATUS_INTERVAL_MS: "0",
+      OPENCLAW_DOCKER_ALL_PARALLELISM: "1",
+      OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: "1",
+      OPENCLAW_DOCKER_ALL_DRY_RUN: "0",
+      OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "logs"),
+      OPENCLAW_DOCKER_ALL_PNPM_COMMAND: fixture.runner,
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "alpha",
+      OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "alpha",
+      OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0",
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: undefined,
+      ...overrides,
+    },
+  });
+}
+
+function sweepObservations(fixture: ReturnType<typeof frozenSweepFixture>) {
+  return readFileSync(fixture.observations, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { lane: string; ids: string | null });
+}
+
 function writeFakePackScript(root: string, sourceTarball: string) {
   const script = path.join(root, "scripts/package-openclaw-for-docker.mjs");
   mkdirSync(path.dirname(script), { recursive: true });
@@ -339,6 +482,104 @@ async function runReadyTimedCommand<T>(
 }
 
 describe("scripts/test-docker-all scheduler", () => {
+  it("rejects an immutable frozen package missing an expected bundled plugin before sharding", () => {
+    const fixture = frozenSweepFixture(["alpha"]);
+    const result = runFrozenSweep(fixture);
+    expect(result.status, result.stderr || result.stdout).toBe(1);
+    expect(
+      readFileSync(path.join(fixture.root, "logs/bundled-plugin-install-uninstall-0.log"), "utf8"),
+    ).toContain("not an installable bundled plugin in this package: beta");
+    expect(sweepObservations(fixture)[0]?.ids).toBe("alpha,beta");
+  });
+
+  it.each([undefined, "undefined", "null", " , "])(
+    "derives complete eligible frozen inventory for override %s",
+    (override) => {
+      const fixture = frozenSweepFixture(["alpha", "beta"]);
+      const result = runFrozenSweep(fixture, { OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: override });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(sweepObservations(fixture)).toEqual([
+        { lane: "bundled-plugin-install-uninstall-0", ids: "alpha,beta" },
+        { lane: "plugin-binding-command-escape", ids: null },
+      ]);
+    },
+  );
+
+  it("preserves an explicit supported subset without leaking it to another lane", () => {
+    const fixture = frozenSweepFixture(["alpha"]);
+    const result = runFrozenSweep(fixture, { OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: "alpha" });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(sweepObservations(fixture)).toEqual([
+      { lane: "bundled-plugin-install-uninstall-0", ids: "alpha" },
+      { lane: "plugin-binding-command-escape", ids: null },
+    ]);
+  });
+
+  it("retains optional package policy independently of partial build selections", () => {
+    const fixture = frozenSweepFixture(["acpx", "alpha", "beta"]);
+    const result = runFrozenSweep(fixture, { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "1" });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(sweepObservations(fixture)[0]?.ids).toBe("acpx,alpha,beta");
+  });
+
+  it("gives each shard the same ordered inventory while the probe partitions it", () => {
+    const fixture = frozenSweepFixture(["alpha", "beta"]);
+    const result = runFrozenSweep(fixture, {
+      OPENCLAW_DOCKER_ALL_LANES:
+        "bundled-plugin-install-uninstall-0,bundled-plugin-install-uninstall-1",
+    });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(sweepObservations(fixture).map(({ ids }) => ids)).toEqual(["alpha,beta", "alpha,beta"]);
+    for (const [index, id] of ["alpha", "beta"].entries()) {
+      const log = readFileSync(
+        path.join(fixture.root, `logs/bundled-plugin-install-uninstall-${index}.log`),
+        "utf8",
+      );
+      expect(log).toContain(`${id}\t${id}\t0\t`);
+    }
+  });
+
+  it.each(["dry-run", "no-sweep"])("does not inspect absent inventory for %s", (mode) => {
+    const fixture = frozenSweepFixture(["alpha"]);
+    rmSync(path.join(fixture.target, "extensions"), { recursive: true });
+    const result = runFrozenSweep(
+      fixture,
+      mode === "dry-run"
+        ? { OPENCLAW_DOCKER_ALL_DRY_RUN: "1" }
+        : {
+            OPENCLAW_DOCKER_ALL_LANES: "plugin-binding-command-escape",
+            OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS: "alpha",
+          },
+    );
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    if (mode === "dry-run") {
+      expect(existsSync(fixture.observations)).toBe(false);
+    } else {
+      expect(sweepObservations(fixture)).toEqual([
+        { lane: "plugin-binding-command-escape", ids: null },
+      ]);
+    }
+  });
+
+  it("fails before launching lanes when eligible frozen inventory is empty", () => {
+    const fixture = frozenSweepFixture(["alpha"]);
+    for (const id of ["alpha", "beta"]) {
+      rmSync(path.join(fixture.target, "extensions", id), { recursive: true });
+    }
+    const result = runFrozenSweep(fixture);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no packaged bundled plugin manifests");
+    expect(existsSync(fixture.observations)).toBe(false);
+  });
+
+  it("still rejects a mismatched immutable package tuple before inventory or lanes", () => {
+    const fixture = frozenSweepFixture(["alpha", "beta"]);
+    const result = runFrozenSweep(fixture, { OPENCLAW_CURRENT_PACKAGE_SHA256: "0".repeat(64) });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("immutable tuple");
+    expect(existsSync(fixture.observations)).toBe(false);
+  });
+
   it("parses the supported CLI options", () => {
     expect(parseDockerAllCliArgs([])).toEqual({
       help: false,
