@@ -82,12 +82,36 @@ function toDisplayPath(root: string, resolved: string): string {
   return relative.split(path.sep).join("/");
 }
 
+/**
+ * Transcript facts can name references that are not workspace files at all. Inbound
+ * attachments arrive as `media://inbound/<id>` URIs, and remote or inline sources reach the
+ * fold the same way. Cwd resolution turns those into inside-root relative paths such as
+ * `<root>/media:/inbound/<id>`, so the containment filter below accepts them and the file
+ * panel then offers an entry that can never be opened.
+ *
+ * Only scheme-qualified transport sources are excluded. A bare colon is not a scheme here:
+ * POSIX filenames such as `report:2026.txt` are ordinary workspace files, and file URLs and
+ * Windows drive paths resolve like any other path. A data URL always carries a comma before
+ * its payload, so a filename such as `data:2026.txt` is unaffected.
+ */
+const NON_WORKSPACE_REFERENCE_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const DATA_URL_RE = /^data:[^,]*,/i;
+const FILE_URL_RE = /^file:/i;
+
+function isWorkspaceFileReference(filePath: string): boolean {
+  const source = filePath.trim();
+  if (FILE_URL_RE.test(source)) {
+    return true;
+  }
+  return !NON_WORKSPACE_REFERENCE_RE.test(source) && !DATA_URL_RE.test(source);
+}
+
 function resolveTouchedFilePath(params: {
   root: string | undefined;
   fileRoot: string | undefined;
   filePath: string;
 }): string | undefined {
-  if (!params.root) {
+  if (!params.root || !isWorkspaceFileReference(params.filePath)) {
     return undefined;
   }
   const base = params.fileRoot ?? params.root;
@@ -449,7 +473,7 @@ export async function listSessionWorkspaceFiles(
     ? loaded.files.filter((file) =>
         Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
       )
-    : loaded.files;
+    : loaded.files.filter((file) => isWorkspaceFileReference(file.path));
   const files = await Promise.all(
     workspaceFiles.map((file) =>
       toSessionFileEntry(file, loaded.root, loaded.fileRoot, { workspaceRoot }),
