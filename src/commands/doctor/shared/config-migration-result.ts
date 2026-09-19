@@ -4,6 +4,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.o
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
 import type {
+  LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
 } from "../../../infra/state-migrations.types.js";
@@ -13,6 +14,8 @@ import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 export type DoctorConfigPreflightOptions = {
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
+  /** Select Doctor normalization without enabling repair-only migrations. */
+  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
   migrateLegacyConfig?: boolean;
   repairPrefixedConfig?: boolean;
   recoverCorruptTargetStore?: boolean;

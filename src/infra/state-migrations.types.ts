@@ -215,6 +215,8 @@ export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
 
 export type LegacyStateMigrationMode = "automatic" | "doctor";
 
+export type LegacyStateMigrationInvocationPurpose = "startup" | "doctor";
+
 export type LegacyStateMigrationEndpoint =
   | { kind: "path"; path: string }
   | { kind: "sqlite"; path: string }

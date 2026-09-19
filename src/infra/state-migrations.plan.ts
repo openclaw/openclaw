@@ -8,6 +8,7 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
+import { isPathInside } from "./path-guards.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import type {
@@ -189,6 +190,25 @@ export async function readLegacyStateMigrationPlanConfig(params: {
 
 function normalizeEndpoint(endpoint: LegacyStateMigrationEndpoint): LegacyStateMigrationEndpoint {
   return endpoint.kind === "owner" ? endpoint : { ...endpoint, path: path.resolve(endpoint.path) };
+}
+
+export function remapMigrationEndpointRoot(
+  endpoint: LegacyStateMigrationEndpoint,
+  sourceRoot: string,
+  targetRoot: string,
+): LegacyStateMigrationEndpoint {
+  if (endpoint.kind === "owner") {
+    return endpoint;
+  }
+  const endpointPath = path.resolve(endpoint.path);
+  const source = path.resolve(sourceRoot);
+  if (endpointPath !== source && !isPathInside(source, endpointPath)) {
+    return endpoint;
+  }
+  return {
+    ...endpoint,
+    path: path.resolve(targetRoot, path.relative(source, endpointPath)),
+  };
 }
 
 export function createLegacyStateMigrationCallerEnv(params: {

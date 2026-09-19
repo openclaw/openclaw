@@ -562,6 +562,7 @@ async function runDoctorConfigPreflightOperation(
                 log: migrationLog,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                invocationPurpose: options.invocationPurpose,
                 ...(options.agentDatabaseMigrationDiscovery
                   ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
                   : {}),

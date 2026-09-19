@@ -128,6 +128,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     (progress) =>
       runDoctorConfigPreflight({
         observe: false,
+        invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
         recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,

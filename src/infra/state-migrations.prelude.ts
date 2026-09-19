@@ -17,26 +17,24 @@ import {
   resolveLegacyProfileWorkspaceMigrationPaths,
   resolvePendingLegacyProfileWorkspaceMigrationPaths,
 } from "./state-migrations.state-dir.js";
-import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 import type {
   LegacyStateMigrationEndpoint,
+  LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationMode,
   LegacyStateMigrationStep,
 } from "./state-migrations.types.js";
 
 export function buildUnresolvedBlockedPreludeSteps(
   mode: LegacyStateMigrationMode,
+  invocationPurpose: LegacyStateMigrationInvocationPurpose,
 ): LegacyStateMigrationStep[] {
-  const ids =
-    mode === "automatic"
-      ? ["transcript-directives"]
-      : [
-          "media-persistence",
-          "transcript-directives",
-          "profile-workspace",
-          "plugin-migration-preparation",
-          "orphan-session-keys",
-        ];
+  const ids = [
+    ...(mode === "doctor" ? ["media-persistence"] : []),
+    ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
+    ...(mode === "doctor"
+      ? ["profile-workspace", "plugin-migration-preparation", "orphan-session-keys"]
+      : []),
+  ];
   return ids.map((id) => ({
     id,
     phase: "shared",
@@ -123,6 +121,7 @@ export function inspectOrphanSessionStoreEndpoints(params: {
 
 export function buildLegacyStateMigrationPreludeSteps(params: {
   mode: LegacyStateMigrationMode;
+  invocationPurpose: LegacyStateMigrationInvocationPurpose;
   config: OpenClawConfig;
   configPath: string;
   configIncludedPaths: readonly string[];
@@ -189,11 +188,18 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       ),
     );
   }
-  steps.push(
-    sharedStep("transcript-directives", agentPersistence, agentPersistence, () =>
-      migrateHistoricalTranscriptDirectives({ ...agentMigrationOptions, preparedTargets }),
-    ),
-  );
+  if (params.invocationPurpose === "doctor") {
+    steps.push(
+      sharedStep("transcript-directives", agentPersistence, agentPersistence, async () => {
+        const { migrateHistoricalTranscriptDirectives } =
+          await import("./state-migrations.transcript-directives.js");
+        return await migrateHistoricalTranscriptDirectives({
+          ...agentMigrationOptions,
+          preparedTargets,
+        });
+      }),
+    );
+  }
   if (params.mode !== "doctor") {
     return steps;
   }
@@ -228,7 +234,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   if (!orphanSessionStores) {
     // Early failures still close this stable step; its sources are prepared after prerequisites.
     steps.push(
-      ...buildUnresolvedBlockedPreludeSteps(params.mode).filter(
+      ...buildUnresolvedBlockedPreludeSteps(params.mode, params.invocationPurpose).filter(
         (step) => step.id === "orphan-session-keys",
       ),
     );
