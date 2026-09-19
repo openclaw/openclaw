@@ -789,6 +789,30 @@ describe("ComposerDictationController", () => {
     controller.dispose();
   });
 
+  it("commits a latched dictation once when the release and a second stop both dispatch", async () => {
+    const { controller, onCommit, target } = createHarness();
+    await startHold(target);
+    emit({
+      transcriptionSessionId: "dictation-1",
+      type: "transcript",
+      text: "hello world",
+      final: true,
+    });
+
+    // iOS Safari dispatches the compatibility click after the release once the
+    // suppression window has passed, and the operator can then dispatch the
+    // Stop control for the same dictation.
+    document.dispatchEvent(pointer("pointerup"));
+    await vi.advanceTimersByTimeAsync(0);
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenCalledWith("hello world");
+    controller.dispose();
+  });
+
   it("commits final text promptly when the Gateway disconnects during a partial drain", async () => {
     const harness = createHarness();
     await startHold(harness.target);

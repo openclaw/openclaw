@@ -193,6 +193,46 @@ describe("NewSessionDictationControl", () => {
     expect(controller.finishActive).toHaveBeenCalledTimes(2);
   });
 
+  it("claims a fresh draft and commits again when the microphone starts the next recording", () => {
+    const captureSelection = vi.fn();
+    const insertTranscript = vi.fn((transcript: string) => transcript);
+    const onMessage = vi.fn();
+    const control = new NewSessionDictationControl({
+      textarea: { captureSelection, insertTranscript } as never,
+      getClient: () => ({}) as never,
+      isConnected: () => true,
+      canCommit: () => true,
+      onMessage,
+      onError: vi.fn(),
+      onSubmit: vi.fn(),
+      requestUpdate: vi.fn(),
+    });
+    const container = document.createElement("div");
+    render(control.render("agent-a"), container);
+    container.querySelector<HTMLButtonElement>(".chat-send-btn--voice")?.click();
+    const controller = dictationHarness.controllers[0];
+    if (!controller) {
+      throw new Error("expected dictation controller");
+    }
+
+    expect(captureSelection).toHaveBeenCalledOnce();
+    dictationHarness.options?.onCommit("spoken task");
+
+    expect(insertTranscript).toHaveBeenCalledWith("spoken task", undefined);
+    expect(onMessage).toHaveBeenCalledWith("spoken task");
+
+    // The next recording owns a fresh draft and its own commit.
+    controller.active = false;
+    render(control.render("agent-a"), container);
+    container.querySelector<HTMLButtonElement>(".chat-send-btn--voice")?.click();
+    expect(captureSelection).toHaveBeenCalledTimes(2);
+    dictationHarness.options?.onCommit("second task");
+
+    expect(insertTranscript).toHaveBeenCalledTimes(2);
+    expect(onMessage).toHaveBeenLastCalledWith("second task");
+    control.dispose();
+  });
+
   it("cancels active dictation and drops its late transcript when the route owner changes", () => {
     const insertTranscript = vi.fn(() => "route B draft");
     const onMessage = vi.fn();

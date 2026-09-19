@@ -47,6 +47,12 @@ export type ChatRunControlsProps = {
   voiceVideoPending?: boolean;
   dictation?: ComposerDictationController;
   onDictationPointerDown?: (event: PointerEvent) => void;
+  /**
+   * The microphone that starts dictation without a hold gesture must claim the
+   * draft and caret the commit inserts into before the live preview takes the
+   * textarea over.
+   */
+  onDirectDictationStart?: () => void;
   onPrimaryActionPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
   onSend: (submissionAction?: Event) => void;
@@ -557,6 +563,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             isBusy: props.isBusy,
             dictation: props.dictation,
             idleLabel: t("chat.composer.dictationCapability"),
+            onDirectDictationStart: props.onDirectDictationStart,
           })}
         </span>
       `
