@@ -56,6 +56,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
+import { buildGoogleRealtimeSystemInstruction } from "./realtime-voice-language.js";
 import {
   GOOGLE_REALTIME_DEFAULT_MODEL,
   GOOGLE_REALTIME_VOICE_METADATA,
@@ -315,7 +316,7 @@ function buildFunctionDeclarations(
 }
 
 function buildGoogleLiveConnectConfig(
-  config: GoogleRealtimeLiveConfig,
+  config: GoogleRealtimeLiveConfig & { language?: string },
   model: string,
 ): LiveConnectConfig {
   const functionDeclarations = buildFunctionDeclarations(
@@ -336,7 +337,7 @@ function buildGoogleLiveConnectConfig(
         },
       },
     },
-    systemInstruction: config.instructions,
+    systemInstruction: buildGoogleRealtimeSystemInstruction(config.instructions, config.language),
     ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
     ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
     inputAudioTranscription: {},

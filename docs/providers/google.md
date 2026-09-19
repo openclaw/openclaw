@@ -423,6 +423,20 @@ SDK rejects language-code hints on this API path.
 </Note>
 
 <Note>
+A Talk or bridge session can carry a caller language hint; Android forwards the
+language part of `talk.speechLocale` or the device locale. The OpenAI realtime
+provider uses that hint for input transcription only. Google Live native-audio
+models ignore `speechConfig.languageCode` and otherwise reply in whatever language
+a short or noisy utterance was transcribed as, so the Google provider also treats
+the hint as a soft reply-language preference. It starts the system instruction
+with a short note: reply in the hinted language, and switch when the caller asks
+for another language. OpenClaw's realtime prompt and your `realtime.instructions`
+follow that note, so a reply language set there (for example "Always reply in
+French") takes precedence. Sessions without a hint, or with an unrecognized one,
+send the instructions unchanged.
+</Note>
+
+<Note>
 Gemini 3.1 Live accepts conversational text through realtime input and uses
 sequential function calling. OpenClaw omits the older `NON_BLOCKING`, function
 response scheduling, and affective-dialog fields for this model. Prefer
