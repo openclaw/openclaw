@@ -299,7 +299,10 @@ export async function prepareRetiredCopilotState(chromeApi = chrome) {
     return { blocked: true };
   }
   try {
-    await discardRetiredCopilotState(chromeApi);
+    // No custody remains, so partial cleanup is safe to retry on the next worker.
+    // Reserve the durable marker for explicit discard of potentially live custody.
+    await chromeApi.storage.session.remove(COPILOT_SESSION_KEYS);
+    await chromeApi.storage.local.remove(COPILOT_LOCAL_KEYS);
   } catch {
     return { blocked: true };
   }
