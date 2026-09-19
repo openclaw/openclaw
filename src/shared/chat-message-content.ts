@@ -44,6 +44,24 @@ export function normalizeAssistantPhase(value: unknown): AssistantPhase | undefi
   return value === "commentary" || value === "final_answer" ? value : undefined;
 }
 
+/** OpenClaw-generated stream-reconciliation ids, not provider item identities. */
+export function isGeneratedAssistantTextSignatureId(id: string): boolean {
+  return /^(?:minimax-commentary|commentary|final-answer)-\d+-[0-9a-f]{24}$/u.test(id);
+}
+
+/** Generated pre-tool commentary ids (ordinary or MiniMax; not final-answer / provider ids). */
+function isGeneratedAssistantCommentaryId(id: string): boolean {
+  return (
+    isGeneratedAssistantTextSignatureId(id) &&
+    (id.startsWith("commentary-") || id.startsWith("minimax-commentary-"))
+  );
+}
+
+/** MiniMax-tagged narration that live Control UI should suppress (not ordinary #135081 progress). */
+export function isGeneratedMiniMaxAssistantCommentaryId(id: string): boolean {
+  return isGeneratedAssistantCommentaryId(id) && id.startsWith("minimax-commentary-");
+}
+
 /** Parses assistant text block signatures, preserving legacy raw ids when not JSON encoded. */
 export function parseAssistantTextSignature(
   block: AssistantTextSignatureBlock,

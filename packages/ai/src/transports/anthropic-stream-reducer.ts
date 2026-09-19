@@ -47,6 +47,13 @@ import {
   type WritableTransportStream,
 } from "./transport-stream-shared.js";
 
+function tagPendingAnthropicCommentaryText(
+  content: ReadonlyArray<unknown>,
+  provider: string | undefined,
+) {
+  return tagPendingCommentaryText(content, { provider });
+}
+
 export type AnthropicStreamBlock = AssistantMessage["content"][number] & {
   index?: number;
   partialJson?: string;
@@ -380,7 +387,7 @@ export async function consumeAnthropicStream(params: {
         }
         if (contentBlock?.type === "tool_use") {
           if (managed) {
-            tagPendingCommentaryText(output.content);
+            tagPendingAnthropicCommentaryText(output.content, model.provider);
           }
           flushPendingTextEnds();
           const block: AnthropicStreamBlock = {
@@ -609,7 +616,7 @@ export async function consumeAnthropicStream(params: {
           (output.stopReason === "toolUse" ||
             output.content.some((block) => block.type === "toolCall"))
         ) {
-          tagPendingCommentaryText(output.content);
+          tagPendingAnthropicCommentaryText(output.content, model.provider);
         }
         flushPendingTextEnds();
       }
@@ -663,7 +670,7 @@ export async function consumeAnthropicStream(params: {
       managed &&
       (output.stopReason === "toolUse" || output.content.some((block) => block.type === "toolCall"))
     ) {
-      tagPendingCommentaryText(output.content);
+      tagPendingAnthropicCommentaryText(output.content, model.provider);
     }
     flushPendingTextEnds();
   } finally {

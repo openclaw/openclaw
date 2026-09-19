@@ -7,6 +7,7 @@ import {
   skipWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { stripMinimaxToolCallXml } from "./assistant-visible-text.minimax.js";
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
@@ -16,6 +17,8 @@ import {
   trimTextFilter,
   type TextFilter,
 } from "./text-projection.js";
+
+export { stripMinimaxToolCallXml };
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -479,70 +482,6 @@ export function stripToolCallXmlTags(
   }
 
   return unwrapStandaloneParameterTags(result);
-}
-
-/**
- * Strip malformed Minimax tool invocations that leak into text content.
- * Minimax sometimes embeds tool calls as XML in text blocks instead of
- * proper structured tool calls.
- */
-export function stripMinimaxToolCallXml(text: string): string {
-  const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
-  const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
-  const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
-  if (!text || (!/minimax:tool_call/i.test(text) && !encodedToolCallOpenRe.test(text))) {
-    return text;
-  }
-  encodedToolCallOpenRe.lastIndex = 0;
-
-  const sourceCodeRegions = findCodeRegions(text);
-  let normalized = "";
-  let envelopeCursor = 0;
-  for (const openMatch of text.matchAll(encodedToolCallOpenRe)) {
-    const start = openMatch.index;
-    if (start < envelopeCursor || isInsideCode(start, sourceCodeRegions)) {
-      continue;
-    }
-
-    encodedToolCallCloseRe.lastIndex = start + openMatch[0].length;
-    let closeMatch = encodedToolCallCloseRe.exec(text);
-    while (closeMatch && isInsideCode(closeMatch.index, sourceCodeRegions)) {
-      closeMatch = encodedToolCallCloseRe.exec(text);
-    }
-    if (!closeMatch) {
-      // A later opening cannot find a closing marker once this search reaches the end.
-      break;
-    }
-
-    const end = closeMatch.index + closeMatch[0].length;
-    normalized += text.slice(envelopeCursor, start);
-    if (sourceCodeRegions.some((region) => region.start >= start && region.end <= end)) {
-      envelopeCursor = end;
-      continue;
-    }
-    normalized += text.slice(start, end).replace(encodedTransportBoundaryRe, "");
-    envelopeCursor = end;
-  }
-  normalized += text.slice(envelopeCursor);
-
-  if (!/minimax:tool_call/i.test(normalized)) {
-    return normalized;
-  }
-
-  const codeRegions = findCodeRegions(normalized);
-  const minimaxToolXmlRe = /<invoke\b[^>]*>[\s\S]*?<\/invoke>|<\/?minimax:tool_call>/gi;
-  let result = "";
-  let cursor = 0;
-  for (const match of normalized.matchAll(minimaxToolXmlRe)) {
-    const start = match.index ?? 0;
-    if (isInsideCode(start, codeRegions)) {
-      continue;
-    }
-    result += normalized.slice(cursor, start);
-    cursor = start + match[0].length;
-  }
-  result += normalized.slice(cursor);
-  return result;
 }
 
 function isLegacyBracketToolCallPayload(value: string): boolean {

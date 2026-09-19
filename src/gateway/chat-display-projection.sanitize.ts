@@ -555,7 +555,11 @@ export function sanitizeChatHistoryMessage(
       entry.content = commentary ? updated.filter((block) => block !== undefined) : updated;
       changed = true;
     }
-    if (entry.role === "assistant" && Array.isArray(entry.content)) {
+    if (
+      entry.role === "assistant" &&
+      Array.isArray(entry.content) &&
+      !isAssistantStreamSegmentFallback(entry)
+    ) {
       const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
       if (mixedToolContent) {
         entry.content = mixedToolContent.content;
@@ -637,6 +641,15 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
   return hasToolHistoryBlock && hasText;
 }
 
+function isAssistantStreamSegmentFallback(message: unknown): boolean {
+  const fallback = readRecord(readRecord(message)?.openclawStreamFallback);
+  return (
+    fallback?.source === "segment" &&
+    typeof fallback.itemId === "string" &&
+    fallback.itemId.trim().length > 0
+  );
+}
+
 export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -648,7 +661,10 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (isProjectedForwardedMessage(entry)) {
     return false;
   }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
+  if (
+    resolveAssistantMessagePhase(message) === "commentary" &&
+    !isAssistantStreamSegmentFallback(entry)
+  ) {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);

@@ -1,6 +1,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { extractText } from "../../../lib/chat/message-extract.ts";
 import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { renderTaskActivityFeed } from "./chat-task-activity-feed.ts";
@@ -181,6 +182,77 @@ describe("task activity feed", () => {
       expect(loader).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps provider-keyed and ordinary commentary progress readable while hiding MiniMax narration", () => {
+    // Use already-projected shapes (same contract as chat-display-projection.media.test.ts)
+    // so UI vitest does not need to resolve the full gateway/@openclaw/ai graph.
+    const progressId = "msg_progress";
+    const ordinaryId = "commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa";
+    const minimaxId = "minimax-commentary-0-cccccccccccccccccccccccc";
+    const ordinaryProgress = "Checking the workspace before the tool runs.";
+    const monologue = "Running through the relevant rules";
+    const answer = "The lookup returned 42.";
+    const projected = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Visible progress" }],
+        openclawStreamFallback: { source: "segment", itemId: progressId },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: ordinaryProgress }],
+        openclawStreamFallback: { source: "segment", itemId: ordinaryId },
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: monologue,
+            textSignature: JSON.stringify({ v: 1, id: minimaxId, phase: "commentary" }),
+          },
+        ],
+        openclawStreamFallback: { source: "segment", itemId: minimaxId },
+      },
+      {
+        role: "assistant",
+        content: [toolCall("lookup", "lookup", { query: "value" })],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: answer,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "final-answer-0-bbbbbbbbbbbbbbbbbbbbbbbb",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      },
+    ];
+    const fallbackItemId = (message: unknown) => {
+      const fallback = (message as { openclawStreamFallback?: { itemId?: string } })
+        .openclawStreamFallback;
+      return fallback?.itemId;
+    };
+    expect(extractText(projected.find((message) => fallbackItemId(message) === progressId))).toBe(
+      "Visible progress",
+    );
+    expect(extractText(projected.find((message) => fallbackItemId(message) === ordinaryId))).toBe(
+      ordinaryProgress,
+    );
+    expect(
+      extractText(projected.find((message) => fallbackItemId(message) === minimaxId)),
+    ).toBeNull();
+    const container = mount(projected);
+    expect(container.textContent).toContain("Visible progress");
+    expect(container.textContent).toContain(ordinaryProgress);
+    expect(container.textContent).not.toContain(monologue);
+    expect(container.textContent).toContain(answer);
+  });
 
   it("renders user text plainly and assistant markdown with links and code", () => {
     const container = mount([

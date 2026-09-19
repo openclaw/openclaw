@@ -26,6 +26,7 @@ import {
 } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
+  parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../../shared/chat-message-content.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -183,6 +184,10 @@ function buildAssistantDisplayRewrite(params: {
     if (text) {
       if (text === block.text || previousDisplay) {
         content.push(text === block.text ? block : { ...block, text });
+      } else if (parseAssistantTextSignature(block)?.phase) {
+        // Phase metadata is OpenClaw-owned visibility, not a cryptographic
+        // provider signature bound to the unsanitized bytes.
+        content.push({ ...block, text });
       } else {
         const { textSignature: _textSignature, ...rest } = block;
         content.push({ ...rest, text });

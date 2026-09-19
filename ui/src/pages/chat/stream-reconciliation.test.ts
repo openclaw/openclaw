@@ -2,6 +2,10 @@
 // Control UI tests cover stream reconciliation behavior.
 import { describe, expect, it } from "vitest";
 import {
+  extractAssistantPhaseText,
+  extractAssistantTextForPhase,
+} from "../../../../src/shared/chat-message-content.js";
+import {
   reconcileTerminalStreamBoundary,
   resolveCumulativeAssistantTail,
   rolloverChatStream,
@@ -144,6 +148,136 @@ describe("stream reconciliation", () => {
       "second preamble",
       "tool output",
     ]);
+  });
+
+  it("hides MiniMax-tagged narration from live visible stream parts and materialization", () => {
+    const minimaxId = "minimax-commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa";
+    const ordinaryId = "commentary-0-cccccccccccccccccccccccc";
+    const state = makeIdleStreamState({
+      chatStreamSegments: [
+        { text: "MiniMax internal context noted for this tool turn.", ts: 2, itemId: minimaxId },
+        { text: "Anthropic-style pre-tool progress text", ts: 3, itemId: ordinaryId },
+        { text: "Checking access for this turn.", ts: 4, itemId: "msg_progress" },
+      ],
+    });
+
+    expect(
+      visibleAssistantStreamParts(state, visibleStreamOptions).map((part) => ({
+        text: part.text,
+        itemId: part.itemId,
+      })),
+    ).toEqual([
+      { text: "Anthropic-style pre-tool progress text", itemId: ordinaryId },
+      { text: "Checking access for this turn.", itemId: "msg_progress" },
+    ]);
+
+    const next = materializeVisibleStreamState(
+      [{ role: "user", content: "look this up", timestamp: 1 }],
+      state,
+      visibleStreamOptions,
+    );
+    expect(
+      next
+        .map((message) => {
+          const fallback = (message as { openclawStreamFallback?: { itemId?: string } })
+            .openclawStreamFallback?.itemId;
+          return fallback;
+        })
+        .filter(Boolean),
+    ).toEqual([ordinaryId, "msg_progress"]);
+    const progress = next.find(
+      (message) =>
+        (message as { openclawStreamFallback?: { itemId?: string } }).openclawStreamFallback
+          ?.itemId === "msg_progress",
+    );
+    expect(extractAssistantPhaseText(progress)).toBe("Checking access for this turn.");
+    expect(extractAssistantTextForPhase(progress, { phase: "commentary" })).toBeUndefined();
+    const ordinary = next.find(
+      (message) =>
+        (message as { openclawStreamFallback?: { itemId?: string } }).openclawStreamFallback
+          ?.itemId === ordinaryId,
+    );
+    expect(extractAssistantPhaseText(ordinary)).toBe("Anthropic-style pre-tool progress text");
+    expect(extractAssistantTextForPhase(ordinary, { phase: "commentary" })).toBeUndefined();
+    expect(
+      next.some((message) => {
+        const id = (message as { openclawStreamFallback?: { itemId?: string } })
+          .openclawStreamFallback?.itemId;
+        return id === minimaxId;
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps ordinary generated commentary visible and readable after materialization", () => {
+    const ordinaryId = "commentary-0-dddddddddddddddddddddddd";
+    const text = "Checking the workspace before the tool runs.";
+    const state = makeIdleStreamState({
+      chatStreamSegments: [{ text, ts: 2, itemId: ordinaryId }],
+    });
+    expect(
+      visibleAssistantStreamParts(state, visibleStreamOptions).map((part) => ({
+        text: part.text,
+        itemId: part.itemId,
+      })),
+    ).toEqual([{ text, itemId: ordinaryId }]);
+    const next = materializeVisibleStreamState(
+      [{ role: "user", content: "look this up", timestamp: 1 }],
+      state,
+      visibleStreamOptions,
+    );
+    const fallback = next.find(
+      (message) =>
+        (message as { openclawStreamFallback?: { itemId?: string } }).openclawStreamFallback
+          ?.itemId === ordinaryId,
+    );
+    expect((fallback as { content?: unknown }).content).toEqual([{ type: "text", text }]);
+    expect(extractAssistantPhaseText(fallback)).toBe(text);
+    expect(extractAssistantTextForPhase(fallback, { phase: "commentary" })).toBeUndefined();
+  });
+
+  it("keeps provider-keyed commentary-phase progress readable when materialized", () => {
+    const itemId = "msg_progress";
+    const state = makeIdleStreamState({
+      chatStreamSegments: [{ text: "Checking access for this turn.", ts: 2, itemId }],
+    });
+    const next = materializeVisibleStreamState(
+      [{ role: "user", content: "look this up", timestamp: 1 }],
+      state,
+      visibleStreamOptions,
+    );
+    const fallback = next.find(
+      (message) =>
+        (message as { openclawStreamFallback?: { itemId?: string } }).openclawStreamFallback
+          ?.itemId === itemId,
+    );
+    expect((fallback as { content?: unknown }).content).toEqual([
+      {
+        type: "text",
+        text: "Checking access for this turn.",
+      },
+    ]);
+    expect(extractAssistantPhaseText(fallback)).toBe("Checking access for this turn.");
+  });
+
+  it("still materializes generated final-answer ids as visible stream text", () => {
+    const itemId = "final-answer-1-bbbbbbbbbbbbbbbbbbbbbbbb";
+    const state = makeIdleStreamState({
+      chatStreamSegments: [{ text: "Here is the UTC time.", ts: 2, itemId }],
+    });
+    expect(
+      visibleAssistantStreamParts(state, visibleStreamOptions).map((part) => part.itemId),
+    ).toEqual([itemId]);
+    const next = materializeVisibleStreamState(
+      [{ role: "user", content: "time?", timestamp: 1 }],
+      state,
+      visibleStreamOptions,
+    );
+    const fallback = next.find(
+      (message) =>
+        (message as { openclawStreamFallback?: { itemId?: string } }).openclawStreamFallback
+          ?.itemId === itemId,
+    );
+    expect(extractAssistantPhaseText(fallback)).toBe("Here is the UTC time.");
   });
 
   it("materializes keyed preambles before later assistant messages", () => {

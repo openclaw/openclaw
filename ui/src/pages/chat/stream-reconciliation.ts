@@ -9,6 +9,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
+  isGeneratedMiniMaxAssistantCommentaryId,
+  isGeneratedAssistantTextSignatureId,
+} from "../../../../src/shared/chat-message-content.js";
+import {
   accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
@@ -134,6 +138,24 @@ export function clearToolStreamSegments(state: StreamReconciliationState) {
   }
 }
 
+function liveAssistantTextSignature(itemId: string | undefined): string | undefined {
+  if (!itemId || !isGeneratedAssistantTextSignatureId(itemId)) {
+    // Provider item ids such as OpenAI Responses `msg_*` stay unphased so
+    // keyed progress remains visible final text.
+    return undefined;
+  }
+  // Final-answer ids keep phase for extractors. MiniMax narration keeps
+  // commentary phase so it stays hidden after materialization. Ordinary
+  // generated commentary-* stays unphased per #135081 (readable on reload).
+  if (itemId.startsWith("final-answer-")) {
+    return JSON.stringify({ v: 1, id: itemId, phase: "final_answer" });
+  }
+  if (isGeneratedMiniMaxAssistantCommentaryId(itemId)) {
+    return JSON.stringify({ v: 1, id: itemId, phase: "commentary" });
+  }
+  return undefined;
+}
+
 function buildAssistantStreamMessage(
   stream: string,
   replacementText = stream,
@@ -144,9 +166,10 @@ function buildAssistantStreamMessage(
   afterBoundaryRunId?: string,
   afterSequence?: number,
 ): Record<string, unknown> {
+  const textSignature = liveAssistantTextSignature(itemId);
   return {
     role: "assistant",
-    content: [{ type: "text", text: stream }],
+    content: [{ type: "text", text: stream, ...(textSignature ? { textSignature } : {}) }],
     timestamp,
     openclawStreamFallback: {
       replacementText,
@@ -299,6 +322,18 @@ export function visibleAssistantStreamParts(
       toolIndexedSegmentIndex += 1;
     }
     const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
+    // MiniMax producer tags hideable narration as minimax-commentary-*. Skip
+    // only those ids on the live path; ordinary commentary-* and provider
+    // item ids (msg_*) stay visible per #135081.
+    if (itemId && isGeneratedMiniMaxAssistantCommentaryId(itemId)) {
+      if (usesAccumulatedText) {
+        previousText = advanceAccumulatedStreamText(previousText, segment.text);
+      }
+      if (boundaryRunId) {
+        latestBoundaryRunId = boundaryRunId;
+      }
+      continue;
+    }
     const visible = visibleAssistantStreamText(
       usesAccumulatedText ? trimAccumulatedStreamPrefix(segment.text, previousText) : segment.text,
       opts.isHiddenStreamText,

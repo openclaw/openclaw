@@ -1,5 +1,6 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isGeneratedMiniMaxAssistantCommentaryId,
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
@@ -82,7 +83,17 @@ export function projectAssistantCommentaryFallbacks(
       group.sourceBlocks.push(block);
     }
     if (text.trim()) {
-      group.content.push({ type: "text", text });
+      // Only MiniMax-tagged narration keeps phase so extractText / task
+      // activity hide it. Ordinary generated commentary-* (#135081) and
+      // provider item ids stay unphased and remain readable after reload.
+      const hideAsCommentary =
+        typeof providerItemId === "string" &&
+        isGeneratedMiniMaxAssistantCommentaryId(providerItemId);
+      group.content.push(
+        hideAsCommentary && typeof content.textSignature === "string"
+          ? { type: "text", text, textSignature: content.textSignature }
+          : { type: "text", text },
+      );
       group.text.push(text);
     }
   }

@@ -69,4 +69,15 @@ describe("assistant text phase tags", () => {
     expect(replaced.textSignature).toBe("provider-replacement");
     expect(existing.textSignature).toBe("provider-signature");
   });
+
+  it("tags MiniMax providers with minimax-commentary identities", () => {
+    const content: TestTextBlock[] = [{ type: "text", text: "Checking access for this turn." }];
+    const tags = tagPendingCommentaryText(content, { provider: "minimax" });
+    expect(tags.size).toBe(1);
+    expect(JSON.parse(String(content[0]?.textSignature))).toMatchObject({
+      v: 1,
+      id: expect.stringMatching(/^minimax-commentary-0-[0-9a-f]{24}$/),
+      phase: "commentary",
+    });
+  });
 });

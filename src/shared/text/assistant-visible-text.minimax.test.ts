@@ -6,6 +6,18 @@ import {
 } from "./assistant-visible-text.js";
 import { createTextProjection } from "./text-projection.js";
 
+describe("stripMinimaxToolCallXml", () => {
+  it("strips minimax tool-call tags that insert zero-width characters in the name", () => {
+    const input = [
+      "Before",
+      `<mini\u200bmax:tool_call><invoke name="exec">payload</invoke></mini\u200bmax:tool_call>`,
+      "After",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(input)).toBe("Before\n\nAfter");
+  });
+});
+
 describe("encoded MiniMax tool envelopes", () => {
   it.each(["delivery", "final-answer-delivery", "history"] as const)(
     "removes the internal envelope and retains surrounding prose in %s",

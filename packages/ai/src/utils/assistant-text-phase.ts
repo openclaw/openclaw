@@ -37,7 +37,9 @@ function tagUnphasedText(
     // Responses carry no run-scoped identity, so a response-local index aliases
     // segments across responses (every response's first commentary becomes
     // `<prefix>-0`) and collapses distinct stream-reconciliation rows. Entropy
-    // keeps each generated identity unique per segment.
+    // keeps each generated identity unique per segment. History fallbacks must
+    // copy this signature so phase filters can keep commentary out of the
+    // visible final answer.
     const signature = encodeAssistantTextSignatureV1(
       `${idPrefix}-${phaseIndex}-${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       phase,
@@ -49,9 +51,33 @@ function tagUnphasedText(
   return tagged;
 }
 
+/** Prefix for MiniMax pre-tool narration that Control UI should keep off the live thread. */
+const MINIMAX_COMMENTARY_ID_PREFIX = "minimax-commentary";
+
+/** Ordinary OpenClaw-generated commentary identities (visible per #135081). */
+const COMMENTARY_ID_PREFIX = "commentary";
+
+function resolveCommentaryIdPrefix(provider: string | undefined): string {
+  const normalized = typeof provider === "string" ? provider.trim().toLowerCase() : "";
+  return normalized === "minimax" ||
+    normalized === "minimax-portal" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal-cn"
+    ? MINIMAX_COMMENTARY_ID_PREFIX
+    : COMMENTARY_ID_PREFIX;
+}
+
 /** Tags unphased narration before a tool-call event becomes consumer-visible. */
-export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): PendingCommentaryTags {
-  return tagUnphasedText(content, "commentary", "commentary");
+export function tagPendingCommentaryText(
+  content: ReadonlyArray<unknown>,
+  options?: { idPrefix?: string; provider?: string },
+): PendingCommentaryTags {
+  const idPrefix =
+    options?.idPrefix ??
+    (options?.provider !== undefined
+      ? resolveCommentaryIdPrefix(options.provider)
+      : COMMENTARY_ID_PREFIX);
+  return tagUnphasedText(content, "commentary", idPrefix);
 }
 
 /** Records the confirmed final-answer boundary after reasoning resumes. */

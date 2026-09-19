@@ -5,9 +5,51 @@ import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
   readAssistantTextBlocksForPhase,
+  isGeneratedMiniMaxAssistantCommentaryId,
+  isGeneratedAssistantTextSignatureId,
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "./chat-message-content.js";
+
+describe("generated assistant text signature ids", () => {
+  it("recognizes OpenClaw stream-reconciliation identities and rejects provider ids", () => {
+    expect(isGeneratedAssistantTextSignatureId("commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa")).toBe(true);
+    expect(
+      isGeneratedAssistantTextSignatureId("minimax-commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa"),
+    ).toBe(true);
+    expect(isGeneratedAssistantTextSignatureId("final-answer-1-bbbbbbbbbbbbbbbbbbbbbbbb")).toBe(
+      true,
+    );
+    expect(isGeneratedAssistantTextSignatureId("commentary-0")).toBe(false);
+    expect(isGeneratedAssistantTextSignatureId("progress")).toBe(false);
+    expect(isGeneratedAssistantTextSignatureId("msg_123")).toBe(false);
+  });
+
+  it("classifies ordinary and MiniMax generated commentary ids without treating provider ids as generated", () => {
+    // Ordinary commentary stays a generated signature id but is not MiniMax-filtered (#135081).
+    expect(isGeneratedAssistantTextSignatureId("commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa")).toBe(true);
+    expect(isGeneratedMiniMaxAssistantCommentaryId("commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa")).toBe(
+      false,
+    );
+    expect(
+      isGeneratedAssistantTextSignatureId("minimax-commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa"),
+    ).toBe(true);
+    expect(
+      isGeneratedMiniMaxAssistantCommentaryId("minimax-commentary-0-aaaaaaaaaaaaaaaaaaaaaaaa"),
+    ).toBe(true);
+    // final-answer / provider ids are never MiniMax commentary hides.
+    expect(isGeneratedAssistantTextSignatureId("final-answer-1-bbbbbbbbbbbbbbbbbbbbbbbb")).toBe(
+      true,
+    );
+    expect(isGeneratedMiniMaxAssistantCommentaryId("final-answer-1-bbbbbbbbbbbbbbbbbbbbbbbb")).toBe(
+      false,
+    );
+    expect(isGeneratedAssistantTextSignatureId("msg_progress")).toBe(false);
+    expect(isGeneratedMiniMaxAssistantCommentaryId("msg_progress")).toBe(false);
+    expect(isGeneratedAssistantTextSignatureId("commentary-0")).toBe(false);
+    expect(isGeneratedMiniMaxAssistantCommentaryId("commentary-0")).toBe(false);
+  });
+});
 
 describe("shared/chat-message-content", () => {
   it.each(["commentary", "final_answer"] as const)(
