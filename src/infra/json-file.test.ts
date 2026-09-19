@@ -156,6 +156,55 @@ describe("json-file helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each(["relative", "absolute"])(
+    "reads back JSON written through a chain of %s symlinks",
+    async (kind) => {
+      await withJsonSymlink(({ root, targetDir, targetPath, linkPath }) => {
+        fs.mkdirSync(targetDir);
+        const middle = path.join(root, "active.json");
+        fs.symlinkSync(kind === "relative" ? "target/config.json" : targetPath, middle);
+        fs.symlinkSync(kind === "relative" ? "active.json" : middle, linkPath);
+
+        writeJsonTarget(linkPath, SAVED_PAYLOAD);
+
+        expectSavedPayloadThroughSymlink(linkPath, targetPath);
+        expect(loadJsonFileThroughSymlink(middle)).toEqual(SAVED_PAYLOAD);
+        expect(fs.lstatSync(middle).isSymbolicLink()).toBe(true);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns undefined when a symlink target traverses a regular file",
+    async () => {
+      await withJsonSymlink(({ root, linkPath }) => {
+        const regularFile = path.join(root, "regular-file");
+        fs.writeFileSync(regularFile, "not a directory");
+        fs.symlinkSync(path.join(regularFile, "config.json"), linkPath);
+        expect(loadJsonFileThroughSymlink(linkPath)).toBeUndefined();
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "returns undefined for dangling chains and symlink cycles",
+    async () => {
+      await withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const first = path.join(root, "first.json");
+        const second = path.join(root, "second.json");
+        fs.symlinkSync("second.json", first);
+        fs.symlinkSync("missing.json", second);
+        expect(loadJsonFileThroughSymlink(first)).toBeUndefined();
+
+        fs.unlinkSync(second);
+        fs.symlinkSync("first.json", second);
+        expect(loadJsonFileThroughSymlink(first)).toBeUndefined();
+        expect(fs.lstatSync(first).isSymbolicLink()).toBe(true);
+        expect(fs.lstatSync(second).isSymbolicLink()).toBe(true);
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "does not create missing target directories through an existing symlink",
     async () => {
