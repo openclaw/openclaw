@@ -28,6 +28,7 @@ export type SessionChangedRowProjection = (
   row: GatewaySessionRow,
   previous: GatewaySessionRow,
   fields: readonly string[],
+  info: SessionChangedEventInfo,
 ) => GatewaySessionRow;
 
 export type SessionChangedRowResult = {
@@ -50,7 +51,7 @@ export type SessionChangedRowResult = {
   disposition?: SessionRowReconcileResult["disposition"];
 };
 
-type SessionChangedEventInfo = {
+export type SessionChangedEventInfo = {
   key: string;
   reason: string | null;
   sessionId?: string;
@@ -210,7 +211,15 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
     return null;
   }
   const session = recordOrNull(event.session);
-  const source = session ? { ...event, ...session } : event;
+  // Full viewer snapshots inherit only explicit clearing receipts from the envelope.
+  const source = session
+    ? {
+        ...(Array.isArray(event.ancestorSessions)
+          ? Object.fromEntries(Object.entries(event).filter(([, value]) => value === null))
+          : event),
+        ...session,
+      }
+    : event;
   const key =
     stringValue(recordValue(source, "key")) ?? stringValue(recordValue(event, "sessionKey"));
   if (!key) {
@@ -274,6 +283,32 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
     event,
     source,
     reason,
+  ];
+}
+
+/** Each authorized ancestor owns its row identity and clock, never the child's event facts. */
+export function sessionChangedSnapshots(payload: unknown): unknown[] {
+  const event = recordOrNull(payload);
+  if (!event || !Array.isArray(event.ancestorSessions)) {
+    return [payload];
+  }
+  return [
+    payload,
+    ...event.ancestorSessions.flatMap((value) => {
+      const row = recordOrNull(value);
+      const key = stringValue(row?.key);
+      if (!row || !key) {
+        return [];
+      }
+      return [
+        {
+          session: row,
+          agentId: stringValue(row.agentId) ?? parseAgentSessionKey(key)?.agentId,
+          ts: event.ts,
+          ancestorSessions: [],
+        },
+      ];
+    }),
   ];
 }
 
@@ -409,6 +444,7 @@ export function reconcileSessionChangedRow(
   const { key } = info;
   const {
     agentId: _agentId,
+    ancestorSessions: _ancestorSessions,
     catalogChanged: _catalogChanged,
     clientRunId: _clientRunId,
     compacted: _compacted,
@@ -473,13 +509,16 @@ export function reconcileSessionChangedRow(
   const existingFields = !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
     ? stripThinkingMetadata(existing)
     : existing;
+  const fullSnapshot = Array.isArray(event.ancestorSessions);
+  const snapshotAgentId = stringValue(recordOrNull(event.session)?.agentId);
   const offered = {
-    ...existingFields,
+    ...(fullSnapshot ? {} : existingFields),
     ...rowFields,
     key: existing.key,
     kind,
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
+    ...(fullSnapshot && snapshotAgentId ? { agentId: snapshotAgentId } : {}),
   };
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
@@ -498,13 +537,30 @@ export function reconcileSessionChangedRow(
       ...options,
       selectedGlobalAgentId: info.agentId ?? options.selectedGlobalAgentId ?? null,
     },
-    project ? { project: (row) => project(row, existing, fields) } : undefined,
+    project
+      ? {
+          project: (row) =>
+            project(
+              row,
+              existing,
+              fullSnapshot
+                ? [
+                    ...fields,
+                    ...Object.keys(existing).filter((field) => !Object.hasOwn(row, field)),
+                  ]
+                : fields,
+              info,
+            ),
+        }
+      : undefined,
   );
   const previousOwner = existing.owner?.actor;
   const nextOwner = reduced.admittedRow?.owner?.actor;
   const ownershipChanged =
     Boolean(reduced.admittedRow) &&
-    (Object.hasOwn(rowFields, "owner") || Object.hasOwn(rowFields, "createdActor")) &&
+    (fullSnapshot ||
+      Object.hasOwn(rowFields, "owner") ||
+      Object.hasOwn(rowFields, "createdActor")) &&
     (previousOwner?.type !== nextOwner?.type ||
       previousOwner?.id !== nextOwner?.id ||
       previousOwner?.label !== nextOwner?.label ||

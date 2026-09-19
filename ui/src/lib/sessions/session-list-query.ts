@@ -25,6 +25,7 @@ import {
   matchesExistingSession,
   parseSessionChangedEvent,
   reconcileSessionChangedRow,
+  sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
 
 const ROW_SNAPSHOT_REASONS = new Set([
@@ -47,65 +48,105 @@ export function canApplySessionListSnapshot(
   if (!result || !parsed || !isPrimarySessionListQuery({ ...options, archivedFilter: "active" })) {
     return false;
   }
-  const [info, event] = parsed;
+  const [eventInfo, event] = parsed;
   if (
     !asOptionalRecord(event.session) ||
     event.catalogChanged === true ||
     event.phase === "reset" ||
-    (info.reason !== null && !ROW_SNAPSHOT_REASONS.has(info.reason)) ||
+    (eventInfo.reason !== null && !ROW_SNAPSHOT_REASONS.has(eventInfo.reason)) ||
     (options.offset ?? 0) > 0
   ) {
     return false;
   }
-  const existing = result.sessions.find((row) =>
-    matchesExistingSession(row, info.key, info.agentId ?? options.agentId ?? null),
-  );
-  const next = reconcileSessionChangedRow(existing, payload, {
-    resultAgentId: options.agentId,
-    archivedFilter: "all",
-  }).admittedRow;
-  if (
-    !existing ||
-    !next ||
-    !sessionMatchesArchivedFilter(existing, options.archivedFilter ?? "active") ||
-    existing.sessionId !== next.sessionId ||
-    existing.kind !== next.kind ||
-    (existing.archived === true) !== (next.archived === true) ||
-    (existing.pinned === true) !== (next.pinned === true) ||
-    existing.pinnedAt !== next.pinnedAt ||
-    JSON.stringify(existing.owner) !== JSON.stringify(next.owner) ||
-    JSON.stringify(existing.createdActor) !== JSON.stringify(next.createdActor)
-  ) {
-    return false;
+  const snapshots = sessionChangedSnapshots(payload);
+  const complete = Array.isArray(event.ancestorSessions);
+  let held = false;
+  for (const snapshot of snapshots) {
+    const parsedSnapshot = parseSessionChangedEvent(snapshot);
+    if (!parsedSnapshot) {
+      return false;
+    }
+    const [info] = parsedSnapshot;
+    const agentId = info.agentId ?? parseAgentSessionKey(info.key)?.agentId;
+    if (
+      options.agentId &&
+      agentId &&
+      normalizeAgentId(options.agentId) !== normalizeAgentId(agentId)
+    ) {
+      continue;
+    }
+    const existing = result.sessions.find((row) =>
+      matchesExistingSession(row, info.key, info.agentId ?? options.agentId ?? null),
+    );
+    const next = reconcileSessionChangedRow(existing, snapshot, {
+      resultAgentId: options.agentId,
+      archivedFilter: "all",
+    }).admittedRow;
+    if (
+      !existing ||
+      !next ||
+      !sessionMatchesArchivedFilter(existing, options.archivedFilter ?? "active") ||
+      existing.sessionId !== next.sessionId ||
+      existing.kind !== next.kind ||
+      (existing.archived === true) !== (next.archived === true) ||
+      (existing.pinned === true) !== (next.pinned === true) ||
+      existing.pinnedAt !== next.pinnedAt ||
+      JSON.stringify(existing.owner) !== JSON.stringify(next.owner) ||
+      JSON.stringify(existing.createdActor) !== JSON.stringify(next.createdActor) ||
+      existing.spawnedBy !== next.spawnedBy ||
+      existing.controlOwnerSessionKey !== next.controlOwnerSessionKey ||
+      existing.parentSessionKey !== next.parentSessionKey
+    ) {
+      return false;
+    }
+    const parents = result.sessions.filter(
+      (row) =>
+        [existing.spawnedBy, existing.controlOwnerSessionKey, existing.parentSessionKey].some(
+          (key) => key && areUiSessionKeysEquivalent(key, row.key),
+        ) || row.childSessions?.some((key) => areUiSessionKeysEquivalent(key, existing.key)),
+    );
+    // Missing certification means the bounded Gateway traversal was incomplete.
+    if (
+      (!complete &&
+        (isSubagentSessionKey(existing.key) ||
+          existing.spawnedBy ||
+          existing.controlOwnerSessionKey ||
+          existing.parentSessionKey ||
+          existing.childSessions?.length ||
+          parents.length)) ||
+      parents.some(
+        (parent) =>
+          !snapshots.some((candidate) => {
+            const candidateInfo = parseSessionChangedEvent(candidate)?.[0];
+            return (
+              candidateInfo &&
+              matchesExistingSession(parent, candidateInfo.key, candidateInfo.agentId)
+            );
+          }),
+      )
+    ) {
+      return false;
+    }
+    // A member whose rank only improves cannot evict another member. Missing rows,
+    // pin/archive/owner changes and backwards clocks need authoritative admission.
+    if (info.updatedAt === null || info.updatedAt < (existing.updatedAt ?? 0)) {
+      return false;
+    }
+    // Owner-first and retained selection can add rows outside the shared page.
+    // Promoting one can displace its boundary despite already being displayed.
+    if (
+      info.updatedAt !== existing.updatedAt &&
+      result.sessions.length >
+        (result.nextOffset ??
+          result.limitApplied ??
+          options.limit ??
+          DEFAULT_SESSION_LIST_QUERY.limit)
+    ) {
+      return false;
+    }
+    held = true;
   }
-  // A child's snapshot does not refresh its ancestors' aggregate activity or
-  // child links. Keep those Gateway-owned facts behind an authoritative read.
-  if (
-    isSubagentSessionKey(existing.key) ||
-    [existing, next].some(
-      (row) => row.spawnedBy || row.controlOwnerSessionKey || row.parentSessionKey,
-    ) ||
-    result.sessions.some((row) =>
-      row.childSessions?.some((key) => areUiSessionKeysEquivalent(key, existing.key)),
-    )
-  ) {
-    return false;
-  }
-  // A member whose rank only improves cannot evict another member. Missing rows,
-  // pin/archive/owner changes and backwards clocks need authoritative admission.
-  if (info.updatedAt === null || info.updatedAt < (existing.updatedAt ?? 0)) {
-    return false;
-  }
-  // Owner-first and retained selection can add rows outside the shared page.
-  // Promoting one can displace its boundary despite already being displayed.
-  return !(
-    info.updatedAt !== existing.updatedAt &&
-    result.sessions.length >
-      (result.nextOffset ??
-        result.limitApplied ??
-        options.limit ??
-        DEFAULT_SESSION_LIST_QUERY.limit)
-  );
+  return held;
 }
 
 export function isForegroundReplacement(options: SessionRefreshOptions): boolean {
@@ -118,17 +159,32 @@ export function sessionListAgentMatcher(agentId?: string | null) {
     !normalized || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === normalized;
 }
 
+export function sessionListEventAgentMatcher(payload: unknown, fallbackAgentId?: string | null) {
+  const matches = sessionChangedSnapshots(payload).map((snapshot) => {
+    const parsed = parseSessionChangedEvent(snapshot);
+    const info = parsed?.[0];
+    const event = parsed?.[1] ?? asOptionalRecord(snapshot);
+    return sessionListAgentMatcher(
+      info?.agentId ??
+        parseAgentSessionKey(info?.key)?.agentId ??
+        (typeof event?.agentId === "string" ? event.agentId : fallbackAgentId),
+    );
+  });
+  return (queryAgentId?: string) => matches.some((match) => match(queryAgentId));
+}
+
 /** Capture membership before event reconciliation can remove or move a known child. */
 export function sessionListEventMatcher(payload: unknown) {
+  const matches = sessionChangedSnapshots(payload).map(sessionListSnapshotMatcher);
+  return (entry: ManagedSessionList): boolean => matches.some((match) => match(entry));
+}
+
+function sessionListSnapshotMatcher(payload: unknown) {
   const parsed = parseSessionChangedEvent(payload);
   const info = parsed?.[0];
   const event = parsed?.[1] ?? asOptionalRecord(payload);
   const source = parsed?.[2];
-  const agentId =
-    info?.agentId ??
-    parseAgentSessionKey(info?.key)?.agentId ??
-    (typeof event?.agentId === "string" ? event.agentId : undefined);
-  const matchesAgent = sessionListAgentMatcher(agentId);
+  const matchesAgent = sessionListEventAgentMatcher(payload);
   const owners = [
     source?.controlOwnerSessionKey,
     source?.spawnedBy,

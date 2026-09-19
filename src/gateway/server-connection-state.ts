@@ -126,24 +126,40 @@ export function createGatewayConnectionState(params: {
         return () => undefined;
       }
       const now = Date.now();
+      const ancestors = projection.ancestorRows(record);
       return (client) => {
         if (!projection.isCurrent(record)) {
           return undefined;
         }
         const { projectedAgentRuns } = projection.state.rowContext;
-        const { row } = prepareProjectedSessionPresentation(projection, client, now, (selection) =>
-          resolveVisibleActiveSessionRunState({
-            ...selection,
-            context: { chatAbortControllers },
-            projectedAgentRunIndex: projectedAgentRuns,
-          }),
-        ).snapshot(query, { includeDerivedTitles: true, includeLastMessage: true });
+        const presentation = prepareProjectedSessionPresentation(
+          projection,
+          client,
+          now,
+          (selection) =>
+            resolveVisibleActiveSessionRunState({
+              ...selection,
+              context: { chatAbortControllers },
+              projectedAgentRunIndex: projectedAgentRuns,
+            }),
+        );
+        const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
+        const { row } = presentation.snapshot(query, enrichment);
         if (!row) {
           return undefined;
         }
         return {
           ...base,
           session: row,
+          ancestorSessions: ancestors?.every((ancestor) => projection.isCurrent(ancestor))
+            ? ancestors.flatMap((ancestor) => {
+                if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+                  return [];
+                }
+                const presented = presentation.present(ancestor, enrichment);
+                return presented ? [presented] : [];
+              })
+            : undefined,
           visibility: row.visibility,
           sharingRole: row.sharingRole,
           ...(isRecord(base.activitySummary) && row.activitySummary

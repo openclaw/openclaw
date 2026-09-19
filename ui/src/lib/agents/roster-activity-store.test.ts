@@ -110,7 +110,7 @@ describe("roster activity lifecycle", () => {
     }
   });
 
-  it("patches a broadcast row for 28 viewers without rereading their 300-row windows", async () => {
+  it("attributes window reads across 28 viewers to initial and membership changes", async () => {
     vi.useFakeTimers();
     const rows: GatewaySessionRow[] = Array.from({ length: 300 }, (_, index) => ({
       key: `agent:main:row-${index}`,
@@ -119,7 +119,28 @@ describe("roster activity lifecycle", () => {
       updatedAt: 300 - index,
       ...(index === 0 ? { pinned: true, pinnedAt: 1 } : {}),
     }));
+    const parent: GatewaySessionRow = {
+      ...rows[1]!,
+      childSessions: ["agent:main:subagent:child", "agent:main:subagent:sibling"],
+    };
+    const child: GatewaySessionRow = {
+      ...rows[200]!,
+      key: "agent:main:subagent:child",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+    };
+    rows[1] = parent;
+    rows[200] = child;
+    rows[201] = {
+      ...rows[201]!,
+      key: "agent:main:subagent:sibling",
+      spawnedBy: parent.key,
+      parentSessionKey: parent.key,
+    };
+    let reason = "initial";
+    const readsByReason: Record<string, number> = {};
     const load = vi.fn(async (params: unknown) => {
+      readsByReason[reason] = (readsByReason[reason] ?? 0) + 1;
       const offset = Number(Reflect.get(params as object, "offset") ?? 0);
       return {
         ...result(""),
@@ -134,18 +155,113 @@ describe("roster activity lifecycle", () => {
     const detach = viewers.map(({ store }) => store.subscribe(() => {}));
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledTimes(84);
-      const updated = { ...rows[200]!, updatedAt: 500, lastMessagePreview: "New activity" };
-      for (const { emit, store } of viewers) {
-        emit({
-          type: "event",
-          event: "sessions.changed",
-          payload: { sessionKey: updated.key, reason: "patch", session: updated },
-        });
-        expect(store.snapshot.result?.sessions.slice(0, 2)).toEqual([rows[0], updated]);
+      expect(readsByReason).toEqual({ initial: 84 });
+      const updated = { ...rows[199]!, updatedAt: 500, lastMessagePreview: "New activity" };
+      for (reason of ["patch", "terminal-message"]) {
+        readsByReason[reason] = 0;
+        for (let iteration = 0; iteration < 4; iteration += 1) {
+          for (const { emit } of viewers) {
+            emit({
+              type: "event",
+              event: reason === "terminal-message" ? "session.message" : "sessions.changed",
+              payload: {
+                sessionKey: updated.key,
+                ...(reason === "terminal-message" ? {} : { reason }),
+                session:
+                  reason === "terminal-message"
+                    ? { ...updated, hasActiveRun: false, status: "done" }
+                    : updated,
+              },
+            });
+          }
+          await vi.advanceTimersByTimeAsync(2_000);
+        }
+        expect(readsByReason[reason]).toBe(0);
+        for (const { store } of viewers) {
+          expect(store.snapshot.result?.sessions[0]).toEqual(rows[0]);
+          expect(store.snapshot.result?.sessions[1]).toMatchObject(updated);
+        }
       }
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(load).toHaveBeenCalledTimes(84);
+      for (reason of ["child-change", "terminal-child-message"]) {
+        readsByReason[reason] = 0;
+        for (let iteration = 0; iteration < 4; iteration += 1) {
+          const terminal = reason === "terminal-child-message";
+          const status = terminal ? "done" : "running";
+          const nextChild: GatewaySessionRow = {
+            ...child,
+            updatedAt: (terminal ? 700 : 600) + iteration,
+            hasActiveRun: !terminal,
+            status,
+          };
+          const nextParent: GatewaySessionRow = {
+            ...parent,
+            childSessions: [rows[201]!.key, child.key],
+            swarm: {
+              groups: [
+                {
+                  groupId: "fixture-swarm",
+                  createdAt: 1,
+                  children: [{ sessionKey: child.key, status }],
+                  queued: 0,
+                  running: terminal ? 0 : 1,
+                  done: terminal ? 1 : 0,
+                  failed: 0,
+                },
+              ],
+              otherActiveGroups: 0,
+            },
+          };
+          for (const { emit } of viewers) {
+            emit({
+              type: "event",
+              event: terminal ? "session.message" : "sessions.changed",
+              payload: {
+                sessionKey: child.key,
+                ...(terminal ? {} : { reason: "patch" }),
+                session: nextChild,
+                ancestorSessions: [nextParent],
+              },
+            });
+          }
+          const shown = viewers[0]!.store.snapshot.result?.sessions;
+          expect.soft(shown?.find((row) => row.key === parent.key)).toEqual(nextParent);
+          expect.soft(shown?.find((row) => row.key === child.key)).toEqual(nextChild);
+          await vi.advanceTimersByTimeAsync(2_000);
+        }
+        expect.soft(readsByReason[reason]).toBe(0);
+      }
+      reason = "activity-summary";
+      readsByReason[reason] = 0;
+      for (let iteration = 0; iteration < 4; iteration += 1) {
+        for (const { emit } of viewers) {
+          emit({
+            type: "event",
+            event: "sessions.changed",
+            payload: { sessionKey: updated.key, reason, session: updated },
+          });
+        }
+        await vi.advanceTimersByTimeAsync(2_000);
+      }
+      expect.soft(readsByReason[reason]).toBe(0);
+      for (reason of ["archive", "groups", "cleanup", "catalogChanged"]) {
+        for (let iteration = 0; iteration < 10; iteration += 1) {
+          for (const { emit } of viewers) {
+            emit({
+              type: "event",
+              event: "sessions.changed",
+              payload:
+                reason === "catalogChanged"
+                  ? { reason: "patch", session: updated, catalogChanged: true }
+                  : { reason },
+            });
+          }
+        }
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(readsByReason[reason]).toBe(84);
+      }
+      console.info(
+        `28-viewer activity roster sessions.list reads: ${JSON.stringify(readsByReason)}`,
+      );
     } finally {
       detach.forEach((stop) => stop());
       vi.useRealTimers();

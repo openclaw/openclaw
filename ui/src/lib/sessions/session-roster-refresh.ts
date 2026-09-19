@@ -28,8 +28,8 @@ import {
   prepareSessionRefreshOptions,
   queuedSessionRefreshCompletion,
   retainSessionPaginationWindow,
-  sessionListAgentMatcher,
   sessionListEventMatcher,
+  sessionListEventAgentMatcher,
   type ManagedSessionList,
   type QueuedSessionRefresh,
   type SessionRefreshAttempt,
@@ -682,7 +682,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       this: void,
       options: { agentId?: string | null; primarySnapshotApplied?: boolean; event?: unknown } = {},
     ) {
-      const matchesAgent = sessionListAgentMatcher(options.agentId);
+      const matchesAgent = sessionListEventAgentMatcher(options.event, options.agentId);
       const event = options.event;
       const affected =
         event && typeof event === "object" ? eventRevisions.get(event)?.lists : undefined;

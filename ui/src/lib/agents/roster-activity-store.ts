@@ -158,6 +158,10 @@ class RosterActivityStore {
       return;
     }
     const info = readSessionChangedEvent(event.payload);
+    // Recaps are opt-in Activity data and are absent from this shared window.
+    if (event.event === "sessions.changed" && info?.reason === "activity-summary") {
+      return;
+    }
     const snapshotApplied =
       this.current.error === null &&
       !this.activeRequest &&

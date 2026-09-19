@@ -26,6 +26,9 @@ export function createSessionRowProjectionContext() {
     }
     const now = Date.now(),
       revision = getSubagentRegistryPublicationRevision();
+    if (registryRevision !== revision) {
+      subagentRevision++;
+    }
     const subagentRuns =
       registryRevision === revision
         ? current.subagentRuns.atTime(now)
@@ -69,7 +72,6 @@ export function createSessionRowProjectionContext() {
           return true;
         case "subagent-runs":
           registryRevision = undefined;
-          subagentRevision++;
           return true;
         case "worker-environments":
         case "worker-placements":

@@ -15,6 +15,8 @@ import {
   readSessionChangedEvent,
   reconcileSessionChangedRow,
   reconcileSessionRow,
+  sessionChangedSnapshots,
+  type SessionChangedEventInfo,
   type SessionChangedRowProjection,
   type SessionChangedRowResult,
   type SessionReconcileOptions,
@@ -33,7 +35,7 @@ export type { SessionReconcileOptions, SessionRowObservation } from "./session-r
 export type SessionChangedResult = Omit<
   SessionChangedRowResult,
   "reconciled" | "eventTs" | "ownershipChanged" | "disposition"
-> & { result: SessionsListResult | null };
+> & { result: SessionsListResult | null; admittedRows?: GatewaySessionRow[] };
 
 /** Retain result identity when a membership-preserving projection leaves every row unchanged. */
 export function projectSessionResultRows(
@@ -121,7 +123,7 @@ export function preserveCurrentSessionRow(
   return result;
 }
 
-export function reconcileSessionChanged(
+function reconcileSessionChangedSnapshot(
   result: SessionsListResult | null,
   payload: unknown,
   options: SessionReconcileOptions = {},
@@ -172,6 +174,44 @@ export function reconcileSessionChanged(
       )
     : undefined;
   return { ...eventResult, row: retainedRow, admittedRow, result: published };
+}
+
+export function reconcileSessionChanged(
+  result: SessionsListResult | null,
+  payload: unknown,
+  options: SessionReconcileOptions = {},
+  project?: SessionChangedRowProjection,
+  accepts: (info: SessionChangedEventInfo) => boolean = () => true,
+): SessionChangedResult {
+  let nextResult = result;
+  let primary: SessionChangedResult | undefined;
+  const admittedRows: GatewaySessionRow[] = [];
+  for (const snapshot of sessionChangedSnapshots(payload)) {
+    const info = readSessionChangedEvent(snapshot);
+    if (
+      info &&
+      (!accepts(info) ||
+        (snapshot !== payload &&
+          nextResult?.sessions.some(
+            (row) =>
+              matchesExistingSession(row, info.key, info.agentId) &&
+              row.sessionId !== info.sessionId,
+          )))
+    ) {
+      continue;
+    }
+    const changed = reconcileSessionChangedSnapshot(nextResult, snapshot, options, project);
+    primary ??= changed;
+    nextResult = changed.result;
+    if (changed.admittedRow) {
+      admittedRows.push(changed.admittedRow);
+    }
+  }
+  return {
+    ...(primary ?? { applied: false }),
+    ...(admittedRows.length ? { applied: true, admittedRows } : {}),
+    result: nextResult,
+  };
 }
 
 export function reconcileSessionHistory(
