@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
@@ -11,6 +14,11 @@ import {
   setDisplayName,
   setUserProfileRole,
 } from "../state/user-profiles.js";
+import {
+  readMentionStoreSnapshot,
+  writeMentionStoreChanges,
+  type MentionStoreSource,
+} from "./mention-inbox-store.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import {
   SESSION_KEY,
@@ -594,21 +602,49 @@ describe("temporary human mention Inbox", () => {
           { length: 101 },
           (_, index) => ensureProfileForEmail(`capacity-${index}@mentions.example.test`).id,
         );
+        const recipientsFor = (index: number) =>
+          Array.from(
+            { length: 10 },
+            (_, offset) => profiles[(index * 10 + offset) % profiles.length]!,
+          );
         const post = (index: number) =>
           f.post(`source-${index}`, {
             messageId: `message-${index}`,
             excerpt: undefined,
-            recipientProfileIds: Array.from(
-              { length: 10 },
-              (_, offset) => profiles[(index * 10 + offset) % profiles.length]!,
-            ),
+            recipientProfileIds: recipientsFor(index),
           });
-        for (let index = 0; index < 1_001; index++) {
-          post(index);
+        post(0);
+        const stored = readMentionStoreSnapshot(-1)!;
+        expect(stored.sources).toHaveLength(1);
+        const template = stored.sources[0]!;
+        const message = template.message!;
+        // Populate retained state directly; real deliveries still own overflow and replay.
+        const sources = new Map<string, MentionStoreSource>();
+        for (let index = 1; index < 1_000; index++) {
+          const key = index.toString(16).padStart(64, "0");
+          sources.set(key, {
+            ...template,
+            key,
+            sequence: index,
+            recipients: recipientsFor(index).map((id, offset) => [id, `seed-${index}-${offset}`]),
+            message: { ...message, content: { ...message.content, messageId: `message-${index}` } },
+          });
         }
+        runOpenClawStateWriteTransaction(({ db }) =>
+          writeMentionStoreChanges(db, { ...stored.head, nextSequence: 1_000 }, sources),
+        );
+        const firstRecipient = identifiedClient(profiles[0]!);
+        expect(
+          read(f.inbox, firstRecipient).items.some((item) => item.messageId === "message-0"),
+        ).toBe(true);
+        post(1_000);
         const retained = profiles.map((id) => read(f.inbox, identifiedClient(id)));
         expect(retained.reduce((sum, snapshot) => sum + snapshot.items.length, 0)).toBe(10_000);
-        const firstRecipient = identifiedClient(profiles[0]!);
+        expect(
+          retained
+            .flatMap((snapshot) => snapshot.items)
+            .some((item) => item.messageId === "message-1000"),
+        ).toBe(true);
         expect(
           read(f.inbox, firstRecipient).items.some((item) => item.messageId === "message-0"),
         ).toBe(false);
