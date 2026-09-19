@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ProgressReporter } from "../../cli/progress.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 
 type GatewayLogPaths = {
@@ -81,7 +81,7 @@ function createBaseParams(
     tailscaleMode: "off",
     tailscaleDns: null,
     tailscaleHttpsUrl: null,
-    skillStatus: null,
+    skillReadiness: null,
     pluginCompatibility: [],
     channelsStatus: null,
     channelIssues: [],
@@ -162,7 +162,7 @@ describe("status-all diagnosis port checks", () => {
     const workspaceDir = tempDirs.make("openclaw-status-skills-");
     const baseDir = path.join(workspaceDir, "skills", "fixture");
     const params = createBaseParams([]);
-    params.skillStatus = buildWorkspaceSkillStatus(workspaceDir, {
+    params.skillReadiness = buildWorkspaceSkillReadiness(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, "managed"),
       agentId: "qa",
       config: {

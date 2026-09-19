@@ -13,7 +13,7 @@ import {
   buildPluginCompatibilityNotices,
   withPluginDiagnosticsReport,
 } from "../../plugins/status.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
 import {
@@ -73,7 +73,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     tailscaleMode: string;
     tailscaleDns: string | null;
     tailscaleHttpsUrl: string | null;
-    skillStatus: ReturnType<typeof buildWorkspaceSkillStatus> | null;
+    skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
     pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
     channelsStatus: StatusScanOverviewResult["channelsStatus"];
     channelIssues: StatusScanOverviewResult["channelIssues"];
@@ -131,7 +131,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     env: process.env,
   });
   const defaultWorkspace = controlPlaneWorkspace.workspaceDir ?? null;
-  const skillStatus =
+  const skillReadiness =
     defaultWorkspace != null
       ? (() => {
           try {
@@ -141,7 +141,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
               execApprovals: loadExecApprovalsReadOnly(),
               agentId: controlPlaneWorkspace.agentId,
             });
-            return buildWorkspaceSkillStatus(defaultWorkspace, {
+            return buildWorkspaceSkillReadiness(defaultWorkspace, {
               config: overview.cfg,
               agentId: controlPlaneWorkspace.agentId,
               eligibility: {
@@ -175,7 +175,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
       tailscaleMode: overview.tailscaleMode,
       tailscaleDns: overview.tailscaleDns,
       tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
-      skillStatus,
+      skillReadiness,
       pluginCompatibility,
       channelsStatus: overview.channelsStatus,
       channelIssues: overview.channelIssues,

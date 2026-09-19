@@ -72,7 +72,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
   loadExecApprovalsReadOnly: () => ({ version: 1, agents: {} }),
 }));
-vi.mock("../skills/discovery/status.js", () => ({ buildWorkspaceSkillStatus: () => null }));
+vi.mock("../skills/discovery/status.js", () => ({ buildWorkspaceSkillReadiness: () => null }));
 vi.mock("../plugins/status.js", async () => ({
   ...(await import("../plugins/status-compatibility.js")),
   buildPluginCompatibilityNotices: () => [],

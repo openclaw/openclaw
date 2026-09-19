@@ -10,7 +10,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
-import { buildWorkspaceSkillStatus } from "./status.js";
+import { buildWorkspaceSkillReadiness, buildWorkspaceSkillStatus } from "./status.js";
 
 type SkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -33,6 +33,11 @@ describe("buildWorkspaceSkillStatus", () => {
     await withEnvAsync({ PATH: workspaceDir, PATHEXT: ".CMD" }, async () => {
       const options = { entries, config: { skills: { install: { preferBrew: true } } } };
       const before = buildWorkspaceSkillStatus(workspaceDir, options);
+      expect(buildWorkspaceSkillReadiness(workspaceDir, options)).toEqual({
+        workspaceDir,
+        eligible: 0,
+        missing: 2,
+      });
       for (const skill of before.skills) {
         expect(skill.eligible).toBe(false);
         expect(skill.missing.bins).toEqual(["brew"]);
@@ -44,6 +49,11 @@ describe("buildWorkspaceSkillStatus", () => {
         { mode: 0o755 },
       );
       const after = buildWorkspaceSkillStatus(workspaceDir, options);
+      expect(buildWorkspaceSkillReadiness(workspaceDir, options)).toEqual({
+        workspaceDir,
+        eligible: 2,
+        missing: 0,
+      });
       for (const skill of after.skills) {
         expect(skill.eligible).toBe(true);
         expect(skill.missing.bins).toEqual([]);
