@@ -119,15 +119,20 @@ const AGENT_EVENT_ROUTING_FIELDS = [
   ["registeredAt", "registeredAt"],
 ] as const;
 
+let agentEventState: AgentEventState | undefined;
+
 function getAgentEventState(): AgentEventState {
-  return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
-    seqByRun: new Map<string, number>(),
-    listeners: new Map(),
-    runListeners: new Map(),
-    nextListenerId: 0,
-    listenerRevision: 0,
-    auditListeners: new Set<(evt: AgentEventPayload) => void>(),
-  }));
+  return (agentEventState ??= resolveGlobalSingleton<AgentEventState>(
+    AGENT_EVENT_STATE_KEY,
+    () => ({
+      seqByRun: new Map<string, number>(),
+      listeners: new Map(),
+      runListeners: new Map(),
+      nextListenerId: 0,
+      listenerRevision: 0,
+      auditListeners: new Set<(evt: AgentEventPayload) => void>(),
+    }),
+  ));
 }
 
 registerAgentRunSequenceResetHandler((runId) => {
