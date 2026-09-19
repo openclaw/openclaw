@@ -5,10 +5,8 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  configureExecutionDecisionWorkSink,
-  type ExecutionDecisionWork,
-} from "../audit/execution-decision-work.js";
+import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";

@@ -75,8 +75,9 @@ one bounded identity envelope, immediately offers it to the existing audit
 writer queue, and continues the run without waiting for writer readiness,
 SQLite, or persistence. The queue drain initializes schema and HMAC-key state,
 pseudonymizes raw references, constructs the immutable context, validates its
-canonical bytes, and persists it through the process-owned shared-state
-connection. An accepted envelope can therefore be temporarily unavailable to
+canonical bytes, and persists it through the existing shared-state worker.
+The process-owned FIFO retains each accepted item until its worker attempt
+settles. An accepted envelope can therefore be temporarily unavailable to
 inspection while queued work finishes.
 
 Persistence remains best-effort. Queue saturation, storage failure, shutdown
@@ -435,6 +436,9 @@ what was recorded, not as proof of what happened:
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
+- Shutdown drops waiting metadata at its existing deadline but joins submitted
+  worker operations before releasing the writer. Unknown worker outcomes are
+  not replayed; ordinary native lock contention keeps the existing FIFO retry.
 - Crash-ambiguous outbound sends are recorded as `unknown` rather than
   invented outcomes.
 
@@ -444,8 +448,9 @@ compliance archive; if you need one, use an external system fed by
 
 ## Storage, retention, and migration
 
-Records live in the shared state database (`state/openclaw.sqlite`) and are
-written off the delivery hot path. Queries never return records older than 30
+Records live in the shared state database (`state/openclaw.sqlite`). The existing
+shared-state worker executes audit writes and maintenance off the Gateway thread,
+including schema/key first use and write-triggered pruning. Queries never return records older than 30
 days, and the ledger is capped at 100,000 rows; expired rows are pruned during
 startup, hourly maintenance, and later writes. Each ledger or progress cleanup
 transaction deletes at most 1,024 expired rows and schedules more work until

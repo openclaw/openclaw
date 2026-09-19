@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  insertOperatorApproval,
-  resolveOperatorApproval,
-} from "../gateway/operator-approval-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -11,7 +7,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { recordAuditEvent } from "./audit-event-store.js";
+import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
@@ -20,12 +16,14 @@ import {
 } from "./execution-identity-admission.js";
 import {
   inspectExecutionIdentityRun,
-  processExecutionIdentityAdmissionWork,
-  pruneExpiredExecutionIdentityContexts,
+  processExecutionIdentityAdmissionWorkInDatabase,
+  pruneExpiredExecutionIdentityContextsInDatabase,
 } from "./execution-identity-context.js";
 import {
   captureExecutionIdentityAdmissionEnvelope,
   persistExecutionIdentityAdmissionEnvelope,
+  prepareExecutionIdentityContextAtAdmission,
+  recordDeniedApprovalForRun,
 } from "./execution-identity.test-support.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -60,67 +58,6 @@ function facts(
     runtime: { kind: "embedded" },
     ...overrides,
   };
-}
-
-function prepareExecutionIdentityContextAtAdmission(
-  admissionFacts: ExecutionIdentityAdmissionFacts,
-  options: Parameters<typeof captureExecutionIdentityAdmissionEnvelope>[1] &
-    Parameters<typeof persistExecutionIdentityAdmissionEnvelope>[1] = {},
-) {
-  const { contextId, executionId, runtimeInstanceId, now, limits, ...database } = options;
-  const envelope = captureExecutionIdentityAdmissionEnvelope(admissionFacts, {
-    ...(contextId !== undefined ? { contextId } : {}),
-    ...(executionId !== undefined ? { executionId } : {}),
-    ...(runtimeInstanceId !== undefined ? { runtimeInstanceId } : {}),
-    ...(now !== undefined ? { now } : {}),
-  });
-  return persistExecutionIdentityAdmissionEnvelope(envelope, {
-    ...database,
-    ...(now !== undefined ? { now } : {}),
-    ...(limits !== undefined ? { limits } : {}),
-  });
-}
-
-function recordDeniedApprovalForRun(
-  runId: string,
-  database: ReturnType<typeof databaseOptions>,
-  id = "denied-approval",
-  binding?: { contextId: string; executionId: string },
-): void {
-  insertOperatorApproval({
-    approval: {
-      id,
-      kind: "exec",
-      presentation: {
-        kind: "exec",
-        commandText: "details withheld",
-        allowedDecisions: ["allow-once", "deny"],
-      },
-      source: { runId, toolCallId: "private-tool-call", toolName: "exec" },
-      runtimeEpoch: "runtime-1",
-      createdAtMs: 100,
-      expiresAtMs: 1_000,
-      ...(binding
-        ? {
-            executionIdentityToken: {
-              tokenVersion: 1,
-              createdAt: 100,
-              runId,
-              contextId: binding.contextId,
-              executionId: binding.executionId,
-            },
-          }
-        : {}),
-    },
-    databaseOptions: database,
-  });
-  resolveOperatorApproval({
-    id,
-    decision: "deny",
-    resolver: { kind: "device", id: "private-reviewer-device" },
-    nowMs: 200,
-    databaseOptions: database,
-  });
 }
 
 describe("execution identity context storage", () => {
@@ -368,9 +305,9 @@ describe("execution identity context storage", () => {
       executionId: "execution-recovery",
       runtimeInstanceId: "runtime-original",
     });
-    const original = processExecutionIdentityAdmissionWork(
+    const original = processExecutionIdentityAdmissionWorkInDatabase(
       { kind: "capture", envelope },
-      { ...database, now: 100 },
+      { ...database, database: openOpenClawStateDatabase(database), now: 100 },
     );
     const token = createExecutionIdentityAdmissionToken("run-recovery", {
       now: 100,
@@ -381,12 +318,18 @@ describe("execution identity context storage", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     expect(
-      processExecutionIdentityAdmissionWork({ kind: "retry-reference", token }, database),
+      processExecutionIdentityAdmissionWorkInDatabase(
+        { kind: "retry-reference", token },
+        { ...database, database: openOpenClawStateDatabase(database) },
+      ),
     ).toEqual(original);
 
     const missingDatabase = databaseOptions();
     expect(() =>
-      processExecutionIdentityAdmissionWork({ kind: "retry-reference", token }, missingDatabase),
+      processExecutionIdentityAdmissionWorkInDatabase(
+        { kind: "retry-reference", token },
+        { ...missingDatabase, database: openOpenClawStateDatabase(missingDatabase) },
+      ),
     ).toThrow("execution identity recovery evidence unavailable");
     expect(
       await inspectExecutionIdentityRun({ executionId: "execution-recovery" }, missingDatabase),
@@ -465,7 +408,11 @@ describe("execution identity context storage", () => {
         .get("execution_identity_contexts"),
     ).toBeUndefined();
 
-    expect(pruneExpiredExecutionIdentityContexts({ database })).toBe(0);
+    expect(
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+      }),
+    ).toBe(0);
     expect(
       opened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -554,7 +501,12 @@ describe("execution identity context storage", () => {
       enqueueExecutionIdentityContextAtAdmission(facts("run-disabled"), { enabled: false }),
     ).toBeUndefined();
 
-    expect(pruneExpiredExecutionIdentityContexts({ database, now: RETENTION_MS + 1 })).toBe(1);
+    expect(
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: RETENTION_MS + 1,
+      }),
+    ).toBe(1);
     expect(
       openOpenClawStateDatabase(database)
         .db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts")
@@ -676,8 +628,8 @@ describe("execution identity context storage", () => {
     ).toEqual(immediatelyAfter);
 
     expect(
-      pruneExpiredExecutionIdentityContexts({
-        database,
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
         now: createdAt + RETENTION_MS + 1,
       }),
     ).toBe(1);
@@ -721,11 +673,21 @@ describe("execution identity context storage", () => {
        FROM rows`,
     ).run();
 
-    expect(pruneExpiredExecutionIdentityContexts({ database, now: RETENTION_MS + 1 })).toBe(1_024);
+    expect(
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: RETENTION_MS + 1,
+      }),
+    ).toBe(1_024);
     expect(db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get()).toEqual({
       count: 1,
     });
-    expect(pruneExpiredExecutionIdentityContexts({ database, now: RETENTION_MS + 1 })).toBe(1);
+    expect(
+      pruneExpiredExecutionIdentityContextsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: RETENTION_MS + 1,
+      }),
+    ).toBe(1);
     expect(db.prepare("SELECT COUNT(*) AS count FROM execution_identity_contexts").get()).toEqual({
       count: 0,
     });
@@ -862,7 +824,7 @@ describe("execution identity context storage", () => {
       },
     });
 
-    recordAuditEvent(
+    recordAuditEventInDatabase(
       {
         sourceId: "legacy-run:1",
         sourceSequence: 1,
@@ -875,7 +837,7 @@ describe("execution identity context storage", () => {
         agentId: "main",
         runId: "legacy-run",
       },
-      unknownDatabase,
+      { ...unknownDatabase, database: openOpenClawStateDatabase(unknownDatabase) },
     );
     expect(
       await inspectExecutionIdentityRun({ runId: "legacy-run" }, unknownDatabase),

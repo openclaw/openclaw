@@ -4,6 +4,8 @@
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-state-logging.tsbuildinfo"
   },
   "include": [
+    "../../src/audit/**/*.test.ts",
+    "../../src/audit/**/*.test.tsx",
     "../../src/state/**/*.test.ts",
     "../../src/state/**/*.test.tsx",
     "../../src/tasks/**/*.test.ts",

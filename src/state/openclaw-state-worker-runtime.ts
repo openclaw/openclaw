@@ -8,6 +8,7 @@ import {
 } from "../agents/harness/native-hook-relay-store.kernel.js";
 import { executeNativeHookRelayMutation } from "../agents/harness/native-hook-relay-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
+import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import { readWorkshopMigrationRecordsInDatabase } from "../commands/doctor-skill-workshop-read.kernel.js";
@@ -124,6 +125,13 @@ export function executeSharedStateCommand(
 ): Operations[keyof Operations]["output"] {
   if (command.type === "audit.events.list") {
     return listAuditEventsInDatabase(open().db, command.input);
+  }
+  if (command.type === "audit.writer.process" || command.type === "audit.writer.prune") {
+    return executeAuditWriterCommand(
+      command,
+      { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+      open,
+    );
   }
   if (
     command.type === "authProfiles.read" ||

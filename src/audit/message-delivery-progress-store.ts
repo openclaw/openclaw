@@ -13,6 +13,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -291,9 +292,9 @@ function pruneProgressAfterInsert(db: DatabaseSync, now: number): void {
 }
 
 /** Persist one progress fact idempotently; first use installs only this owner table. */
-export function recordOutboundMessageProgress(
+export function recordOutboundMessageProgressInDatabase(
   input: OutboundMessageProgressInput,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): OutboundMessageAuditEventRecord | undefined {
   const executionToken = planMessageExecutionBinding(input.executionIdentityToken, input.runId);
   ensureProgressSchema(options);
@@ -455,9 +456,10 @@ export function hasOutboundMessageProgressCursorInDatabase(
 }
 
 /** Prune existing progress without creating its lazy table. */
-export function pruneExpiredOutboundMessageProgress(
-  params: { now?: number; database?: OpenClawStateDatabaseOptions } = {},
-): number {
+export function pruneExpiredOutboundMessageProgressInDatabase(params: {
+  now?: number;
+  database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
+}): number {
   const database = openOpenClawStateDatabase(params.database);
   if (!tableExists(database.db, "outbound_message_progress")) {
     return 0;
