@@ -1619,11 +1619,9 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
-export function sessionLikelyHasOversizedToolResults(params: {
-  messages: AgentMessage[];
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-}): boolean {
+export function sessionLikelyHasOversizedToolResults(
+  params: Parameters<typeof estimateToolResultReductionPotential>[0],
+): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;
 }

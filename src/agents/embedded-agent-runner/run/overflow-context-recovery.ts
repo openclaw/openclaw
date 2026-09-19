@@ -22,6 +22,7 @@ import {
 } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import {
+  resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSessionManager,
@@ -65,6 +66,29 @@ type EmbeddedRunOverflowRecoveryOutcome =
       errorText: string;
       userText: string;
     };
+
+const OVERFLOW_RECOVERY_TOOL_RESULT_RATIO = 0.5;
+
+function resolveOverflowRecoveryToolResultBudgets(params: {
+  contextTokenBudget: number;
+  observedOverflowTokens?: number;
+}) {
+  const liveMaxChars = resolveLiveToolResultMaxChars({
+    contextWindowTokens: params.contextTokenBudget,
+  });
+  const liveAggregateMaxChars = resolveLiveToolResultAggregateMaxChars({
+    contextWindowTokens: params.contextTokenBudget,
+    perResultMaxChars: liveMaxChars,
+  });
+  const observedRatio = params.observedOverflowTokens
+    ? (params.contextTokenBudget / params.observedOverflowTokens) * 0.9
+    : OVERFLOW_RECOVERY_TOOL_RESULT_RATIO;
+  const reductionRatio = Math.min(OVERFLOW_RECOVERY_TOOL_RESULT_RATIO, observedRatio);
+  return {
+    maxChars: Math.max(1, Math.floor(liveMaxChars * reductionRatio)),
+    aggregateMaxChars: Math.max(1, Math.floor(liveAggregateMaxChars * reductionRatio)),
+  };
+}
 
 export async function recoverEmbeddedRunOverflow(
   input: EmbeddedRunCompactionRecoveryInput & {
@@ -152,7 +176,25 @@ export async function recoverEmbeddedRunOverflow(
   const preflightRecovery = input.attempt.preflightRecovery;
   const requiresTranscriptContinuation =
     preflightRecovery?.source === "mid-turn" || !isCurrentAttemptReplaySafe(input.attempt);
-  const truncateToolResults = async () => {
+  const liveToolResultMaxChars = resolveLiveToolResultMaxChars({
+    contextWindowTokens: contextTokenBudget,
+  });
+  const liveToolResultBudgets = {
+    maxChars: liveToolResultMaxChars,
+    aggregateMaxChars: resolveLiveToolResultAggregateMaxChars({
+      contextWindowTokens: contextTokenBudget,
+      perResultMaxChars: liveToolResultMaxChars,
+    }),
+  };
+  const recoveryToolResultBudgets = resolveOverflowRecoveryToolResultBudgets({
+    contextTokenBudget,
+    observedOverflowTokens,
+  });
+  const truncateToolResults = async (
+    budgets: typeof liveToolResultBudgets = isPreflightRecovery
+      ? liveToolResultBudgets
+      : recoveryToolResultBudgets,
+  ) => {
     const { sessionManager, assertActive } = input.prepareRecoverySession(contextTokenBudget);
     if (!sessionManager) {
       return {
@@ -167,9 +209,8 @@ export async function recoverEmbeddedRunOverflow(
       const result = truncateOversizedToolResultsInSessionManager({
         sessionManager,
         contextWindowTokens: contextTokenBudget,
-        maxCharsOverride: resolveLiveToolResultMaxChars({
-          contextWindowTokens: contextTokenBudget,
-        }),
+        maxCharsOverride: budgets.maxChars,
+        aggregateMaxCharsOverride: budgets.aggregateMaxChars,
         protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
         projectionState: getEmbeddedSessionPromptState(input.getActiveSession().id).toolResults,
         ...target,
@@ -212,6 +253,35 @@ export async function recoverEmbeddedRunOverflow(
 
   const isCompactionFailure = isCompactionFailureError(errorText);
 
+  const attemptToolResultTruncation = async (
+    phase: "before compaction" | "fallback",
+    budgets: typeof liveToolResultBudgets = isPreflightRecovery
+      ? liveToolResultBudgets
+      : recoveryToolResultBudgets,
+  ) => {
+    if (input.state.toolResultTruncationAttempted) {
+      return undefined;
+    }
+    const hasToolResultPressure = input.attempt.messagesSnapshot
+      ? sessionLikelyHasOversizedToolResults({
+          messages: input.attempt.messagesSnapshot,
+          contextWindowTokens: contextTokenBudget,
+          maxCharsOverride: budgets.maxChars,
+          aggregateMaxCharsOverride: budgets.aggregateMaxChars,
+        })
+      : false;
+    if (!hasToolResultPressure) {
+      return undefined;
+    }
+
+    input.state.toolResultTruncationAttempted = true;
+    log.warn(
+      `[context-overflow-recovery] Attempting tool result truncation ${phase} for ${input.modelSelection.provider}/${input.modelSelection.model} ` +
+        `(contextWindow=${contextTokenBudget} tokens)`,
+    );
+    return await truncateToolResults(budgets);
+  };
+
   // Compaction here budgets against the model's context window, so it cannot make the request fit
   // under the provider's own ceiling, and every retry re-sends a payload already rejected. Stop
   // the run instead of compacting, adopting a successor transcript, or truncating and retrying:
@@ -250,6 +320,28 @@ export async function recoverEmbeddedRunOverflow(
       input.prepareCurrentTranscriptRetry();
     }
     return { action: "retry" };
+  }
+
+  if (!isCompactionFailure && input.attemptCompactionCount === 0 && !isPreflightRecovery) {
+    const truncResult = await attemptToolResultTruncation("before compaction");
+    if (truncResult?.truncated) {
+      input.markOwnedTranscriptRetry();
+      log.info(
+        `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt before compaction`,
+      );
+      if (requiresTranscriptContinuation) {
+        input.prepareCurrentTranscriptRetry();
+      } else {
+        await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);
+        input.assertRecoveryActive();
+      }
+      return { action: "retry" };
+    }
+    if (truncResult) {
+      log.warn(
+        `[context-overflow-recovery] Pre-compaction tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+      );
+    }
   }
 
   if (
@@ -377,38 +469,23 @@ export async function recoverEmbeddedRunOverflow(
     }
   }
 
-  if (!parkedWorkBlocksContinuation && !input.state.toolResultTruncationAttempted) {
-    const toolResultMaxChars = resolveLiveToolResultMaxChars({
-      contextWindowTokens: input.contextTokenBudget,
-    });
-    const hasOversized = input.attempt.messagesSnapshot
-      ? sessionLikelyHasOversizedToolResults({
-          messages: input.attempt.messagesSnapshot,
-          contextWindowTokens: input.contextTokenBudget,
-          maxCharsOverride: toolResultMaxChars,
-        })
-      : false;
-    if (hasOversized) {
-      input.state.toolResultTruncationAttempted = true;
-      log.warn(
-        `[context-overflow-recovery] Attempting tool result truncation for ${input.modelSelection.provider}/${input.modelSelection.model} ` +
-          `(contextWindow=${input.contextTokenBudget} tokens)`,
-      );
-      const truncResult = await truncateToolResults();
-      if (truncResult.truncated) {
-        input.markOwnedTranscriptRetry();
-        log.info(
-          `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
-        );
-        if (requiresTranscriptContinuation) {
-          input.prepareCurrentTranscriptRetry();
-        }
-        return { action: "retry" };
-      }
-      log.warn(
-        `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
-      );
+  const truncResult = !parkedWorkBlocksContinuation
+    ? await attemptToolResultTruncation("fallback")
+    : undefined;
+  if (truncResult?.truncated) {
+    input.markOwnedTranscriptRetry();
+    log.info(
+      `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
+    );
+    if (requiresTranscriptContinuation) {
+      input.prepareCurrentTranscriptRetry();
     }
+    return { action: "retry" };
+  }
+  if (truncResult) {
+    log.warn(
+      `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+    );
   }
 
   if (

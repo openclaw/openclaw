@@ -36,7 +36,7 @@ existing recovery outcome.
 
 ## Auto-compaction
 
-Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
+Auto-compaction is on by default. It runs when the session nears the context limit. When the model instead returns a generic context-overflow error with reducible tool-result pressure, OpenClaw first shortens those tool results on an append-only recovery branch and retries. If that cannot reduce the prompt, OpenClaw compacts and retries.
 
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling.
 
