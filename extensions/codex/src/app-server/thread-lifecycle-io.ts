@@ -170,6 +170,7 @@ export async function resumeExistingCodexThread(
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: resumeBinding.preserveNativeModel === true,
+        preserveReserveSettings: resumeBinding.reserveReturn !== undefined,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
@@ -431,6 +432,7 @@ export async function resumeExistingCodexThread(
       acceptedConfiguration.assertConfigured();
     }
     if (
+      resumeBinding.reserveReturn ||
       resumeBinding.pendingResumeConfiguration ||
       resumeBinding.preserveNativeModel ||
       resumeBinding.connectionScope === "supervision" ||

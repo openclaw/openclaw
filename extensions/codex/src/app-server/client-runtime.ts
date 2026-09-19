@@ -1,5 +1,4 @@
 /** Client-scoped Codex auth and account observers. */
-import { createHash } from "node:crypto";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
@@ -17,6 +16,10 @@ import {
   type ThreadOwnerToken,
   type ThreadReleaseTransition,
 } from "./client-thread-owner.js";
+import {
+  prepareCodexClientWorkspaceReferences,
+  type CodexClientWorkspaceReferenceState,
+} from "./client-workspace-references.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type CodexServiceTier, type JsonObject } from "./protocol.js";
 import { mergeCodexRateLimitsUpdate } from "./rate-limit-cache.js";
@@ -27,13 +30,16 @@ type ClientRuntimeContext = CodexAppServerAuthProfileLookup & {
   onAuthRefreshFailure?: () => void;
 };
 
-type ClientRuntime = ThreadOwnershipState & {
-  context: ClientRuntimeContext;
-  authHandoff?: CodexAppServerAuthHandoff;
-  sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
-  workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
-  evictionTimer?: ReturnType<typeof setTimeout>;
-};
+type ClientRuntime = ThreadOwnershipState &
+  CodexClientWorkspaceReferenceState & {
+    context: ClientRuntimeContext;
+    authHandoff?: CodexAppServerAuthHandoff;
+    sessionMetadata: Map<
+      string,
+      { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }
+    >;
+    evictionTimer?: ReturnType<typeof setTimeout>;
+  };
 
 export type CodexAppServerLiveThreadOwnership = {
   assertCurrent: () => void;
@@ -80,6 +86,14 @@ export function recordCodexAppServerAuthHandoff(
   }
 }
 
+/** Identity observation for account-bound transitions; replacing auth invalidates retained observers. */
+export function readCodexAppServerAuthHandoff(
+  client: CodexAppServerClient,
+): CodexAppServerAuthHandoff | undefined {
+  const runtime = configuredClients.get(client);
+  return runtime && !runtime.closed ? runtime.authHandoff : undefined;
+}
+
 /** Reference history is only trusted while this native subscription stays warm. */
 export function forgetCodexWorkspaceReferences(
   client: CodexAppServerClient,
@@ -94,23 +108,7 @@ export function prepareCodexWorkspaceReferences(
   threadId: string,
   reference: string | undefined,
 ) {
-  const runtime = configuredClients.get(client);
-  const digest = createHash("sha256")
-    .update(reference ?? "")
-    .digest("hex");
-  const previous = runtime?.workspaceReferences.get(threadId) ?? { needsReintroduction: true };
-  if (runtime && !runtime.closed) {
-    runtime.workspaceReferences.set(threadId, previous);
-  }
-  return {
-    include: previous.needsReintroduction || previous.digest !== digest,
-    accepted: () => {
-      if (!runtime || runtime.closed || runtime.workspaceReferences.get(threadId) !== previous) {
-        return;
-      }
-      runtime.workspaceReferences.set(threadId, { digest, needsReintroduction: false });
-    },
-  };
+  return prepareCodexClientWorkspaceReferences(configuredClients.get(client), threadId, reference);
 }
 
 /** Immutable declarations are data owned by this physical client, never retained executors. */

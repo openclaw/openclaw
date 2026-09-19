@@ -79,7 +79,9 @@ export function activateCodexAttemptTurn(
   const activeTurnId = turn.turn.id;
   const { thread } = resourceState;
   const runtimeModelSelection =
-    thread.preserveNativeModel && thread.model && thread.modelProvider
+    (thread.preserveNativeModel || resources.state.acceptedReserveModel) &&
+    thread.model &&
+    thread.modelProvider
       ? { provider: thread.modelProvider, model: thread.model }
       : undefined;
   // Native preparation may replace the cached model. Attribute this turn to its

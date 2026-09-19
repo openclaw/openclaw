@@ -265,26 +265,28 @@ export function buildThreadResumeParams(
     threadId: string;
     authProfileId?: string;
     preserveNativeModel?: boolean;
+    preserveReserveSettings?: boolean;
   },
 ): CodexThreadResumeParams & { developerInstructions: string } {
-  const modelSelection = options.preserveNativeModel
-    ? undefined
-    : resolveCodexAppServerRequestModelSelection({
-        model: options.model ?? params.modelId,
-        modelProvider:
-          options.modelProvider ??
-          resolveCodexAppServerModelProvider({
-            provider: params.provider,
-            authProfileId: options.authProfileId ?? params.authProfileId,
-            authProfileStore: params.authProfileStore,
-            agentDir: params.agentDir,
-            config: params.config,
-          }),
-        authProfileId: options.authProfileId ?? params.authProfileId,
-        authProfileStore: params.authProfileStore,
-        agentDir: params.agentDir,
-        config: params.config,
-      });
+  const modelSelection =
+    options.preserveNativeModel || options.preserveReserveSettings
+      ? undefined
+      : resolveCodexAppServerRequestModelSelection({
+          model: options.model ?? params.modelId,
+          modelProvider:
+            options.modelProvider ??
+            resolveCodexAppServerModelProvider({
+              provider: params.provider,
+              authProfileId: options.authProfileId ?? params.authProfileId,
+              authProfileStore: params.authProfileStore,
+              agentDir: params.agentDir,
+              config: params.config,
+            }),
+          authProfileId: options.authProfileId ?? params.authProfileId,
+          authProfileStore: params.authProfileStore,
+          agentDir: params.agentDir,
+          config: params.config,
+        });
   return {
     threadId: options.threadId,
     // Only the latest turn id/status is needed to preserve active-turn conflict
@@ -302,6 +304,7 @@ export function buildThreadResumeParams(
         }
       : {}),
     ...buildCodexThreadConfiguration(params, options),
+    ...(options.preserveReserveSettings ? { serviceTier: undefined } : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
 }
