@@ -145,6 +145,19 @@ is created, so it does not add per-turn latency. Calls to
 `openclaw_agent_consult` still run the full OpenClaw agent and should be used
 for tool work, current information, memory lookups, or workspace state.
 
+Only one native agent consult runs at a time for each call. A replay of the same
+provider tool-call ID shares its pending result. A different tool-call ID receives
+`busy`, `started: false`, and `retryable: true`, even when its question text is
+identical. That request has not started; retry it after the pending consult finishes.
+The retry uses its own question and the remaining caller transcript, not the earlier
+consult's answer.
+
+If another invocation arrives before transcript settling finishes, the earlier
+consult uses the caller text captured when its invocation arrived. Without a
+competing invocation, normal transcript settling still includes later fragments.
+Successful native consults consume only their own transcript prefix, leaving
+later text in the existing buffers with their normal expiration rules.
+
 ```json5
 {
   plugins: {
