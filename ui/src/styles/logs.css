@@ -127,3 +127,54 @@ openclaw-logs-page {
   min-height: 0;
   max-height: none;
 }
+
+/* Keep responsive overrides after the base rules in this lazy stylesheet. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .log-stream {
+    border-radius: var(--radius-md);
+    max-height: 380px;
+  }
+
+  .content:has(openclaw-logs-page) {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  .content openclaw-logs-page,
+  .content .settings-workspace--fill-height .logs-card {
+    display: block;
+    height: auto;
+    min-height: 0;
+    flex: initial;
+    overflow-y: visible;
+  }
+
+  .content .settings-workspace--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .log-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .log-time {
+    font-size: 12px;
+  }
+
+  .log-level {
+    font-size: 12px;
+  }
+
+  .log-subsystem {
+    font-size: 12px;
+  }
+
+  .log-message {
+    font-size: 12px;
+  }
+}
