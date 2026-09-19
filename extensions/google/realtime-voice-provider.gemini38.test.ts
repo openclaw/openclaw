@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildThinkingConfig,
   emitsCompleteInputTranscripts,
+  endsTurnOnAudioStreamEnd,
   modelSupportsToolResultContinuation,
   supportsClientContentInterrupt,
 } from "./realtime-voice-model-contract.js";
@@ -116,6 +117,13 @@ describe("Gemini 3.8 Live model contracts", () => {
     expect(emitsCompleteInputTranscripts("gemini-2.5-flash-native-audio-preview-12-2025")).toBe(
       false,
     );
+  });
+
+  it("ends the audio stream on silence only for models that end the turn on audioStreamEnd", () => {
+    expect(endsTurnOnAudioStreamEnd("gemini-3.8-live")).toBe(false);
+    expect(endsTurnOnAudioStreamEnd("models/gemini-3.8-live-extended-thinking")).toBe(false);
+    expect(endsTurnOnAudioStreamEnd("gemini-3.1-flash-live-preview")).toBe(true);
+    expect(endsTurnOnAudioStreamEnd("gemini-2.5-flash-native-audio-preview-12-2025")).toBe(true);
   });
 
   it("builds thinking config per model family", () => {
@@ -279,6 +287,24 @@ describe("buildGoogleRealtimeVoiceProvider with Gemini 3.8 Live", () => {
         ["user", "Name a yellow fruit.", true],
         ["assistant", "A banana.", true],
       ]);
+    },
+  );
+
+  it.each(["gemini-3.8-live", "gemini-3.8-live-extended-thinking"])(
+    "keeps forwarding silent microphone frames to %s instead of ending the audio stream",
+    async (model) => {
+      const bridge = await openConfiguredBridge({
+        providerConfig: { model, silenceDurationMs: 60 },
+      });
+
+      // Past the silence threshold, 3.1 would send audioStreamEnd and drop further silence.
+      const silence20ms = Buffer.alloc(160, 0xff);
+      for (let frame = 0; frame < 10; frame += 1) {
+        bridge.sendAudio(silence20ms);
+      }
+
+      expect(session.sendRealtimeInput).not.toHaveBeenCalledWith({ audioStreamEnd: true });
+      expect(session.sendRealtimeInput).toHaveBeenCalledTimes(10);
     },
   );
 
