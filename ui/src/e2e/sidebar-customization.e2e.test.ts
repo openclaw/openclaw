@@ -584,7 +584,7 @@ suite.define(() => {
             .locator(".shell")
             .evaluate((element) => getComputedStyle(element).getPropertyValue("--shell-nav-width")),
         )
-        .toBe("0px");
+        .toBe("52px");
       await expect.poll(() => sidebarResizer.count()).toBe(0);
       await expect.poll(() => sidebar.isVisible()).toBe(false);
       const navExpand = page.locator(".shell-chrome-controls__nav-toggle");

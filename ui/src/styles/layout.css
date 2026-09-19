@@ -117,6 +117,90 @@
   gap: var(--shell-chrome-controls-gap);
 }
 
+/* Keep the legacy in-page strip's visual order; the browser rail below follows
+   the actions' DOM order for keyboard navigation. Native titlebar controls
+   remain owned by their host. */
+.shell-chrome-controls__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--shell-chrome-controls-gap);
+}
+
+.shell-chrome-controls__actions > :has(.shell-chrome-controls__new-thread) {
+  order: -1;
+}
+
+/* Only browser windows get the rail. Native hosts reserve their own traffic
+   lights, drag regions and caption controls, including older macOS hosts. */
+html:not(
+    .openclaw-native-macos,
+    .openclaw-native-nav,
+    .openclaw-native-web-chrome,
+    .openclaw-native-desktop
+  )
+  .shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--onboarding):not(.shell--settings) {
+  --shell-nav-width: 52px;
+  --shell-chrome-safe-area-left: 12px;
+  --shell-attention-width: 0px;
+
+  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+
+  .shell-chrome-controls {
+    top: 8px;
+    left: var(--shell-chrome-controls-inset);
+  }
+
+  /* The 48px session header and 32px toggle share a 24px centerline. The
+     divider belongs to session chrome, not New Session or page headings. */
+  .shell-chrome-controls--session::after {
+    position: absolute;
+    top: 8px;
+    left: calc(var(--shell-chrome-control-size) + 9px);
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    content: "";
+  }
+
+  .shell-chrome-controls__actions {
+    position: fixed;
+    bottom: calc(
+      10px + env(safe-area-inset-bottom, 0px) + var(--shell-chrome-control-size) +
+        var(--shell-chrome-controls-gap)
+    );
+    left: var(--shell-chrome-controls-inset);
+    flex-direction: column;
+
+    > :has(.shell-chrome-controls__new-thread) {
+      order: 0;
+    }
+  }
+
+  openclaw-sidebar-attention.sidebar-attention--floating {
+    top: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    left: var(--shell-chrome-controls-inset);
+  }
+
+  .sidebar-attention--floating ~ .sidebar-update-card--floating .sidebar-update-card {
+    margin-top: 12px;
+  }
+}
+
+/* Match the document-direction contract used by the page-header layout. */
+html[dir="rtl"]:not(
+    .openclaw-native-macos,
+    .openclaw-native-nav,
+    .openclaw-native-web-chrome,
+    .openclaw-native-desktop
+  )
+  .shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--onboarding):not(.shell--settings) {
+  grid-template-columns: minmax(0, 1fr) var(--shell-nav-width);
+  grid-template-areas:
+    "topbar nav"
+    "content nav";
+}
+
 .shell-chrome-controls__nav-toggle[data-env-avatar]::before {
   display: inline-flex;
   align-items: center;

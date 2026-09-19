@@ -408,7 +408,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       ${
         !nativeEmbed && navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
           ? html`
-              <div class="shell-chrome-controls">
+              <div
+                class="shell-chrome-controls ${sessionRoute ? "shell-chrome-controls--session" : ""}"
+              >
                 <openclaw-tooltip
                   .content=${`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
                 >
@@ -425,27 +427,29 @@ export function renderApplicationShell(host: ShellViewHost) {
                     ${icons.panelLeftOpen}
                   </button>
                 </openclaw-tooltip>
-                ${renderNewSessionLink({
-                  basePath: context.basePath,
-                  agentId: selectedAgentId,
-                  className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
-                  label: t("chat.runControls.newSession"),
-                  disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                  onOpen: openNewSession,
-                })}
-                <openclaw-tooltip
-                  .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-                >
-                  <button
-                    type="button"
-                    class="shell-chrome-controls__button shell-chrome-controls__search"
-                    aria-label=${t("chat.openCommandPalette")}
-                    @click=${() => host.openPalette()}
+                <div class="shell-chrome-controls__actions">
+                  <openclaw-tooltip
+                    .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
                   >
-                    ${icons.search}
-                  </button>
-                </openclaw-tooltip>
-                ${homePanelAvailable ? renderCollapsedHomeToggle() : nothing}
+                    <button
+                      type="button"
+                      class="shell-chrome-controls__button shell-chrome-controls__search"
+                      aria-label=${t("chat.openCommandPalette")}
+                      @click=${() => host.openPalette()}
+                    >
+                      ${icons.search}
+                    </button>
+                  </openclaw-tooltip>
+                  ${renderNewSessionLink({
+                    basePath: context.basePath,
+                    agentId: selectedAgentId,
+                    className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                    label: t("chat.runControls.newSession"),
+                    disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+                    onOpen: openNewSession,
+                  })}
+                  ${homePanelAvailable ? renderCollapsedHomeToggle() : nothing}
+                </div>
               </div>
             `
           : nothing

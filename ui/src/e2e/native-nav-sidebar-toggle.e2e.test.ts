@@ -6,11 +6,13 @@ import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  controlUiSessionPath,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
+  dockChatSidePanel,
   failNextDeviceIdentityMint,
   focusChatSidePanel,
   openChatSidePanelType,
@@ -161,7 +163,20 @@ suite.define(() => {
   }
 
   it("keeps the web expand/collapse controls in plain browsers", async () => {
-    const page = await openPage({ nativeNav: false });
+    const page = await openPage({
+      nativeNav: false,
+      pathname: controlUiSessionPath("agent:main:work").slice(1),
+      scenario: {
+        sessionKey: "agent:main:work",
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "chat.history",
+          "chat.send",
+          "sessions.create",
+        ],
+      },
+    });
 
     expect(
       await page.evaluate(() => ({
@@ -183,6 +198,105 @@ suite.define(() => {
     await collapse.click();
     const expand = page.locator(".shell-chrome-controls__nav-toggle");
     await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    const controls = page.locator(".shell-chrome-controls");
+    const search = controls.locator(".shell-chrome-controls__search");
+    const newSession = controls.locator(".shell-chrome-controls__new-thread");
+    const home = controls.locator(".shell-chrome-controls__home");
+    const inbox = page.locator(".sidebar-attention--floating .sidebar-issues-button");
+    await home.waitFor();
+    await inbox.waitFor();
+    await expect
+      .poll(async () => Math.round((await page.locator(".content").boundingBox())!.x))
+      .toBe(52);
+    const toggleBounds = (await expand.boundingBox())!;
+    expect(toggleBounds).toMatchObject({ x: 10, y: 8, width: 32, height: 32 });
+    const headerBounds = (await page.locator(".chat-pane__header:visible").first().boundingBox())!;
+    expect(toggleBounds.y + toggleBounds.height / 2).toBeCloseTo(
+      headerBounds.y + headerBounds.height / 2,
+      1,
+    );
+    expect(
+      await controls.evaluate((element) => {
+        const divider = getComputedStyle(element, "::after");
+        const bounds = element.getBoundingClientRect();
+        return {
+          x: bounds.x + Number.parseFloat(divider.left),
+          width: divider.width,
+          height: divider.height,
+          content: divider.content,
+        };
+      }),
+    ).toMatchObject({ x: 51, width: "1px", height: "16px", content: '""' });
+    const actions = [search, newSession, home, inbox];
+    const boxes = await Promise.all(actions.map((action) => action.boundingBox()));
+    for (const [index, box] of boxes.entries()) {
+      expect(box).toMatchObject({ x: 10, width: 32, height: 32 });
+      if (index > 0) expect(box!.y).toBe(boxes[index - 1]!.y + 36);
+    }
+    expect(boxes.at(-1)!.y).toBe(page.viewportSize()!.height - 42);
+    expect(
+      await page
+        .locator(".shell-chrome-controls__actions .shell-chrome-controls__button")
+        .evaluateAll((elements) => elements.map((element) => element.className)),
+    ).toEqual([
+      expect.stringContaining("__search"),
+      expect.stringContaining("__new-thread"),
+      expect.stringContaining("__home"),
+    ]);
+    expect(
+      await home.evaluate((element) =>
+        Boolean(
+          element.compareDocumentPosition(
+            document.querySelector(".sidebar-attention--floating .sidebar-issues-button")!,
+          ) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+      ),
+    ).toBe(true);
+    for (const [index, action] of actions.slice(0, 3).entries()) {
+      await action.focus();
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => actions[index + 1]!.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+    }
+    const composerBounds = (await page
+      .locator(".agent-chat__composer-shell:visible")
+      .first()
+      .boundingBox())!;
+    expect(composerBounds.x).toBeGreaterThanOrEqual(52);
+    await page.evaluate(() => {
+      document.documentElement.dir = "rtl";
+    });
+    await expect
+      .poll(async () => Math.round((await page.locator(".content").boundingBox())!.x))
+      .toBe(52);
+    expect((await expand.boundingBox())!.x).toBe(10);
+    await page.evaluate(() => {
+      document.documentElement.dir = "ltr";
+    });
+    await search.click();
+    await page.locator(".cmd-palette-overlay").waitFor();
+    await page.keyboard.press("Escape");
+    await home.click();
+    const homePanel = page.locator("openclaw-assistant-panel");
+    await homePanel.getByRole("button", { name: "Home", exact: true }).waitFor();
+    await homePanel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+    await inbox.click();
+    await page.getByRole("dialog", { name: "Inbox", exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    await openChatSidePanelType(page, "Side chat");
+    await dockChatSidePanel(page, "left");
+    const leftPanel = (await page.locator(".sidebar-region--left").boundingBox())!;
+    expect(leftPanel.x).toBeGreaterThanOrEqual(52);
+    for (const button of await page.locator(".chat-pane__actions button:visible").all()) {
+      await button.click({ trial: true });
+    }
+    await newSession.click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    await page.locator(".new-session-page__message").waitFor();
+    expect(await controls.evaluate((element) => getComputedStyle(element, "::after").content)).toBe(
+      "none",
+    );
     await expand.click();
     await expect.poll(() => collapse.isVisible()).toBe(true);
 
@@ -757,6 +871,8 @@ suite.define(() => {
       .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
       .toBe(false);
 
+    expect(await page.locator(".shell-chrome-controls").count()).toBe(0);
+    expect((await page.locator(".content").boundingBox())!.x).toBe(0);
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();

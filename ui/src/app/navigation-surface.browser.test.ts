@@ -36,16 +36,18 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
               type="button"
               aria-label="Expand navigation"
             ></button>
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-              type="button"
-              aria-label="New session"
-            ></button>
-            <button
-              class="shell-chrome-controls__button shell-chrome-controls__search"
-              type="button"
-              aria-label="Search"
-            ></button>
+            <div class="shell-chrome-controls__actions">
+              <button
+                class="shell-chrome-controls__button shell-chrome-controls__search"
+                type="button"
+                aria-label="Search"
+              ></button>
+              <button
+                class="shell-chrome-controls__button shell-chrome-controls__new-thread"
+                type="button"
+                aria-label="New session"
+              ></button>
+            </div>
           </div>
           <main class="content">
             ${renderFloatingUpdateCard({

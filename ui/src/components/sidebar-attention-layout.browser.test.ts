@@ -91,6 +91,7 @@ afterEach(() => {
     "openclaw-native-nav",
     "openclaw-native-macos",
     "openclaw-native-web-chrome",
+    "openclaw-native-desktop",
   );
 });
 
@@ -196,8 +197,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
   });
 
   it.each(["base-first", "base-last"])(
-    "positions collapsed sidebar attention beyond chrome controls (%s)",
+    "keeps browser Inbox at the rail bottom and native Inbox beside its chrome (%s)",
     async (order) => {
+      const { page } = await import("vitest/browser");
+      await page.viewport(1280, 800);
       // Entry CSS and the lazy component may arrive in either order. Use both
       // complete owners so this also catches resets introduced in the base sheet.
       const sheets = (
@@ -213,10 +216,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       shell.className = "shell shell--nav-collapsed";
       shell.innerHTML = `
       <div class="shell-chrome-controls">
-        <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button"></button>
-        <button class="shell-chrome-controls__button shell-chrome-controls__home"></button>
+        <button class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"></button>
+        <div class="shell-chrome-controls__actions">
+          <button class="shell-chrome-controls__button shell-chrome-controls__search"></button>
+          <button class="shell-chrome-controls__button shell-chrome-controls__new-thread"></button>
+          <button class="shell-chrome-controls__button shell-chrome-controls__home"></button>
+        </div>
       </div>
       <nav class="macos-titlebar-controls">
         ${Array.from(
@@ -246,9 +251,14 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
       expect(getComputedStyle(attention).position).toBe("fixed");
       expect(getComputedStyle(attention).display).toBe("flex");
-      expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-        chrome.getBoundingClientRect().right + 8,
-      );
+      const inboxBounds = attention.getBoundingClientRect();
+      expect(inboxBounds.left).toBe(10);
+      expect(inboxBounds.top).toBe(window.innerHeight - 42);
+      const homeBounds = chrome
+        .querySelector(".shell-chrome-controls__home")!
+        .getBoundingClientRect();
+      expect(homeBounds.left).toBe(inboxBounds.left);
+      expect(inboxBounds.top - homeBounds.bottom).toBe(4);
       const paint = () => ({
         border: getComputedStyle(inbox).borderTopWidth,
         background: getComputedStyle(inbox).backgroundColor,
@@ -258,7 +268,6 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       expect(resting.background).not.toBe("rgba(0, 0, 0, 0)");
       expect(getComputedStyle(inbox).boxShadow).not.toBe("none");
       expect(getComputedStyle(inbox).backdropFilter).toBe("blur(10px)");
-      const { page } = await import("vitest/browser");
       await page.elementLocator(inbox).hover();
       const hovered = paint();
       expect(hovered.border).toBe(resting.border);
@@ -269,6 +278,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       inbox.setAttribute("aria-expanded", "false");
       expect(paint()).toEqual(resting);
 
+      document.documentElement.classList.add("openclaw-native-desktop");
+      expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        chrome.getBoundingClientRect().right + 8,
+      );
+      expect(attention.getBoundingClientRect().top).toBe(10);
+      document.documentElement.classList.remove("openclaw-native-desktop");
       document.documentElement.classList.add("openclaw-native-nav");
       expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(8);
 

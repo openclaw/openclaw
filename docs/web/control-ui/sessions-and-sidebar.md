@@ -107,6 +107,13 @@ enablement and sizing.
 
 ## Sidebar navigation
 
+In a desktop browser, collapsing the sidebar leaves a narrow navigation rail.
+The expand button stays at the top, beside the project and session title on
+session pages. Search, New session, Home (when available), and Inbox stack at
+the bottom. The rail reserves its own space so it does not cover the composer.
+Narrow screens keep the navigation drawer; native desktop apps keep their
+existing window controls.
+
 Drag page destinations, including plugin-provided pages, to reorder them together.
 The order is saved in your sidebar preferences and survives reloads. A temporarily
 unavailable plugin keeps its saved position for when it returns. **Home** stays
