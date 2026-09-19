@@ -75,6 +75,36 @@ function isKeyedAgentEntryPath(path: readonly string[]): boolean {
   return path.length === 3 && path[0] === "agents" && path[1] === "entries";
 }
 
+function isKeyedProviderModelsPath(path: readonly string[]): boolean {
+  return (
+    path.length === 4 && path[0] === "models" && path[1] === "providers" && path[3] === "models"
+  );
+}
+
+function includePathCanAbsorbWrite(params: {
+  configPath: string;
+  provenance: readonly ConfigIncludeOwnership[];
+  path: readonly string[];
+  targetPath: string | undefined;
+}): boolean {
+  if (!params.targetPath) {
+    return false;
+  }
+  const boundary = resolveIncludeWriteBoundary({
+    provenance: params.provenance,
+    changed: { paths: [[...params.path, "$value"]], rootChanged: false },
+  });
+  return Boolean(
+    boundary &&
+    pathsEqual(boundary.boundaryPath, params.path) &&
+    boundary.includePath === params.targetPath &&
+    isInternalIncludeWriteTarget({
+      configPath: params.configPath,
+      includePath: boundary.includePath,
+    }),
+  );
+}
+
 function isSoleOwner(entry: ConfigIncludeOwnership): boolean {
   // A merged directive or one carrying sibling overrides does not solely own the
   // value it contributes, so its file cannot absorb a write on its own.
@@ -197,17 +227,12 @@ export function resolveKeyedAgentEntryIncludePreservation(params: {
     ) {
       return null;
     }
-    const boundary = resolveIncludeWriteBoundary({
-      provenance,
-      changed: { paths: [[...entry.path, "$value"]], rootChanged: false },
-    });
     if (
-      !boundary ||
-      !pathsEqual(boundary.boundaryPath, entry.path) ||
-      boundary.includePath !== entry.targetPath ||
-      !isInternalIncludeWriteTarget({
+      !includePathCanAbsorbWrite({
         configPath: params.configPath,
-        includePath: boundary.includePath,
+        provenance,
+        path: entry.path,
+        targetPath: entry.targetPath,
       })
     ) {
       return null;
@@ -215,4 +240,47 @@ export function resolveKeyedAgentEntryIncludePreservation(params: {
     includePaths.push([...entry.path]);
   }
   return { includePaths };
+}
+
+/** Exact provider catalog includes that can absorb a models[] write beside root-owned edits. */
+export function resolveKeyedProviderModelsIncludePreservation(params: {
+  configPath: string;
+  provenance: readonly ConfigIncludeOwnership[] | undefined;
+}): { includePaths: readonly (readonly string[])[] } | null {
+  const provenance = params.provenance;
+  if (!provenance) {
+    return null;
+  }
+  const catalogOwnership = provenance.filter((entry) => isKeyedProviderModelsPath(entry.path));
+  if (catalogOwnership.length === 0) {
+    return null;
+  }
+
+  const includePaths: string[][] = [];
+  const seen = new Set<string>();
+  for (const entry of catalogOwnership) {
+    const key = entry.path.join(".");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    // Same-path delegation is ambiguous for preservation; skip and fail closed on change.
+    if (
+      catalogOwnership.filter((candidate) => pathsEqual(candidate.path, entry.path)).length !== 1
+    ) {
+      continue;
+    }
+    if (
+      !includePathCanAbsorbWrite({
+        configPath: params.configPath,
+        provenance,
+        path: entry.path,
+        targetPath: entry.targetPath,
+      })
+    ) {
+      continue;
+    }
+    includePaths.push([...entry.path]);
+  }
+  return includePaths.length > 0 ? { includePaths } : null;
 }

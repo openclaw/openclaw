@@ -98,6 +98,7 @@ export type ConfigIoContext = {
     candidate: OpenClawConfig,
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
+    includeReadOverlay?: ReadonlyMap<string, string>,
   ) => OpenClawConfig;
   prepareRecoveryBackupCandidateAsync: (
     candidate: ConfigRecoveryCandidate,
@@ -255,6 +256,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     candidate: OpenClawConfig,
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
+    includeReadOverlay?: ReadonlyMap<string, string>,
   ): OpenClawConfig {
     const env = { ...deps.env } as NodeJS.ProcessEnv;
     const resolvedIncludes = resolveConfigIncludesForRead(
@@ -263,6 +265,9 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       { ...deps, env },
       includeFileHashes,
       includeFileTargets,
+      undefined,
+      undefined,
+      includeReadOverlay,
     );
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
     const contextBudgetConfig = migrateLegacyContextBudgetConfig(

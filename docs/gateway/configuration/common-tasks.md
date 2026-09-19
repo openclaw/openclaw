@@ -405,6 +405,22 @@ read_when:
       nested object-map entries. Write-through only targets include files inside
       the top-level config directory; includes admitted through
       `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
+    - **Mixed root+include writes**: a write that touches keyed
+      `agents.entries.<id>` or `models.providers.<id>.models` paths owned by
+      an include, alongside other root-owned keys in the same operation,
+      writes through: each keyed entry/catalog lands in its owning include
+      file and the root keeps its `$include` pointer.
+    - **Interruption recovery**: a mixed write publishes its include files
+      first and `openclaw.json` last. A caught failure restores each include it
+      already published, unless another writer changed that file in the
+      meantime; the newer edit is kept. A process kill or power loss between
+      those publications can leave the includes updated and `openclaw.json`
+      unchanged. That partial combination can fail validation, so do not assume
+      the same command can be rerun immediately. Restore the affected include
+      from its adjacent `.bak` file when available, or from another known-good
+      copy; if neither exists, edit the root and include files together until
+      they form a valid configuration. Run `openclaw config validate`, then
+      rerun the intended write only after validation passes.
     - **Control UI form saves**: the form edits the include-resolved authored
       config. Unchanged redacted credentials, including SecretRef ids, channel
       tokens, and provider headers, survive a save even when they are authored
@@ -412,19 +428,23 @@ read_when:
     - **Unsupported write-through**: root includes (every section of a config
       whose root object authors `$include`), actual array-entry includes,
       include arrays, sibling overrides, files shared by multiple logical paths,
-      changes spanning ownership boundaries,
+      any other change spanning ownership boundaries,
       any nested include beneath a merged owner, and any include whose own file
       still authors a nested `$include` directive fail closed instead of
       flattening the config. Numeric object keys are treated as map keys, not
       array positions.
       Include targets and contents are rechecked around persistence; a concurrent
       edit to an intermediate include refuses the write or rolls back its unchanged leaf.
-    - **Doctor repairs**: `openclaw doctor --fix` writes through the same
-      boundary. A run whose candidate mixes a root-owned repair with an
-      include-owned repair is refused as a whole. That refused write leaves every
-      file unchanged (earlier writes in the same run stay saved), and Doctor names
-      the boundary to repair by hand before rerunning, plus the included file or
-      files when the root file authors that boundary's `$include` (an agent-roster
+    - **Doctor repairs**: `openclaw doctor --fix` writes repaired config
+      through the same guarded include-aware writer as other config writes. A
+      repair touching keyed `agents.entries.<id>` or
+      `models.providers.<id>.models` paths owned by an include writes through
+      to that include file, alongside any root-owned repairs in the same run,
+      following the mixed-write contract above. Any other include-owned repair
+      fails closed like a manual write: every file stays unchanged (earlier
+      writes in the same run stay saved), and Doctor names the boundary to
+      repair by hand before rerunning, plus the included file or files when
+      the root file authors that boundary's `$include` (an agent-roster
       boundary is named without its file).
     - **Confinement**: `$include` paths must resolve under the directory holding
       `openclaw.json`. To share a tree across machines or users, set

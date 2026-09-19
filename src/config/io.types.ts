@@ -28,7 +28,9 @@ export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  // Restoring staged include files (finding 4) needs an await; existing
+  // synchronous rollbacks remain valid under this widened return type.
+  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void | Promise<void>;
 };
 
 export type ConfigWriteAuditOrigin =

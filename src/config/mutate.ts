@@ -10,7 +10,6 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
-import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
 import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
@@ -42,12 +41,12 @@ import {
   type IncludeWriteBoundary,
 } from "./include-write-boundary.js";
 import {
-  ConfigIncludeError,
-  hashConfigIncludeRaw,
-  INCLUDE_KEY,
-  isInternalIncludeWriteTarget,
-  resolveConfigIncludeWritePath,
-} from "./includes.js";
+  formatJsonFileValue,
+  readRootBoundFileRawIfExists,
+  resolveExpectedRootBoundIncludeFile,
+  rollbackJsonFileWriteIfUnchanged,
+} from "./include-write-through.js";
+import { hashConfigIncludeRaw, INCLUDE_KEY, isInternalIncludeWriteTarget } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
   createConfigIO,
@@ -61,7 +60,6 @@ import {
 import {
   containsConfigIncludeDirective,
   hashConfigRaw,
-  rejectConfigNonFiniteNumbers,
   resolveManagedRuntimeEnvBaseline,
 } from "./io.read-helpers.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
@@ -70,7 +68,6 @@ import { injectExplicitlySetPaths, projectConfigWriteSource } from "./io.write-p
 import {
   captureConfigFileWritePathProof,
   createGuardedConfigFileSystem,
-  rollbackConfigFileWriteIfUnchanged,
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { projectIncludeModelPolicyWrite } from "./model-policy-allowlist-migration.js";
@@ -515,87 +512,6 @@ function snapshotProvesBrokenInclude(snapshot: ConfigFileSnapshot, includePath: 
   );
 }
 
-function formatJsonFileValue(value: unknown): string {
-  rejectConfigNonFiniteNumbers(value);
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-type RootBoundIncludeFile = {
-  absolutePath: string;
-  relativePath: string;
-  root: FsSafeRoot;
-};
-
-async function resolveRootBoundIncludeFile(params: {
-  configPath: string;
-  includePath: string;
-  allowedRoots: readonly string[];
-}): Promise<RootBoundIncludeFile> {
-  const absolutePath = resolveConfigIncludeWritePath(params);
-  const candidateRoots = [path.dirname(params.configPath), ...params.allowedRoots];
-  for (const candidateRoot of candidateRoots) {
-    const rootReal = await fs.realpath(candidateRoot).catch(() => null);
-    if (!rootReal || !isPathInside(rootReal, absolutePath)) {
-      continue;
-    }
-    const relativePath = path.relative(rootReal, absolutePath);
-    if (
-      !relativePath ||
-      path.isAbsolute(relativePath) ||
-      relativePath.split(path.sep)[0] === ".."
-    ) {
-      continue;
-    }
-    return {
-      absolutePath,
-      relativePath,
-      root: await createFsRoot(rootReal, {
-        hardlinks: "reject",
-        mkdir: true,
-        mode: 0o600,
-        symlinks: "reject",
-      }),
-    };
-  }
-  throw new Error(`Config include write path has no approved existing root: ${absolutePath}`);
-}
-
-async function resolveExpectedRootBoundIncludeFile(params: {
-  configPath: string;
-  includePath: string;
-  allowedRoots: readonly string[];
-  expectedAbsolutePath: string;
-}): Promise<RootBoundIncludeFile> {
-  let target: RootBoundIncludeFile;
-  try {
-    target = await resolveRootBoundIncludeFile(params);
-  } catch (error) {
-    if (
-      error instanceof ConfigIncludeError ||
-      (error instanceof Error &&
-        error.message.startsWith("Config include write path has no approved existing root:"))
-    ) {
-      throw new ConfigMutationConflictError("included config target changed since last load");
-    }
-    throw error;
-  }
-  if (path.normalize(target.absolutePath) !== path.normalize(params.expectedAbsolutePath)) {
-    throw new ConfigMutationConflictError("included config target changed since last load");
-  }
-  return target;
-}
-
-async function readRootBoundFileRawIfExists(target: RootBoundIncludeFile): Promise<string | null> {
-  try {
-    return await target.root.readText(target.relativePath);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return null;
-    }
-    throw error;
-  }
-}
-
 async function assertRootConfigStillMatchesSnapshot(snapshot: ConfigFileSnapshot): Promise<void> {
   let currentRaw: string | null = null;
   try {
@@ -639,28 +555,6 @@ async function assertIncludeGraphStillMatchesSnapshot(params: {
       throw new ConfigMutationConflictError("included config changed while preparing write");
     }
   }
-}
-
-async function rollbackJsonFileWriteIfUnchanged(params: {
-  target: RootBoundIncludeFile;
-  previousRaw: string | null;
-  committedRaw: string | null;
-  pathProof: ReturnType<typeof captureConfigFileWritePathProof>;
-}): Promise<boolean> {
-  return await rollbackConfigFileWriteIfUnchanged({
-    configPath: params.target.absolutePath,
-    previousSnapshot: {
-      path: params.target.absolutePath,
-      exists: params.previousRaw !== null,
-      raw: params.previousRaw,
-    },
-    committedHash: hashConfigRaw(params.committedRaw),
-    fsModule: fsNode,
-    assertCurrent: params.pathProof.assertCurrent,
-    preserveDirectoryMode: true,
-    durable: true,
-    destinationHardlinks: "reject",
-  });
 }
 
 async function writeRootBoundJsonFile(params: {
@@ -756,7 +650,7 @@ async function writeRootBoundJsonFile(params: {
         target: targetAtCommit,
         previousRaw: currentRaw,
         committedRaw: publication.phase === "published" ? content : null,
-        pathProof,
+        assertCurrent: pathProof.assertCurrent,
       });
       rollbackStatus = rolledBack ? "restored" : "not-restored";
     } catch (rollbackError) {
@@ -1090,7 +984,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             target: includeTarget,
             previousRaw: previousIncludeRaw,
             committedRaw: committedIncludeRaw,
-            pathProof,
+            assertCurrent: pathProof.assertCurrent,
           });
           rollbackStatus = rolledBack ? "restored" : "not-restored";
           if (rolledBack) {

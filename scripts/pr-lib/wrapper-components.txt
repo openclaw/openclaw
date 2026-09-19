@@ -332,6 +332,7 @@ src/config/gateway-control-ui-origins.ts
 src/config/gateway-env-selection.ts
 src/config/github-identity-profile-id.ts
 src/config/include-write-boundary.ts
+src/config/include-write-through.ts
 src/config/includes.ts
 src/config/io.audit.ts
 src/config/io.clobber-snapshot.ts

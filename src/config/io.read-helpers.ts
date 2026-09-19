@@ -254,6 +254,10 @@ export function resolveConfigIncludesForRead(
   includeFileTargetsForWrite?: Record<string, string>,
   includeFilePathsForWatch?: Set<string>,
   onIncludeResolved?: (event: ConfigIncludeResolutionEvent) => void,
+  // Staged-but-not-yet-committed include bytes (io.write.ts's write-through
+  // path). Consulted before touching disk so validation and the committed
+  // revision hash see the bytes that will exist on disk once publish runs.
+  includeReadOverlay?: ReadonlyMap<string, string>,
 ): unknown {
   const allowedRoots = resolveIncludeRoots(deps.env, deps.homedir);
   const recordIncludeWatchPath = (resolvedPath: string) => {
@@ -277,10 +281,39 @@ export function resolveConfigIncludesForRead(
     parsed,
     configPath,
     {
-      readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      readFile: (candidate) => {
+        const staged = includeReadOverlay?.get(path.normalize(candidate));
+        return staged !== undefined ? staged : deps.fs.readFileSync(candidate, "utf-8");
+      },
       onLexicalPath: recordIncludeWatchPath,
       onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {
+        // Overlay keys are canonical write paths; fall back to canonicalizing
+        // the lexical resolved path so a symlinked config dir still hits.
+        let staged = includeReadOverlay?.get(path.normalize(resolvedPath));
+        if (staged === undefined && includeReadOverlay) {
+          try {
+            staged = includeReadOverlay.get(
+              path.normalize(
+                resolveConfigIncludeWritePath({
+                  configPath,
+                  includePath: resolvedPath,
+                  allowedRoots,
+                }),
+              ),
+            );
+          } catch {
+            // Unresolvable write path: no overlay entry can exist for it.
+          }
+        }
+        if (staged !== undefined) {
+          recordIncludeWatchPath(resolvedPath);
+          recordIncludeTarget(resolvedPath);
+          if (includeFileHashesForWrite) {
+            includeFileHashesForWrite[path.normalize(resolvedPath)] = hashConfigIncludeRaw(staged);
+          }
+          return staged;
+        }
         try {
           const raw = readConfigIncludeFileWithGuards({
             includePath,

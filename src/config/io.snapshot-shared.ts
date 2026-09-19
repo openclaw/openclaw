@@ -73,11 +73,33 @@ export function createConfigFileSnapshot(params: {
   };
 }
 
+// The read that produced a snapshot owns its load-time include graph (hashes
+// AND canonical targets, intermediates included). Binding the whole graph to
+// the snapshot object keeps every baseSnapshot writer fenced against an
+// include edited since load -- an intermediate's own redirect included --
+// without each caller threading the maps itself.
+const includeLoadGraph = new WeakMap<
+  ConfigFileSnapshot,
+  { hashes: Record<string, string>; targets: Record<string, string> }
+>();
+
+export function getConfigSnapshotIncludeLoadGraph(
+  snapshot: ConfigFileSnapshot,
+): { hashes: Record<string, string>; targets: Record<string, string> } | undefined {
+  return includeLoadGraph.get(snapshot);
+}
+
 export async function finalizeReadConfigSnapshotInternalResult(
   deps: NormalizedConfigIoDeps,
   result: ReadConfigFileSnapshotInternalResult,
   options?: { observe?: boolean },
 ): Promise<ReadConfigFileSnapshotInternalResult> {
+  if (result.includeFileHashesForWrite && result.includeFileTargetsForWrite) {
+    includeLoadGraph.set(result.snapshot, {
+      hashes: result.includeFileHashesForWrite,
+      targets: result.includeFileTargetsForWrite,
+    });
+  }
   if (deps.observe && options?.observe !== false) {
     await observeConfigSnapshot(deps, result.snapshot);
   }

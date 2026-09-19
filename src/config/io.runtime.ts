@@ -560,7 +560,7 @@ async function finalizeCommittedConfigWrite(params: {
   runtimePreflightResult: unknown;
   managedPreparedCandidates: Map<symbol, RuntimeConfigWritePreparedCandidate>;
   assertPostCommitCurrent?: () => void;
-  rollbackWriteEffects?: () => void;
+  rollbackWriteEffects?: () => void | Promise<void>;
 }): Promise<ConfigWriteResult> {
   const {
     io,
@@ -705,7 +705,7 @@ async function finalizeCommittedConfigWrite(params: {
           before: envBeforeCanonicalRead,
           after: envAfterCanonicalRead,
         });
-        params.rollbackWriteEffects?.();
+        await params.rollbackWriteEffects?.();
       }
     } catch (rollbackError) {
       throw new ConfigWritePostCommitError({
