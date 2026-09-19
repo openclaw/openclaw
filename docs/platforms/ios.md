@@ -610,6 +610,10 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 
 Open **Settings → Gateway**, enable **Use Manual Gateway**, and enter the Gateway host + port (default `18789`).
 
+IPv6 host fields accept raw addresses such as `fd00::1` and bracketed addresses
+such as `[fd00::1]`. Full Gateway URLs require brackets around the address,
+for example `wss://[fd00::1]:18789`.
+
 ## Multiple Gateways
 
 The app keeps a registry of every Gateway it has paired with, so you can switch between them without pairing again:
