@@ -180,9 +180,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
       }
       const action = read.personal.kind === "eligible" ? read.personal.action : null;
-      const personal = action ? await service!.status(action) : null;
+      let personal = action ? await service!.status(action) : null;
       const session = read.currentSession();
-      const pendingPersonal = action ? coordinator.personalPending(action, session) : null;
+      const pendingPersonal = action ? await coordinator.personalPending(action, session) : null;
+      read.currentSession();
+      if (action && personal) {
+        personal = service!.revalidateStatus(action, personal);
+      }
       const latestShared = coordinator.latestShared(session, options.params.idempotencyKey);
       read.currentSession();
       options.respond(true, { personal, shared, pendingPersonal, latestShared });

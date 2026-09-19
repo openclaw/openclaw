@@ -66,6 +66,16 @@ verified descriptors and post-render thumbnail checks remain in place. Inserts, 
 promotion, cleanup claim/deletion transactions, Doctor imports, and native session
 metadata reads keep their existing owners and remain separate worker migrations.
 
+Personal repository publication options scan receipts in the shared-state worker.
+The reader validates every matching pending receipt in the existing timestamp and
+request-ID order, retaining only the latest status. Title and body content remain
+in the worker; older corrupt receipts still fail the read. Options recheck current
+caller and session authority after waiting, then consult the shared publication
+owner. Prepared personal account status rechecks its current generation and
+account without repeating network verification. Empty repository results retain the non-repository workspace owner's
+fallback. Database-open behavior, publication writes, schemas, and retention are
+unchanged.
+
 Profile enumeration for user lists, session-member pickers, and human-mention
 directories runs in the same shared-state worker. Ordered profile metadata,
 tombstones, emails, and verified GitHub handles retain their existing query owner;

@@ -12,6 +12,10 @@ import type { CronStoreWorkerOperations } from "../cron/store/load-worker.types.
 import type { CronStoreSaveWorkerOperations } from "../cron/store/save-worker.types.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
+  RepositoryGitHubPublicationPendingQuery,
+  RepositoryGitHubPublicationStatusRow,
+} from "../gateway/github-repository-publication.kernel.js";
+import type {
   ManagedImageRecord,
   ManagedImageRecordEntry,
 } from "../gateway/managed-image-record-store.types.js";
@@ -66,6 +70,10 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
   DeliveryQueueWorkerOperations &
   TranscriptReadOperations &
   TaskRegistryWorkerOperations & {
+    "githubRepository.personalPending": {
+      input: RepositoryGitHubPublicationPendingQuery;
+      output: RepositoryGitHubPublicationStatusRow | undefined;
+    };
     "skillUploads.commit": {
       input: Parameters<typeof commitSkillUploadInDatabase>[0];
       output: ReturnType<typeof commitSkillUploadInDatabase>;

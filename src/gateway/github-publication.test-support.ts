@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -452,6 +453,7 @@ export function installGitHubPublicationTestHarness(): void {
     // Agent close releases leases through shared state; closing shared state first can
     // reopen it during teardown and leave a Windows handle under the fixture root.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
