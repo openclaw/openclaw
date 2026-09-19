@@ -11,9 +11,21 @@ export type AgentWorkspaceAccess = {
     SandboxFsBridge,
     "readFile" | "readFileWithSource" | "readDirectory" | "writeFile" | "stat"
   >;
+  /** Purpose-scoped output reads; the document bridge need not allow attachment paths. */
+  outboundMedia?: {
+    localRoots: readonly string[];
+    readFile: (filePath: string, maxBytes: number) => Promise<Buffer>;
+  };
 };
 
-const bindings = new Map<string, { access?: AgentWorkspaceAccess; active: boolean }>();
+type WorkspaceBinding = { access?: AgentWorkspaceAccess; active: boolean };
+const bindings = new Map<string, WorkspaceBinding>();
+
+function assertBindingCurrent(key: string, binding: WorkspaceBinding): void {
+  if (!binding.active || bindings.get(key) !== binding) {
+    throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
+  }
+}
 
 const WORKSPACE_ACCESS_UNAVAILABLE_CODE = "WORKSPACE_ACCESS_UNAVAILABLE";
 
@@ -54,12 +66,8 @@ export function registerAgentWorkspaceAccess(
   if (bindings.get(key)?.active) {
     throw new Error(`Workspace access is already registered: ${key}`);
   }
-  const binding: { access?: AgentWorkspaceAccess; active: boolean } = { active: true };
-  const assertCurrent = () => {
-    if (!binding.active || bindings.get(key) !== binding) {
-      throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
-    }
-  };
+  const binding: WorkspaceBinding = { active: true };
+  const assertCurrent = () => assertBindingCurrent(key, binding);
   // Retained methods must stop working when their service stops or is replaced.
   const bridge: AgentWorkspaceAccess["bridge"] = {
     async readFile(params) {
@@ -99,6 +107,19 @@ export function registerAgentWorkspaceAccess(
     };
   }
   const boundAccess: AgentWorkspaceAccess = { bridge: Object.freeze(bridge) };
+  const outboundMedia = access.outboundMedia;
+  if (outboundMedia) {
+    const readFile = outboundMedia.readFile.bind(outboundMedia);
+    boundAccess.outboundMedia = Object.freeze({
+      localRoots: Object.freeze([...outboundMedia.localRoots]),
+      async readFile(filePath: string, maxBytes: number) {
+        assertCurrent();
+        const data = await readFile(filePath, maxBytes);
+        assertCurrent();
+        return data;
+      },
+    });
+  }
   binding.access = Object.freeze(boundAccess);
   bindings.set(key, binding);
   return () => {
@@ -108,9 +129,37 @@ export function registerAgentWorkspaceAccess(
 }
 
 export function getAgentWorkspaceAccess(workspaceDir: string): AgentWorkspaceAccess | undefined {
-  const binding = bindings.get(path.resolve(workspaceDir));
-  if (binding && !binding.active) {
-    throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
+  const key = path.resolve(workspaceDir);
+  const binding = bindings.get(key);
+  if (binding) {
+    assertBindingCurrent(key, binding);
   }
   return binding?.access;
+}
+
+/** Internal routing capture: unrelated Gateway media remains usable while the host is offline. */
+export function captureAgentWorkspaceOutboundMedia(
+  workspaceDir: string,
+): NonNullable<AgentWorkspaceAccess["outboundMedia"]> | undefined {
+  const key = path.resolve(workspaceDir);
+  const binding = bindings.get(key);
+  if (!binding) {
+    return undefined;
+  }
+  const media = binding.access?.outboundMedia;
+  // Registering document access does not opt an existing adapter into remote attachments.
+  if (binding.access && !media) {
+    return undefined;
+  }
+  return {
+    localRoots: media?.localRoots ?? [],
+    async readFile(filePath, maxBytes) {
+      // Never adopt a replacement binding on a retained delivery capability.
+      assertBindingCurrent(key, binding);
+      if (!media) {
+        throw new Error("Remote workspace attachment access is unavailable");
+      }
+      return await media.readFile(filePath, maxBytes);
+    },
+  };
 }

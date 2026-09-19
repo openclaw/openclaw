@@ -370,6 +370,8 @@ export type EmbeddedRunAttemptResult = {
     | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  /** Immutable delivery facts prepared before a remote harness releases its file reader. */
+  preparedReplyMedia?: import("../../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
   latestMcpAppChannelView?: McpAppChannelView;
   latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;

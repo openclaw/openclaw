@@ -39,6 +39,29 @@ export type AgentHarnessHostCapabilities = Readonly<{
     message: import("../runtime/index.js").AgentMessage;
     maxChars: number;
   }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
+  /** Stages reply attachments under captured sender policy while the harness reader is live. */
+  prepareReplyMedia?: (
+    request: {
+      workspaceRoot?: string;
+      readWorkspaceFile: (
+        relativePath: string,
+        options: { maxBytes: number; signal: AbortSignal },
+      ) => Promise<Buffer>;
+      signal?: AbortSignal;
+    } & (
+      | {
+          kind: "attempt";
+          attempt: import("../embedded-agent-runner/run/attempt-result.js").EmbeddedRunAttemptWithReceiptEvidence;
+        }
+      | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+    ),
+  ) => Promise<
+    | {
+        kind: "attempt";
+        preparedMedia: import("../../auto-reply/reply/reply-media-paths.js").PreparedReplyMedia;
+      }
+    | { kind: "payload"; payload: import("../../auto-reply/reply-payload.js").ReplyPayload }
+  >;
   /** Closure-bound event sink backed by the host-owned trajectory recorder. */
   trajectory?: Readonly<{
     recordEvent: (type: string, data?: Record<string, unknown>) => void;

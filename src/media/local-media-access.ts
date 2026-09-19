@@ -224,14 +224,25 @@ export async function readLocalMediaFile(
     maxBytes: number;
     resolvedRoots?: readonly string[];
     resolveRoots?: () => Promise<readonly string[]>;
+    /** Local copies of remotely owned roots must not be read through ancestor aliases. */
+    excludedRoots?: readonly string[];
   },
 ): Promise<Buffer> {
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
   const boundary = await resolveLocalMediaBoundary(mediaPath, localRoots, "reject", options);
+  const excludedRoots = options.excludedRoots?.length
+    ? await resolveLocalMediaRoots(options.excludedRoots)
+    : [];
   readScope?.assertCurrent();
   const opened = await openLocalFileSafely({ filePath: mediaPath });
   try {
+    if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
+      throw new LocalMediaAccessError(
+        "path-not-allowed",
+        `Local media path belongs to a remote workspace: ${mediaPath}`,
+      );
+    }
     if (
       boundary.roots !== "any" &&
       !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))

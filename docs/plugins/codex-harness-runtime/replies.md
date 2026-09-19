@@ -23,6 +23,16 @@ or notify. Heartbeat turns use the same Codex Default collaboration mode as
 ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
 scheduled heartbeat user message when present.
 
+## Attachments in a remote workspace
+
+With `appServer.remoteWorkspaceRoot`, final and asynchronous replies can use
+`MEDIA:./report.pdf` or an absolute path inside the remote workspace. Before
+releasing the app-server connection, the Codex plugin reads the attachment with
+bounded `command/exec` requests. The host's
+[reply-media capability](/plugins/sdk-agent-harness/attempt-runtime#reply-attachments-from-a-remote-workspace)
+applies read policy and stages the bytes for delivery. The original reply remains
+in the transcript; Gateway workspace copies are not used as a fallback.
+
 ## Final answers after settled tool work
 
 For ordinary host-authenticated Codex turns that finish tool work without a

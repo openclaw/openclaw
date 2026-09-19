@@ -434,6 +434,38 @@ describe("agent harness host capability", () => {
     expect(preparedExecute).not.toHaveBeenCalled();
   });
 
+  it.each(policyRevocations)(
+    "does not stage reply bytes after $name during a remote read",
+    async ({ revoke }) => {
+      const readStarted = createDeferred();
+      const readResult = createDeferred<Buffer>();
+      const readWorkspaceFile = vi.fn(async () => {
+        readStarted.resolve();
+        return await readResult.promise;
+      });
+      const { attempt, admission } = await admittedAttempt("run-reply-media");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const prepare = host.capabilities.prepareReplyMedia;
+      if (!prepare) {
+        throw new Error("expected reply media capability");
+      }
+      const request = {
+        kind: "payload" as const,
+        payload: { text: "Artifact ready\nMEDIA:./artifact.txt" },
+        readWorkspaceFile,
+      };
+      const pending = prepare(request);
+      const rejected = expect(pending).rejects.toThrow();
+      await readStarted.promise;
+      await revoke({ host, attempt, admission });
+      readResult.resolve(Buffer.from("remote artifact"));
+      await rejected;
+      await expect(prepare(request)).rejects.toThrow();
+      expect(readWorkspaceFile).toHaveBeenCalledTimes(1);
+      host.close();
+    },
+  );
+
   it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
     const flushStarted = createDeferred();
     const flushResult = createDeferred();
