@@ -14,6 +14,7 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as tokens from "./device-auth-store.js";
 import { storeDeviceAuthTokenInDatabase } from "./device-auth-store.kernel.js";
+import { SQLITE_WORKER_MAX_RESULT_BYTES } from "./sqlite-worker-contract.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
 import {
@@ -123,16 +124,19 @@ if (!isMainThread) {
       let nativeWrites = 0;
       let current = true;
       const refused = new Error("Synthetic token authority revoked");
+      // Begin the framed-result cleanup probe after the large mutation has settled.
       const dispatch = vi
         .spyOn(MessagePort.prototype, "postMessage")
         .mockImplementation(function (this: MessagePort, message, transferList) {
           const result = nativePost.call(this, message, transferList);
           if (
             !isRecord(message) ||
-            message.type !== "accepted" ||
-            (preparation
-              ? message.admission !== undefined
-              : !(message.admission instanceof MessagePort))
+            (length > SQLITE_WORKER_MAX_RESULT_BYTES
+              ? message.type !== "result-next"
+              : message.type !== "accepted" ||
+                (preparation
+                  ? message.admission !== undefined
+                  : !(message.admission instanceof MessagePort)))
           ) {
             return result;
           }
