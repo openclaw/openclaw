@@ -34,16 +34,6 @@ type HandshakeBrowserSecurityContext = {
   authRateLimiter?: AuthRateLimiter;
 };
 
-export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
-  return (
-    client.mode === GATEWAY_CLIENT_MODES.UI &&
-    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
-      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
-      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
-      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
-  );
-}
-
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const trimmedOrigin = requestOrigin?.trim();
   if (!trimmedOrigin) {
