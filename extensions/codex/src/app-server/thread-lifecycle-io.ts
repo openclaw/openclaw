@@ -109,7 +109,10 @@ export async function resumeExistingCodexThread(
     const configuration = await context.prepareResume();
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
-    await context.releaseRetainedThread(configuration.assertCurrent);
+    await context.releaseRetainedThread(
+      configuration.assertCurrent,
+      configuration.subscriptionMayExist,
+    );
     configuration.assertCurrent();
     const clientBoundThread =
       ringZeroClientInstanceId !== undefined ||

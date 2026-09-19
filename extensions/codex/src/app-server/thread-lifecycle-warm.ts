@@ -135,7 +135,11 @@ async function releaseCodexRetainedLiveThread(
 
 /** Release follows the physical owner across connection rotation, never a copied thread id. */
 export async function releaseCodexBoundLiveThread(
-  options: CodexLiveThreadReleaseParams & { clientId?: string; ownerClientId?: string },
+  options: CodexLiveThreadReleaseParams & {
+    clientId?: string;
+    ownerClientId?: string;
+    releaseUntrackedSubscription?: boolean;
+  },
 ): Promise<boolean> {
   const changedClient = options.ownerClientId && options.ownerClientId !== options.clientId;
   const previous = changedClient
@@ -153,7 +157,7 @@ export async function releaseCodexBoundLiveThread(
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
-    return await releaseCodexRetainedLiveThread({
+    const releaseOptions = {
       ...options,
       client,
       abandonClient: previous ? undefined : options.abandonClient,
@@ -163,7 +167,21 @@ export async function releaseCodexBoundLiveThread(
             assertPrevious?.();
           }
         : undefined,
-    });
+    };
+    if (await releaseCodexRetainedLiveThread(releaseOptions)) {
+      return true;
+    }
+    if (!options.releaseUntrackedSubscription) {
+      return false;
+    }
+    if (client.isThreadSubscriptionKnownReleased(options.threadId)) {
+      return false;
+    }
+    // A durable binding can outlive this process-local retained-owner entry.
+    // A loaded thread with no known successful release authorizes cleanup on
+    // the bound connection; callers without that observation must leave it alone.
+    await releaseCodexConsumedLiveThread(releaseOptions);
+    return true;
   } finally {
     previous?.release();
   }

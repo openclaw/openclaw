@@ -176,8 +176,8 @@ export function registerThreadPolicyRefreshTests({
     },
   );
 
-  it.each(
-    ["idle", "systemError", "active"].flatMap((nativeStatus) =>
+  it.each([
+    ...["idle", "systemError", "active"].flatMap((nativeStatus) =>
       (nativeStatus === "active"
         ? ["replacement policy"]
         : ["initial policy", "replacement policy", ""]
@@ -186,18 +186,43 @@ export function registerThreadPolicyRefreshTests({
           nativeStatus,
           developerInstructions,
           transport,
+          retainedOwner: true,
+          siblingSubscriber: false,
+          ownerState: "retained",
         })),
       ),
     ),
-  )(
-    "keeps ordinary warm configuration honest over $transport across $nativeStatus and policy $developerInstructions",
-    async ({ nativeStatus, developerInstructions, transport }) => {
+    {
+      nativeStatus: "idle",
+      developerInstructions: "replacement policy",
+      transport: "stdio" as const,
+      retainedOwner: false,
+      siblingSubscriber: false,
+      ownerState: "untracked",
+    },
+    {
+      nativeStatus: "idle",
+      developerInstructions: "replacement policy",
+      transport: "stdio" as const,
+      retainedOwner: false,
+      siblingSubscriber: true,
+      ownerState: "sibling-subscribed",
+    },
+  ])(
+    "keeps ordinary $ownerState configuration honest over $transport across $nativeStatus and policy $developerInstructions",
+    async ({
+      nativeStatus,
+      developerInstructions,
+      transport,
+      retainedOwner,
+      siblingSubscriber,
+    }) => {
       const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "ordinary-warm-policy";
       const response = threadStartResult(threadId);
       const methods: string[] = [];
-      let subscribed = true;
+      let subscriberCount = siblingSubscriber ? 2 : 1;
       const wire = await createLeasedLifecycleWireClient(
         path.join(tempDir, "agent"),
         (request) => {
@@ -212,20 +237,24 @@ export function registerThreadPolicyRefreshTests({
             return { requirements: null };
           }
           if (request.method === "thread/start" || request.method === "thread/resume") {
-            if (!subscribed && nativeStatus === "idle") {
+            if (
+              request.method === "thread/resume" &&
+              subscriberCount === 0 &&
+              nativeStatus === "idle"
+            ) {
               wire.send({
                 method: "thread/status/changed",
                 params: { threadId, status: { type: "notLoaded" } },
               });
             }
-            subscribed = true;
+            subscriberCount = Math.max(1, subscriberCount);
             return response;
           }
           if (request.method === "thread/read") {
             return { thread: { ...response.thread, status: { type: nativeStatus } } };
           }
           if (request.method === "thread/unsubscribe") {
-            subscribed = false;
+            subscriberCount = Math.max(0, subscriberCount - 1);
             return { status: "unsubscribed" };
           }
           if (request.method === "thread/inject_items") {
@@ -252,12 +281,14 @@ export function registerThreadPolicyRefreshTests({
           ...common,
           developerInstructions: "initial policy",
         });
-        await retainCodexAppServerLiveThread(
-          wire.client,
-          first.threadId,
-          undefined,
-          first.liveThreadConfigFingerprint,
-        );
+        if (retainedOwner) {
+          await retainCodexAppServerLiveThread(
+            wire.client,
+            first.threadId,
+            undefined,
+            first.liveThreadConfigFingerprint,
+          );
+        }
         const resume = startOrResumeThread({ ...common, developerInstructions });
         if (nativeStatus === "active") {
           await expect(resume).rejects.toThrow("Codex session became active in another runner");
@@ -269,6 +300,13 @@ export function registerThreadPolicyRefreshTests({
             "configRequirements/read",
             "thread/read",
           ]);
+          expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
+          return;
+        }
+        if (siblingSubscriber) {
+          await expect(resume).rejects.toThrow("did not confirm unloading");
+          expect(methods).toContain("thread/unsubscribe");
+          expect(methods).not.toContain("thread/inject_items");
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(first.threadId);
           return;
         }

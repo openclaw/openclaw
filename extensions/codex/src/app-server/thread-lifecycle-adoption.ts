@@ -230,6 +230,7 @@ async function preparePendingCodexThreadResume(
       assertConfigured: observation.assertConfigured,
       assertCurrent,
       dispose,
+      subscriptionMayExist: observation.subscriptionMayExist,
       settledSystemError: observation.settledSystemError,
     };
   } catch (error) {
@@ -307,6 +308,7 @@ function observeCodexThreadConfiguration(
   });
   return {
     dispose,
+    subscriptionMayExist: thread.status.type !== "notLoaded",
     settledSystemError,
     assertConfigured: () => {
       assertCurrent();

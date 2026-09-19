@@ -241,6 +241,7 @@ export class CodexAppServerClient {
   private closed = false;
   private transportExited = false;
   private nativeExecutionObserved = false;
+  private readonly releasedThreadSubscriptions = new Set<string>();
   private closeError: Error | undefined;
   private serverVersion: string | undefined;
   private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
@@ -386,6 +387,11 @@ export class CodexAppServerClient {
   /** Stable generation id for this exact physical client instance. */
   getInstanceId(): string {
     return this.instanceId;
+  }
+
+  /** True only after this physical connection acknowledged its latest unsubscribe. */
+  isThreadSubscriptionKnownReleased(threadId: string): boolean {
+    return this.releasedThreadSubscriptions.has(threadId);
   }
 
   /** Account/config observations become stale before a mutation can enter the wire. */
@@ -578,7 +584,7 @@ export class CodexAppServerClient {
         throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
       }
       try {
-        return await this.requestOnce<T>(
+        const result = await this.requestOnce<T>(
           method,
           params,
           {
@@ -590,6 +596,8 @@ export class CodexAppServerClient {
           deadline,
           onResponse,
         );
+        this.recordThreadSubscriptionResult(method, params, result);
+        return result;
       } catch (error) {
         // Codex emits -32001 only when ingress rejects a request before enqueue,
         // so retrying mutating methods cannot duplicate server-side work.
@@ -607,6 +615,30 @@ export class CodexAppServerClient {
         );
         await this.waitForOverloadRetry(method, backoffMs, deadline, options.signal);
       }
+    }
+  }
+
+  private recordThreadSubscriptionResult(method: string, params: unknown, result: unknown): void {
+    if (method === "thread/unsubscribe") {
+      if (
+        isJsonObject(params) &&
+        typeof params.threadId === "string" &&
+        isJsonObject(result) &&
+        (result.status === "unsubscribed" ||
+          result.status === "notSubscribed" ||
+          result.status === "notLoaded")
+      ) {
+        this.releasedThreadSubscriptions.add(params.threadId);
+      }
+      return;
+    }
+    if (
+      (method === "thread/start" || method === "thread/resume" || method === "thread/fork") &&
+      isJsonObject(result) &&
+      isJsonObject(result.thread) &&
+      typeof result.thread.id === "string"
+    ) {
+      this.releasedThreadSubscriptions.delete(result.thread.id);
     }
   }
 
