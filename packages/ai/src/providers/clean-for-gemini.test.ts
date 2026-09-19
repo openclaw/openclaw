@@ -354,4 +354,32 @@ describe("cleanSchemaForGemini", () => {
 
     expect(cleaned.enum).toBeUndefined();
   });
+
+  it("cleans a shared definition reused inline and through $ref without a false circular error", () => {
+    // The object graph is acyclic: one node object is shared between $defs.Node and
+    // properties.head, and references itself only through the $ref string. The reference
+    // stack already bounds that expansion, so the raw-descent cycle guard must not fire.
+    const node: Record<string, unknown> = {
+      type: "object",
+      properties: { next: { $ref: "#/$defs/Node" } },
+    };
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      $defs: { Node: node },
+      properties: { head: node },
+      required: ["head"],
+    }) as { properties?: { head?: unknown }; required?: unknown };
+
+    expect(cleaned.required).toStrictEqual(["head"]);
+    expect(cleaned.properties?.head).toStrictEqual({
+      type: "object",
+      properties: { next: { type: "object", properties: { next: {} } } },
+    });
+  });
+
+  it("still rejects a genuinely circular object graph", () => {
+    const cyclic: Record<string, unknown> = { type: "object", properties: {} };
+    (cyclic.properties as Record<string, unknown>).self = cyclic;
+    expect(() => cleanSchemaForGemini(cyclic)).toThrow(/circular/i);
+  });
 });

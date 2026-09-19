@@ -67,11 +67,10 @@ export function normalizeStrictOpenAIJsonSchema(
 ): unknown {
   const schemaInput = schema ?? {};
   if (!schemaInput || typeof schemaInput !== "object") {
-    return normalizeStrictOpenAIJsonSchemaRecursive(
+    return normalizeStrictOpenAIJsonSchemaTree(
       normalizeToolParameterSchema(schemaInput, {
         modelCompat: resolveToolSchemaModelCompat(modelCompat),
       }),
-      0,
     );
   }
   const cacheKey = resolveStrictOpenAISchemaCacheKey(modelCompat);
@@ -84,60 +83,168 @@ export function normalizeStrictOpenAIJsonSchema(
     cacheKey,
     // Cache by input object and compatibility key so repeated inventory generation preserves object
     // identity without mixing schemas normalized for different provider limitations.
-    normalizeStrictOpenAIJsonSchemaRecursive(
+    normalizeStrictOpenAIJsonSchemaTree(
       normalizeToolParameterSchema(schemaInput, {
         modelCompat: resolveToolSchemaModelCompat(modelCompat),
       }),
-      0,
     ),
   );
 }
 
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
-  if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
+// Tool schemas are external input and can nest far deeper than the call stack, so the walkers
+// below run explicit task stacks instead of recursing (#141306). A visit task either resolves a
+// leaf immediately or pushes one assemble task plus a visit task per child; the assemble task
+// only runs after every child has written its result back, mirroring the original recursion.
+// The `properties` schema map keeps its parent's depth, exactly as the recursion did.
+type StrictVisitTask = {
+  kind: "visit";
+  node: unknown;
+  depth: number;
+  assign: (value: unknown) => void;
+};
 
-  const record = schema as Record<string, unknown>;
-  let changed = false;
-  const normalized = Object.fromEntries<unknown>(
-    Object.entries(record).map(([key, value]) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(
-        value,
-        key === "properties" ? depth : depth + 1,
-      );
-      changed ||= next !== value;
-      return [key, next];
-    }),
-  );
+type StrictAssembleArrayTask = {
+  kind: "assemble-array";
+  node: object;
+  depth: number;
+  assign: (value: unknown) => void;
+  // Arrays fill slots by index.
+  entries: unknown[];
+  changed: boolean;
+};
 
-  if (normalized.type === "object") {
-    const properties =
-      normalized.properties &&
-      typeof normalized.properties === "object" &&
-      !Array.isArray(normalized.properties)
-        ? (normalized.properties as Record<string, unknown>)
-        : undefined;
-    if (properties && Object.keys(properties).length === 0 && !Array.isArray(normalized.required)) {
-      normalized.required = [];
-      changed = true;
+type StrictAssembleRecordTask = {
+  kind: "assemble-record";
+  node: object;
+  depth: number;
+  assign: (value: unknown) => void;
+  // Records collect [key, childResult] pairs for Object.fromEntries so user-named keys such as
+  // `__proto__` become own properties, matching the recursion.
+  entries: Array<[string, unknown]>;
+  changed: boolean;
+};
+
+type StrictTask = StrictVisitTask | StrictAssembleArrayTask | StrictAssembleRecordTask;
+
+function createCircularToolSchemaError(): TypeError {
+  return new TypeError("Tool schema contains a circular reference and cannot be normalized.");
+}
+
+function normalizeStrictOpenAIJsonSchemaTree(root: unknown): unknown {
+  let rootResult: unknown = root;
+  // Recursion previously bounded cyclic object graphs via the call stack; the explicit stack
+  // removes that implicit guard, so the walk tracks the nodes on its current path instead.
+  const ancestors = new Set<object>();
+  const tasks: StrictTask[] = [
+    {
+      kind: "visit",
+      node: root,
+      depth: 0,
+      assign: (value) => {
+        rootResult = value;
+      },
+    },
+  ];
+  let task: StrictTask | undefined;
+  while ((task = tasks.pop()) !== undefined) {
+    if (task.kind !== "visit") {
+      ancestors.delete(task.node);
+      if (task.kind === "assemble-array") {
+        task.assign(task.changed ? task.entries : task.node);
+        continue;
+      }
+      const normalized = Object.fromEntries(task.entries);
+      if (normalized.type === "object") {
+        const properties =
+          normalized.properties &&
+          typeof normalized.properties === "object" &&
+          !Array.isArray(normalized.properties)
+            ? (normalized.properties as Record<string, unknown>)
+            : undefined;
+        if (
+          properties &&
+          Object.keys(properties).length === 0 &&
+          !Array.isArray(normalized.required)
+        ) {
+          normalized.required = [];
+          task.changed = true;
+        }
+        if (task.depth === 0 && !("additionalProperties" in normalized)) {
+          normalized.additionalProperties = false;
+          task.changed = true;
+        }
+      }
+      task.assign(task.changed ? normalized : task.node);
+      continue;
     }
-    if (depth === 0 && !("additionalProperties" in normalized)) {
-      normalized.additionalProperties = false;
-      changed = true;
+    const { node, depth, assign } = task;
+    if (Array.isArray(node)) {
+      if (ancestors.has(node)) {
+        throw createCircularToolSchemaError();
+      }
+      ancestors.add(node);
+      const assemble: StrictAssembleArrayTask = {
+        kind: "assemble-array",
+        node,
+        depth,
+        assign,
+        entries: Array.from({ length: node.length }),
+        changed: false,
+      };
+      tasks.push(assemble);
+      const entries = assemble.entries;
+      for (let index = node.length - 1; index >= 0; index -= 1) {
+        const slot = index;
+        tasks.push({
+          kind: "visit",
+          node: node[slot],
+          depth,
+          assign: (value) => {
+            assemble.changed ||= value !== node[slot];
+            entries[slot] = value;
+          },
+        });
+      }
+      continue;
+    }
+    if (!node || typeof node !== "object") {
+      assign(node);
+      continue;
+    }
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
+    const record = node as Record<string, unknown>;
+    const assemble: StrictAssembleRecordTask = {
+      kind: "assemble-record",
+      node,
+      depth,
+      assign,
+      entries: [],
+      changed: false,
+    };
+    tasks.push(assemble);
+    const normalized = assemble.entries;
+    const entries = Object.entries(record);
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (!entry) {
+        continue;
+      }
+      const [key, value] = entry;
+      tasks.push({
+        kind: "visit",
+        node: value,
+        depth: key === "properties" ? depth : depth + 1,
+        assign: (childResult) => {
+          assemble.changed ||= childResult !== value;
+          normalized.push([key, childResult]);
+        },
+      });
     }
   }
-
-  return changed ? normalized : schema;
+  return rootResult;
 }
 
 /** Normalizes tool parameters using strict OpenAI rules only when strict mode is active. */
@@ -155,7 +262,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+  return isStrictOpenAIJsonSchemaCompatibleTree(normalizeStrictOpenAIJsonSchema(schema));
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
@@ -186,51 +293,80 @@ export function findOpenAIStrictToolProjectionDiagnostics(
   ];
 }
 
-function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return true;
-  }
+function isStrictOpenAIJsonSchemaCompatibleTree(root: unknown): boolean {
+  // Depth-first boolean check on an explicit stack (#141306); evaluation order does not affect
+  // the conjunction, only short-circuiting on the first violation does. Leave markers bound
+  // cyclic object graphs the way the call stack bounded them before.
+  type Pending = { kind: "visit"; node: unknown } | { kind: "leave"; node: object };
+  const ancestors = new Set<object>();
+  const pending: Pending[] = [{ kind: "visit", node: root }];
+  let current: Pending | undefined;
+  while ((current = pending.pop()) !== undefined) {
+    if (current.kind === "leave") {
+      ancestors.delete(current.node);
+      continue;
+    }
+    const node = current.node;
+    if (Array.isArray(node)) {
+      if (ancestors.has(node)) {
+        throw createCircularToolSchemaError();
+      }
+      ancestors.add(node);
+      pending.push({ kind: "leave", node });
+      for (const entry of node) {
+        pending.push({ kind: "visit", node: entry });
+      }
+      continue;
+    }
+    if (!node || typeof node !== "object") {
+      continue;
+    }
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
 
-  const record = schema as Record<string, unknown>;
-  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
-    return false;
-  }
-  if (Array.isArray(record.type)) {
-    return false;
-  }
-  if (record.type === "object" && record.additionalProperties !== false) {
-    return false;
-  }
-  if (record.type === "object") {
-    const properties =
-      record.properties &&
-      typeof record.properties === "object" &&
-      !Array.isArray(record.properties)
-        ? (record.properties as Record<string, unknown>)
-        : {};
-    const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-    if (!required) {
+    const record = node as Record<string, unknown>;
+    if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
       return false;
     }
-    const requiredSet = new Set(required);
-    if (Object.keys(properties).some((key) => !requiredSet.has(key))) {
+    if (Array.isArray(record.type)) {
       return false;
     }
-  }
-
-  return Object.entries(record).every(([key, entry]) => {
-    if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      return Object.values(entry as Record<string, unknown>).every((value) =>
-        isStrictOpenAIJsonSchemaCompatibleRecursive(value),
-      );
+    if (record.type === "object" && record.additionalProperties !== false) {
+      return false;
     }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
-  });
+    if (record.type === "object") {
+      const properties =
+        record.properties &&
+        typeof record.properties === "object" &&
+        !Array.isArray(record.properties)
+          ? (record.properties as Record<string, unknown>)
+          : {};
+      const required = Array.isArray(record.required)
+        ? record.required.filter((entry): entry is string => typeof entry === "string")
+        : undefined;
+      if (!required) {
+        return false;
+      }
+      const requiredSet = new Set(required);
+      if (Object.keys(properties).some((key) => !requiredSet.has(key))) {
+        return false;
+      }
+    }
+
+    pending.push({ kind: "leave", node });
+    for (const [key, entry] of Object.entries(record)) {
+      if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+        for (const value of Object.values(entry as Record<string, unknown>)) {
+          pending.push({ kind: "visit", node: value });
+        }
+        continue;
+      }
+      pending.push({ kind: "visit", node: entry });
+    }
+  }
+  return true;
 }
 
 /** Resolves strict mode for the projected tools that will be emitted in the request payload. */
