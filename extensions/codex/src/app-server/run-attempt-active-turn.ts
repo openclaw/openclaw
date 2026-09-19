@@ -7,6 +7,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -288,6 +289,7 @@ export function activateCodexAttemptTurn(
   const workspaceOnly = resolveAttemptFsWorkspaceOnly({ config: params.config, sessionAgentId });
   const imageContext = {
     workspaceDir: connection.effectiveWorkspace,
+    agentWorkspaceDir: params.workspaceDir,
     model: params.model,
     config: params.config,
     workspaceOnly,
@@ -306,7 +308,18 @@ export function activateCodexAttemptTurn(
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertActive: assertSteeringActive,
-    prepareMessage: async (text, options) => {
+    prepareMessage: async (text, options, assertMessageCurrent) => {
+      const attachmentNote = await prepareAgentWorkspaceAttachments({
+        workspaceDir: params.workspaceDir,
+        turn: {
+          config: params.config,
+          media: options.media,
+          timeoutMs: params.timeoutMs,
+          abortSignal: runAbortController.signal,
+          userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
+        },
+        assertCurrent: assertMessageCurrent,
+      });
       const result = await detectAndLoadAgentHarnessPromptImages({
         ...imageContext,
         prompt: text,
@@ -327,7 +340,10 @@ export function activateCodexAttemptTurn(
         userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
       });
       return {
-        input: buildCodexUserInput(text, result.images),
+        input: buildCodexUserInput(
+          attachmentNote ? `${text}\n\n${attachmentNote}` : text,
+          result.images,
+        ),
         message: {
           ...source,
           role: "user",

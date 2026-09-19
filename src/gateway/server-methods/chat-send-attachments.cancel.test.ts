@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import * as sandboxWorkspace from "../../agents/sandbox/context.js";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -15,6 +16,84 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import type { RespondFn } from "./types.js";
+
+it("admits a non-PDF upload for a remote workspace without staging a Gateway sandbox copy", async () => {
+  await withOpenClawTestState({ label: "remote-chat-attachment" }, async (state) => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: { skipBootstrap: true, sandbox: { mode: "all" } },
+      },
+    } satisfies OpenClawConfig;
+    await state.writeConfig(cfg);
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    const respond = vi.fn<RespondFn>();
+    const runId = "remote-attachment";
+    const setup = await prepareAndAdmitChatSend({
+      client: null,
+      context,
+      respond,
+      params: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        message: "read the file",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            fileName: "input.txt",
+            mimeType: "text/plain",
+            content: Buffer.from("original upload").toString("base64"),
+          },
+        ],
+      },
+    });
+    if (!setup) {
+      throw new Error("chat admission failed");
+    }
+    const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+      bridge: {
+        readFile: async () => {
+          throw new Error("unexpected workspace read");
+        },
+        writeFile: async () => {
+          throw new Error("unexpected workspace write");
+        },
+        stat: async () => {
+          throw new Error("unexpected workspace stat");
+        },
+      },
+    });
+    const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
+    let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
+    const admission = setup.admitted.value;
+    try {
+      prepared = await prepareChatSendAttachments({
+        request: setup.normalizedRequest.value,
+        session: setup.preparedSession.value,
+        admission,
+        respond,
+        context,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("attachment preparation failed");
+      }
+      const source = prepared.value.offloadedRefs[0]!.path;
+      expect(prepared.value.mediaPathOffloadPaths).toEqual([source]);
+      expect(await fs.readFile(source, "utf8")).toBe("original upload");
+      expect(sandboxSpy).not.toHaveBeenCalled();
+    } finally {
+      release();
+      sandboxSpy.mockRestore();
+      admission.cleanupAdmittedRun();
+      clearAgentRunContext(runId, admission.lifecycleGeneration);
+      if (prepared?.ok) {
+        await attachments.discardPreparedInboundMedia(prepared.value.offloadedRefs);
+      }
+    }
+  });
+});
 
 it.each([
   {

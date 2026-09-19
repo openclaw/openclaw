@@ -78,6 +78,21 @@ a remote OpenClaw worker or move its agent loop. Memory search and maintenance,
 skills, attachments, and host provisioning require separate integration and
 verification before removing workspace synchronization.
 
+### Input attachments for a remote workspace
+
+A trusted Gateway plugin can supply `prepareTurnAttachments` on its existing
+`AgentWorkspaceAccess` binding. Core calls `prepareAgentWorkspaceAttachments`
+from `openclaw/plugin-sdk/agent-workspace-runtime` to resolve admitted input files
+and invoke this capability before a harness attempt or Codex steering.
+It appends the returned Harness-path note only to execution input. Original media
+references and transcript text stay on Gateway for image hydration and replay.
+
+A failed enabled transfer prevents dispatch. Bindings without this optional
+callback keep their existing input handling, including inline images; they do
+not gain automatic file transfer. Unconfigured local workspaces are unchanged. This interface does
+not provision a backend or acquire credentials. Each host adapter supplies its
+own authorized bridge.
+
 ### Native tool-policy enforcement
 
 Set `conversationToolPolicySupport: "exact"` only when `runAttempt` enforces every

@@ -355,6 +355,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     activeSession.agent,
     {
       workspaceDir: input.effectiveWorkspace,
+      agentWorkspaceDir: attempt.workspaceDir,
       model: attempt.model,
       maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,

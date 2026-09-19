@@ -7,7 +7,7 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 type PromptExecutionAttempt = Pick<
   RunEmbeddedAgentParams,
-  "config" | "imageOrder" | "images" | "media" | "userTurnTranscriptRecorder"
+  "config" | "imageOrder" | "images" | "media" | "userTurnTranscriptRecorder" | "workspaceDir"
 > & { model: { input?: string[] } };
 type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
 
@@ -47,6 +47,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
+    agentWorkspaceDir: attempt.workspaceDir,
     model: attempt.model,
     existingImages: attempt.images,
     imageOrder: attempt.imageOrder,

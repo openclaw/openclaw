@@ -8,6 +8,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
@@ -19,6 +20,7 @@ import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import {
+  STAGED_INPUT_MAX_BYTES,
   ensureStagedInputDirectory,
   stagedInputDirectory,
   stagedInputFileName,
@@ -29,7 +31,7 @@ import { CONFIG_DIR } from "../../utils.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templating.js";
 
 /** Maximum size of one file copied into an agent sandbox or staging workspace. */
-export const SANDBOX_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
+export const SANDBOX_MEDIA_MAX_BYTES = STAGED_INPUT_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
 // Attachment indexes are the staging identity. Callers use this map to detect
@@ -61,7 +63,13 @@ export async function stageSandboxMedia(params: {
     return EMPTY_STAGE_RESULT;
   }
 
-  const forceRemoteCache = ctx.MediaRemoteHost && params.remoteMediaMode === "cache";
+  const remoteWorkspace = getAgentWorkspaceAccess(workspaceDir);
+  if (remoteWorkspace && !ctx.MediaRemoteHost) {
+    // Keep managed originals on Gateway; the admitted turn transfers them to the Harness.
+    return EMPTY_STAGE_RESULT;
+  }
+  const forceRemoteCache =
+    ctx.MediaRemoteHost && (remoteWorkspace || params.remoteMediaMode === "cache");
   const sandbox = forceRemoteCache
     ? null
     : await ensureSandboxWorkspaceForSession({

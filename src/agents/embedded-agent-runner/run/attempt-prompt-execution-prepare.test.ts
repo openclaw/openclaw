@@ -26,6 +26,7 @@ type PromptExecutionInput = Parameters<typeof prepareEmbeddedAttemptPromptExecut
 function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecutionInput {
   return {
     attempt: {
+      workspaceDir: "/agent/workspace",
       config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
       imageOrder: ["inline"],
       images: [{ type: "image", data: "data", mimeType: "image/png" }],
@@ -93,6 +94,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith({
       prompt: "inspect image.png",
       workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/agent/workspace",
       model: input.attempt.model,
       existingImages: input.attempt.images,
       imageOrder: ["inline"],
