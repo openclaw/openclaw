@@ -121,6 +121,12 @@ Author watchers around **actionable state**, not only success: a watcher that go
 Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
 </Warning>
 
+The headless script runtime does not attach configured MCP servers. The owning
+agent's tool policy can include core tools such as `exec`, but it does not make
+configured `mcp__<server>__<tool>` tools available to condition scripts or
+`script` payloads. Use an agent-turn payload when a job needs to query an MCP
+server, or keep the condition script limited to the tools it actually exposes.
+
 Create a watcher from a local script file (`-` reads the script from stdin). The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument:
 
 ```bash
