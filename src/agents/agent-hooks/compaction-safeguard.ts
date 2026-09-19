@@ -56,6 +56,12 @@ import {
   readWorkspaceBootstrapFile,
 } from "../workspace-bootstrap-read.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
+import { curateCompactionSummarizerInput } from "./compaction-input-curation.js";
+import {
+  buildCompactionSemanticRepairEvidence,
+  isCompactionSemanticRepairFinding,
+  observeCompactionSemanticFidelity,
+} from "./compaction-semantic-fidelity.js";
 import {
   appendSummarySection,
   auditSummaryQuality,
@@ -1005,6 +1011,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
     const providerId = runtime?.provider;
     const turnPrefixMessages = baseTurnPrefixMessages;
+    const semanticSourceMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
     const structuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
@@ -1261,6 +1268,48 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         (summaryTargetMessages.length > 0 ||
           !preservedTurnsSectionLocal.text.includes(requiredAskContext));
       messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
+      const uncuratedMessagesToSummarize = messagesToSummarize;
+      let omittedCurationEvidence: Array<{ id: string; text: string }> = [];
+      let curationApplied = false;
+      if (
+        qualityGuardEnabled &&
+        qualityGuardMaxRetries > 0 &&
+        runtime?.semanticJudgmentCurationEnabled
+      ) {
+        if (!signal) {
+          log.debug(
+            "Compaction safeguard: input curation skipped; reason=no-cancellation-signal",
+          );
+        } else {
+          const curation = await curateCompactionSummarizerInput({
+            messages: messagesToSummarize,
+            unresolvedAsk: latestUnresolvedUserRequest ?? latestUserAsk,
+            signal,
+          });
+          messagesToSummarize = curation.messages;
+          omittedCurationEvidence = curation.omittedEvidence.map((item) => ({
+            id: `curated-${item.id}`,
+            text: `Tool result (${item.toolName}):\n${item.text}`,
+          }));
+          curationApplied = curation.omitted > 0;
+          if (curation.status === "ok") {
+            log.info(
+              "Compaction safeguard: judgment-assisted input curation completed; " +
+                `considered=${curation.considered} omitted=${curation.omitted} ` +
+                `originalChars=${curation.originalChars} curatedChars=${curation.curatedChars}`,
+            );
+          } else if (curation.status === "unavailable") {
+            log.debug(
+              "Compaction safeguard: input curation unavailable; preserving original summarizer input. " +
+                `reason=${curation.reason} considered=${curation.considered}`,
+            );
+          }
+        }
+      } else if (runtime?.semanticJudgmentCurationEnabled) {
+        log.debug(
+          "Compaction safeguard: input curation skipped; reason=quality-guard-or-retry-budget-disabled",
+        );
+      }
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
@@ -1271,7 +1320,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         contextWindow: contextWindowTokens,
         signal,
       });
-      const maxChunkTokens = Math.max(
+      let maxChunkTokens = Math.max(
         1,
         Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
       );
@@ -1280,7 +1329,26 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const effectivePreviousSummary = droppedSummary ?? previousSummary;
 
       let correctiveInstructions = "";
+      let semanticFallbackSummary: string | undefined;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
+
+      const restoreUncuratedInput = async (reason: string) => {
+        messagesToSummarize = uncuratedMessagesToSummarize;
+        omittedCurationEvidence = [];
+        curationApplied = false;
+        const retryMessages = [...messagesToSummarize, ...turnPrefixMessages];
+        const retryAdaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
+          messages: retryMessages,
+          contextWindow: contextWindowTokens,
+          signal,
+        });
+        maxChunkTokens = Math.max(
+          1,
+          Math.floor(contextWindowTokens * retryAdaptiveRatio) -
+            SUMMARIZATION_OVERHEAD_TOKENS,
+        );
+        correctiveInstructions = reason;
+      };
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let splitTurnSectionLocal = "";
@@ -1326,6 +1394,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             signal.throwIfAborted();
           }
           if (attempt > 0) {
+            if (semanticFallbackSummary) {
+              log.warn(
+                "Compaction safeguard: semantic corrective generation failed; preserving the last deterministic-valid summary.",
+              );
+              return compactionResult(semanticFallbackSummary);
+            }
             log.warn(
               "Compaction safeguard: corrective generation failed; " +
                 `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
@@ -1394,9 +1468,117 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifierPolicy,
         });
         if (quality.ok) {
+          if (runtime?.semanticJudgmentsEnabled) {
+            if (!signal) {
+              log.debug(
+                "Compaction safeguard: semantic fidelity observation skipped; reason=no-cancellation-signal",
+              );
+            } else {
+              const observation = await observeCompactionSemanticFidelity({
+                sourceMessages: semanticSourceMessages,
+                retainedContext: finalized.summary,
+                additionalSourceItems: omittedCurationEvidence,
+                signal,
+              });
+              if (observation.status === "ok") {
+                const relationCounts = observation.findings.reduce<Record<string, number>>(
+                  (counts, finding) => {
+                    counts[finding.relation] = (counts[finding.relation] ?? 0) + 1;
+                    return counts;
+                  },
+                  {},
+                );
+                const repairFindings = observation.findings.filter(
+                  isCompactionSemanticRepairFinding,
+                );
+                const curationLossFindings = repairFindings.filter((finding) =>
+                  finding.id.startsWith("curated-tool-result-"),
+                );
+                log.info(
+                  "Compaction safeguard: semantic fidelity observation completed; " +
+                    `checked=${observation.checked} verbatimPreserved=${observation.verbatimPreserved} ` +
+                    `relations=${JSON.stringify(relationCounts)} repairFindings=${repairFindings.length} ` +
+                    `provider=${observation.providerId} model=${observation.model}`,
+                );
+                if (repairFindings.length > 0) {
+                  if (
+                    curationApplied &&
+                    curationLossFindings.length > 0 &&
+                    canRegenerate &&
+                    attempt < totalAttempts - 1
+                  ) {
+                    await restoreUncuratedInput(
+                      "Regenerate from the original uncurated input. The curated attempt lost tool-derived context required for continuity.",
+                    );
+                    continue;
+                  }
+                  if (canRegenerate && attempt < totalAttempts - 1) {
+                    const repairEvidence = buildCompactionSemanticRepairEvidence(repairFindings);
+                    const semanticFeedback = wrapUntrustedInstructionBlock(
+                      "Semantic fidelity feedback",
+                      repairEvidence,
+                    );
+                    const budgetInstruction =
+                      `Keep the complete summary body within ${finalized.bodyBudget} UTF-16 code units so the finalized artifact remains valid after required suffixes.`;
+                    semanticFallbackSummary = finalized.summary;
+                    const semanticRepairInstructions = [
+                      "Preserve the active meaning of the source requirements below. Do not mark them complete or superseded unless the retained conversation supports that conclusion.",
+                      budgetInstruction,
+                      semanticFeedback,
+                    ]
+                      .filter(Boolean)
+                      .join("\n\n");
+                    if (curationApplied && attempt >= totalAttempts - 2) {
+                      await restoreUncuratedInput(
+                        [
+                          "Regenerate from the original uncurated input. The final available corrective attempt is reserved for full source evidence.",
+                          semanticRepairInstructions,
+                        ]
+                          .filter(Boolean)
+                          .join("\n\n"),
+                      );
+                    } else {
+                      correctiveInstructions = semanticRepairInstructions;
+                    }
+                    continue;
+                  }
+                  log.warn(
+                    "Compaction safeguard: semantic fidelity findings remain after the available corrective retry budget; " +
+                      `findingCount=${repairFindings.length}`,
+                  );
+                }
+              } else if (observation.status === "unavailable") {
+                if (curationApplied && canRegenerate && attempt < totalAttempts - 1) {
+                  log.warn(
+                    "Compaction safeguard: semantic fidelity unavailable after input curation; retrying from original uncurated input. " +
+                      `reason=${observation.reason}`,
+                  );
+                  await restoreUncuratedInput(
+                    "Regenerate from the original uncurated input because the post-curation semantic fidelity check was unavailable.",
+                  );
+                  continue;
+                }
+                log.debug(
+                  "Compaction safeguard: semantic fidelity observation unavailable; " +
+                    `reason=${observation.reason} checked=${observation.checked}`,
+                );
+              } else {
+                log.debug(
+                  "Compaction safeguard: semantic fidelity observation skipped; reason=no-candidates " +
+                    `verbatimPreserved=${observation.verbatimPreserved}`,
+                );
+              }
+            }
+          }
           return compactionResult(finalized.summary);
         }
         if (!canRegenerate || attempt >= totalAttempts - 1) {
+          if (semanticFallbackSummary) {
+            log.warn(
+              "Compaction safeguard: semantic corrective retry did not produce a deterministic-valid replacement; preserving the prior accepted summary.",
+            );
+            return compactionResult(semanticFallbackSummary);
+          }
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];
@@ -1411,6 +1593,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           return { cancel: true };
         }
         const reasons = quality.reasons.join(", ");
+        if (curationApplied && attempt >= totalAttempts - 2) {
+          const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
+            "Quality check feedback",
+            `Previous curated summary failed quality checks (${reasons}).`,
+          );
+          await restoreUncuratedInput(
+            [
+              "Regenerate from the original uncurated input. The final available corrective attempt is reserved for full source evidence.",
+              qualityFeedbackReasons,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          );
+          continue;
+        }
         const qualityFeedbackInstruction =
           identifierPolicy === "strict"
             ? "Fix all issues and include every required section with exact identifiers preserved."

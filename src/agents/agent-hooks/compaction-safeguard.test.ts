@@ -8,6 +8,8 @@ import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-s
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as judgmentRuntimeModule from "../../judgments/runtime.js";
+import type { JudgmentOutcome } from "../../judgments/types.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import {
   requireActivePluginRegistry,
@@ -20,6 +22,7 @@ import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
+import * as compactionInputCurationModule from "./compaction-input-curation.js";
 import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
   consumeCompactionSafeguardCancellation,
@@ -47,11 +50,28 @@ const { compactionLogger } = vi.hoisted(() => {
   return { compactionLogger: logger };
 });
 
+vi.mock("../../judgments/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../judgments/runtime.js")>(
+    "../../judgments/runtime.js",
+  );
+  return { ...actual, evaluateJudgment: vi.fn(actual.evaluateJudgment) };
+});
+
 vi.mock("../../logging/subsystem.js", async () => {
   const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
     "../../logging/subsystem.js",
   );
   return { ...actual, createSubsystemLogger: () => compactionLogger };
+});
+
+vi.mock("./compaction-input-curation.js", async () => {
+  const actual = await vi.importActual<typeof compactionInputCurationModule>(
+    "./compaction-input-curation.js",
+  );
+  return {
+    ...actual,
+    curateCompactionSummarizerInput: vi.fn(actual.curateCompactionSummarizerInput),
+  };
 });
 
 vi.mock("./compaction-safeguard-quality.js", async () => {
@@ -70,6 +90,13 @@ vi.mock("../compaction.js", async () => {
 });
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
+const mockCurateCompactionSummarizerInput = vi.mocked(
+  compactionInputCurationModule.curateCompactionSummarizerInput,
+);
+const mockEvaluateJudgment = vi.mocked(judgmentRuntimeModule.evaluateJudgment);
+const actualCompactionInputCurationModule = await vi.importActual<
+  typeof compactionInputCurationModule
+>("./compaction-input-curation.js");
 const actualCompactionModule = await vi.importActual<typeof compactionModule>("../compaction.js");
 const actualCompactionQualityModule = await vi.importActual<typeof compactionQualityModule>(
   "./compaction-safeguard-quality.js",
@@ -134,6 +161,11 @@ beforeEach(() => {
   testing.setSummarizeInStagesForTest(mockSummarizeInStages);
   mockAuditSummaryQuality.mockImplementation(actualCompactionQualityModule.auditSummaryQuality);
   mockAuditSummaryQuality.mockClear();
+  mockCurateCompactionSummarizerInput.mockImplementation(
+    actualCompactionInputCurationModule.curateCompactionSummarizerInput,
+  );
+  mockCurateCompactionSummarizerInput.mockClear();
+  mockEvaluateJudgment.mockReset();
   compactionLogger.warn.mockClear();
 });
 
@@ -226,6 +258,38 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
   },
   customInstructions: "",
   signal: new AbortController().signal,
+});
+
+const createSemanticCompactionEvent = (params: {
+  sourceRequirement: string;
+  latestAsk: string;
+  tokensBefore: number;
+  signal?: AbortSignal;
+}) => ({
+  preparation: {
+    messagesToSummarize: [
+      { role: "user", content: params.sourceRequirement, timestamp: 1 },
+      castAgentMessage({
+        role: "assistant",
+        content: "Acknowledged standing requirement.",
+        timestamp: 2,
+      }),
+      { role: "user", content: params.latestAsk, timestamp: 3 },
+    ] as AgentMessage[],
+    turnPrefixMessages: [] as AgentMessage[],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: params.tokensBefore,
+    fileOps: {
+      read: [],
+      edited: [],
+      written: [],
+    },
+    settings: { reserveTokens: 4_000 },
+    previousSummary: undefined,
+    isSplitTurn: false,
+  },
+  customInstructions: "",
+  signal: params.signal ?? new AbortController().signal,
 });
 
 const createCompactionContext = (params: {
@@ -1086,6 +1150,86 @@ describe("compaction-safeguard runtime registry", () => {
 
     expect(consumeCompactionSafeguardCancellation(sm)).toBeNull();
     expect(getCompactionSafeguardRuntime(sm)).toBeNull();
+  });
+
+  it.each([
+    {
+      label: "omitted",
+      qualityGuard: {},
+      expected: { quality: true, semantic: false, curation: false },
+    },
+    {
+      label: "boolean false",
+      qualityGuard: { semanticJudgments: false },
+      expected: { quality: true, semantic: false, curation: false },
+    },
+    {
+      label: "boolean true",
+      qualityGuard: { semanticJudgments: true },
+      expected: { quality: true, semantic: true, curation: false },
+    },
+    {
+      label: "empty object",
+      qualityGuard: { semanticJudgments: {} },
+      expected: { quality: true, semantic: false, curation: false },
+    },
+    {
+      label: "object disabled",
+      qualityGuard: { semanticJudgments: { enabled: false } },
+      expected: { quality: true, semantic: false, curation: false },
+    },
+    {
+      label: "object disabled but curation requested",
+      qualityGuard: { semanticJudgments: { enabled: false, curateInput: true } },
+      expected: { quality: true, semantic: true, curation: true },
+    },
+    {
+      label: "object enabled",
+      qualityGuard: { semanticJudgments: { enabled: true } },
+      expected: { quality: true, semantic: true, curation: false },
+    },
+    {
+      label: "curation implies semantic checks",
+      qualityGuard: { semanticJudgments: { curateInput: true } },
+      expected: { quality: true, semantic: true, curation: true },
+    },
+    {
+      label: "explicitly disabled quality guard",
+      qualityGuard: {
+        enabled: false,
+        semanticJudgments: { enabled: true, curateInput: true },
+      },
+      expected: { quality: false, semantic: false, curation: false },
+    },
+  ])("resolves semantic judgment runtime compatibility: $label", ({ qualityGuard, expected }) => {
+    const sessionManager = {} as unknown as Parameters<
+      typeof buildEmbeddedExtensionFactories
+    >[0]["sessionManager"];
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            qualityGuard,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    buildEmbeddedExtensionFactories({
+      cfg,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-3-opus",
+      model: {
+        contextWindow: 200_000,
+      } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
+    });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.qualityGuardEnabled).toBe(expected.quality);
+    expect(runtime?.semanticJudgmentsEnabled).toBe(expected.semantic);
+    expect(runtime?.semanticJudgmentCurationEnabled).toBe(expected.curation);
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -3629,6 +3773,958 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
+  it("does not run input curation when the quality guard is disabled", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult("summary without quality guard"));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: false,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+
+    const event = createCompactionEvent({
+      messageText: "summarize this conversation",
+      tokensBefore: 1_500,
+    });
+    (event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }).settings = {
+      reserveTokens: 4_000,
+    };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockCurateCompactionSummarizerInput).not.toHaveBeenCalled();
+  });
+
+  it("retries from original input when omitted tool evidence is missing from the retained summary", async () => {
+    mockSummarizeInStages.mockReset();
+    const userAsk = "Fix the parser tests.";
+    const materialFact = "MATERIAL_RESULT: parser failure is caused by TOKEN_X.";
+    const toolOutput = `${"routine test output\n".repeat(220)}${materialFact}`;
+    const firstSummary = [
+      "## Decisions",
+      "Continue debugging.",
+      "## Open TODOs",
+      "Fix the parser tests.",
+      "## Constraints/Rules",
+      "None.",
+      "## Pending user asks",
+      userAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    const recoveredSummary = [
+      "## Decisions",
+      materialFact,
+      "## Open TODOs",
+      "Fix the parser tests.",
+      "## Constraints/Rules",
+      "Preserve the parser failure cause.",
+      "## Pending user asks",
+      userAsk,
+      "## Exact identifiers",
+      "TOKEN_X",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(firstSummary))
+      .mockResolvedValueOnce(summaryResult(recoveredSummary));
+    mockEvaluateJudgment
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "tool-result-1": {
+              type: "choice",
+              choice: "redundant",
+              probabilities: {
+                essential: 0.01,
+                relevant: 0.02,
+                redundant: 0.93,
+                transient: 0.01,
+                uncertain: 0.03,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "curation",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "curated-tool-result-1": {
+              type: "choice",
+              choice: "missing",
+              probabilities: {
+                preserved: 0.01,
+                missing: 0.94,
+                contradicted: 0.01,
+                inactive_or_completed: 0.01,
+                uncertain: 0.03,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "fidelity",
+        },
+      } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: userAsk, timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+            timestamp: 2,
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            content: [{ type: "text", text: toolOutput }],
+            timestamp: 3,
+          },
+          castAgentMessage({ role: "assistant", content: "Tests completed.", timestamp: 4 }),
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(2);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const curatedCall = requireRecord(mockCallArg(mockSummarizeInStages, 0));
+    expect(JSON.stringify(curatedCall.messages)).toContain(
+      "omitted from compaction summarizer input",
+    );
+    expect(JSON.stringify(curatedCall.messages)).not.toContain(materialFact);
+    const uncuratedCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(JSON.stringify(uncuratedCall.messages)).toContain(materialFact);
+    expect(expectCompactionResult(result).summary).toContain(materialFact);
+  });
+
+  it("reserves the final retry for original input after curated deterministic quality failure", async () => {
+    mockSummarizeInStages.mockReset();
+    const userAsk = "Fix the parser tests.";
+    const materialFact = "MATERIAL_RESULT: parser failure is caused by TOKEN_X.";
+    const toolOutput = `${"routine test output\n".repeat(220)}${materialFact}`;
+    const recoveredSummary = [
+      "## Decisions",
+      materialFact,
+      "## Open TODOs",
+      userAsk,
+      "## Constraints/Rules",
+      "Preserve the parser failure cause.",
+      "## Pending user asks",
+      userAsk,
+      "## Exact identifiers",
+      "TOKEN_X",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult("invalid curated summary"))
+      .mockResolvedValueOnce(summaryResult(recoveredSummary));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "tool-result-1": {
+            type: "choice",
+            choice: "redundant",
+            probabilities: {
+              essential: 0.01,
+              relevant: 0.02,
+              redundant: 0.93,
+              transient: 0.01,
+              uncertain: 0.03,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "curation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: userAsk, timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+            timestamp: 2,
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            content: [{ type: "text", text: toolOutput }],
+            timestamp: 3,
+          },
+          castAgentMessage({ role: "assistant", content: "Tests completed.", timestamp: 4 }),
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(1);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstCall = requireRecord(mockCallArg(mockSummarizeInStages, 0));
+    expect(JSON.stringify(firstCall.messages)).toContain(
+      "omitted from compaction summarizer input",
+    );
+    expect(JSON.stringify(firstCall.messages)).not.toContain(materialFact);
+    const secondCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(JSON.stringify(secondCall.messages)).toContain(materialFact);
+    expect(secondCall.customInstructions).toContain(
+      "final available corrective attempt is reserved for full source evidence",
+    );
+    expect(expectCompactionResult(result).summary).toContain(materialFact);
+  });
+
+  it("restores original input when post-curation semantic fidelity is unavailable", async () => {
+    mockSummarizeInStages.mockReset();
+    const userAsk = "Fix the parser tests.";
+    const materialFact = "MATERIAL_RESULT: parser failure is caused by TOKEN_X.";
+    const toolOutput = `${"routine test output\n".repeat(220)}${materialFact}`;
+    const curatedSummary = [
+      "## Decisions",
+      "Continue debugging.",
+      "## Open TODOs",
+      userAsk,
+      "## Constraints/Rules",
+      "None.",
+      "## Pending user asks",
+      userAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    const recoveredSummary = [
+      "## Decisions",
+      materialFact,
+      "## Open TODOs",
+      userAsk,
+      "## Constraints/Rules",
+      "Preserve the parser failure cause.",
+      "## Pending user asks",
+      userAsk,
+      "## Exact identifiers",
+      "TOKEN_X",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(curatedSummary))
+      .mockResolvedValueOnce(summaryResult(recoveredSummary));
+    mockEvaluateJudgment
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "tool-result-1": {
+              type: "choice",
+              choice: "redundant",
+              probabilities: {
+                essential: 0.01,
+                relevant: 0.02,
+                redundant: 0.93,
+                transient: 0.01,
+                uncertain: 0.03,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "curation",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "circuit-open",
+      } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: userAsk, timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+            timestamp: 2,
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            content: [{ type: "text", text: toolOutput }],
+            timestamp: 3,
+          },
+          castAgentMessage({ role: "assistant", content: "Tests completed.", timestamp: 4 }),
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(2);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstCall = requireRecord(mockCallArg(mockSummarizeInStages, 0));
+    expect(JSON.stringify(firstCall.messages)).not.toContain(materialFact);
+    const secondCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(JSON.stringify(secondCall.messages)).toContain(materialFact);
+    expect(secondCall.customInstructions).toContain(
+      "post-curation semantic fidelity check was unavailable",
+    );
+    expect(expectCompactionResult(result).summary).toContain(materialFact);
+  });
+
+  it("reserves the only semantic retry for original input when curation was applied", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Never modify production configuration.";
+    const latestAsk = "Continue fixing the parser tests.";
+    const materialFact = "The parser failure is caused by a stale cache after schema reload.";
+    const toolOutput = `${"routine parser trace\n".repeat(220)}${materialFact}`;
+    const firstSummary = [
+      "## Decisions",
+      "Continue debugging the parser.",
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      "None.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+      "",
+      "The failure is caused by stale cache after schema reload.",
+    ].join("\n");
+    const recoveredSummary = [
+      "## Decisions",
+      materialFact,
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(firstSummary))
+      .mockResolvedValueOnce(summaryResult(recoveredSummary));
+    mockEvaluateJudgment
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "tool-result-1": {
+              type: "choice",
+              choice: "redundant",
+              probabilities: {
+                essential: 0.01,
+                relevant: 0.02,
+                redundant: 0.94,
+                transient: 0.01,
+                uncertain: 0.02,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "curation",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "curated-tool-result-1": {
+              type: "choice",
+              choice: "preserved",
+              probabilities: {
+                preserved: 0.92,
+                missing: 0.02,
+                contradicted: 0.01,
+                inactive_or_completed: 0.02,
+                uncertain: 0.03,
+              },
+            },
+            "recent-user-1": {
+              type: "choice",
+              choice: "missing",
+              probabilities: {
+                preserved: 0.01,
+                missing: 0.94,
+                contradicted: 0.01,
+                inactive_or_completed: 0.01,
+                uncertain: 0.03,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "fidelity",
+        },
+      } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: sourceRequirement, timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: "Acknowledged standing requirement.",
+            timestamp: 2,
+          }),
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+            timestamp: 3,
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            content: [{ type: "text", text: toolOutput }],
+            timestamp: 4,
+          },
+          castAgentMessage({
+            role: "assistant",
+            content: "The failure is caused by stale cache after schema reload.",
+            timestamp: 5,
+          }),
+          { role: "user", content: latestAsk, timestamp: 6 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(2);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstCall = requireRecord(mockCallArg(mockSummarizeInStages, 0));
+    const secondCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(JSON.stringify(firstCall.messages)).not.toContain(materialFact);
+    expect(JSON.stringify(secondCall.messages)).toContain(materialFact);
+    expect(secondCall.customInstructions).toContain(
+      "final available corrective attempt is reserved for full source evidence",
+    );
+    expect(secondCall.customInstructions).toContain("Semantic fidelity feedback");
+    expect(expectCompactionResult(result).summary).toContain(materialFact);
+  });
+
+  it("restores original input after a curated semantic retry later loses tool context", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Never modify production configuration.";
+    const latestAsk = "Continue fixing the parser tests.";
+    const materialFact = "The parser failure is caused by a stale cache after schema reload.";
+    const toolOutput = `${"routine parser trace\n".repeat(220)}${materialFact}`;
+    const firstSummary = [
+      "## Decisions",
+      "Continue debugging the parser.",
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      "None.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+      "",
+      "The failure is caused by stale cache after schema reload.",
+    ].join("\n");
+    const semanticRepairSummary = [
+      "## Decisions",
+      "Continue debugging the parser.",
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    const recoveredSummary = [
+      "## Decisions",
+      materialFact,
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(firstSummary))
+      .mockResolvedValueOnce(summaryResult(semanticRepairSummary))
+      .mockResolvedValueOnce(summaryResult(recoveredSummary));
+    mockEvaluateJudgment
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "tool-result-1": {
+              type: "choice",
+              choice: "redundant",
+              probabilities: {
+                essential: 0.01,
+                relevant: 0.02,
+                redundant: 0.94,
+                transient: 0.01,
+                uncertain: 0.02,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "curation",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "curated-tool-result-1": {
+              type: "choice",
+              choice: "preserved",
+              probabilities: {
+                preserved: 0.92,
+                missing: 0.02,
+                contradicted: 0.01,
+                inactive_or_completed: 0.02,
+                uncertain: 0.03,
+              },
+            },
+            "recent-user-1": {
+              type: "choice",
+              choice: "missing",
+              probabilities: {
+                preserved: 0.01,
+                missing: 0.94,
+                contradicted: 0.01,
+                inactive_or_completed: 0.01,
+                uncertain: 0.03,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "first-fidelity",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "curated-tool-result-1": {
+              type: "choice",
+              choice: "missing",
+              probabilities: {
+                preserved: 0.01,
+                missing: 0.95,
+                contradicted: 0.01,
+                inactive_or_completed: 0.01,
+                uncertain: 0.02,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "second-fidelity",
+        },
+      } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 2,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: sourceRequirement, timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: "Acknowledged standing requirement.",
+            timestamp: 2,
+          }),
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+            timestamp: 3,
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            content: [{ type: "text", text: toolOutput }],
+            timestamp: 4,
+          },
+          castAgentMessage({
+            role: "assistant",
+            content: "The failure is caused by stale cache after schema reload.",
+            timestamp: 5,
+          }),
+          { role: "user", content: latestAsk, timestamp: 6 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(3);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
+    const firstCall = requireRecord(mockCallArg(mockSummarizeInStages, 0));
+    const secondCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    const thirdCall = requireRecord(mockCallArg(mockSummarizeInStages, 2));
+    expect(JSON.stringify(firstCall.messages)).not.toContain(materialFact);
+    expect(JSON.stringify(secondCall.messages)).not.toContain(materialFact);
+    expect(secondCall.customInstructions).toContain("Semantic fidelity feedback");
+    expect(JSON.stringify(thirdCall.messages)).toContain(materialFact);
+    expect(thirdCall.customInstructions).toContain(
+      "curated attempt lost tool-derived context",
+    );
+    expect(expectCompactionResult(result).summary).toContain(materialFact);
+  });
+
+  it("restores original input when fidelity becomes unavailable after a curated semantic retry", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Never modify production configuration.";
+    const latestAsk = "Continue fixing the parser tests.";
+    const materialFact = "The parser failure is caused by a stale cache after schema reload.";
+    const toolOutput = `${"routine parser trace\n".repeat(220)}${materialFact}`;
+    const firstSummary = [
+      "## Decisions",
+      "Continue debugging the parser.",
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      "None.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+      "",
+      "The failure is caused by stale cache after schema reload.",
+    ].join("\n");
+    const semanticRepairSummary = [
+      "## Decisions",
+      "Continue debugging the parser.",
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+      "",
+      "The failure is caused by stale cache after schema reload.",
+    ].join("\n");
+    const recoveredSummary = [
+      "## Decisions",
+      materialFact,
+      "## Open TODOs",
+      latestAsk,
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(firstSummary))
+      .mockResolvedValueOnce(summaryResult(semanticRepairSummary))
+      .mockResolvedValueOnce(summaryResult(recoveredSummary));
+    mockEvaluateJudgment
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "tool-result-1": {
+              type: "choice",
+              choice: "redundant",
+              probabilities: {
+                essential: 0.01,
+                relevant: 0.02,
+                redundant: 0.94,
+                transient: 0.01,
+                uncertain: 0.02,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "curation",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "ok",
+        result: {
+          model: "fixture",
+          answers: {
+            "curated-tool-result-1": {
+              type: "choice",
+              choice: "preserved",
+              probabilities: {
+                preserved: 0.92,
+                missing: 0.02,
+                contradicted: 0.01,
+                inactive_or_completed: 0.02,
+                uncertain: 0.03,
+              },
+            },
+            "recent-user-1": {
+              type: "choice",
+              choice: "missing",
+              probabilities: {
+                preserved: 0.01,
+                missing: 0.94,
+                contradicted: 0.01,
+                inactive_or_completed: 0.01,
+                uncertain: 0.03,
+              },
+            },
+          },
+        },
+        provenance: {
+          providerId: "fixture",
+          rubricVersion: "1",
+          runtimeGeneration: "first-fidelity",
+        },
+      } satisfies JudgmentOutcome)
+      .mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "circuit-open",
+      } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 2,
+      semanticJudgmentsEnabled: true,
+      semanticJudgmentCurationEnabled: true,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: sourceRequirement, timestamp: 1 },
+          castAgentMessage({
+            role: "assistant",
+            content: "Acknowledged standing requirement.",
+            timestamp: 2,
+          }),
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+            timestamp: 3,
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "exec",
+            content: [{ type: "text", text: toolOutput }],
+            timestamp: 4,
+          },
+          castAgentMessage({
+            role: "assistant",
+            content: "The failure is caused by stale cache after schema reload.",
+            timestamp: 5,
+          }),
+          { role: "user", content: latestAsk, timestamp: 6 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: "test-key",
+    });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(3);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
+    const secondCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    const thirdCall = requireRecord(mockCallArg(mockSummarizeInStages, 2));
+    expect(JSON.stringify(secondCall.messages)).not.toContain(materialFact);
+    expect(secondCall.customInstructions).toContain("Semantic fidelity feedback");
+    expect(JSON.stringify(thirdCall.messages)).toContain(materialFact);
+    expect(thirdCall.customInstructions).toContain(
+      "post-curation semantic fidelity check was unavailable",
+    );
+    expect(expectCompactionResult(result).summary).toContain(materialFact);
+  });
+
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
     const preservedUserText = [
@@ -3813,6 +4909,286 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     expect(result.compaction?.summary).toContain("latest ask status");
+  });
+
+  it("uses a semantic loss finding to drive the registered hook's existing corrective retry", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const firstSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    const repairedSummary = [
+      "## Decisions",
+      "Deploy only to staging.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      sourceRequirement,
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(firstSummary))
+      .mockResolvedValueOnce(summaryResult(repairedSummary));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "recent-user-1": {
+            type: "choice",
+            choice: "contradicted",
+            probabilities: {
+              preserved: 0.01,
+              missing: 0.01,
+              contradicted: 0.95,
+              inactive_or_completed: 0.01,
+              uncertain: 0.02,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "test-generation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockEvaluateJudgment).toHaveBeenCalledTimes(1);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const repairCall = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(repairCall.customInstructions).toContain("Semantic fidelity feedback");
+    expect(repairCall.customInstructions).toContain(sourceRequirement);
+    expect(expectCompactionResult(result).summary).toContain(sourceRequirement);
+  });
+
+  it("preserves the deterministic-valid summary when semantic corrective generation fails", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const acceptedSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(acceptedSummary))
+      .mockRejectedValueOnce(new Error("semantic repair failed"));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "recent-user-1": {
+            type: "choice",
+            choice: "contradicted",
+            probabilities: {
+              preserved: 0.01,
+              missing: 0.01,
+              contradicted: 0.95,
+              inactive_or_completed: 0.01,
+              uncertain: 0.02,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "test-generation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result).not.toEqual({ cancel: true });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstFinalizedSummary = requireRecord(
+      mockCallArg(mockAuditSummaryQuality, 0),
+    ).summary;
+    expect(expectCompactionResult(result).summary).toBe(firstFinalizedSummary);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+    expect(compactionLogger.warn.mock.calls.flat().join("\n")).toContain(
+      "preserving the last deterministic-valid summary",
+    );
+  });
+
+  it("preserves the deterministic-valid summary when the semantic retry exhausts on ordinary quality checks", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const acceptedSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(acceptedSummary))
+      .mockResolvedValueOnce(summaryResult("invalid replacement"));
+    mockEvaluateJudgment.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        model: "fixture",
+        answers: {
+          "recent-user-1": {
+            type: "choice",
+            choice: "missing",
+            probabilities: {
+              preserved: 0.01,
+              missing: 0.95,
+              contradicted: 0.01,
+              inactive_or_completed: 0.01,
+              uncertain: 0.02,
+            },
+          },
+        },
+      },
+      provenance: {
+        providerId: "fixture",
+        rubricVersion: "1",
+        runtimeGeneration: "test-generation",
+      },
+    } satisfies JudgmentOutcome);
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+    });
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    expect(result).not.toEqual({ cancel: true });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const firstFinalizedSummary = requireRecord(
+      mockCallArg(mockAuditSummaryQuality, 0),
+    ).summary;
+    expect(expectCompactionResult(result).summary).toBe(firstFinalizedSummary);
+    expect(compactionLogger.warn.mock.calls.flat().join("\n")).toContain(
+      "semantic corrective retry did not produce a deterministic-valid replacement",
+    );
+  });
+
+  it("propagates caller cancellation while a semantic judgment is pending", async () => {
+    mockSummarizeInStages.mockReset();
+    const sourceRequirement = "Deploy to staging only. Production is not authorized.";
+    const acceptedSummary = [
+      "## Decisions",
+      "Deploy after tests pass.",
+      "## Open TODOs",
+      "Run deployment.",
+      "## Constraints/Rules",
+      "Deploy to production after tests pass.",
+      "## Pending user asks",
+      "Deploy after tests pass.",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValueOnce(summaryResult(acceptedSummary));
+
+    const controller = new AbortController();
+    let settleJudgment!: () => void;
+    const judgmentStarted = new Promise<void>((resolve) => {
+      mockEvaluateJudgment.mockImplementationOnce(async (_batch, options) => {
+        resolve();
+        await new Promise<void>((settle) => {
+          settleJudgment = settle;
+          options.signal?.addEventListener("abort", settle, { once: true });
+        });
+        options.signal?.throwIfAborted();
+        throw new Error("unreachable");
+      });
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      semanticJudgmentsEnabled: true,
+    });
+    const latestAsk = "Deploy after tests pass.";
+    const event = createSemanticCompactionEvent({
+      sourceRequirement,
+      latestAsk,
+      tokensBefore: 1_500,
+      signal: controller.signal,
+    });
+
+    const run = runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+    await judgmentStarted;
+    controller.abort();
+    settleJudgment?.();
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
   it("cancels when corrective generation fails after finalized quality rejection", async () => {

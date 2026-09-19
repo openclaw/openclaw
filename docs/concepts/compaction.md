@@ -34,6 +34,53 @@ of corrective attempts. If no finalized summary passes, compaction stops before
 writing a transcript entry, keeps the original history, and surfaces the
 existing recovery outcome.
 
+When `agents.defaults.compaction.qualityGuard.semanticJudgments: true` is set,
+the built-in safeguard can also ask the configured `judgments.provider` to
+classify whether a bounded sample of recent user requirements was preserved,
+missed, contradicted, completed/superseded, or remains uncertain. This setting
+is off by default and applies only to the built-in safeguard path after the
+ordinary deterministic quality checks pass. Strong missing or contradicted
+findings may use the quality guard's existing corrective retry budget; they do
+not add a second retry loop or independently authorize a transcript write. If
+the judgment provider is unavailable, normal compaction behavior is preserved.
+Caller cancellation remains terminal.
+
+The configuration is backward-compatible: omitting `semanticJudgments` keeps the
+existing deterministic compaction behavior, `false` remains an explicit opt-out, and
+the boolean `true` form continues to mean semantic fidelity checking without input
+curation. The object form is additive and is only needed when curation or explicit
+subfeature control is desired. Existing configurations are not rewritten during
+materialization or reload. Within the object form, `curateInput: true` necessarily
+enables the semantic fidelity check even when `enabled: false` is also present,
+because curated output is never allowed to bypass its post-summary safety check. To
+disable all semantic behavior, use `semanticJudgments: false` or leave curation off.
+
+The same setting also accepts an object form for bounded summarizer-input curation:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "qualityGuard": {
+          "semanticJudgments": {
+            "enabled": true,
+            "curateInput": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`curateInput` only applies while the quality guard is enabled and a corrective retry
+is available. It considers only bounded, successful tool results whose full text fits
+the judgment evidence limit. Oversized or failed results are kept unchanged. Any
+omitted tool result is carried into the post-summary semantic fidelity check; if the
+retained summary loses required tool-derived context, OpenClaw retries from the
+original uncurated input rather than treating the reduced view as authoritative.
+
 ## Auto-compaction
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).

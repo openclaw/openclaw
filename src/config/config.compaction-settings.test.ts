@@ -24,6 +24,7 @@ describe("config compaction settings", () => {
       qualityGuard: {
         enabled: true,
         maxRetries: 2,
+        semanticJudgments: true,
       },
       midTurnPrecheck: {
         enabled: true,
@@ -41,11 +42,48 @@ describe("config compaction settings", () => {
     expect(compaction?.identifierPolicy).toBe("strict");
     expect(compaction?.qualityGuard?.enabled).toBe(true);
     expect(compaction?.qualityGuard?.maxRetries).toBe(2);
+    expect(compaction?.qualityGuard?.semanticJudgments).toBe(true);
     expect(compaction?.midTurnPrecheck?.enabled).toBe(true);
     expect(compaction?.memoryFlush?.enabled).toBe(false);
     expect(compaction?.memoryFlush?.model).toBe("ollama/qwen3:8b");
     expect(compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
     expect(compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it.each([
+    ["omitted", undefined],
+    ["false", false],
+    ["true", true],
+    ["object-empty", {}],
+    ["object-disabled", { enabled: false }],
+    ["object-enabled", { enabled: true }],
+    ["object-curation", { curateInput: true }],
+    ["object-disabled-curation", { enabled: false, curateInput: true }],
+    ["object-enabled-curation", { enabled: true, curateInput: true }],
+  ] as const)("preserves semanticJudgments compatibility form: %s", (_label, semanticJudgments) => {
+    const compaction = materializeCompactionConfig({
+      qualityGuard: {
+        ...(semanticJudgments === undefined ? {} : { semanticJudgments }),
+      },
+    });
+
+    expect(compaction?.qualityGuard?.semanticJudgments).toEqual(semanticJudgments);
+  });
+
+  it("preserves semantic judgment object config for optional input curation", () => {
+    const compaction = materializeCompactionConfig({
+      qualityGuard: {
+        semanticJudgments: {
+          enabled: true,
+          curateInput: true,
+        },
+      },
+    });
+
+    expect(compaction?.qualityGuard?.semanticJudgments).toEqual({
+      enabled: true,
+      curateInput: true,
+    });
   });
 
   it("defaults compaction mode to safeguard", () => {
