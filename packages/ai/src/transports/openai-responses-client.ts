@@ -7,6 +7,7 @@ import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -253,7 +254,14 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           compactRequest
             ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
             : config.streamRequest
-              ? withDefaultResponsesStreamEncoding(buildGuardedModelFetch(model))
+              ? withDefaultResponsesStreamEncoding(
+                  // The SDK replaces the fetch signal; keep liveness keyed to the
+                  // caller signal watched by the idle timer.
+                  buildGuardedModelFetch(model, undefined, {
+                    onSseComment: () =>
+                      notifyLlmRequestActivity(options?.signal, "transport-liveness"),
+                  }),
+                )
               : undefined,
         );
         const nativeAstra =

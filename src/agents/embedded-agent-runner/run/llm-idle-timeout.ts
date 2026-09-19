@@ -522,12 +522,15 @@ export function streamWithIdleTimeout(
             }, effectiveTimeout);
             idleTimer.unref?.();
           };
-          const unsubscribeLlmActivity = onLlmRequestActivity(streamAbortController.signal, () => {
-            armTimer();
-            if (runId && areDiagnosticsEnabledForProcess()) {
-              markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
-            }
-          });
+          const unsubscribeLlmActivity = onLlmRequestActivity(
+            streamAbortController.signal,
+            (kind) => {
+              armTimer();
+              if (kind === "model-progress" && runId && areDiagnosticsEnabledForProcess()) {
+                markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
+              }
+            },
+          );
           const unsubscribeStreamToolActivity = runId ? onToolActivity(runId, armTimer) : undefined;
           const settle = () => {
             if (settled) {

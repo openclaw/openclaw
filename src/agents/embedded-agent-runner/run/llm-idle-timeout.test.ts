@@ -967,7 +967,7 @@ describe("streamWithIdleTimeout", () => {
     expect(results).toHaveLength(3);
   });
 
-  it("treats quarantined provider events as stream activity", async () => {
+  it("treats transport liveness as watchdog activity", async () => {
     vi.useFakeTimers();
     let requestSignal: AbortSignal | undefined;
     const baseFn: StreamFn = vi.fn((_model, _context, options) => {
@@ -987,8 +987,8 @@ describe("streamWithIdleTimeout", () => {
     const iterator = stream[Symbol.asyncIterator]();
     const next = iterator.next();
 
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal, "transport-liveness"), 40);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal, "transport-liveness"), 80);
     await vi.advanceTimersByTimeAsync(120);
 
     await expect(next).resolves.toEqual({
