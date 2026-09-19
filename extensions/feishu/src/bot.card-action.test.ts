@@ -7,10 +7,12 @@ import { processedCardActions, resolvedCardActionChatTypes } from "./card-action
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
+  expectFeishuCardButtonRow,
   expectFirstSentCardUsesFillWidthOnly,
   expectSentCardHasP2pAction,
 } from "./card-test-helpers.js";
 import {
+  createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
@@ -257,13 +259,7 @@ describe("Feishu Card Action Handler", () => {
     expect(requireRecord(card.config, "Feishu card config").width_mode).toBe("fill");
     const header = requireRecord(card.header, "Feishu card header");
     expect(requireRecord(header.title, "Feishu card title").content).toBe("Confirm action");
-    const body = requireRecord(card.body, "Feishu card body");
-    const elements = body.elements as Array<Record<string, unknown>>;
-    const actionElement = elements.find((element) => element.tag === "action");
-    if (!actionElement) {
-      throw new Error("Expected action element");
-    }
-    const actions = actionElement.actions as Array<Record<string, unknown>>;
+    const actions = expectFeishuCardButtonRow(card);
     const actionValue = requireRecord(actions[0]?.value, "Feishu approval action value");
     const approvalContext = requireRecord(actionValue.c, "Feishu approval context");
     expect(approvalContext.u).toBe("u123");
@@ -273,6 +269,84 @@ describe("Feishu Card Action Handler", () => {
     expect(typeof approvalContext.e).toBe("number");
     expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "confirm",
+      button: 0,
+      openId: "u123",
+      chatId: "chat1",
+      expired: false,
+      notice: undefined,
+    },
+    {
+      name: "cancel",
+      button: 1,
+      openId: "u123",
+      chatId: "chat1",
+      expired: false,
+      notice: "Cancelled.",
+    },
+    {
+      name: "wrong actor",
+      button: 0,
+      openId: "u999",
+      chatId: "chat1",
+      expired: false,
+      notice: "different user",
+    },
+    {
+      name: "wrong chat",
+      button: 0,
+      openId: "u123",
+      chatId: "chat2",
+      expired: false,
+      notice: "different conversation",
+    },
+    {
+      name: "expired",
+      button: 0,
+      openId: "u123",
+      chatId: "chat1",
+      expired: true,
+      notice: "expired",
+    },
+  ])("preserves $name handling for buttons emitted by an approval card", async (testCase) => {
+    const card = createApprovalCard({
+      operatorOpenId: "u123",
+      chatId: "chat1",
+      chatType: "group",
+      sessionKey: "agent:codex:feishu:chat:chat1",
+      command: "/reset",
+      prompt: "Reset this session?",
+      expiresAt: Date.now() + (testCase.expired ? -1 : 60_000),
+      confirmLabel: "Reset",
+      cancelLabel: "Keep",
+    });
+    const buttons = expectFeishuCardButtonRow(card);
+    expect(buttons.map((button) => button.text)).toEqual([
+      { tag: "plain_text", content: "Reset" },
+      { tag: "plain_text", content: "Keep" },
+    ]);
+    expect(buttons.map((button) => button.type)).toEqual(["primary", "default"]);
+    const event = createCardActionEvent({
+      token: `emitted-${testCase.name}`,
+      openId: testCase.openId,
+      chatId: testCase.chatId,
+      actionValue: requireRecord(buttons[testCase.button]?.value, "emitted callback value"),
+    });
+    await handleFeishuCardAction({ cfg, event, runtime });
+    if (testCase.notice) {
+      expect(String(sendMessageCall().text)).toContain(testCase.notice);
+      expect(handleFeishuMessage).not.toHaveBeenCalled();
+    } else {
+      expect(handleMessage().content).toBe('{"text":"/reset"}');
+      expect(handleMessage().chat_id).toBe("chat1");
+      expect(handleMessage().chat_type).toBe("group");
+      await handleFeishuCardAction({ cfg, event, runtime });
+      expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("does not open approval cards when the expiry would exceed a valid Date", async () => {
