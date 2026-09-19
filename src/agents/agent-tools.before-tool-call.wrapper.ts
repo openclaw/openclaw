@@ -518,8 +518,12 @@ export function wrapToolWithBeforeToolCallHook(
         }
         onImplementationStart = decision.start;
       }
-      // A voice grant binds the post-finalizer execution shape. Consume it only
-      // after steering can no longer suppress the prepared call.
+      // Host capabilities can close while hooks, approval, validation, or
+      // steering awaits. Recheck before consuming approval at the source boundary.
+      signal?.throwIfAborted();
+      assertAgentPluginRuntimeCurrent();
+      runAgentToolSourceExecutionGuard(tool);
+      // A voice grant binds the post-finalizer execution shape.
       const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
         toolCallId,
         toolName,
@@ -533,11 +537,6 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
-      // Host capabilities can close while hooks, approval, validation, or
-      // steering awaits. Recheck at the final synchronous source boundary.
-      signal?.throwIfAborted();
-      assertAgentPluginRuntimeCurrent();
-      runAgentToolSourceExecutionGuard(tool);
       admitExecution?.();
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
