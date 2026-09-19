@@ -177,6 +177,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/onepassword/src/tool-list.test.ts",
   "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
   "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+  "extensions/reef/doctor-contract-api.capacity.test.ts",
   "extensions/reef/doctor-contract-api.test.ts",
   "extensions/reef/src/channel.test.ts",
   "extensions/reef/src/flow-receipts.test.ts",
