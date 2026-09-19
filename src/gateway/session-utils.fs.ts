@@ -59,6 +59,13 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
       let normalizedMessage: Record<string, unknown>;
       try {
         const record = JSON.parse(line) as Record<string, unknown>;
+        // Compaction/reset boundary markers carry no message payload; pass them
+        // through so the chars estimate only counts the live window after the
+        // latest boundary, not the full retained archive.
+        if (record.type === "compaction" || record.type === "reset") {
+          usageAccumulator.add({ type: record.type });
+          continue;
+        }
         if (
           !record.message ||
           typeof record.message !== "object" ||

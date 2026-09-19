@@ -149,6 +149,14 @@ export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageS
   let sawEstimateModelIdentity = false;
   const add = (message: unknown): void => {
     if (source === "artifact" && isRecord(message)) {
+      // A compaction/reset boundary starts a fresh context window: content
+      // before it is superseded history, so the chars estimate restarts there.
+      // Usage snapshots below still aggregate across the whole record.
+      if (message.type === "compaction" || message.type === "reset") {
+        estimatedTranscriptChars = 0;
+        sawEstimateModelIdentity = false;
+        return;
+      }
       const provider = typeof message.provider === "string" ? message.provider.trim() : undefined;
       const model = typeof message.model === "string" ? message.model.trim() : undefined;
       if (
