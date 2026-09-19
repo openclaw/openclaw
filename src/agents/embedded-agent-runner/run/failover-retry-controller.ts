@@ -252,6 +252,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
       reason: TransientRetryReason;
       message?: string;
       retryAfterMs?: number;
+      /** Saved retry.provider.maxRetryDelayMs; undefined or 0 disables the cap. */
+      maxRetryDelayMs?: number;
+      /** False when the attempt cannot fail over (replay-unsafe tool activity). */
+      failoverEligible?: boolean;
       onRetry?: (status: {
         attempt: number;
         maxRetries: number;
@@ -270,6 +274,35 @@ export function createEmbeddedRunFailoverRetryController(input: {
       }
       const rateLimit = retry.reason === "rate_limit";
       if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+        return false;
+      }
+      // A 429 floor past the operator's maxRetryDelayMs is a usage window in
+      // everything but wording: Anthropic's session-window exhaustion answers
+      // with "try again later" and a Retry-After of hours, which matches no
+      // keyword pattern. The SDK already refused to wait that long under the
+      // same setting; sleeping it here instead holds the turn open until the
+      // run's own timeout kills it. With a fallback configured and an attempt
+      // that can still fail over, decline the wait now. Without either there is
+      // nothing to do but wait, so the floor is honored: after a replay-unsafe
+      // tool action neither profile rotation nor model fallback runs, so
+      // declining here would end the turn instead of continuing it.
+      const retryDelayCapMs =
+        retry.maxRetryDelayMs !== undefined &&
+        Number.isFinite(retry.maxRetryDelayMs) &&
+        retry.maxRetryDelayMs > 0
+          ? retry.maxRetryDelayMs
+          : undefined;
+      if (
+        rateLimit &&
+        fallbackConfigured &&
+        retry.failoverEligible !== false &&
+        retryDelayCapMs !== undefined &&
+        retry.retryAfterMs !== undefined &&
+        retry.retryAfterMs > retryDelayCapMs
+      ) {
+        log.warn(
+          `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over`,
+        );
         return false;
       }
       rateLimitSeen ||= rateLimit;
