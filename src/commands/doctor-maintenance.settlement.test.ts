@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   maybeStopManagedServiceBeforeMutableUpdate,
   PreManagedServiceStop,
+  revalidateManagedGatewayServiceAfterUpdate,
 } from "../cli/update-cli/update-command-service-maintenance.js";
 import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
@@ -14,7 +15,7 @@ const boundary = vi.hoisted(() => ({
   stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
   read: vi.fn<typeof readGatewayServiceState>(),
   command: vi.fn<GatewayService["readCommand"]>(),
-  revalidate: vi.fn(),
+  revalidate: vi.fn<typeof revalidateManagedGatewayServiceAfterUpdate>(),
   restart: vi.fn(),
   health: vi.fn(),
   resume: vi.fn(),
@@ -113,6 +114,12 @@ beforeEach(() => {
     OPENCLAW_STATE_DIR: "/synthetic/doctor-state",
     OPENCLAW_CONFIG_PATH: "/synthetic/doctor-state/openclaw.json",
   };
+  const verdict = {
+    kind: "owned" as const,
+    root,
+    fingerprint: "fixture",
+    refreshDefinition: false,
+  };
   stopped = {
     stopped: true,
     inspected: true,
@@ -120,7 +127,7 @@ beforeEach(() => {
     running: false,
     offline: true,
     serviceEnv,
-    serviceUpdateVerdict: { kind: "owned", root, fingerprint: "fixture", refreshDefinition: false },
+    serviceUpdateVerdict: verdict,
     windowsTaskAutoStartRecovery: {
       suspended: Promise.resolve(true),
       beginMutation: () => {},
@@ -139,6 +146,7 @@ beforeEach(() => {
   });
   const command = { programArguments: ["/synthetic/node", `${root}/openclaw.mjs`, "gateway"] };
   boundary.command.mockResolvedValue(command);
+  boundary.revalidate.mockResolvedValue(verdict);
   boundary.read.mockResolvedValue({
     installed: true,
     running: false,

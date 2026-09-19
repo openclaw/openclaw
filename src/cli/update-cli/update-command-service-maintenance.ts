@@ -56,6 +56,7 @@ function matchesStoppedService(
   before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">,
   state: GatewayServiceState,
   inspection: ManagedGatewayUpdateVerdict,
+  allowIncompleteInspection = false,
 ): boolean {
   const verdict = before.serviceUpdateVerdict;
   const refreshDefinition = verdict?.kind === "owned" && verdict.refreshDefinition;
@@ -78,6 +79,7 @@ function matchesStoppedService(
     resolveName(before.serviceEnv) === resolveName(state.env) &&
     (process.platform !== "linux" ||
       before.serviceManagerUid === undefined ||
+      (allowIncompleteInspection && observedSystemdManagerUid(state) === undefined) ||
       before.serviceManagerUid === observedSystemdManagerUid(state)) &&
     (refreshDefinition ||
       ("fingerprint" in inspection && inspection.fingerprint === verdict.fingerprint)),
@@ -92,10 +94,24 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
   >;
   allowInstallRootChange?: boolean;
+  /** Restoration still rejects observed identity drift when a native probe fails. */
+  allowIncompleteInspection?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const before = params.preManagedServiceStop;
   const verdict = before?.serviceUpdateVerdict;
   assertGatewayServiceManagementAllowedForUpdate(params.state.env);
+  const managerUid = observedSystemdManagerUid(params.state);
+  if (
+    params.allowIncompleteInspection &&
+    before?.serviceManagerUid !== undefined &&
+    managerUid !== undefined &&
+    managerUid !== before.serviceManagerUid
+  ) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
+      undefined,
+    );
+  }
   // Shipped handoffs and package root swaps retain the exact launcher fingerprint.
   const inspection = await inspectManagedGatewayServiceBeforeUpdate({
     ...params,
@@ -130,7 +146,9 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     before &&
     verdict &&
     (verdict.kind === "owned" || verdict.kind === "unresolved") &&
-    (inspection.kind !== verdict.kind || !matchesStoppedService(before, params.state, inspection))
+    !(params.allowIncompleteInspection && inspection.kind === "unavailable") &&
+    (inspection.kind !== verdict.kind ||
+      !matchesStoppedService(before, params.state, inspection, params.allowIncompleteInspection))
   ) {
     throw new GatewayServiceUpdateOwnershipError(
       inspection.kind === "unavailable" &&

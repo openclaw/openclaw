@@ -26,7 +26,7 @@ const versionArgs = [
   "Version",
 ];
 export const SYSTEMD_TRANSPORT_DEADLINE = new ServiceInspectionError(
-  "systemd-user-bus-unavailable",
+  "systemd-inspection-deadline-exceeded",
 );
 const addressFor = (socket: string) =>
   `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;

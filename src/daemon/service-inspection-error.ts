@@ -4,6 +4,8 @@ const SERVICE_INSPECTION_MESSAGES = {
     "No supported service manager detected. Restart the Gateway you launched manually after the update.",
   "systemd-user-bus-unavailable":
     "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
+  "systemd-inspection-deadline-exceeded":
+    "The systemd manager inspection deadline expired while probing the manager or checking custody/admission guards. This does not establish that the user session bus is unavailable. Run openclaw gateway status --deep to inspect the service after recovery.",
   "systemd-busctl-unavailable":
     "The busctl executable is unavailable. Install the systemd package providing busctl and verify busctl --user list from the service account, then retry.",
   "service-manager-access-denied":
@@ -26,7 +28,8 @@ export function isServiceInspectionReason(value: string): value is ServiceInspec
 }
 
 export function formatServiceInspectionReason(reason: ServiceInspectionReason): string {
-  return reason === "service-manager-unavailable"
+  return reason === "service-manager-unavailable" ||
+    reason === "systemd-inspection-deadline-exceeded"
     ? SERVICE_INSPECTION_MESSAGES[reason]
     : `${SERVICE_INSPECTION_MESSAGES[reason]} ${EXTERNAL_SERVICE_RECOVERY}`;
 }

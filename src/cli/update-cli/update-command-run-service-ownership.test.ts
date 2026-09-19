@@ -272,7 +272,10 @@ it.each([
       expect(facts).toEqual([
         expect.objectContaining({
           check: "managed-service",
-          code: "service-inspection-unavailable",
+          code:
+            scenario === "timeout"
+              ? "systemd-inspection-deadline-exceeded"
+              : "service-inspection-unavailable",
           message: expect.stringContaining("Restart the Gateway you launched manually"),
         }),
       ]);

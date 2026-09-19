@@ -308,7 +308,7 @@ it.each([true, false])(
     const waiting = resolveSystemdUserTransport(env, undefined, undefined, "admission");
     release();
     expect(await first).toMatchObject(
-      privateAvailable ? { kind: "private" } : { reason: "systemd-user-bus-unavailable" },
+      privateAvailable ? { kind: "private" } : { reason: "systemd-inspection-deadline-exceeded" },
     );
     const selected = await waiting;
     expect(selected).toMatchObject({ kind: "session-bus", address: env.DBUS_SESSION_BUS_ADDRESS });

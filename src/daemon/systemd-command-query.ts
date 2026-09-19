@@ -66,15 +66,21 @@ export async function createSystemdCommandQuery(
     if (managerPeer) {
       try {
         return await managerPeer.query(args, signatures, deadlineAt);
-      } catch {
+      } catch (error) {
         assertGatewayServiceUpdateCurrent();
+        if (error instanceof ServiceInspectionError) {
+          throw error;
+        }
         throw new ServiceInspectionError("systemd-user-bus-unavailable");
       }
     }
     const assertCurrent =
       (args[0] === "call" && args[4] === "LoadUnit" ? undefined : inspection?.assertReadCurrent) ??
       inspection?.assertCurrent;
-    if (managerUid !== undefined && (performance.now() >= deadlineAt || remainingCalls <= 0)) {
+    if (performance.now() >= deadlineAt) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (managerUid !== undefined && remainingCalls <= 0) {
       throw unavailable();
     }
     if (peer) {
@@ -82,7 +88,7 @@ export async function createSystemdCommandQuery(
       const values = await peer.query(args, signatures, deadlineAt, inspection);
       assertCurrent?.();
       if (performance.now() >= deadlineAt) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       return values;
     }
@@ -118,7 +124,7 @@ export async function createSystemdCommandQuery(
       // budget; neither the retry nor later legacy calls earn a new deadline.
       const remaining = Math.floor(callDeadline - performance.now());
       if (remaining <= 0) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       legacyOutput = true;
       result = await exec(
@@ -139,13 +145,13 @@ export async function createSystemdCommandQuery(
       assertCurrent?.();
       throw new ServiceInspectionError(reason);
     }
-    if (legacyOutput && (result.termination !== "exit" || performance.now() >= callDeadline)) {
+    if (performance.now() >= (legacyOutput ? callDeadline : deadlineAt)) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (legacyOutput && result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
-    if (
-      managerUid !== undefined &&
-      (result.termination !== "exit" || performance.now() >= deadlineAt)
-    ) {
+    if (managerUid !== undefined && result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     if (result.code !== 0) {

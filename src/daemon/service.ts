@@ -265,7 +265,7 @@ export async function readGatewayServiceState(
       (binding) => {
         const remaining = deadline - performance.now();
         if (remaining <= 0) {
-          throw new Error("Original systemd read admission deadline expired.");
+          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
         }
         return readGatewayServiceStateWithBinding(service, {
           ...args,
@@ -333,14 +333,14 @@ async function readGatewayServiceStateWithBinding(
     systemdReadBinding?.verify();
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      throw new Error("Original systemd read admission deadline expired.");
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
     absent = await service
       .isAbsent({ env, timeoutMs: remaining, strictCommandAbsent: true })
       .catch(() => false);
     systemdReadBinding?.verify();
     if (performance.now() >= deadline) {
-      throw new Error("Original systemd read admission deadline expired.");
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
   }
   if (absent) {

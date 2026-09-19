@@ -2,6 +2,7 @@
 // under live custody; neither mode starts a unit or a bus service.
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
@@ -51,7 +52,10 @@ export async function readLoadedSystemdServiceRuntime(
         : (inspection?.assertReadCurrent ?? inspection?.assertCurrent);
     assertCurrent?.();
     const remaining = deadline - performance.now();
-    if (remaining <= 0 || remainingQueries <= 0) {
+    if (remaining <= 0) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (remainingQueries <= 0) {
       throw unavailable();
     }
     if (binding) {
@@ -65,7 +69,7 @@ export async function readLoadedSystemdServiceRuntime(
       }
       assertCurrent?.();
       if (performance.now() >= deadline) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       return values;
     }
@@ -76,7 +80,10 @@ export async function readLoadedSystemdServiceRuntime(
         ? await execBusctlSystem(queryArgs, callTimeout)
         : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
     assertCurrent?.();
-    if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
+    if (performance.now() >= deadline) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (result.code !== 0 || result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     const values = result.stdout

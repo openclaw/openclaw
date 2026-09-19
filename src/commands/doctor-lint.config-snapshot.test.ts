@@ -3,6 +3,7 @@ import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
+import { parseReleasedDoctorLintReport } from "../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -72,6 +73,11 @@ describe("runDoctorLintCli config snapshot", () => {
       const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
       expect(payload.schemaVersion).toBe(1);
       expect(payload.findings).toEqual([]);
+      expect(parseReleasedDoctorLintReport(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        ok: true,
+        checksRun: 1,
+        findings: [],
+      });
     } finally {
       stdout.mockRestore();
     }

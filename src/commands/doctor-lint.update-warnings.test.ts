@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
+import { parseReleasedDoctorLintReport } from "../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -39,6 +40,10 @@ it.each([false, true])(
         const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
         expect(payload.findings).toEqual([]);
         expect(payload.warnings).toEqual(update ? [finding] : undefined);
+        expect(parseReleasedDoctorLintReport(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          warnings: update ? [finding] : [],
+        });
       } finally {
         stdout.mockRestore();
         clearHealthChecksForTest();

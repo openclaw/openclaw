@@ -1,6 +1,7 @@
 /** Typed private-peer reads through the platform sd-bus ABI, not a D-Bus codec. */
 import { createRequire } from "node:module";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
 
@@ -118,8 +119,11 @@ async function openSystemdConnection(
   const remaining = (until: number) => {
     assertGatewayServiceUpdateCurrent();
     const value = until - performance.now();
-    if (closed || value <= 0) {
+    if (closed) {
       throw unavailable();
+    }
+    if (value <= 0) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
     }
     return Math.max(1, Math.floor(value * 1000));
   };

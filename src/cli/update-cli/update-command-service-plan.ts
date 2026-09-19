@@ -194,6 +194,7 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root?: string;
   state: GatewayServiceState;
   retainedCommand?: boolean;
+  allowIncompleteInspection?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const { state } = params;
   const { command } = state;
@@ -217,9 +218,10 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
       : unavailable();
   }
   if (
-    state.loadState.status === "unknown" ||
-    (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
-    (process.platform === "linux" && observedSystemdManagerUid(state) === undefined)
+    !params.allowIncompleteInspection &&
+    (state.loadState.status === "unknown" ||
+      (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
+      (process.platform === "linux" && observedSystemdManagerUid(state) === undefined))
   ) {
     return unavailable();
   }

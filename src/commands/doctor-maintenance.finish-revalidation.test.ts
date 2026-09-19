@@ -4,9 +4,12 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
+import { ServiceInspectionError } from "../daemon/service-inspection-error.js";
 import type { SystemdServiceReadBinding } from "../daemon/service-types.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -91,6 +94,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   mockSystemAccountHome();
   mocks.stops = 0;
+  vi.mocked(waitForGatewayHealthyRestart).mockClear();
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -105,6 +109,15 @@ type StoppedUnitState =
   | "changed-command"
   | "restart-failed"
   | "slow-admission"
+  | "slow-loadunit-admission"
+  | "inspection-unavailable"
+  | "inspection-error"
+  | "inspection-timeout"
+  | "runtime-timeout"
+  | "runtime-timeout-changed-command"
+  | "runtime-timeout-changed-manager"
+  | "inspection-competing"
+  | "inspection-start-failed"
   | "competing-during-inspection"
   | "lifecycle-contended"
   | "gateway-lifecycle-contended"
@@ -198,10 +211,10 @@ async function runDoctorFinishForStoppedUnit(
 ): Promise<{
   finishError: unknown;
   restartCalls: number;
+  startCalls: number;
   logs: string[];
   takeoverSteps: number;
   runStatus: string | undefined;
-  inspectionElapsedMs: number | undefined;
   unauthorizedRestarts: number;
 }> {
   const home = tempDirs.make("openclaw-doctor-finish-");
@@ -226,7 +239,9 @@ async function runDoctorFinishForStoppedUnit(
     },
     async () => {
       const boundedInspection =
-        scenario === "slow-admission" || scenario === "competing-during-inspection";
+        scenario === "slow-admission" ||
+        scenario === "slow-loadunit-admission" ||
+        scenario === "competing-during-inspection";
       if (boundedInspection) {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
@@ -377,7 +392,8 @@ async function runDoctorFinishForStoppedUnit(
       let stopObserved = false;
       let commandReads = 0;
       let inspectingRuntime = false;
-      let inspectionElapsedMs: number | undefined;
+      let inspectingCommand = false;
+      const loadGuardDelays = [2602, 4770];
       let inspectionClock = 0;
       let competingUpdateStarted = false;
       let otherOwner: ReturnType<typeof tryAcquireExclusiveSqliteCoordinator> | undefined;
@@ -409,12 +425,19 @@ async function runDoctorFinishForStoppedUnit(
         running = true;
         return { outcome: "completed" as const };
       });
+      const start = vi.fn<GatewayService["start"]>(async (args) => {
+        args.assertCurrent?.();
+        if (scenario === "inspection-start-failed") {
+          throw new Error("service manager rejected start");
+        }
+        running = true;
+      });
       mocks.resolveService.mockReturnValue(
         createMockGatewayService({
           isAbsent: async () => false,
           hasInstalledDefinition: async () => true,
           isLoaded: async () => scenario === "retained" || boundedInspection,
-          readCommand: async (_env, opts) => {
+          readCommand: async (env, opts) => {
             await releaseDuringInspection?.();
             if (++commandReads === 2) {
               activateCompetingUpdate?.();
@@ -430,11 +453,51 @@ async function runDoctorFinishForStoppedUnit(
             ) {
               throw new Error("Effective systemd service command could not be inspected.");
             }
-            opts?.loadForInspection?.assertCurrent();
+            if (stopObserved && scenario.startsWith("inspection-")) {
+              if (scenario === "inspection-error") {
+                throw new Error("Effective systemd service command could not be inspected.");
+              }
+              if (scenario === "inspection-competing") {
+                createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } });
+              }
+              throw new ServiceInspectionError(
+                scenario === "inspection-unavailable"
+                  ? "systemd-user-bus-unavailable"
+                  : "systemd-inspection-deadline-exceeded",
+              );
+            }
+            if (stopObserved && scenario === "slow-loadunit-admission") {
+              inspectingCommand = true;
+              const binding = stoppedSystemdBinding(() => {});
+              try {
+                const reader = await createSystemdCommandQuery(
+                  env,
+                  binding.unit,
+                  { ...opts, systemdReadBinding: binding },
+                  () => new Error("systemd inspection deadline expired"),
+                );
+                await reader.query(
+                  [
+                    "call",
+                    binding.destination,
+                    "/org/freedesktop/systemd1",
+                    "org.freedesktop.systemd1.Manager",
+                    "LoadUnit",
+                    "s",
+                    binding.unit,
+                  ],
+                  ["o"],
+                );
+              } finally {
+                inspectingCommand = false;
+              }
+            } else {
+              opts?.loadForInspection?.assertCurrent();
+            }
             return {
               programArguments: [
                 ...command.programArguments,
-                ...(stopObserved && scenario === "changed-command" ? ["--verbose"] : []),
+                ...(stopObserved && scenario.endsWith("changed-command") ? ["--verbose"] : []),
               ],
               environment: { ...command.environment },
             };
@@ -449,8 +512,16 @@ async function runDoctorFinishForStoppedUnit(
                 systemd: { managerUid: 2001 },
               };
             }
+            if (scenario.startsWith("runtime-timeout")) {
+              return {
+                status: "unknown",
+                inspectionReason: "systemd-inspection-deadline-exceeded",
+                systemd: {
+                  managerUid: scenario.endsWith("changed-manager") ? 2002 : 2001,
+                },
+              };
+            }
             if (boundedInspection) {
-              const started = inspectionClock;
               inspectingRuntime = true;
               try {
                 return await readLoadedSystemdServiceRuntime(
@@ -469,7 +540,6 @@ async function runDoctorFinishForStoppedUnit(
                 );
               } finally {
                 inspectingRuntime = false;
-                inspectionElapsedMs = inspectionClock - started;
               }
             }
             opts?.loadForInspection?.assertCurrent();
@@ -496,6 +566,7 @@ async function runDoctorFinishForStoppedUnit(
             }
           }),
           restart,
+          start,
         }),
       );
       const parentOwnsService =
@@ -583,6 +654,9 @@ async function runDoctorFinishForStoppedUnit(
         vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation(
           (pathname) => {
             const prepared = prepareSnapshot(pathname);
+            if (inspectingCommand) {
+              inspectionClock += loadGuardDelays.shift() ?? 0;
+            }
             if (inspectingRuntime) {
               inspectionClock += 100;
             }
@@ -619,11 +693,11 @@ async function runDoctorFinishForStoppedUnit(
       return {
         finishError,
         restartCalls: restart.mock.calls.length,
+        startCalls: start.mock.calls.length,
         logs,
         takeoverSteps:
           savedRun?.steps.filter((step) => step.step === "finalize:repair-takeover").length ?? 0,
         runStatus: savedRun?.status,
-        inspectionElapsedMs,
         unauthorizedRestarts,
       };
     },
@@ -791,13 +865,48 @@ it.each(["retained", "unloaded"] as const)(
   },
 );
 
-it("restores the Gateway within the native inspection budget with slow admission snapshots", async () => {
-  const { finishError, restartCalls, inspectionElapsedMs } =
-    await runDoctorFinishForStoppedUnit("slow-admission");
-  expect(finishError).toBeUndefined();
-  expect(restartCalls).toBe(1);
-  expect(inspectionElapsedMs).toBeGreaterThan(0);
-  expect(inspectionElapsedMs).toBeLessThan(5000);
+it.each(["slow-admission", "slow-loadunit-admission"] as const)(
+  "restores the Gateway without timing out on %s snapshots",
+  async (scenario) => {
+    const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(scenario);
+    expect(finishError).toBeUndefined();
+    expect(restartCalls).toBe(1);
+    expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
+  },
+);
+
+it.each([
+  "inspection-unavailable",
+  "inspection-error",
+  "inspection-timeout",
+  "runtime-timeout",
+] as const)("starts and verifies the Gateway it stopped after %s", async (scenario) => {
+  const result = await runDoctorFinishForStoppedUnit(scenario);
+  expect(result.finishError).toBeUndefined();
+  expect(result.startCalls).toBe(1);
+  expect(result.restartCalls).toBe(0);
+  expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
+  expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+});
+
+it("does not treat an inconclusive inspection as admission to a competing update", async () => {
+  const result = await runDoctorFinishForStoppedUnit("inspection-competing");
+  expect(result.finishError).toMatchObject({
+    message: expect.stringContaining("is still in progress"),
+  });
+  expect(result.startCalls).toBe(0);
+  expect(result.restartCalls).toBe(0);
+});
+
+it("reports both inspection and start failures without claiming recovery", async () => {
+  const result = await runDoctorFinishForStoppedUnit("inspection-start-failed");
+  expect(result.startCalls).toBe(1);
+  expect(result.finishError).toMatchObject({
+    message: expect.stringContaining("service manager rejected start"),
+  });
+  expect(result.logs.join("\n")).toContain("inspection deadline expired");
+  expect(result.logs).not.toContain("Gateway restarted and verified after Doctor repair.");
 });
 
 it("rechecks update admission after passive native inspection before restoring the Gateway", async () => {
@@ -808,16 +917,19 @@ it("rechecks update admission after passive native inspection before restoring t
   expect(restartCalls).toBe(0);
 });
 
-it.each(["changed-manager", "changed-command"] as const)(
-  "refuses activation after %s during repair",
-  async (scenario) => {
-    const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(scenario);
-    expect(finishError).toMatchObject({
-      message: expect.stringMatching(/ownership or manager identity changed/),
-    });
-    expect(restartCalls).toBe(0);
-  },
-);
+it.each([
+  "changed-manager",
+  "changed-command",
+  "runtime-timeout-changed-manager",
+  "runtime-timeout-changed-command",
+] as const)("refuses activation after %s during repair", async (scenario) => {
+  const { finishError, restartCalls, startCalls } = await runDoctorFinishForStoppedUnit(scenario);
+  expect(finishError).toMatchObject({
+    message: expect.stringMatching(/ownership or manager identity changed/),
+  });
+  expect(restartCalls).toBe(0);
+  expect(startCalls).toBe(0);
+});
 
 it.each(["dead-before-restart", "terminal-dead-before-restart"] as const)(
   "restores the Gateway and records one takeover when the owner is %s",

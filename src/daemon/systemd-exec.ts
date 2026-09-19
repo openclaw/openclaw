@@ -62,6 +62,9 @@ export function systemdInspectionError(
   if (result.inspectionReason) {
     return new ServiceInspectionError(result.inspectionReason);
   }
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+  }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");
   }
