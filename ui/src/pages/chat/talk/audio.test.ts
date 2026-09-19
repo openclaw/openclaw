@@ -172,22 +172,47 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();
 
-    expect(queue.play(silentPcmBase64(600), context as unknown as AudioContext, 100)).toBe(
+    // 100 samples/sec: 5,900 samples == 59s (just under the 60s cap), then
+    // 200 more samples (2s) pushes the queued total past the cap.
+    expect(queue.play(silentPcmBase64(5_900), context as unknown as AudioContext, 100)).toBe(
       "queued",
     );
-    expect(queue.play(silentPcmBase64(500), context as unknown as AudioContext, 100)).toBe(
+    expect(queue.play(silentPcmBase64(200), context as unknown as AudioContext, 100)).toBe(
       "overflow",
     );
 
     expect(context.sources).toHaveLength(1);
-    expect(queue.queuedUntil).toBe(6);
+    expect(queue.queuedUntil).toBe(59);
+  });
+
+  it("queues a full multi-sentence reply delivered far faster than real time", () => {
+    // Mirrors the #148658 reproduction: 60 chunks of 250ms PCM16 audio at
+    // 24kHz (15s of speech) arriving in bursts while the AudioContext clock
+    // only advances 25ms per chunk (1.5s of wall-clock time). The reply
+    // must queue in full instead of being cancelled as playback-overflow.
+    const context = new MockOutputAudioContext();
+    const queue = new RealtimeTalkPcmOutputQueue();
+    const sampleRateHz = 24_000;
+    const chunk = silentPcmBase64(Math.round(sampleRateHz * 0.25));
+
+    for (let index = 0; index < 60; index += 1) {
+      expect(queue.play(chunk, context as unknown as AudioContext, sampleRateHz)).toBe("queued");
+      context.currentTime += 0.025;
+    }
+
+    expect(context.sources).toHaveLength(60);
+    expect(queue.queuedUntil).toBeCloseTo(15, 5);
   });
 
   it("rejects an oversized frame before base64 decoding", () => {
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();
 
-    expect(queue.play("!".repeat(3_000), context as unknown as AudioContext, 100)).toBe("overflow");
+    // 24,000 base64 chars decode to 18,000 bytes == 9,000 samples; at
+    // 100Hz that's 90s of audio, comfortably past the 60s queued-seconds cap.
+    expect(queue.play("!".repeat(24_000), context as unknown as AudioContext, 100)).toBe(
+      "overflow",
+    );
     expect(context.sources).toHaveLength(0);
   });
 
