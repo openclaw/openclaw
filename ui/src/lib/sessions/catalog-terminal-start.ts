@@ -5,6 +5,7 @@ import {
   type TerminalGatewayClient,
   type TerminalOpenResult,
 } from "../../components/terminal/terminal-connection.ts";
+import type { TerminalCatalogRelease } from "../../components/terminal/terminal-panel-session-exit.ts";
 import { t } from "../../i18n/index.ts";
 
 type TerminalSink = Parameters<TerminalConnection["open"]>[1];
@@ -12,6 +13,7 @@ type PreparedTerminal = {
   client: TerminalGatewayClient;
   connection: TerminalConnection;
   result: TerminalOpenResult;
+  release: TerminalCatalogRelease;
   bind: (sink: TerminalSink) => void;
   expiry: ReturnType<typeof setTimeout>;
 };
@@ -75,6 +77,11 @@ export async function prepareCatalogTerminal(
       client,
       connection,
       result,
+      release: {
+        agentId: params.agentId,
+        catalogId: params.catalogId,
+        hostId: params.hostId ?? "gateway:local",
+      },
       expiry: setTimeout(() => discard(terminal), 60_000),
       bind: (target) => {
         sink = target;

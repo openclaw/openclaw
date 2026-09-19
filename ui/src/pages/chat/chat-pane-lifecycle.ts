@@ -11,7 +11,6 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
@@ -46,6 +45,7 @@ import {
 import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
+  subscribeBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
@@ -109,7 +109,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
   private composerPresentation: ChatPaneComposerHandoff | undefined;
-
   protected activateComposerPresentation(): void {
     if (this.selected && this.presented) {
       this.composerPresentation?.claim();
@@ -434,11 +433,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft, []);
     }
-    const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
-    window.addEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation);
-    chatState.addCleanup(() =>
-      window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
+    chatState.addCleanup(
+      subscribeBrowserAnnotation((event) => this.receiveBrowserAnnotation(event)),
     );
+    chatState.addCleanup(this.connectCatalogReleaseReconciler());
     const panelToggleEvents = [
       [TERMINAL_PANEL_TOGGLE_EVENT, "terminal", "openclaw-terminal-panel"],
       [BROWSER_PANEL_TOGGLE_EVENT, "browser", "openclaw-browser-panel"],

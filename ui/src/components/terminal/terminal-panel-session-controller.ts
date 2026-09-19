@@ -1,6 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { takePreparedCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   TerminalConnection,
   TerminalOpenTimeoutError,
@@ -11,7 +10,9 @@ import {
 } from "./terminal-connection.ts";
 import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
+import { claimCatalog, restoredSessionGone } from "./terminal-panel-prepared-catalog.ts";
 import { bootTerminalPanelSession } from "./terminal-panel-session-boot.ts";
+import { applyTerminalExit, type TerminalCatalogRelease } from "./terminal-panel-session-exit.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
 import {
   resolveTerminalPanelOwnerSessionKey,
@@ -233,9 +234,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }, release);
   }
 
-  restoreSessions(): Promise<void> {
-    return this.intentQueue.queue({ kind: "restore", agentId: this.host.agentId?.trim() || null });
-  }
+  restoreSessions = (): Promise<void> =>
+    this.intentQueue.queue({ kind: "restore", agentId: this.host.agentId?.trim() || null });
 
   private terminalActionsCanRun(): boolean {
     return (
@@ -366,6 +366,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     operation: TerminalOperation,
     options: {
       awaitFirstOutput?: boolean;
+      catalogRelease?: TerminalCatalogRelease;
       restore?: { batch: TerminalRestoreBatch; sessionId: string };
     } = {},
   ) {
@@ -377,7 +378,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       awaitFirstOutput: options.awaitFirstOutput === true,
       isCurrent: () => this.isTerminalOperationCurrent(operation, options.restore?.batch),
       onReady: (tab) => this.readiness.markReady(tab),
-      onExit: (tab, info) => this.handleExit(tab.id, info),
+      onExit: (tab, info) => this.handleExit(tab.id, info, options.catalogRelease),
     });
     if (!this.isTerminalOperationCurrent(operation, options.restore?.batch)) {
       disposeTerminalController(boot.tab.controller, boot.tab.host);
@@ -457,7 +458,10 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalPanelSessionTab | undefined;
     try {
-      const boot = await this.bootTab(operation, { awaitFirstOutput: Boolean(catalog) });
+      const boot = await this.bootTab(operation, {
+        awaitFirstOutput: Boolean(catalog),
+        catalogRelease: catalog ? { ...catalog, agentId } : undefined,
+      });
       createdTab = boot.tab;
       boot.tab.pendingOpen = action;
       const result = await boot.connection.open(
@@ -521,16 +525,13 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
   ): Promise<boolean> {
     let createdTab: TerminalPanelSessionTab | undefined;
     let createdConnection: TerminalConnection | undefined;
-    const prepared = this.host.page
-      ? takePreparedCatalogTerminal(sessionId, operation.client)
-      : null;
+    const claimed = claimCatalog(this.host.page, sessionId, operation.client, this.connection);
+    const prepared = claimed.prepared;
+    this.connection = claimed.connection;
     try {
-      if (prepared) {
-        this.connection?.dispose();
-        this.connection = prepared.connection;
-      }
       const boot = await this.bootTab(operation, {
         awaitFirstOutput: prepared !== null,
+        catalogRelease: prepared?.release,
         restore: restore && { batch: restore, sessionId },
       });
       createdTab = boot.tab;
@@ -564,14 +565,21 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }
       const sessionGone =
         restore && createdConnection
-          ? await this.confirmRestoredSessionGone(createdConnection, sessionId, restore)
+          ? await restoredSessionGone(createdConnection, sessionId, () =>
+              this.isTerminalOperationCurrent(operation, restore),
+            )
           : false;
       if (!this.isTerminalOperationCurrent(operation, restore, createdTab)) {
         return false;
       }
       if (createdTab && !createdTab.gatewaySessionId && this.tabs.includes(createdTab)) {
         if (sessionGone) {
-          this.markRestoredSessionExited(createdTab, sessionId);
+          createdTab.gatewaySessionId = sessionId;
+          this.handleExit(
+            createdTab.id,
+            { reason: "disconnected", exitCode: null },
+            prepared?.release,
+          );
         } else {
           this.removeTab(createdTab);
         }
@@ -583,27 +591,18 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
   }
 
-  private async confirmRestoredSessionGone(
-    connection: TerminalConnection,
-    sessionId: string,
-    restore: TerminalRestoreBatch,
-  ): Promise<boolean> {
-    // A failed confirmation cannot turn a transport or authorization error
-    // into an authoritative terminal exit.
-    const sessions = await connection.list().catch(() => null);
-    return (
-      sessions !== null &&
-      this.isTerminalOperationCurrent(restore.operation, restore) &&
-      !sessions.some((session) => session.sessionId === sessionId)
-    );
-  }
-
   /** Keeps a dead persisted session visible without replaying bytes from a missing PTY. */
   private async restoreExitedSession(
     sessionId: string,
     restore: TerminalRestoreBatch,
   ): Promise<void> {
+    const client = restore.operation.client;
+    const claimed = claimCatalog(this.host.page, sessionId, client, this.connection);
+    const prepared = claimed.prepared;
+    this.connection = claimed.connection;
     const boot = await this.bootTab(restore.operation, {
+      awaitFirstOutput: prepared !== null,
+      catalogRelease: prepared?.release,
       restore: { batch: restore, sessionId },
     });
     if (!this.isTerminalOperationCurrent(restore.operation, restore) || boot.tab.cancelled) {
@@ -613,17 +612,17 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }
       return;
     }
-    this.markRestoredSessionExited(boot.tab, sessionId);
-  }
-
-  private markRestoredSessionExited(tab: TerminalPanelSessionTab, sessionId: string): void {
-    tab.gatewaySessionId = sessionId;
-    this.handleExit(tab.id, { reason: "disconnected", exitCode: null });
+    boot.tab.gatewaySessionId = sessionId;
+    prepared?.bind(boot.sink);
+    if (boot.tab.status !== "exited") {
+      this.handleExit(boot.tab.id, { reason: "disconnected", exitCode: null }, prepared?.release);
+    }
   }
 
   private handleExit(
     tabId: string,
     info: { reason?: string; exitCode: number | null; signal?: number | null; error?: string },
+    catalogRelease?: TerminalCatalogRelease,
   ): void {
     const tab = this.tabs.find((entry) => entry.id === tabId);
     if (!tab) {
@@ -631,13 +630,9 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
     this.retireRestoredTab(tab);
     this.readiness.stop(tab);
-    delete tab.pendingOpen;
-    tab.status = "exited";
-    tab.exitReason = info.reason;
-    tab.exitCode = info.exitCode;
-    tab.exitSignal = info.signal;
-    if (info.error?.trim()) {
-      this.setError(formatUiExternalText(info.error));
+    const error = applyTerminalExit(tab, info, catalogRelease);
+    if (error) {
+      this.setError(error);
     }
     // The connection drops its own sink on exit delivery, so no release() here —
     // the session id may not be recorded yet when an early exit is replayed.

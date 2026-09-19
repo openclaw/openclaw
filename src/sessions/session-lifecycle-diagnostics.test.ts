@@ -34,6 +34,13 @@ let directory: string;
 let logFile: string;
 let diagnosticsWereEnabled: boolean;
 
+function activeLifecycleDiagnosticWatchers(): number {
+  const value = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.sessionLifecycleDiagnostics")
+  ];
+  return isRecord(value) && typeof value.watchers === "number" ? value.watchers : 0;
+}
+
 async function records(message: string): Promise<Record<string, unknown>[]> {
   await flushLogger();
   return fs
@@ -108,13 +115,21 @@ beforeEach(() => {
 
 afterEach(async () => {
   await flushLogger();
-  expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-  setLoggerOverride(null);
-  resetLogger();
-  fs.rmSync(directory, { recursive: true, force: true });
+  const watcherCount = activeLifecycleDiagnosticWatchers();
+  try {
+    // Vitest reuses workers across files, so its global fake-timer count can
+    // include an unrelated timer. The subsystem-owned counter proves that
+    // every lifecycle diagnostic timer was retired.
+    expect(watcherCount).toBe(0);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    setLoggerOverride(null);
+    resetLogger();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {

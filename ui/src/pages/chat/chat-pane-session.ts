@@ -29,6 +29,8 @@ import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
+import { loadCatalogRefreshPages, reconcileCatalogRefresh } from "./chat-pane-catalog-refresh.ts";
+import { ChatCatalogReleaseReconciler } from "./chat-pane-catalog-release.ts";
 import {
   CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS,
   catalogRawResult,
@@ -49,6 +51,25 @@ import { scheduleChatScroll } from "./scroll.ts";
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
+  private catalogLatestPageSize = 0;
+  private readonly catalogReleaseReconciler = new ChatCatalogReleaseReconciler({
+    current: () => {
+      const state = this.state;
+      return state?.client
+        ? {
+            connected: state.connected,
+            client: state.client,
+            sessionKey: this.sessionKey,
+            agentId: resolveChatAgentId(state),
+          }
+        : null;
+    },
+    load: (key) => this.loadCatalogSession(key, false, true),
+  });
+
+  protected connectCatalogReleaseReconciler(): () => void {
+    return this.catalogReleaseReconciler.connect();
+  }
 
   protected secondarySessionReadsReady(explicit = false): boolean {
     const state = this.state;
@@ -395,6 +416,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
     this.catalogRequestedSessionKey = this.sessionKey;
     this.catalogMessages = [];
+    this.catalogLatestPageSize = 0;
     this.catalogCursor = undefined;
     this.catalogSession = null;
     this.catalogHost = null;
@@ -500,7 +522,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return [...uniqueMessages, ...current];
   }
 
-  protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
+  protected async loadCatalogSession(
+    key: CatalogSessionKey,
+    older: boolean,
+    preserveHistory = false,
+  ): Promise<boolean> {
     const scope = this.captureConnectionScope();
     if (!scope) {
       return false;
@@ -509,15 +535,23 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (older && !this.catalogCursor) {
       return false;
     }
+    if (preserveHistory && this.catalogLoading) {
+      return false;
+    }
     const agentId = resolveChatAgentId(state);
-    const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
+    const generation =
+      older || preserveHistory ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
+    const refreshGeneration = preserveHistory
+      ? ++this.catalogRefreshGeneration
+      : this.catalogRefreshGeneration;
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) &&
       generation === this.catalogLoadGeneration &&
+      (!preserveHistory || refreshGeneration === this.catalogRefreshGeneration) &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
-    if (!older) {
+    if (!older && !preserveHistory) {
       this.catalogLoading = true;
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
@@ -539,7 +573,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (requestedOlderCursor) {
         this.olderCursorsSeen.add(requestedOlderCursor);
       }
-      const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+      const readParams = {
         agentId,
         catalogId: key.catalogId,
         hostId: key.hostId,
@@ -548,16 +582,48 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           ? { sourceHomeId: this.catalogSession.sourceHomeId }
           : {}),
         limit: 50,
+      };
+      const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+        ...readParams,
         ...(older && this.catalogCursor ? { cursor: this.catalogCursor } : {}),
       });
       if (!isCurrent()) {
         return false;
       }
-      const messages = page.items
-        .toReversed()
-        .map((item) => this.catalogItemMessage(item))
-        .filter((message) => message !== null);
-      const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
+      const project = (readPage: SessionsCatalogReadResult) =>
+        readPage.items
+          .toReversed()
+          .map((item) => this.catalogItemMessage(item))
+          .filter((message) => message !== null);
+      const latestPageMessages = project(page);
+      const refresh = preserveHistory
+        ? await loadCatalogRefreshPages({
+            current: this.catalogMessages,
+            firstPage: page,
+            firstPageMessages: latestPageMessages,
+            isCurrent,
+            project,
+            read: (cursor) =>
+              client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
+                ...readParams,
+                cursor,
+              }),
+          })
+        : null;
+      if (!isCurrent() || (preserveHistory && !refresh)) {
+        return false;
+      }
+      const messages = refresh?.messages ?? latestPageMessages;
+      const nextMessages = older
+        ? this.prependUniqueCatalogMessages(messages)
+        : preserveHistory
+          ? reconcileCatalogRefresh(
+              this.catalogMessages,
+              messages,
+              this.catalogLatestPageSize,
+              refresh?.complete ?? false,
+            )
+          : messages;
       const addedMessages = nextMessages.length > this.catalogMessages.length;
       // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
       // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
@@ -570,9 +636,16 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           page.nextCursor === requestedOlderCursor ||
           this.olderCursorsSeen.has(page.nextCursor));
       this.catalogMessages = nextMessages;
-      this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
+      if (preserveHistory && refresh?.complete) {
+        this.catalogCursor = undefined;
+      } else if (!preserveHistory) {
+        this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
+      }
+      if (!older) {
+        this.catalogLatestPageSize = latestPageMessages.length;
+      }
       state.lastError = null;
-      scheduleChatScroll(state, !older);
+      scheduleChatScroll(state, !older && !preserveHistory);
       return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
@@ -581,7 +654,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return false;
     } finally {
       if (isCurrent()) {
-        if (!older) {
+        if (!older && !preserveHistory) {
           this.catalogLoading = false;
           state.chatLoading = false;
         }

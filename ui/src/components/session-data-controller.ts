@@ -11,7 +11,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
-import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.ts";
 import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -27,7 +26,6 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
-  applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogChanged as applySessionCatalogChangedToData,
@@ -52,6 +50,7 @@ import {
   subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-controller-events.ts";
+import { SessionCatalogReleaseReconciler } from "./session-data-controller-release.ts";
 import { SessionDataScrollController } from "./session-data-scroll-controller.ts";
 import { SessionLineageController } from "./session-lineage-controller.ts";
 
@@ -103,6 +102,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private readonly childSessionQueries = new Map<string, ChildSessionQuery>();
   private cachedSessionResult: SessionsListResult | null = null;
   private stopCatalogBrowserEvents: (() => void) | null = null;
+  private readonly catalogReleaseReconciler = new SessionCatalogReleaseReconciler(this);
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayConnectionRevision = 0;
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -194,7 +194,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   hostConnected(): void {
     this.subscriptions.hostConnected();
     this.stopCatalogBrowserEvents = subscribeSessionCatalogBrowserEvents(
-      this.handleCatalogSessionContinued as EventListener,
+      this.catalogReleaseReconciler.handleContinued as EventListener,
+      this.catalogReleaseReconciler.handle,
       this.handleSessionCatalogPageActivation,
     );
   }
@@ -246,6 +247,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   retireSessionCatalogData(): void {
+    this.catalogReleaseReconciler.clear();
     this.sessionScopeGeneration += 1;
     this.pendingCatalogArchives.clear();
     this.sessionsLoading = false;
@@ -324,12 +326,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   handleSessionCatalogChanged(payload: unknown): void {
     applySessionCatalogChangedToData(this, payload);
   }
-
-  private readonly handleCatalogSessionContinued = (
-    event: CustomEvent<CatalogSessionContinuedDetail>,
-  ) => {
-    applySessionCatalogContinuation(this, event.detail);
-  };
 
   private readonly handleSessionCatalogPageActivation = () => {
     scheduleSessionCatalogRefresh(this);
