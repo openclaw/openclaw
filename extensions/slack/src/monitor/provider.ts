@@ -1,6 +1,6 @@
 // Slack provider module implements model/runtime integration.
 import type { RequestListener } from "node:http";
-import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
+import { type WebClientOptions, WebClient } from "@slack/web-api";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -22,6 +22,7 @@ import {
   resolveSlackLookupClientOptions,
   resolveSlackProxyDispatcher,
   resolveSlackWebClientOptions,
+  withSlackLifecycleSignal,
 } from "../client-options.js";
 import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
@@ -44,6 +45,12 @@ import {
 } from "./enterprise-install.js";
 import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
 import { createSlackHttpRequestHandler } from "./http-handler.js";
+import {
+  adoptSlackIdentity,
+  applySlackInstallationIdentity,
+  createSlackIdentityRecovery,
+  resolveSlackRuntimeIdentity,
+} from "./identity-recovery.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
@@ -76,17 +83,6 @@ import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
 
-function withSlackPresenceLifecycleSignal(
-  fetchImpl: FetchFunction,
-  lifecycleSignal: AbortSignal,
-): FetchFunction {
-  return async (input, init) =>
-    await fetchImpl(input, {
-      ...init,
-      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
-    });
-}
-
 async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
     const slackBoltModule = await import("@slack/bolt");
@@ -99,65 +95,6 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
 }
 
 const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));
-
-type SlackRuntimeIdentity = {
-  botUserId: string;
-  botId?: string;
-};
-
-function resolveSlackRuntimeIdentity(params: {
-  identity: "bot" | "user";
-  botUserId?: unknown;
-  botId?: unknown;
-}): SlackRuntimeIdentity | undefined {
-  // User identity has no bot_id; its human id is both the mention target and self-send dedupe
-  // source. Bot identity stays bot_id-gated so token mismatches fail closed.
-  const botUserId = normalizeOptionalString(params.botUserId);
-  const botId = normalizeOptionalString(params.botId);
-  if (!botUserId || (params.identity === "bot" && !botId)) {
-    return undefined;
-  }
-  return {
-    botUserId,
-    ...(botId ? { botId } : {}),
-  };
-}
-
-function applySlackInstallationIdentity(
-  ctx: SlackMonitorContext,
-  identity: SlackInstallationIdentity,
-) {
-  ctx.installationIdentity = identity;
-  ctx.teamId = identity.kind === "workspace" ? identity.teamId : "";
-  ctx.apiAppId = identity.kind === "degraded" ? "" : (identity.apiAppId ?? "");
-}
-
-function adoptSlackIdentity(params: {
-  ctx: SlackMonitorContext;
-  identity: "bot" | "user";
-  installationIdentity: SlackInstallationIdentity;
-  botUserId?: unknown;
-  botId?: unknown;
-}): boolean {
-  if (
-    params.ctx.identityHealth.lifecycle !== "blocked" ||
-    params.installationIdentity.kind === "degraded"
-  ) {
-    return false;
-  }
-  const resolved = resolveSlackRuntimeIdentity(params);
-  if (!resolved) {
-    return false;
-  }
-  applySlackInstallationIdentity(params.ctx, params.installationIdentity);
-  params.ctx.botUserId = resolved.botUserId;
-  params.ctx.botId = resolved.botId;
-  params.ctx.identityHealth = resolveSlackIdentityHealth({
-    installationIdentity: params.installationIdentity,
-    botUserId: resolved.botUserId,
-  });
-  return true;
-}
 
 function formatSlackSocketReconnectMessage(params: {
   event: string;
@@ -320,7 +257,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         return;
       }
       const recovered =
-        current.identityHealth.lifecycle === "blocked" ? await recoverSlackIdentity() : false;
+        current.identityHealth.lifecycle === "blocked"
+          ? (await identityRecovery.recover()) === "adopted"
+          : false;
       const contextTeamId = normalizeOptionalString(identity.teamId);
       const contextEnterpriseId = normalizeOptionalString(identity.enterpriseId);
       const contextInstallationIdentity =
@@ -539,7 +478,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
       slackDispatcher,
     );
-    options.fetch = withSlackPresenceLifecycleSignal(
+    options.fetch = withSlackLifecycleSignal(
       options.fetch ?? globalThis.fetch,
       presenceRequestAbort.signal,
     );
@@ -640,53 +579,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   }
 
-  let identityRecoveryPromise: Promise<boolean> | undefined;
-  async function recoverSlackIdentity() {
-    if (ctx.identityHealth.lifecycle !== "blocked") {
-      return false;
-    }
-    if (identityRecoveryPromise) {
-      return await identityRecoveryPromise;
-    }
-    const recovery = (async () => {
-      try {
-        const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
-        const recoveredInstallationIdentity = resolveSlackInstallationIdentity({
-          auth,
-          transportApiAppId: expectedApiAppIdFromAppToken,
-        });
-        assertSlackInstallationPolicy(recoveredInstallationIdentity);
-        const adopted = adoptSlackIdentity({
-          ctx,
-          identity: account.identity,
-          installationIdentity: recoveredInstallationIdentity,
-          botUserId: auth.user_id,
-          botId: (auth as { bot_id?: string }).bot_id,
-        });
-        if (!adopted) {
-          return false;
-        }
-        installationState.update(recoveredInstallationIdentity.kind);
-        await installSlackRuntimeForIdentity(recoveredInstallationIdentity);
-        return true;
-      } catch (err) {
-        ctx.identityHealth = {
-          lifecycle: "blocked",
-          lastError: formatUnknownError(err),
-        };
-        return false;
-      }
-    })();
-    identityRecoveryPromise = recovery;
-    try {
-      return await recovery;
-    } finally {
-      if (identityRecoveryPromise === recovery) {
-        identityRecoveryPromise = undefined;
-      }
-    }
-  }
-
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
       void gracefulStop();
@@ -697,6 +589,26 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     account.accountId,
     installationIdentity.kind,
   );
+
+  // Re-resolves identity after a failed startup auth.test. Created here because
+  // recovery updates the installation state registered just above.
+  const identityRecovery = createSlackIdentityRecovery({
+    ctx,
+    accountId: account.accountId,
+    identity: account.identity,
+    token,
+    clientOptions,
+    transportApiAppId: expectedApiAppIdFromAppToken,
+    runtime,
+    ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+    assertInstallationPolicy: assertSlackInstallationPolicy,
+    onAdopted: async (identity) => {
+      installationState.update(identity.kind);
+      await installSlackRuntimeForIdentity(identity);
+    },
+    publishReadyStatus: () => publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth),
+  });
+  identityRecovery.startBackoffLoop();
 
   try {
     await installSlackRuntimeForIdentity(installationIdentity);
@@ -723,7 +635,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             abortSignal: opts.abortSignal,
             onStarted: async () => {
               reconnectAttempts = 0;
-              await recoverSlackIdentity();
+              await identityRecovery.recover();
               publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
@@ -833,6 +745,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    identityRecovery.dispose();
     installationState.release();
     runtimeStarted = false;
     presenceRequestAbort?.abort();

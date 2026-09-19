@@ -147,6 +147,20 @@ function applySlackRequestAuthority(
   };
 }
 
+// Binds a client's requests to a provider-owned lifecycle: the Slack SDK only
+// enforces its own per-request timeout, so teardown needs this signal to cancel
+// an attempt that is already in flight.
+export function withSlackLifecycleSignal(
+  fetchImpl: FetchFunction,
+  lifecycleSignal: AbortSignal,
+): FetchFunction {
+  return async (input, init) =>
+    await fetchImpl(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
+    });
+}
+
 export function resolveSlackWebClientOptions(
   options: WebClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
