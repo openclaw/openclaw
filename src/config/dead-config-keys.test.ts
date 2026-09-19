@@ -252,23 +252,9 @@ describe("dead config keys", () => {
     expectUnknownKey({ config, path: "secrets.providers.legacy", key });
   });
 
+  // Discord and Slack now accept and normalize legacy nested DM aliases
+  // (dm.policy / dm.allowFrom) rather than rejecting them. See #152564.
   it.each([
-    ["Discord root", "discord", { dm: { policy: "pairing" } }, "channels.discord.dm", "policy"],
-    [
-      "Discord account",
-      "discord",
-      { accounts: { work: { dm: { allowFrom: ["1"] } } } },
-      "channels.discord.accounts.work.dm",
-      "allowFrom",
-    ],
-    ["Slack root", "slack", { dm: { policy: "pairing" } }, "channels.slack.dm", "policy"],
-    [
-      "Slack account",
-      "slack",
-      { accounts: { work: { dm: { allowFrom: ["U1"] } } } },
-      "channels.slack.accounts.work.dm",
-      "allowFrom",
-    ],
     [
       "Google Chat root",
       "googlechat",

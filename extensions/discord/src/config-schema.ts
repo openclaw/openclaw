@@ -7,6 +7,8 @@ import {
   buildChannelReactionShape,
   buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
+  AllowFromListSchema,
+  DmPolicySchema,
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
@@ -96,6 +98,8 @@ const DiscordDmSchema = z
     enabled: z.boolean().optional(),
     groupEnabled: z.boolean().optional(),
     groupChannels: DiscordIdListSchema.optional(),
+    policy: DmPolicySchema.optional(),
+    allowFrom: AllowFromListSchema,
   })
   .strict();
 

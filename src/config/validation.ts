@@ -1,6 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 // Owns core preparation and sync/async orchestration for config validation.
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { normalizeLegacyDmAliases } from "./channel-compat-normalization.js";
 import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -138,6 +140,50 @@ type PreparedConfigWithPlugins = {
   parsedConfig: OpenClawConfig;
 };
 
+const CHANNELS_WITH_LEGACY_DM_ALIASES = new Set(["discord", "slack"]);
+
+function normalizeChannelDmAliasesInPlace(config: unknown): void {
+  const channels = asNullableRecord(asNullableRecord(config)?.channels);
+  if (!channels) {
+    return;
+  }
+  for (const [channelId, raw] of Object.entries(channels)) {
+    if (!CHANNELS_WITH_LEGACY_DM_ALIASES.has(channelId)) {
+      continue;
+    }
+    const entry = asNullableRecord(raw);
+    if (!entry) {
+      continue;
+    }
+    const normalized = normalizeLegacyDmAliases({
+      entry,
+      pathPrefix: `channels.${channelId}`,
+      changes: [],
+    });
+    if (normalized.changed) {
+      channels[channelId] = normalized.entry;
+    }
+    const accounts = asNullableRecord(normalized.entry.accounts);
+    if (!accounts) {
+      continue;
+    }
+    for (const [accountId, rawAccount] of Object.entries(accounts)) {
+      const account = asNullableRecord(rawAccount);
+      if (!account) {
+        continue;
+      }
+      const accountNormalized = normalizeLegacyDmAliases({
+        entry: account,
+        pathPrefix: `channels.${channelId}.accounts.${accountId}`,
+        changes: [],
+      });
+      if (accountNormalized.changed) {
+        accounts[accountId] = accountNormalized.entry;
+      }
+    }
+  }
+}
+
 function prepareConfigObjectWithPlugins(
   raw: unknown,
   params: ValidateConfigWithPluginsParams | undefined,
@@ -146,6 +192,7 @@ function prepareConfigObjectWithPlugins(
     omitDeferredPluginMigrationConfig(raw, params?.deferredPluginMigrations),
   );
   const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
+  normalizeChannelDmAliasesInPlace(contextBudgetConfig);
   const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
     env: params?.env,
     homedir: params?.homedir,
