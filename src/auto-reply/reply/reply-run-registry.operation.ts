@@ -14,6 +14,7 @@ import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
+  ReplyRunDisplacedToolAuthorityError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyOperation,
@@ -374,7 +375,7 @@ export function createReplyOperation(params: {
         !toolAuthoritySnapshot ||
         replyRunState.activeRunsByKey.get(currentSessionKey) !== operation
       ) {
-        throw new Error("Reply operation has no active tool authority snapshot");
+        throw new ReplyRunDisplacedToolAuthorityError(currentSessionKey);
       }
       const provider = normalizeOptionalString(route.provider);
       const model = normalizeOptionalString(route.model);

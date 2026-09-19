@@ -54,6 +54,7 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+  "ReplyRunDisplacedToolAuthorityError",
 ]);
 
 // Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
