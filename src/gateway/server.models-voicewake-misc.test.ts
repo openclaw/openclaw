@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -39,6 +40,8 @@ let port: number;
 afterAll(async () => {
   ws.close();
   await server.close();
+  // Minimal test gateways skip the skills close hook; skills.status watchers stay open otherwise.
+  await closeSkillsWatchers(true);
 });
 
 beforeAll(async () => {
