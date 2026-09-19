@@ -25,9 +25,13 @@ TXT hints on every beacon: `role` (gateway role hint), `transport` (transport hi
 openclaw gateway discover
 ```
 
+<a id="param-timeout"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="2000">
   Per-command timeout (browse/resolve).
 </ParamField>
+<a id="param-json"></a>
+
 <ParamField path="--json" type="boolean">
   Machine-readable output (also disables styling/spinner).
 </ParamField>
