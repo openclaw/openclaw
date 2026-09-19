@@ -53,6 +53,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
+import { registerDoctorWindowsLauncherTests } from "./doctor-health.windows-launcher.test-support.js";
 
 const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]> = {
   status: "advisory",
@@ -85,6 +86,8 @@ describe("runDoctorHealthFlow", () => {
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
+
+  registerDoctorWindowsLauncherTests(runDoctorHealthFlow);
 
   it.each(support.doctorServiceInspectionCases)(
     "admits state repair without claiming unavailable service authority: $kind (update=$updateParent)",

@@ -295,7 +295,28 @@ describe("check-workflows", () => {
     expect(native).not.toBe(probe);
     expect(native.if).toBe("${{ inputs.run_windows_ci }}");
     expect(native["runs-on"]).toBe("windows-2025");
-    expect(probe.if).toBeUndefined();
+    // Supplier proofs own separate opt-in runners; the default and launcher paths still run both proofs.
+    expect(workflow.on.workflow_dispatch.inputs.run_winget_acceptance).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(probe.if).toBe(
+      "${{ !inputs.run_winget_acceptance && !inputs.run_portable_node_recovery }}",
+    );
+    expect(workflow.jobs["winget-acceptance"]?.if).toBe("${{ inputs.run_winget_acceptance }}");
+    expect(workflow.on.workflow_dispatch.inputs.run_portable_node_recovery).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const portable = workflow.jobs["portable-node-recovery"]!;
+    expect(portable.if).toBe("${{ inputs.run_portable_node_recovery }}");
+    expect(portable["runs-on"]).toBe("windows-2025");
+    expect(
+      portable.steps.find((step) => step.name === "Checkout immutable proof tooling")?.with?.ref,
+    ).toBe("${{ github.workflow_sha }}");
+    expect(
+      portable.steps.find((step) => step.name === "Checkout exact installer candidate")?.with?.ref,
+    ).toBe("${{ inputs.target_ref }}");
     expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
     for (const job of [probe, native]) {
       expect(job.needs).toBeUndefined();
@@ -356,7 +377,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || (inputs.run_windows_launcher_integration && '24.20.0' || '24.x') }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
