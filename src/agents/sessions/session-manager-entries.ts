@@ -331,15 +331,42 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         const anchor = this.persistenceTarget
           ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
           : undefined;
-        if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
+        if (anchor) {
+          return {
+            entryId: current.id,
+            message: current.message,
+            anchor,
+            appended: false,
+          };
         }
-        return {
-          entryId: current.id,
-          message: current.message,
-          ...(anchor ? { anchor } : {}),
-          appended: false,
-        };
+        // The anchor reader returns undefined for dirty projections (side
+        // appends) and for entries absent from the active path (genuinely
+        // inactive users). Reload the canonical transcript and revalidate
+        // the current turn using the production turn resolver — mirroring
+        // the SQLite adoption path. If the cached keyed user is still the
+        // current turn entry after reload (the side-append artifact was
+        // context metadata that the resolver skips), the missing anchor is
+        // a harmless dirty-index artifact and the dedup hit is valid. If
+        // the turn has completed (an assistant reply displaced the user) or
+        // another user displaced the cached one, fall through to the normal
+        // append path.
+        if (this.persistenceTarget) {
+          this.reloadPersistedTranscript();
+          const revalidatedTurnId = this.resolveCurrentTurnEntryId();
+          if (revalidatedTurnId === current.id) {
+            return {
+              entryId: current.id,
+              message: current.message,
+              appended: false,
+            };
+          }
+        } else {
+          return {
+            entryId: current.id,
+            message: current.message,
+            appended: false,
+          };
+        }
       }
     }
     const entry: SessionMessageEntry = {

@@ -612,12 +612,14 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (idempotencyKey && options?.idempotencyLookup !== "caller-checked") {
         // Ingress can commit the keyed user after this manager loaded. The
         // caller reloads and adopts only when that canonical row is still active.
-        if (!result.anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
-        }
+        // When the transcript projection index is momentarily dirty (e.g. after
+        // a side-append from conversation-turn-capture), the anchor read returns
+        // undefined. Adopt the canonical message ID without an anchor — the
+        // caller reloads the transcript and validates the current turn, which
+        // re-resolves the projection (#152511).
         return {
           adoptedMessageId: result.messageId,
-          anchor: result.anchor,
+          ...(result.anchor ? { anchor: result.anchor } : {}),
           appended: result.appended,
           effectiveParentId: result.effectiveParentId ?? null,
         };
