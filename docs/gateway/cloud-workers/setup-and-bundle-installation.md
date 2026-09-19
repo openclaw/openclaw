@@ -26,9 +26,9 @@ exit $LASTEXITCODE
 
 Use a Crabbox bootstrap or image that supplies a supported Node.js release and npm on the machine `PATH`, with npm's CLI installed beside `node.exe` under `node_modules/npm`. OpenClaw fails enrollment with a prerequisite message if Node or that npm installation is missing; it does not install Node. npm installs the node runtime archive, and OpenClaw extracts worker bundles with its Node archive library.
 
-The guest must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
+Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
-Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning.
+Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning. Desktop-enabled Windows workers instead use Crabbox's interactive desktop service and also bind the account SID and interactive session; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 
 ## Bundle installation
 

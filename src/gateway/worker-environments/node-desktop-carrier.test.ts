@@ -41,11 +41,7 @@ function nodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
 }
 
 function fakeBroker() {
-  type AttachedStream = {
-    auth: "vnc-password" | "ard-account";
-    vncPassword: string;
-    stream: PassThrough;
-  };
+  type AttachedStream = Awaited<ReturnType<NodeDesktopStreamBroker["mint"]>["attached"]>;
   const attachments: Array<ReturnType<typeof deferred<AttachedStream>>> = [];
   const streams: PassThrough[] = [];
   const broker = {
@@ -64,14 +60,19 @@ function fakeBroker() {
   } as unknown as NodeDesktopStreamBroker;
   return {
     broker,
-    attachNext(auth: "vnc-password" | "ard-account" = "vnc-password") {
+    attachNext(
+      metadata: Omit<AttachedStream, "stream"> = {
+        auth: "vnc-password",
+        vncPassword: "worker-password",
+      },
+    ) {
       const attached = attachments.shift();
       if (!attached) {
         throw new Error("expected pending desktop attach");
       }
       const stream = new PassThrough();
       streams.push(stream);
-      attached.resolve({ auth, vncPassword: "worker-password", stream });
+      attached.resolve({ ...metadata, stream });
       return stream;
     },
     streams,
@@ -317,9 +318,9 @@ describe("worker node desktop carrier", () => {
     }
   });
 
-  it.each(["vnc-password", "ard-account"] as const)(
-    "observes an exact durable node desktop with %s preauthentication",
-    async (auth) => {
+  it.each([undefined, "worker"])(
+    "observes an exact durable node desktop with lease username %s",
+    async (username) => {
       const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
       const client = { invalidated: false };
       const requester = {
@@ -327,8 +328,8 @@ describe("worker node desktop carrier", () => {
         isCurrent: () => !client.invalidated,
       };
       const record = support.seedReadyNodeDesktop("worker-node-desktop-observe");
-      if (auth === "ard-account") {
-        record.desktop = { ...support.DESKTOP, username: "desktop-user" };
+      if (username) {
+        record.desktop = { ...record.desktop!, username };
       }
       let nowMs = 1_000;
       vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -347,7 +348,13 @@ describe("worker node desktop carrier", () => {
       const observing = carrier.observe({ record, control: false, requester });
       await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
       nowMs = 50_000;
-      streamed.attachNext(auth);
+      const credentials = username
+        ? { username, password: "worker-password" }
+        : { password: "worker-password" };
+      streamed.attachNext({
+        auth: username ? "ard-account" : "vnc-password",
+        vncPassword: "worker-password",
+      });
 
       await expect(observing).resolves.toMatchObject({
         transport: "rfb",
@@ -356,12 +363,10 @@ describe("worker node desktop carrier", () => {
         control: false,
       });
       expect(await observing).not.toHaveProperty("vncPassword");
+      expect(await observing).not.toHaveProperty("preauth");
       expect(mint.mock.calls[0]?.[0].preauth).toEqual({
-        auth,
-        credentials: {
-          password: "worker-password",
-          ...(auth === "ard-account" ? { username: "desktop-user" } : {}),
-        },
+        auth: username ? "ard-account" : "vnc-password",
+        credentials,
       });
       const mintedRequester = mint.mock.calls[0]?.[0].requester;
       expect(mintedRequester).toBe(requester);
@@ -375,8 +380,8 @@ describe("worker node desktop carrier", () => {
             ticket: "a".repeat(48),
             attachPath: `/node-desktop/attach?ticket=${"a".repeat(48)}`,
             port: 5900,
-            ...(auth === "ard-account" ? { username: "desktop-user" } : {}),
             passwordFilePath: "/var/lib/crabbox/vnc.password",
+            ...(username ? { username } : {}),
           },
           timeoutMs: 0,
         }),
@@ -388,6 +393,30 @@ describe("worker node desktop carrier", () => {
       expect(streamed.streams[0]?.destroyed).toBe(true);
     },
   );
+
+  it.each([
+    { auth: "ard-account" as const },
+    { auth: "vnc-password" as const, vncPassword: "secret" },
+  ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
+    const record = support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
+    record.desktop = { ...record.desktop!, username: "worker" };
+    const transport = pendingTransport({
+      proof: nodeProof(record.nodeDeviceId!),
+      isProofCurrent: () => true,
+    });
+    const streamed = fakeBroker();
+    const carrier = createWorkerNodeDesktopCarrier({
+      store: { get: () => record },
+      desktopRegistry: createDesktopSessionRegistry(),
+    });
+    carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+    const observing = carrier.observe({ record, control: false });
+    await support.waitForFast(() => expect(transport.invoke).toHaveBeenCalledOnce());
+    const stream = streamed.attachNext(metadata);
+    await expect(observing).rejects.toThrow("managed authentication");
+    expect(stream.destroyed).toBe(true);
+    await carrier.stopAll();
+  });
 
   it("cancels and joins an admitted app launch before its first microtask", async () => {
     const record = support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");

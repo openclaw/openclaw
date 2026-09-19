@@ -24,6 +24,8 @@ const replayError =
   "Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker";
 
 type ReplayOptions = {
+  desktop?: boolean;
+  currentSession?: { sessionId: number; userSid: string };
   processEntry?: Record<string, unknown>;
   processOutput?: string;
   launchRecord?: Record<string, unknown>;
@@ -37,6 +39,7 @@ type ReplayOptions = {
 async function replay(options: ReplayOptions = {}) {
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
+    desktop: options.desktop,
     target: "windows/normal",
     enrollment: {
       mode: "connect",
@@ -60,6 +63,9 @@ async function replay(options: ReplayOptions = {}) {
   const fs = {
     mkdirSync: vi.fn(),
     chmodSync: vi.fn(),
+    mkdtempSync: () => path.win32.join(home, "desktop-probe"),
+    writeFileSync: vi.fn(),
+    rmSync: vi.fn(),
     existsSync: (file: string) =>
       file === path.win32.join(stateDir, "node.pid") ||
       (file === launcher && !options.missingLauncher),
@@ -79,6 +85,7 @@ async function replay(options: ReplayOptions = {}) {
             runtimeDir,
             stateDir,
             cli,
+            ...(options.desktop ? { sessionId: 2, userSid: "S-1-5-21-1001" } : {}),
             ...options.launchRecord,
           })
         );
@@ -99,6 +106,16 @@ async function replay(options: ReplayOptions = {}) {
     throw new Error("Replay must not launch another node");
   });
   const spawnSync = vi.fn((binary: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
+    if (options.desktop && args.includes("-File")) {
+      expect(processFixture.env).not.toHaveProperty("CRABBOX_WORKER_BOOTSTRAP_TOKEN");
+      expect(processFixture.env).not.toHaveProperty("CRABBOX_WORKER_SETUP_CODE");
+      return {
+        status: 0,
+        stdout: JSON.stringify(
+          options.currentSession ?? { sessionId: 2, userSid: "S-1-5-21-1001" },
+        ),
+      };
+    }
     expect(binary).toBe("powershell.exe");
     expect(args).toContain("-NoProfile");
     expect(args).toContain("-NonInteractive");
@@ -116,6 +133,7 @@ async function replay(options: ReplayOptions = {}) {
           startTime,
           executablePath: node,
           commandLine: `"${node}" "${cli}" connect --ephemeral`,
+          ...(options.desktop ? { sessionId: 2, userSid: "S-1-5-21-1001" } : {}),
           ...options.processEntry,
         }),
     };
@@ -132,7 +150,10 @@ async function replay(options: ReplayOptions = {}) {
         return path.win32;
       }
       if (name === "node:os") {
-        return { homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home) };
+        return {
+          homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home),
+          tmpdir: () => path.win32.join(home, "Temp"),
+        };
       }
       if (name === "node:child_process") {
         return { spawn, spawnSync };
@@ -212,5 +233,29 @@ describe("native Windows node enrollment replay", () => {
     });
     expect(result.spawnSync).not.toHaveBeenCalled();
     expect(result.fs.mkdirSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("native Windows desktop enrollment replay", () => {
+  it("reuses only the node in the current interactive account and session", async () => {
+    expect(await replay({ desktop: true, missingLauncher: true })).toMatchObject({ code: 0 });
+  });
+
+  it.each([
+    { name: "Session 0 node", processEntry: { sessionId: 0 } },
+    { name: "a different process session", processEntry: { sessionId: 3 } },
+    { name: "a different process account", processEntry: { userSid: "S-1-5-21-2001" } },
+    { name: "stale recorded session", launchRecord: { sessionId: 3 } },
+    { name: "stale recorded account", launchRecord: { userSid: "S-1-5-21-2001" } },
+    { name: "changed active session", currentSession: { sessionId: 3, userSid: "S-1-5-21-1001" } },
+    {
+      name: "failed active-session lookup",
+      currentSession: { sessionId: 0, userSid: "S-1-5-21-1001" },
+    },
+  ])("rejects $name", async ({ name: _name, ...options }) => {
+    expect(await replay({ desktop: true, ...options })).toMatchObject({
+      code: 1,
+      output: expect.stringContaining(replayError),
+    });
   });
 });

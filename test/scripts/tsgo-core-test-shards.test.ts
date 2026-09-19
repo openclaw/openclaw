@@ -65,6 +65,9 @@ describe("tsgo core test shards", () => {
       ["src/cli/cron-output.process.test.ts", "services"],
       ["src/cli/cron-cli/register.cron-edit.test.ts", "services"],
       ["src/cli/update-cli/update-command-config-fence.test.ts", "config-cli"],
+      ["src/gateway/worker-environments/desktop-endpoint.test.ts", "gateway-worker-environments"],
+      ["src/gateway/worker-environments/desktop-tunnel.test.ts", "gateway-worker-environments"],
+      ["src/gateway/desktop/node-stream-broker.test.ts", "gateway-other"],
     ] as const) {
       expect(
         shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),

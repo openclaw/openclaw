@@ -1,5 +1,6 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
+import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
 import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
@@ -51,8 +52,9 @@ function createCrabboxNodeSetup(params: {
   const workerBundle = params.workerBundle
     ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
     : undefined;
+  const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
-    params.desktop && (params.target ?? "linux") === "linux"
+    desktopTarget === "linux"
       ? [
           "set -eu",
           ...createCrabboxXfceSessionEnvironment(),
@@ -107,13 +109,17 @@ setPhase("preparation");
     if (!desktopSetup) return;
     setPhase("desktop setup");
     // The wallpaper can exceed the OS argument limit; stream the owned script over stdin.
+    if (process.platform === "win32") {
+      runWindowsDesktopPowerShell(desktopSetup);
+      return;
+    }
     const result = spawnSync("bash", ["-s"], { input: desktopSetup, env: nodeEnv, stdio: ["pipe", "inherit", "inherit"], timeout: ${CRABBOX_SETUP_TIMEOUT_MS}, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error("Cloud worker desktop setup failed" + (result.signal ? " (" + result.signal + ")" : " with exit code " + result.status));
   };
   const directoryOptions = process.platform === "win32" ? {} : { mode: 0o700 };
   const launcher = path.join(process.env.ProgramFiles || "C:\\\\Program Files", "Crabbox", "bin", "Start-CrabboxDetachedProcess.ps1");
-  if (process.platform === "win32" && mode && !fs.existsSync(launcher)) {
+  if (process.platform === "win32" && mode && !${JSON.stringify(desktopTarget === "windows/normal")} && !fs.existsSync(launcher)) {
     throw new Error("Cloud worker requires " + launcher + "; update the Crabbox Windows bootstrap image and reprovision the worker");
   }
   if (desktopEnvironment) {
@@ -127,72 +133,12 @@ setPhase("preparation");
     fs.mkdirSync(stateDir, { recursive: true, ...directoryOptions });
     if (process.platform !== "win32") fs.chmodSync(stateDir, 0o700);
   }
-  const probeProcess = (binary, args) => {
-    const result = spawnSync(binary, args, { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout: process.platform === "win32" ? 10000 : 2000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
-    return result.status === 0 && !result.error ? result.stdout.trim() : null;
-  };
-  const processStartTime = (pid) => probeProcess("ps", ["-o", "lstart=", "-p", String(pid)])?.replace(/\\s+/g, " ");
-  const windowsProcesses = (filter) => {
-    const output = probeProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; @(Get-CimInstance Win32_Process -Filter '" + filter + "' | ForEach-Object { @{ pid = $_.ProcessId; startTime = $_.CreationDate.ToUniversalTime().ToString('o'); executablePath = $_.ExecutablePath; commandLine = $_.CommandLine } }) | ConvertTo-Json -Compress"]);
-    if (!output) return [];
-    const parsed = JSON.parse(output);
-    return Array.isArray(parsed) ? parsed : [parsed];
-  };
-  const isWindowsNode = (entry) => {
-    if (!entry || !Number.isSafeInteger(entry.pid) || entry.pid < 1 || typeof entry.startTime !== "string" || !entry.startTime || typeof entry.executablePath !== "string" || typeof entry.commandLine !== "string") return false;
-    // Our invocation has exactly executable + CLI before its options. Windows paths
-    // cannot contain quotes; accept quoted or unquoted path tokens in those positions.
-    // CIM retains this command line even when Node changes the console title.
-    const invocation = entry.commandLine.match(/^(?:"([^"]+)"|([^\\s"]+))\\s+(?:"([^"]+)"|([^\\s"]+))(?:\\s|$)/);
-    return invocation !== null && (invocation[3] ?? invocation[4]) === cli && fs.realpathSync(invocation[1] ?? invocation[2]) === fs.realpathSync(process.execPath) && fs.realpathSync(entry.executablePath) === fs.realpathSync(process.execPath);
-  };
-  if (mode && fs.existsSync(pidFile)) {
-    const pidText = fs.readFileSync(pidFile, "utf8").trim();
-    if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
-    const pid = Number(pidText);
-    let alive = true;
-    try { process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
-    if (alive) {
-      let verified = false;
-      if (process.platform === "linux") {
-        const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
-        const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
-        // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
-        const title = args[0];
-        const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
-        verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
-      } else if (process.platform === "win32") {
-        try {
-          const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
-          const entries = windowsProcesses("ProcessId=" + pidText);
-          const entry = entries.length === 1 ? entries[0] : undefined;
-          // Windows exposes no cheap cwd probe. Bind launch-owned cwd/state to the
-          // actual node.exe creation time and independently inspect its executable/argv.
-          verified = isWindowsNode(entry) && entry.pid === pid && launch.pid === pid && launch.startTime === entry.startTime && launch.runtimeDir === runtimeDir && launch.stateDir === stateDir && launch.cli === cli;
-        } catch { /* Missing launch or process identity must never authorize replay. */ }
-      } else {
-        try {
-          // Darwin loses ps-visible environment when process.title changes. Bind the launch
-          // facts to this live process's start time, then independently verify argv and cwd.
-          const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
-          const startTime = processStartTime(pid);
-          const command = probeProcess("ps", ["-ww", "-o", "command=", "-p", pidText]);
-          const invocation = process.execPath + " " + cli;
-          const nodeInvocation = command !== null && (["openclaw", "openclaw-connect", "openclaw-node"].includes(command) || command === invocation || command.startsWith(invocation + " "));
-          const cwdArgs = ["-a", "-p", pidText, "-d", "cwd", "-Fn"];
-          const cwdOutput = probeProcess("lsof", cwdArgs) ?? probeProcess("/usr/sbin/lsof", cwdArgs);
-          const cwd = cwdOutput?.split("\\n").filter((line) => line.startsWith("n"));
-          verified = launch.pid === pid && Boolean(startTime) && launch.startTime === startTime && launch.runtimeDir === runtimeDir && launch.stateDir === stateDir && launch.cli === cli && nodeInvocation && cwd?.length === 1 && fs.realpathSync(cwd[0].slice(1)) === runtimeDir;
-        } catch { /* Missing launch or process identity must never authorize replay. */ }
-      }
-      if (!verified) {
-        throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
-      }
-      finishDesktopSetup();
-      setPhase("complete");
-      return;
-    }
-    fs.unlinkSync(pidFile);
+  ${createCrabboxNodeProcessRuntime(desktopTarget, leaseId)}
+  if (desktopTarget === "macos") finishDesktopSetup();
+  if (reuseNodeProcess()) {
+    if (desktopTarget !== "macos") finishDesktopSetup();
+    setPhase("complete");
+    return;
   }
   const verifyRuntime = (root) => {
     setPhase("runtime verification");
@@ -370,55 +316,8 @@ setPhase("preparation");
     if (!setupCode) throw new Error("Cloud worker enrollment credential is unavailable");
     fs.writeFileSync(setupFile, setupCode + "\\n", { mode: 0o600 });
   }
-  const args = mode === "connect" ? ["connect", "--target-file", setupFile] : ["node", "run"];
-  setPhase("node launch");
-  const logPath = path.join(stateDir, "node.log");
-  const log = process.platform === "win32" ? undefined : fs.openSync(logPath, "a", 0o600);
-  let child;
-  let pid;
-  let parentPid;
-  let startTime;
-  try {
-    const nodeArgs = [cli, ...args, "--ephemeral", "--display-name", displayName];
-    if (process.platform === "win32") {
-      const quote = (value) => "'" + value.replaceAll("'", "''") + "'";
-      // The managed launcher owns OpenSSH job breakaway. Its hidden PowerShell child
-      // owns logging because detached processes must not inherit SSH stdio handles.
-      const launchScript = "$env:OPENCLAW_STATE_DIR = " + quote(stateDir) + "; & " + [process.execPath, ...nodeArgs].map(quote).join(" ") + " *>> " + quote(logPath) + "; exit $LASTEXITCODE";
-      const argumentList = "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + Buffer.from(launchScript, "utf16le").toString("base64");
-      const launched = probeProcess("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", launcher, "-FilePath", "powershell.exe", "-ArgumentList", argumentList, "-WorkingDirectory", runtimeDir]);
-      if (!/^[1-9][0-9]*$/.test(launched || "")) throw new Error("Cloud worker managed Windows launcher failed; release and reprovision the worker");
-      parentPid = Number(launched);
-      const deadline = Date.now() + 30000;
-      while (!pid && Date.now() < deadline) {
-        const entries = windowsProcesses("ParentProcessId=" + parentPid).filter(isWindowsNode);
-        if (entries.length > 1) throw new Error("Cloud worker node invocation is ambiguous; release and reprovision the worker");
-        if (entries.length === 1) { pid = entries[0].pid; startTime = entries[0].startTime; }
-        else await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      if (!pid) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
-    } else {
-      child = spawn(process.execPath, nodeArgs, { cwd: runtimeDir, env: nodeEnv, detached: true, windowsHide: true, stdio: ["ignore", log, log] });
-      await once(child, "spawn");
-      pid = child.pid;
-      if (process.platform !== "linux") startTime = processStartTime(pid);
-    }
-      if (process.platform !== "linux") {
-        if (!startTime) throw new Error("Cloud worker node start time is unavailable; release and reprovision the worker");
-        const temporary = launchFile + "." + crypto.randomUUID();
-        try {
-          fs.writeFileSync(temporary, JSON.stringify({ pid, startTime, runtimeDir, stateDir, cli }), { mode: 0o600, flag: "wx" });
-          fs.renameSync(temporary, launchFile);
-        } finally { fs.rmSync(temporary, { force: true }); }
-      }
-      fs.writeFileSync(pidFile, String(pid) + "\\n", { mode: 0o600 });
-    child?.unref();
-  } catch (error) {
-    if (parentPid) spawnSync("taskkill.exe", ["/PID", String(parentPid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
-    else if (pid) process.kill(-pid, "SIGTERM");
-    throw error;
-  } finally { if (log !== undefined) fs.closeSync(log); }
-  finishDesktopSetup();
+  await launchNodeProcess();
+  if (desktopTarget !== "macos") finishDesktopSetup();
   setPhase("complete");
 })().catch((error) => { console.error("Cloud worker node bootstrap " + phase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message); process.exitCode = 1; });
 `;

@@ -102,9 +102,11 @@ export type WorkerDesktopApp =
   | {
       id: "browser";
       executablePath: string;
+      /** Fixed provider-owned arguments, passed directly without a shell. */
+      args?: string[];
       cdpPort: number;
     }
-  | { id: "terminal"; executablePath: string };
+  | { id: "terminal"; executablePath: string; args?: string[] };
 
 /** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
 export type WorkerDesktopEndpoint = {

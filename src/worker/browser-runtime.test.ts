@@ -20,67 +20,75 @@ describe("worker Browser runtime", () => {
     vi.clearAllMocks();
   });
 
-  it("loads only the bundled Browser runtime and launches the fixed executable without arguments", async () => {
-    const dispose = vi.fn().mockResolvedValue(undefined);
-    const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
-      tool: { name: "browser" },
-      dispose,
-    });
-    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
-      createAttachedBrowserToolRuntime,
-    });
-    mocks.execFile.mockImplementation(
-      (
-        _file: string,
-        _args: string[],
-        _options: object,
-        callback: (error: Error | null) => void,
-      ) => {
-        callback(null);
-        return {};
-      },
-    );
+  it.each([
+    { launcherArgs: undefined },
+    { launcherArgs: ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1", "literal;$(text)"] },
+  ])(
+    "launches the provider executable with fixed args $launcherArgs without a shell",
+    async ({ launcherArgs }) => {
+      const dispose = vi.fn().mockResolvedValue(undefined);
+      const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
+        tool: { name: "browser" },
+        dispose,
+      });
+      mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
+        createAttachedBrowserToolRuntime,
+      });
+      mocks.execFile.mockImplementation(
+        (
+          _file: string,
+          _args: string[],
+          _options: object,
+          callback: (error: Error | null) => void,
+        ) => {
+          callback(null);
+          return {};
+        },
+      );
 
-    const runtime = await createWorkerBrowserToolRuntime({
-      descriptor: {
+      const runtime = await createWorkerBrowserToolRuntime({
+        descriptor: {
+          cdpUrl: "http://127.0.0.1:9222",
+          launcherPath: "/usr/local/bin/openclaw-worker-browser",
+          ...(launcherArgs ? { launcherArgs } : {}),
+        },
+        sessionKey: "worker:session-1",
+        stateDir: "/tmp/worker-state",
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
+        dirName: "browser",
+        artifactBasename: "runtime-api.js",
+        trackedPluginId: "browser",
+      });
+      expect(createAttachedBrowserToolRuntime).toHaveBeenCalledWith({
         cdpUrl: "http://127.0.0.1:9222",
-        launcherPath: "/usr/local/bin/openclaw-worker-browser",
-      },
-      sessionKey: "worker:session-1",
-      stateDir: "/tmp/worker-state",
-      workspaceDir: "/tmp/workspace",
-    });
+        ensureAttachTarget: expect.any(Function),
+        agentSessionKey: "worker:session-1",
+        agentDir: "/tmp/worker-state",
+        workspaceDir: "/tmp/workspace",
+      });
 
-    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
-      dirName: "browser",
-      artifactBasename: "runtime-api.js",
-      trackedPluginId: "browser",
-    });
-    expect(createAttachedBrowserToolRuntime).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      ensureAttachTarget: expect.any(Function),
-      agentSessionKey: "worker:session-1",
-      agentDir: "/tmp/worker-state",
-      workspaceDir: "/tmp/workspace",
-    });
+      const ensureAttachTarget = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
+        .ensureAttachTarget as () => Promise<void>;
+      await ensureAttachTarget();
+      expect(mocks.execFile).toHaveBeenCalledWith(
+        "/usr/local/bin/openclaw-worker-browser",
+        launcherArgs ?? [],
+        {
+          timeout: 30_000,
+          maxBuffer: 64 * 1024,
+          windowsHide: true,
+          shell: false,
+        },
+        expect.any(Function),
+      );
 
-    const ensureAttachTarget = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
-      .ensureAttachTarget as () => Promise<void>;
-    await ensureAttachTarget();
-    expect(mocks.execFile).toHaveBeenCalledWith(
-      "/usr/local/bin/openclaw-worker-browser",
-      [],
-      {
-        timeout: 30_000,
-        maxBuffer: 64 * 1024,
-        windowsHide: true,
-      },
-      expect.any(Function),
-    );
-
-    await runtime.dispose();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
+      await runtime.dispose();
+      expect(dispose).toHaveBeenCalledOnce();
+    },
+  );
 
   it("uses the build-composed Browser runtime without filesystem discovery", async () => {
     const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({

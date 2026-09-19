@@ -6,22 +6,30 @@ import { createCrabboxNodeEnrollmentSetup } from "./crabbox-worker-node-enrollme
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 
 const require = createRequire(import.meta.url);
-const home = "/Users/worker";
 const leaseId = "cbx_replay_fixture";
-const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
-const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
-const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
 
-async function replay(platform: "linux" | "darwin", failure?: string) {
+async function replay(
+  platform: "linux" | "darwin",
+  failure?: string,
+  desktop = false,
+  displayName = "Replay fixture",
+  home = "/Users/worker",
+) {
+  const stateDir = path.join(home, ".openclaw", "cloud-workers", leaseId);
+  const runtimeDir = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
+  const cli = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  const nodeStart = desktop ? "1788998400:123456" : "Wed Sep 9 12:00:00 2026";
+  const hostStart = "1788998399:654321";
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
+    ...(desktop ? { desktop: true, target: "macos" as const } : {}),
     enrollment: {
       mode: "connect",
       setupCode: "synthetic-code",
       setupId: "synthetic-setup",
       openclawVersion: "2026.8.1",
       nodeBootstrap: createNodeBootstrapFixture(),
-      displayName: "Replay fixture",
+      displayName,
       waitForDeviceId: async () => "synthetic-device",
     },
   });
@@ -39,7 +47,8 @@ async function replay(platform: "linux" | "darwin", failure?: string) {
   const processFixture = {
     platform,
     execPath: "/usr/bin/node",
-    env: { ...setup.forwardedEnv },
+    getuid: () => 501,
+    env: { ...setup.forwardedEnv, LC_ALL: "fr_FR.UTF-8" },
     umask: vi.fn(),
     kill: vi.fn(),
     exitCode: 0,
@@ -61,11 +70,16 @@ async function replay(platform: "linux" | "darwin", failure?: string) {
         }
         return JSON.stringify({
           pid: failure === "pid" ? 124 : 123,
-          startTime:
-            failure === "pid-reuse" ? "Tue Sep 8 12:00:00 2026" : "Wed Sep 9 12:00:00 2026",
+          startTime: failure === "pid-reuse" ? "other-generation" : nodeStart,
           runtimeDir: runtimeDir + (failure === "runtime-record" ? "-other" : ""),
           stateDir: stateDir + (failure === "state" ? "-other" : ""),
           cli: cli + (failure === "cli-record" ? "-other" : ""),
+          ...(desktop
+            ? {
+                hostPid: 456,
+                hostStartTime: failure === "host-pid-reuse" ? "other-generation" : hostStart,
+              }
+            : {}),
         });
       }
       if (platform !== "linux") {
@@ -84,10 +98,80 @@ async function replay(platform: "linux" | "darwin", failure?: string) {
     },
     realpathSync: (file: string) =>
       file === "/proc/123/cwd" ? runtimeDir + (failure === "cwd" ? "-other" : "") : file,
+    statSync: (file: string) => {
+      if (file !== runtimeDir) {
+        throw new Error("Unexpected directory identity read");
+      }
+      return { dev: -2147483647n, ino: 42n };
+    },
   };
+  const hostArguments = [
+    "/Applications/OpenClawCloudWorker.app/Contents/MacOS/OpenClaw",
+    "--cloud-worker-host",
+    "--node-executable",
+    "/usr/bin/node",
+    "--runtime-dir",
+    runtimeDir,
+    "--state-dir",
+    stateDir,
+    "--desktop-dir",
+    `/var/db/crabbox/openclaw-workers/${leaseId}`,
+    "--lease-id",
+    leaseId,
+    "--display-name",
+    displayName,
+    "--enrollment-mode",
+    "connect",
+  ];
   const spawnSync = vi.fn((binary: string, args: string[]) => {
     if (failure === "unavailable") {
       return { status: 1, stdout: "" };
+    }
+    if (binary === hostArguments[0]) {
+      if (args[0] !== "--cloud-worker-inspect-process" || args[1] !== "456" || args[2] !== "123") {
+        throw new Error("Unexpected native process inspection");
+      }
+      if (
+        [
+          "host-inspect-unavailable",
+          "host-replaced-during-inspect",
+          "node-replaced-during-inspect",
+        ].includes(failure ?? "")
+      ) {
+        return { status: 1, stdout: "" };
+      }
+      const cwd = { device: "2147483649", inode: "42" };
+      const inspection =
+        failure === "dead-host"
+          ? { state: "gone" }
+          : {
+              state: "active",
+              host: {
+                pid: 456,
+                uid: failure === "host-uid" ? 0 : 501,
+                parentPid: 111,
+                startTime: hostStart,
+                executablePath: hostArguments[0],
+                arguments: failure === "host-command" ? ["unrelated-host"] : hostArguments,
+                cwd: failure === "host-cwd" ? { ...cwd, inode: "43" } : cwd,
+              },
+              node: {
+                pid: 123,
+                uid: failure === "node-uid" ? 0 : 501,
+                parentPid: failure === "other-parent" ? 789 : 456,
+                startTime: nodeStart,
+                executablePath: "/usr/bin/node",
+                arguments:
+                  failure === "original-argv"
+                    ? ["/usr/bin/node", cli, "connect", "--ephemeral"]
+                    : [command],
+                cwd: failure === "cwd" ? { ...cwd, inode: "43" } : cwd,
+              },
+            };
+      return {
+        status: 0,
+        stdout: failure === "host-argv-invalid-json" ? "invalid" : JSON.stringify(inspection),
+      };
     }
     if (binary.endsWith("lsof")) {
       if (failure === "lsof" || (failure === "lsof-fallback" && binary === "lsof")) {
@@ -95,7 +179,7 @@ async function replay(platform: "linux" | "darwin", failure?: string) {
       }
       return {
         status: 0,
-        stdout: `p123\nfcwd\nn${runtimeDir}${failure === "cwd" ? "-other" : ""}\n`,
+        stdout: `p123\nfcwd\nn${runtimeDir.replace(/[^\x20-\x7e]/gu, "?")}${failure === "cwd" ? "-other" : ""}\n`,
       };
     }
     if (binary === "ps") {
@@ -171,4 +255,46 @@ it.each([
 });
 it.each(["lsof-fallback"])("uses the available macOS %s probe", async (variant) => {
   expect(await replay("darwin", variant)).toMatchObject({ code: 0 });
+});
+
+describe("macOS desktop host enrollment replay", () => {
+  it("reuses the verified host and Node child despite a different SSH locale", async () => {
+    expect(await replay("darwin", undefined, true)).toMatchObject({ code: 0 });
+  });
+
+  it.each(["Cloud worker Développement", "Cloud worker family 👨‍👩‍👧‍👦", "Cloud worker tab\tline\n"])(
+    "preserves the exact native argv for %j",
+    async (displayName) => {
+      expect(await replay("darwin", undefined, true, displayName)).toMatchObject({ code: 0 });
+    },
+  );
+
+  it.each(["/Users/Développement", "/Users/family 👨‍👩‍👧‍👦", "/Users/tab\tline\n"])(
+    "binds the runtime directory and original Node argv under %j",
+    async (home) => {
+      expect(await replay("darwin", "original-argv", true, "Replay fixture", home)).toMatchObject({
+        code: 0,
+      });
+    },
+  );
+
+  it.each([
+    "dead-host",
+    "host-pid-reuse",
+    "host-command",
+    "host-cwd",
+    "other-parent",
+    "host-uid",
+    "node-uid",
+    "cwd",
+    "host-inspect-unavailable",
+    "host-argv-invalid-json",
+    "host-replaced-during-inspect",
+    "node-replaced-during-inspect",
+  ])("rejects %s even when the Node process still looks healthy", async (failure) => {
+    expect(await replay("darwin", failure, true)).toMatchObject({
+      code: 1,
+      output: expect.stringContaining("release and reprovision the worker"),
+    });
+  });
 });

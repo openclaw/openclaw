@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-gateway-worker-environments.tsbuildinfo"
+  },
+  "include": [
+    "../../src/gateway/worker-environments/**/*.test.ts",
+    "../../src/gateway/worker-environments/**/*.test.tsx"
+  ]
+}

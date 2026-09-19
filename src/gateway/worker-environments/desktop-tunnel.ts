@@ -7,7 +7,6 @@ import type {
   WorkerDesktopEndpoint,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
-import type { DesktopRfbAttachment } from "../desktop/attachment.js";
 import {
   createDesktopSessionRegistry,
   DesktopSessionStaleOwnerError,
@@ -42,7 +41,7 @@ type DesktopAcquireRequest = {
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
-type DesktopAcquireResult = { attachment: DesktopRfbAttachment; vncPassword?: string };
+type DesktopAcquireResult = Awaited<ReturnType<DesktopSessionRegistry["acquire"]>>;
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
@@ -177,8 +176,11 @@ export function createWorkerDesktopTunnels(deps: {
           ],
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
+        if (!isCurrent()) {
+          throw new Error("Worker desktop tunnel stopped before connecting");
+        }
         if (!successful(result)) {
-          throw workerSshProcessError(result.stderr || result.stdout);
+          throw workerSshProcessError(result.stderr);
         }
         vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
         if (!vncPassword) {
@@ -313,7 +315,7 @@ export function createWorkerDesktopTunnels(deps: {
             String(prepared.port),
             "--",
             prepared.sshTarget,
-            workerSshRemoteCommand([request.app.executablePath]),
+            workerSshRemoteCommand([request.app.executablePath, ...(request.app.args ?? [])]),
           ],
           workerSshCommandOptions({
             timeoutMs: remainingLaunchMs,

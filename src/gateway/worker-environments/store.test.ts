@@ -43,10 +43,12 @@ const DESKTOP: WorkerDesktopEndpoint = {
   protocol: "rfb",
   port: 5900,
   passwordFilePath: "/var/lib/crabbox/vnc.password",
+  username: "worker",
   apps: [
     {
       id: "browser",
       executablePath: "/usr/local/bin/openclaw-worker-browser",
+      args: ["--profile", "lease profile"],
       cdpPort: 9222,
     },
     { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },

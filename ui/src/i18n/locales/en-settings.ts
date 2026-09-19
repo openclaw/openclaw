@@ -272,7 +272,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Enable Browser and Terminal access on Linux, native Windows, or prepared macOS workers. Supports direct or coordinator-backed AWS and Azure, and coordinator-backed Hetzner. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
