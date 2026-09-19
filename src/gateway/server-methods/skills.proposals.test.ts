@@ -5,8 +5,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -108,6 +116,21 @@ function callHandler(
   return callGatewayHandler(skillsHandlers, method, params, options);
 }
 
+function observeEventReadSql() {
+  const sql = observeMainThreadSql();
+  const close = vi.spyOn(requireNodeSqlite().DatabaseSync.prototype, "close");
+  return {
+    expectIdle() {
+      sql.expectIdle();
+      expect(close).not.toHaveBeenCalled();
+    },
+    restore() {
+      close.mockRestore();
+      sql.restore();
+    },
+  };
+}
+
 describe("skills proposal gateway handlers", () => {
   beforeEach(async () => {
     testState = await createOpenClawTestState({
@@ -157,6 +180,95 @@ describe("skills proposal gateway handlers", () => {
     getWorkspaceDir: () => mocks.workspaceDir,
   });
 
+  it("lists persisted proposal events without caller-thread SQLite", async () => {
+    const actual = await vi.importActual<typeof import("../../skills/workshop/service.js")>(
+      "../../skills/workshop/service.js",
+    );
+    mocks.listSkillProposalEvents.mockImplementation(actual.listSkillProposalEvents);
+    const proposal = await actual.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      config: {},
+      agentId: "main",
+      name: "Event Read Worker",
+      description: "Read durable proposal events through the registered handler",
+      content: "# Event Read Worker\n",
+    });
+    await closeOpenClawStateDatabaseAsync();
+    const sql = observeEventReadSql();
+    try {
+      await expect(
+        callHandler("skills.proposals.events.list", {
+          proposalId: proposal.record.id,
+          afterSequence: 0,
+          limit: 1,
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        response: {
+          events: [{ proposalId: proposal.record.id, type: "created" }],
+        },
+      });
+      await closeOpenClawStateDatabaseAsync();
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it.each(["absent database", "absent feature tables"])(
+    "initializes the event reader from %s without caller-thread SQLite",
+    async (initialState) => {
+      const actual = await vi.importActual<typeof import("../../skills/workshop/service.js")>(
+        "../../skills/workshop/service.js",
+      );
+      mocks.listSkillProposalEvents.mockImplementation(actual.listSkillProposalEvents);
+      const databasePath = resolveOpenClawStateSqlitePath(testState.env);
+      if (initialState === "absent feature tables") {
+        openOpenClawStateDatabase({ env: testState.env }).db.exec(`
+          DROP TABLE skill_workshop_proposal_events;
+          DROP TABLE skill_workshop_proposal_rollbacks;
+          DROP TABLE skill_workshop_proposals;
+          DROP TABLE skill_workshop_collection_reviews;
+        `);
+        await closeOpenClawStateDatabaseAsync();
+      } else {
+        await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      const sql = observeEventReadSql();
+      try {
+        await expect(callHandler("skills.proposals.events.list", {})).resolves.toMatchObject({
+          ok: true,
+          response: { events: [] },
+        });
+        await closeOpenClawStateDatabaseAsync();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      const { DatabaseSync } = requireNodeSqlite();
+      const observer = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(observer.prepare("PRAGMA user_version").get()).toMatchObject({
+          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        });
+        expect(
+          observer
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'skill_workshop_%' ORDER BY name",
+            )
+            .all(),
+        ).toMatchObject([
+          { name: "skill_workshop_collection_reviews" },
+          { name: "skill_workshop_proposal_events" },
+          { name: "skill_workshop_proposal_rollbacks" },
+          { name: "skill_workshop_proposals" },
+        ]);
+      } finally {
+        observer.close();
+      }
+    },
+  );
+
   it("creates, lists, inspects, and applies a proposal", async () => {
     const create = await callHandler("skills.proposals.create", {
       name: "Weather Planner",
@@ -177,7 +289,8 @@ describe("skills proposal gateway handlers", () => {
     expect(created.record.draftFile).toBe("PROPOSAL.md");
     expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
     expect(
-      readSkillProposalEvents({ config: {}, proposalId: created.record.id }).events[0]?.actor,
+      (await readSkillProposalEvents({ config: {}, proposalId: created.record.id })).events[0]
+        ?.actor,
     ).toEqual({ type: "gateway" });
 
     const list = await callHandler("skills.proposals.list", {});
