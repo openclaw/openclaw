@@ -1,5 +1,6 @@
 // Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
@@ -72,6 +73,7 @@ function buildUserChatMessageContentBlocks(
 }
 
 type LocalUserMessageInput = {
+  workContext?: ChatWorkContext;
   attachments?: readonly ChatAttachment[];
   mentions?: readonly HumanMention[];
   createdAt: number;
@@ -126,6 +128,9 @@ export function buildLocalUserMessage(
     content,
     timestamp: input.createdAt,
     __openclaw: {
+      ...(input.workContext
+        ? { workContext: { snapshot: input.workContext, text: input.text } }
+        : {}),
       ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
       ...(input.pending
         ? {

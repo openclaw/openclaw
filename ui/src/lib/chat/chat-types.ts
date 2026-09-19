@@ -1,5 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 /**
  * Chat message types for the UI layer.
  */
@@ -113,6 +114,8 @@ export type ToolApprovalReview = {
 
 export type ChatQueueItem = {
   id: string;
+  workContext?: ChatWorkContext;
+  workContextUnavailable?: true;
   text: string;
   mentions?: readonly HumanMention[];
   createdAt: number;

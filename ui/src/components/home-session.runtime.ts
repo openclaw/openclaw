@@ -3,10 +3,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
+import { formatChatWorkContext } from "../../../src/chat/work-context.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
-import { formatChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
+import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import "../pages/chat/chat-pane.ts";
 import "../styles/chat.ts";
 import "../styles/chat/composer.css";
@@ -157,7 +158,7 @@ export class OpenClawHomeSession extends OpenClawLightDomElement {
           .active=${true}
           .compact=${true}
           .narrow=${true}
-          .workContext=${this.includeContext ? text : undefined}
+          .workContext=${this.includeContext ? context : undefined}
         ></openclaw-chat-pane>`,
       )}
     `;

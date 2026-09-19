@@ -1,3 +1,6 @@
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
+import { t } from "../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -43,6 +46,8 @@ import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+registerChatMessageMetadataEnglish();
+
 export function setChatError(
   host: { lastError?: string | null; chatError?: string | null },
   error: string | null,
@@ -65,6 +70,7 @@ export function createPendingSendMessage(
   intent?: ChatQueueItem["intent"],
   expectedLeafEntryId?: string | null,
   mentions?: readonly HumanMention[],
+  workContext?: ChatWorkContext,
 ): { item: ChatQueueItem; admission: ReturnType<typeof captureChatOutboxAdmission> } | null {
   const submitted = trimHumanMentions(text, mentions);
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -79,6 +85,7 @@ export function createPendingSendMessage(
     id: generateUUID(),
     text: intent ? text : submitted.text,
     ...(submitted.mentions ? { mentions: submitted.mentions } : {}),
+    ...(workContext ? { workContext } : {}),
     createdAt: Date.now(),
     ...(resumedOrderKey !== undefined ? { orderKey: resumedOrderKey } : {}),
     attachments: hasAttachments ? attachments : undefined,
@@ -232,6 +239,12 @@ export function finishChatDeliveryAdmission(
   const routeVisible = (agentId = item.agentId) => visibleSessionMatches(host, route, agentId);
   const current = readQueuedMessageById(host, item.id);
   if (!current) {
+    return "failed";
+  }
+  if (current.workContextUnavailable) {
+    const error = t("chat.messages.attachedContext.restoreFailed");
+    setState("failed", error);
+    surfaceChatDeliveryFailure(host, route, current.agentId, error);
     return "failed";
   }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);

@@ -106,7 +106,7 @@ type ChatSendRetryParams = {
   assertCurrent?: () => void;
   request: Pick<
     NormalizedChatSendRequest,
-    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions"
+    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext"
   >;
   session: Pick<
     PreparedChatSendSession,
@@ -175,7 +175,11 @@ export function resolveChatSendRequestConflict({
   if (storedFingerprint !== undefined) {
     return storedFingerprint === session.restartSafeRequest?.fingerprint ? undefined : conflict();
   }
-  if (sameDurableSource && request.mentions?.length && !session.restartSafeRequest) {
+  if (
+    sameDurableSource &&
+    (request.mentions?.length || request.workContext) &&
+    !session.restartSafeRequest
+  ) {
     return conflict(true);
   }
   if (entries.some((entry) => entry?.requestIdentity === request.requestIdentity)) {
@@ -205,10 +209,16 @@ export function resolveChatSendRequestConflict({
       )
     : undefined;
   if (!submitted) {
-    return request.mentions?.length ? conflict(true) : undefined;
+    return request.mentions?.length || request.workContext ? conflict(true) : undefined;
   }
   const storedMentions = submitted["__openclaw"]?.humanMentions;
-  if (!request.mentions?.length && !storedMentions?.length) {
+  const storedContext = submitted["__openclaw"]?.workContext;
+  if (
+    !request.mentions?.length &&
+    !storedMentions?.length &&
+    !request.workContext &&
+    !storedContext
+  ) {
     return undefined;
   }
   const storedText =
@@ -217,7 +227,8 @@ export function resolveChatSendRequestConflict({
       normalizeText: (text) => text,
     }) ?? "";
   return storedText !== request.rawMessage ||
-    !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? [])
+    !isDeepStrictEqual(storedMentions ?? [], request.mentions ?? []) ||
+    !isDeepStrictEqual(storedContext, request.workContext)
     ? conflict()
     : undefined;
 }

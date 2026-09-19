@@ -1,3 +1,4 @@
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
@@ -50,7 +51,7 @@ export type ChatHost = ChatInputHistoryState &
     captureComposerRecoveryOwner?: () => ChatComposerRecoveryOwner | undefined;
     chatMentions?: readonly HumanMention[];
     /** Captured once at submit; queued delivery never re-reads the current page. */
-    getWorkContext?: () => string | undefined;
+    getWorkContext?: () => ChatWorkContext | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
     chatMessages: unknown[];
     chatThinkingLevel: string | null;

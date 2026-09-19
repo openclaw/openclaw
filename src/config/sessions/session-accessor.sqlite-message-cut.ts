@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { readMessageWorkContext } from "../../chat/work-context.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
@@ -379,7 +380,7 @@ function resolveMessageCut(
   const editorMediaRefs = extractEditorMediaRefs(message);
   return {
     status: "cut",
-    editorText: extractEditorText(message.content),
+    editorText: readMessageWorkContext(message)?.text ?? extractEditorText(message.content),
     ...(editorAttachments ? { editorAttachments } : {}),
     ...(editorMediaRefs ? { editorMediaRefs } : {}),
     parentId: target.parentId,

@@ -16,6 +16,11 @@ import type {
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
+import {
+  captureChatWorkContext,
+  formatChatWorkContext,
+  type AttachedChatWorkContext,
+} from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
@@ -67,6 +72,7 @@ export type NormalizedChatSendRequest = {
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
   requestIdentity: string;
   mentions?: HumanMention[];
+  workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
 
@@ -245,11 +251,31 @@ export function normalizeChatSendRequest(params: {
         "Human mentions require a signed-in Control UI chat. Remove the selected mentions to use this mode.",
     };
   }
+  if (
+    p.workContext &&
+    (goalOperation ||
+      stopCommand ||
+      turnKind !== "main" ||
+      rawMessage.startsWith("/") ||
+      rawMessage.startsWith("!"))
+  ) {
+    return { ok: false, error: "Working context is only supported for ordinary chat messages." };
+  }
+  const workContext = p.workContext
+    ? { snapshot: captureChatWorkContext(p.workContext), text: rawMessage }
+    : undefined;
+  if (workContext && !workContext.snapshot.page) {
+    return { ok: false, error: "Working context requires a nonempty page." };
+  }
+  const modelMessage = workContext
+    ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
+    : rawMessage;
   const requestIdentity = createHash("sha256")
     .update(
       JSON.stringify([
         p.message,
         p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+        ...(workContext ? [workContext.snapshot] : []),
       ]),
     )
     .digest("hex");
@@ -263,7 +289,8 @@ export function normalizeChatSendRequest(params: {
       p,
       ...(goalOperation ? { goalOperation } : {}),
       explicitOrigin: explicitOriginResult.value,
-      inboundMessage,
+      inboundMessage: workContext ? modelMessage : inboundMessage,
+      ...(workContext ? { workContext } : {}),
       systemInputProvenance,
       systemProvenanceReceipt,
       suppressCommandInterpretation: commandInterpretationSuppressed,
@@ -271,7 +298,7 @@ export function normalizeChatSendRequest(params: {
       stopCommand,
       turnKind,
       normalizedAttachments,
-      rawMessage,
+      rawMessage: modelMessage,
       requestIdentity,
       ...(mentions.value ? { mentions: mentions.value } : {}),
       reconnectResumeRequested: controlUiReconnectResume.resumeRequested,

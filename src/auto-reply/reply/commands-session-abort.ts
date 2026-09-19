@@ -9,7 +9,8 @@ import {
   type AbortCutoff,
 } from "./abort-cutoff.js";
 import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./abort-operation.js";
-import { isAbortTrigger, setAbortMemory } from "./abort-primitives.js";
+import { setAbortMemory } from "./abort-primitives.js";
+import { isAbortTrigger } from "./abort-trigger-text.js";
 import { formatAbortReplyText } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
