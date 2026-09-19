@@ -948,7 +948,7 @@ const enSettings = {
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
-      chooseTheme: "Choose a theme family.",
+      chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
       typography: "Typography",
       fonts: {
         ui: "Interface",
@@ -977,6 +977,7 @@ const enSettings = {
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
       usingInheritedAccent: "Using inherited accent",
+      usingThemeAccent: "Using theme accent",
       usingAccent: "Using {value}",
       accents: {
         default: "Theme default",

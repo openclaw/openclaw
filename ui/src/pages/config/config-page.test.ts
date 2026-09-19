@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
 import { createServerPrefsWriter } from "../../app/server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
-  changedServerUiPrefs,
   flushServerUiPrefs,
   pushServerUiPrefs,
   refreshProfileAppearancePrefs,
@@ -170,7 +170,12 @@ describe("ConfigPage synced preference provenance", () => {
     page.resetSyncedAppearancePref("theme");
 
     expect(page.settings.theme).toBe("dash");
-    expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({ theme: null });
+    expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({
+      theme: null,
+      accent: "theme",
+      fontUi: null,
+      fontChat: null,
+    });
   });
 
   it.each([

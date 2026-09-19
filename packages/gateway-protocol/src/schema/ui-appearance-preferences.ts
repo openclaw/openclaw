@@ -54,7 +54,8 @@ export function normalizeUiAppearancePreference(
     return undefined;
   }
   if (key === UI_APPEARANCE_PREFERENCE_KEYS.accent) {
-    return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : undefined;
+    // Explicit theme ownership is distinct from an absent (inherited) accent.
+    return value === "theme" || /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : undefined;
   }
   if (
     key === UI_APPEARANCE_PREFERENCE_KEYS.fontUi ||

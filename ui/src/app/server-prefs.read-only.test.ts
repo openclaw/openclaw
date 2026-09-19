@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import {
   configWithPrefs,
   createServerPrefsWriter,
@@ -11,7 +12,6 @@ import {
 } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
-  changedServerUiPrefs,
   flushServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPref,

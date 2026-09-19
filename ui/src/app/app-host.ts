@@ -1,16 +1,16 @@
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
-import "../components/app-topbar.ts";
-import "../components/assistant-panel.ts";
-import "../components/modal-dialog.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
-import "../components/resizable-divider.ts";
+import "../components/app-topbar.ts";
+import "../components/assistant-panel.ts";
+import "../components/modal-dialog.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import "../components/resizable-divider.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
 import type {
   CommandPaletteElement,
@@ -70,11 +70,8 @@ import {
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import {
-  changedServerUiPrefs,
-  isApplyingServerUiPrefs,
-  pushServerUiPrefs,
-} from "./server-prefs.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
+import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { setSettingsChangeListener } from "./settings.ts";
 import {
   isStaleChunkImportError,

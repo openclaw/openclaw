@@ -26,6 +26,9 @@ describe("user preference protocol schemas", () => {
     expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.accent, "#A1b2C3")).toBe(
       "#a1b2c3",
     );
+    expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.accent, "theme")).toBe(
+      "theme",
+    );
     expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.fontUi, "geist")).toBe(
       "geist",
     );

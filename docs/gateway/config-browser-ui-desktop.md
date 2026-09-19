@@ -153,7 +153,9 @@ Agent display names, emoji, and avatars belong to each agent's `identity` block 
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
   `talk.config` payloads and the macOS app's config snapshot. If neither is set,
-  the theme default applies.
+  the theme default applies. `prefs.accent` also accepts `"theme"` to explicitly
+  select the Control UI theme palette without inheriting `seamColor`; `talk.config`
+  omits its hex-only accent in that case.
 - `prefs`: cross-device operator preferences. This is the canonical home so agents can
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot. An

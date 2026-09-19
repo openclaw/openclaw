@@ -170,7 +170,7 @@ export type OpenClawConfig = {
         | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
-      /** User-selected Control UI accent color (#RRGGBB). */
+      /** Control UI accent: #RRGGBB, or "theme" to bypass inherited accent colors. */
       accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
