@@ -420,6 +420,7 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
   const runTrace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(diagnosticTrace));
   const diagnosticRunBase = {
     runId: params.runId,
+    ...(params.agentId && { agentId: params.agentId }),
     ...(params.sessionKey && { sessionKey: params.sessionKey }),
     ...(params.sessionId && { sessionId: params.sessionId }),
     provider: params.provider,

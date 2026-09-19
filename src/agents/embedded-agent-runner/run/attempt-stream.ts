@@ -400,6 +400,7 @@ export function installEmbeddedAttemptStreamGuards(
   let modelResponseTerminal = false;
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
     runId: attempt.runId,
+    agentId: sessionAgentId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,

@@ -30,6 +30,7 @@ function createContext(): PreparedCliRunContext {
         },
       },
       runId: "claude-diagnostics-test",
+      agentId: "claude-diagnostics-agent",
       sessionId: "session-test",
     },
   } as PreparedCliRunContext;
@@ -52,6 +53,38 @@ describe("Claude CLI model-call diagnostics", () => {
         transport: "stdio",
       }),
     ).toBeUndefined();
+  });
+
+  it("carries the prepared agent identity on emitted model calls", async () => {
+    const events: Array<{ agentId?: string }> = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      if (
+        event.type === "model.call.started" ||
+        event.type === "model.call.completed" ||
+        event.type === "model.call.error"
+      ) {
+        events.push({ agentId: event.agentId });
+      }
+    });
+    try {
+      const diagnostics = expectDefined(
+        createClaudeCliModelCallDiagnostics({
+          context: createContext(),
+          prompt: "hello",
+          transport: "stdio",
+        }),
+        "Claude CLI diagnostics",
+      );
+      diagnostics.emitStarted();
+      diagnostics.emitCompleted({} as CliOutput);
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      stop();
+    }
+    expect(events.map((event) => event.agentId)).toEqual([
+      "claude-diagnostics-agent",
+      "claude-diagnostics-agent",
+    ]);
   });
 
   it("bounds large prompt and assistant content during a burst", async () => {
