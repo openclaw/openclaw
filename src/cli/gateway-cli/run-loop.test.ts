@@ -22,6 +22,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
+import { registerGatewayRequestTests } from "./run-loop-request.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -490,47 +491,19 @@ afterEach(() => {
 });
 
 describe("runGatewayLoop", () => {
-  it.each([
-    { signal: "SIGTERM", restartReason: undefined, reason: "stop (SIGTERM)" },
-    { signal: "SIGINT", restartReason: undefined, reason: "stop (SIGINT)" },
-    { signal: "SIGUSR1", restartReason: undefined, reason: "restart (SIGUSR1)" },
-    {
-      signal: "SIGUSR1",
-      restartReason: "config reload: gateway.bind",
-      reason: "restart (SIGUSR1: config reload: gateway.bind)",
-    },
-    {
-      signal: "SIGTERM",
-      restartReason: "update.run",
-      reason: "restart (SIGTERM: update.run)",
-    },
-  ] as const)("names the shutdown trigger: $reason", async ({ signal, restartReason, reason }) => {
-    vi.clearAllMocks();
-    if (signal === "SIGTERM" && restartReason) {
-      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: restartReason });
-    } else {
-      peekGatewaySigusr1RestartReason.mockReturnValueOnce(restartReason);
-    }
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const close = createCloseMock();
-      const { start, started } = createSignaledStart(close);
-      const { runtime, exited } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      await runLoopWithStart({ start, runtime, completeBoot });
-      await waitForStart(started);
-      captureSignal(signal)();
-      if (signal === "SIGUSR1") {
-        await waitForLoopCondition(() => start.mock.calls.length === 2, "restart did not finish");
-        captureSignal("SIGINT")();
-      }
-      await expect(exited).resolves.toBe(0);
-      expect(gatewayLog.info).toHaveBeenCalledWith(`admission closed: ${reason}`);
-      expect(gatewayLog.info).not.toHaveBeenCalledWith("admission closed: restart drain");
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: reason.startsWith("restart") ? "planned_restart" : "clean_stop",
-        reason,
-      });
-    });
+  registerGatewayRequestTests({
+    acquireGatewayLock,
+    reloadTaskRuntimeStateFromStore,
+    runLoopWithStart,
+    waitForGatewayActiveWork,
+    restartGatewayProcessWithFreshPid,
+    consumeGatewaySigusr1RestartIntent,
+    consumeGatewayRestartIntentPayloadSync,
+    peekGatewaySigusr1RestartReason,
+    managedUpdateSuccessorOwner,
+    commitManagedServiceUpdateHandoff,
+    isGatewayWorkAdmissionClosed: () => gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed(),
+    gatewayLog,
   });
 
   it.each([false, true])(

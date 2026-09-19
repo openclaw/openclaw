@@ -1,6 +1,11 @@
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayStartupOperation } from "../../gateway/server-public.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 
 export function createGatewayStartupOperations(): {
   run: GatewayStartupOperation;
@@ -47,4 +52,62 @@ export function createGatewayStartupOperations(): {
       }
     },
   };
+}
+
+/** Join the retired generation and reset its admission before the next Gateway boot. */
+export async function prepareGatewayRestartIteration(
+  runtime: typeof import("./lifecycle.runtime.js"),
+  logger: Pick<SubsystemLogger, "warn">,
+  onAdmissionReset: () => void,
+): Promise<void> {
+  // After an in-process restart (SIGUSR1), reset command-queue lane state.
+  // Interrupted tasks from the previous lifecycle may have left `active`
+  // counts elevated (their finally blocks never ran), permanently blocking
+  // new work from draining. The same boundary also discards stale restart
+  // deferral timers and reloads the task registry from durable state so
+  // cancelled/completed work is not kept alive by old in-memory maps.
+  const {
+    abortActiveCronTaskRuns,
+    advanceCronActiveJobGeneration,
+    reloadTaskRuntimeStateFromStore,
+    retireActiveCronTaskRunTracking,
+    resetCronActiveJobs,
+    resetAllLanes,
+    resetGatewayRestartStateForInProcessRestart,
+    resetGatewaySuspendCoordinatorForLifecycleRestart,
+    rotateAgentEventLifecycleGeneration,
+    waitForActiveCronJobs,
+    waitForActiveCronTaskRuns,
+  } = runtime;
+  // Rotation aborts rootless stale owners before reset pumps preserved queues.
+  rotateAgentEventLifecycleGeneration();
+  advanceCronActiveJobGeneration();
+  abortActiveCronTaskRuns("Gateway restarting.");
+  const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
+  const cronDrain = await waitForActiveCronJobs(1_000);
+  if (!cronTaskDrain.drained || !cronDrain.drained) {
+    logger.warn(
+      `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
+    );
+  }
+  retireActiveCronTaskRunTracking();
+  resetCronActiveJobs();
+  // Resume the retired scheduler before resetAllLanes invalidates its
+  // suspension admission callback and discards the coordinator entry.
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
+  resetAllLanes();
+  // resetAllLanes installs the next admission generation. Keep the local
+  // mirror aligned so a restart queued during cleanup closes that generation.
+  onAdmissionReset();
+  clearRuntimeConfigSnapshot();
+  resetGatewayRestartStateForInProcessRestart();
+  // Rent: a failed startup has no server close handle, and restart hooks can
+  // recreate shared slots after close. Reset the same lifecycle before boot.
+  try {
+    await drainGlobalSingletonLifecycleState("restart");
+  } catch (error) {
+    logger.warn(`failed to reset ambient runtime state: ${formatErrorMessage(error)}`);
+  }
+  await reloadTaskRuntimeStateFromStore();
+  markGatewayRestartTrace("restart.next-start");
 }

@@ -223,6 +223,8 @@ describe("status-overview-rows", () => {
     ["all", "startupMigrationWarning", "Startup migrations"],
     ["default", "startupRecoveryWarning", "Session recovery"],
     ["all", "startupRecoveryWarning", "Session recovery"],
+    ["default", "installationReplacementWarning", "Installation replaced"],
+    ["all", "installationReplacementWarning", "Installation replaced"],
   ] as const)("surfaces %s %s output", (mode, field, label) => {
     const params = createStatusCommandOverviewRowsParams();
     params.summary[field] = "Inspect the affected state. Run openclaw doctor.";

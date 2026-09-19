@@ -31,28 +31,40 @@ describe("gateway stale install errors", () => {
     vi.unstubAllEnvs();
   });
 
-  it("turns a missing module from the OpenClaw install into restart guidance", async () => {
-    vi.stubEnv("OPENCLAW_PROFILE", "sd1");
-    const missingChunk = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "missing-own-chunk.js",
-    );
-    const respond = await dispatchThrowingHandler(moduleNotFoundError(missingChunk));
+  it.each(["ERR_MODULE_NOT_FOUND", "ENOENT"])(
+    "turns an own runtime %s into restart guidance",
+    async (code) => {
+      vi.stubEnv("OPENCLAW_PROFILE", "sd1");
+      const missingChunk = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../dist",
+        "missing-own-chunk.js",
+      );
+      const error =
+        code === "ENOENT"
+          ? Object.assign(new Error(`ENOENT: no such file or directory, open '${missingChunk}'`), {
+              code,
+              path: missingChunk,
+              syscall: "open",
+            })
+          : moduleNotFoundError(missingChunk);
+      const respond = await dispatchThrowingHandler(error);
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: false,
-        message: expect.stringContaining("openclaw --profile sd1 gateway restart"),
-        details: {
-          code: "STALE_INSTALL",
-          restartCommand: "openclaw --profile sd1 gateway restart",
-        },
-      }),
-    );
-  });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: false,
+          message: expect.stringContaining("openclaw --profile sd1 gateway restart"),
+          details: {
+            code: "STALE_INSTALL",
+            restartCommand: "openclaw --profile sd1 gateway restart",
+          },
+        }),
+      );
+    },
+  );
 
   it("does not rewrite a missing module outside the OpenClaw install", async () => {
     const outsideInstall = path.join(

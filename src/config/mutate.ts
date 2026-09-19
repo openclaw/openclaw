@@ -95,7 +95,6 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,

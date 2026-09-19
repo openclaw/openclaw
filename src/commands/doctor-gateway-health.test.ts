@@ -248,6 +248,7 @@ describe("checkGatewayHealth", () => {
   it.each([
     ["startupMigrationWarning", "Startup migration warnings"],
     ["startupRecoveryWarning", "Startup session recovery"],
+    ["installationReplacementWarning", "Installation replaced"],
   ])("reports %s without marking the gateway unhealthy", async (field, title) => {
     const warning = 'Inspect the affected state. Run "openclaw doctor".';
     callGateway.mockResolvedValueOnce({ [field]: warning }).mockResolvedValue({});

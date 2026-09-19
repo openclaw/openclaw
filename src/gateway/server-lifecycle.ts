@@ -586,8 +586,7 @@ export async function prepareGatewayLifecycle(params: {
         );
       }
       await requestEntryLifetime.sealAndJoin();
-      const { waitForPluginCacheRetirement } = await import("../plugins/plugin-cache.js");
-      await waitForPluginCacheRetirement();
+      await shutdownRuntime.waitForPluginCacheRetirement();
     };
   };
   const closeStepOwner = {

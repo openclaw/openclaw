@@ -219,6 +219,19 @@ place, and a running Gateway can otherwise try to load core or plugin files
 mid-swap. Restart the Gateway after the package manager finishes so it picks up
 the new install.
 
+Gateways with installation-replacement detection also check the installed build
+on their maintenance tick. If the running and installed builds differ, the
+Gateway records the replacement, stops accepting new work, and gives active work
+its existing bounded shutdown window before handing over to its service manager.
+A foreground Gateway exits with instructions to run `openclaw gateway run` again.
+Status and Doctor report the replacement while the Gateway drains;
+`openclaw gateway status --deep` retains the recorded shutdown reason afterward.
+If a reply's delivery module disappears before sending starts, the reply remains
+eligible for recovery instead of being treated as an uncertain send.
+This recovery cannot prevent every failure during a package manager's in-place
+swap, and older running Gateways do not gain it from files installed underneath
+them. `openclaw update` remains the supported path for coordinating replacement.
+
 Release packages include generated compatibility files for lazy imports from
 updaters in the supported upgrade window, including the 2026.9.1 service restart path. These
 files let the old updater finish after its installation is replaced. They do not

@@ -187,6 +187,9 @@ export async function checkGatewayHealth(params: {
     if (status.startupRecoveryWarning) {
       note(sanitizeTerminalText(status.startupRecoveryWarning), "Startup session recovery");
     }
+    if (status.installationReplacementWarning) {
+      note(sanitizeTerminalText(status.installationReplacementWarning), "Installation replaced");
+    }
     const secretDegradations = projectDoctorSecretRuntimeDegradations(status);
     if (secretDegradations.length > 0) {
       note(

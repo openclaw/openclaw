@@ -8,6 +8,8 @@ import {
   resolveChannelProgressDraftConfig as readProgressDraftConfig,
   type StreamingCompatEntry as ProgressDraftCompatEntry,
 } from "../channels/streaming.js";
+import { classifyGatewayStaleInstall } from "../gateway/stale-install.js";
+import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 export { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
@@ -215,7 +217,14 @@ export type {
 /** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
 export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =
   async (...args) => {
-    const mod = await import("../channels/turn/durable-delivery.js");
+    const mod = await import("../channels/turn/durable-delivery.js").catch((error: unknown) => {
+      const staleInstall = classifyGatewayStaleInstall(error);
+      // Only import failure proves no send: errors from the delivery runtime may be ambiguous.
+      throw new PlatformMessageNotDispatchedError(
+        staleInstall?.error.message ?? "Reply delivery runtime could not load before dispatch",
+        { cause: error },
+      );
+    });
     return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
   };
 

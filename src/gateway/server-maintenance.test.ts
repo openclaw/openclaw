@@ -15,6 +15,7 @@ import type { HealthSummary } from "./health/types.js";
 import { createChatAbortMarker } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import * as staleInstall from "./stale-install.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
@@ -547,23 +548,25 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("broadcasts tick keepalives without dropIfSlow", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-12T00:00:00Z"));
-    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+  it("broadcasts tick keepalives and checks installation replacement until the timer stops", async () => {
+    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
     const broadcast = vi.fn();
+    const check = vi.spyOn(staleInstall, "checkGatewayInstallationReplacement").mockResolvedValue();
 
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
+      ...deps,
       broadcast,
     });
 
     broadcast.mockClear();
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
 
     expect(broadcast).toHaveBeenCalledWith("tick", { ts: Date.now() });
+    expect(check).toHaveBeenCalledOnce();
 
     await stopMaintenanceTimers(timers);
+    await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
+    expect(check).toHaveBeenCalledOnce();
   });
 
   it("refreshes automatic health snapshots without live channel probes", async () => {

@@ -157,6 +157,7 @@ describe("collectStatusScanOverview", () => {
             degradedSecretOwners: [],
             degradedPlugins: [],
             startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+            installationReplacementWarning: "Installation replaced; draining before handoff.",
             sqliteWal,
           }
         : { channelAccounts: {} },
@@ -191,6 +192,9 @@ describe("collectStatusScanOverview", () => {
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
     expect(result.runtimeDegradation?.startupMigrationWarning).toBe(
       "Retained legacy state; run openclaw doctor --fix.",
+    );
+    expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
+      "Installation replaced; draining before handoff.",
     );
   });
 
@@ -324,6 +328,7 @@ describe("collectStatusScanOverview", () => {
       degradedSecretOwners: [],
       degradedPlugins: [],
       startupMigrationWarning: "fallback warning",
+      installationReplacementWarning: "Replacement detected by the running Gateway.",
       sqliteWal,
     };
     mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
@@ -340,6 +345,9 @@ describe("collectStatusScanOverview", () => {
       includeChannelsData: false,
     });
     expect(result.runtimeDegradation?.startupMigrationWarning).toBe("fallback warning");
+    expect(result.runtimeDegradation?.installationReplacementWarning).toBe(
+      status.installationReplacementWarning,
+    );
     expect(result.runtimeDegradation?.sqliteWal).toEqual(sqliteWal);
     expect(result.runtimeDegradation).toMatchObject({ heartbeat: status.heartbeat });
     expect(mocks.callGateway).not.toHaveBeenCalled();
