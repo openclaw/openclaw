@@ -67,7 +67,13 @@ async function startEmbeddingServer(options?: {
             object: "list",
             data: texts.map((text, index) => ({
               object: "embedding",
-              embedding: [String(text).length, index + 0.5, 3],
+              embedding: [
+                String(text).startsWith("item-")
+                  ? Number.parseInt(String(text).slice(5), 10)
+                  : String(text).length,
+                index + 0.5,
+                3,
+              ],
               index,
             })),
             model: body.model,
@@ -245,9 +251,17 @@ describe("memory-core generic embedding provider contract", () => {
   });
 });
 
+// Exercise the explicit item cap recognized for DashScope-style provider errors.
+const DASHSCOPE_INPUT_ARRAY_LIMIT = 10;
+const DASHSCOPE_REJECTION_BODY = JSON.stringify({
+  error: {
+    code: "InvalidParameter",
+    message: "batch size is invalid, it should not be larger than 10",
+  },
+});
+
 // Zhipu BigModel embedding-3 caps `input` at 64 items and rejects a larger array
-// with HTTP 400 code 1214. Memory batches are byte-budgeted, not item-counted, so
-// short chunks pack far more than 64 items into one request (issue #139040).
+// with HTTP 400 code 1214 (issue #139040).
 const ZHIPU_INPUT_ARRAY_LIMIT = 64;
 const ZHIPU_REJECTION_BODY = JSON.stringify({
   error: { code: "1214", message: "input array max 64" },
@@ -329,11 +343,68 @@ function distinctCandidates(
 }
 
 describe("memory-core embedding batch recovery over real transport", () => {
-  it("halves an oversized batch until the provider input array limit is met", async () => {
+  it("uses an explicit DashScope item cap after the first rejected request", async () => {
+    const server = await startEmbeddingServer({
+      reject: (inputCount) =>
+        inputCount > DASHSCOPE_INPUT_ARRAY_LIMIT
+          ? { status: 400, body: DASHSCOPE_REJECTION_BODY }
+          : undefined,
+    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        database,
+      );
+      const embeddings = await owner.embedChunksInBatches(distinctCandidates(33), generation);
+
+      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
+        33, 10, 10, 10, 3,
+      ]);
+      expect(embeddings).toEqual(
+        Array.from({ length: 33 }, (_, index) => [index + 1, (index % 10) + 0.5, 3]),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("uses Zhipu's explicit input array cap after the first rejected request", async () => {
     const server = await startEmbeddingServer({
       reject: (inputCount) =>
         inputCount > ZHIPU_INPUT_ARRAY_LIMIT
           ? { status: 400, body: ZHIPU_REJECTION_BODY }
+          : undefined,
+    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        database,
+      );
+      const embeddings = await owner.embedChunksInBatches(distinctCandidates(100), generation);
+
+      expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual([
+        100, 64, 36,
+      ]);
+      expect(embeddings).toEqual(
+        Array.from({ length: 100 }, (_, index) => [index + 1, (index % 64) + 0.5, 3]),
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("halves a splittable rejection without a parseable item cap", async () => {
+    const server = await startEmbeddingServer({
+      reject: (inputCount) =>
+        inputCount > 50
+          ? {
+              status: 400,
+              body: JSON.stringify({
+                error: { message: "request header fields too large" },
+              }),
+            }
           : undefined,
     });
     const database = new DatabaseSync(":memory:");
