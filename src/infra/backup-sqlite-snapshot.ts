@@ -33,7 +33,9 @@ import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
+  hasSqliteDatabaseHeader,
   isAppleDoubleMetadataFile,
+  prefetchSqliteDatabaseHeaders,
   resolveSqliteDatabaseFilePaths,
   SQLITE_SIDECAR_SUFFIXES,
 } from "./sqlite-files.js";
@@ -69,14 +71,23 @@ type CanonicalSqliteSource = {
   sourcePath: string;
 } & ({ role: "global" } | { role: "agent"; agentId: string });
 
-function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
+function stripSqliteSidecarSuffix(sourcePath: string): string {
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
     if (sourcePath.endsWith(suffix)) {
-      const databasePath = sourcePath.slice(0, -suffix.length);
-      return databasePath.endsWith(".sqlite") ? databasePath : undefined;
+      return sourcePath.slice(0, -suffix.length);
     }
   }
-  return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
+  return sourcePath;
+}
+
+/**
+ * The path whose header decides classification, when the (sidecar-stripped)
+ * name alone cannot. `.sqlite` names stay trusted by policy; every other
+ * candidate must prove it is a SQLite database through its on-disk header.
+ */
+function resolveSqliteHeaderProbePath(sourcePath: string): string | undefined {
+  const databasePath = stripSqliteSidecarSuffix(sourcePath);
+  return databasePath.endsWith(".sqlite") ? undefined : databasePath;
 }
 
 export function classifyBackupSqliteSource(
@@ -85,10 +96,8 @@ export function classifyBackupSqliteSource(
 ): "excluded" | "sqlite" | "opaque" | "opaque-skip" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);
-  const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
-  if (!transient && !databasePath) {
-    return undefined;
-  }
+  // Admission and exclusion policy is pure pathname work, so it runs before
+  // the header probe: unrelated trees never pay for descriptor isolation.
   const withinOwnedRoot =
     isPathWithin(resolvedSourcePath, inventory.stateDir) ||
     inventory.agentRoots.some(({ sourcePath: agentRoot }) =>
@@ -97,13 +106,29 @@ export function classifyBackupSqliteSource(
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
   }
-  if (transient || !inventory.isIncluded(resolvedSourcePath)) {
+  if (transient) {
     return "excluded";
+  }
+  // `.sqlite` names stay trusted by policy; every other candidate must prove
+  // it is a SQLite database through its on-disk header (probed only after the
+  // pathname gates above, so unrelated trees never pay for descriptor
+  // isolation). Only name-trusted SQLite families keep the historical
+  // "excluded" classification when the include policy rejects a path:
+  // directories and ordinary files under excluded-but-protected trees must
+  // stay "undefined" so the archive walker's include-over-exclude policy and
+  // directory traversal decide them, exactly as before this change.
+  const databasePath = stripSqliteSidecarSuffix(resolvedSourcePath);
+  const nameTrusted = databasePath.endsWith(".sqlite");
+  if (!inventory.isIncluded(resolvedSourcePath)) {
+    return nameTrusted ? "excluded" : undefined;
+  }
+  if (!nameTrusted && !hasSqliteDatabaseHeader(databasePath)) {
+    return undefined;
   }
   if (isAppleDoubleMetadataFile(resolvedSourcePath)) {
     return "excluded";
   }
-  const source = databasePath && inventory.resolveSqliteSource(databasePath);
+  const source = inventory.resolveSqliteSource(databasePath);
   if (source && source.role === "unresolvable-link") {
     return resolvedSourcePath === databasePath ? "opaque-skip" : "opaque";
   }
@@ -116,6 +141,7 @@ async function discoverBackupSqliteSources(params: {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
   const visitedDirectories = new Set<string>();
+  const candidateEntries: Array<{ entryPath: string; name: string }> = [];
   const gatewayLockDir = resolveGatewayLockDir(params.inventory.stateDir);
 
   async function visit(directoryPath: string): Promise<void> {
@@ -154,22 +180,36 @@ async function discoverBackupSqliteSources(params: {
       if (!params.inventory.isIncluded(entryPath)) {
         continue;
       }
-      if (
-        (!entry.isFile() && !entry.isSymbolicLink()) ||
-        classifyBackupSqliteSource(entryPath, params.inventory) !== "sqlite"
-      ) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) {
         continue;
       }
-      discoveredSourcePaths.add(entryPath);
-      if (entry.name.endsWith(".sqlite")) {
-        snapshotPaths.add(entryPath);
-      }
+      candidateEntries.push({ entryPath, name: entry.name });
     }
   }
 
   await visit(params.inventory.stateDir);
   for (const { sourcePath } of params.inventory.agentRoots) {
     await visit(sourcePath);
+  }
+
+  // One child process answers every header probe the classification below
+  // needs, so discovery never opens raw descriptors in this process.
+  prefetchSqliteDatabaseHeaders(
+    candidateEntries.flatMap(({ entryPath }) => {
+      const probePath = resolveSqliteHeaderProbePath(path.resolve(entryPath));
+      return probePath ? [probePath] : [];
+    }),
+  );
+  for (const { entryPath, name } of candidateEntries) {
+    if (classifyBackupSqliteSource(entryPath, params.inventory) !== "sqlite") {
+      continue;
+    }
+    discoveredSourcePaths.add(entryPath);
+    // Sidecar-suffixed names belong to their main database's snapshot;
+    // every other discovered source is a main database file.
+    if (!SQLITE_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix))) {
+      snapshotPaths.add(entryPath);
+    }
   }
 
   for (const database of params.inventory.coreDatabases) {

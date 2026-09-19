@@ -55,7 +55,7 @@ async function declareBackupResources(state: OpenClawTestState): Promise<void> {
 }
 
 async function withHardlinkedDatabase(
-  ownerName: "alpha.sqlite" | "zeta.sqlite",
+  ownerName: string,
   run: (fixture: HardlinkedDatabase) => Promise<void>,
   ownership: "declared" | "opaque" = "declared",
 ): Promise<void> {
@@ -69,7 +69,9 @@ async function withHardlinkedDatabase(
       const aliasPath = state.statePath(
         "plugins",
         "hardlinks",
-        ownerName === "alpha.sqlite" ? "zeta.sqlite" : "alpha.sqlite",
+        ownerName.startsWith("alpha")
+          ? `zeta${ownerName.slice("alpha".length)}`
+          : `alpha${ownerName.slice("zeta".length)}`,
       );
       await fs.mkdir(path.dirname(ownerPath), { recursive: true });
       const sqlite = requireNodeSqlite();
@@ -221,6 +223,34 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         });
 
         expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+        expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+      });
+    },
+  );
+
+  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
+    "preserves a live writer's main-file POSIX lock when header-probing a declared plugin %s named .db",
+    async (layout) => {
+      await withHardlinkedDatabase("alpha.db", async ({ state, ownerPath, aliasPath }) => {
+        if (layout === "singleton") {
+          await fs.unlink(aliasPath);
+        }
+        const locksBefore = readMainDatabasePosixLocks(ownerPath);
+        expect(locksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
+
+        const archive = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+        });
+
+        // The header probe must run outside this process: closing a raw
+        // descriptor here would drop the live writer's POSIX locks above.
+        expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+        // Verified snapshots (not opaque copies) prove the probe classified
+        // the .db names as SQLite databases.
+        expect(archive.warnings ?? []).toEqual([]);
         expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
       });
     },
