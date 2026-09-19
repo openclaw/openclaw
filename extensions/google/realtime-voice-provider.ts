@@ -64,6 +64,7 @@ import {
 import {
   buildGoogleLiveInterruptTurn,
   buildThinkingConfig,
+  emitsCompleteInputTranscripts,
   isGemini31LiveModel,
   isResponseDone,
   modelSupportsToolResultContinuation,
@@ -967,21 +968,20 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
     const owner = this.connectionOwner;
-    // Live 3.1 emits complete input utterances without the optional finished flag.
-    const completeInput = role === "user" && isGemini31LiveModel(this.model);
-    const text = transcript.text;
-    if (text) {
+    // Live 3.1 and 3.8 emit complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && emitsCompleteInputTranscripts(this.model);
+    if (transcript.text) {
       const pending = this.pendingTranscripts[role],
-        bytes = Buffer.byteLength(text, "utf8");
+        bytes = Buffer.byteLength(transcript.text, "utf8");
       if (pending.byteCount + bytes > GOOGLE_REALTIME_MAX_PENDING_TRANSCRIPT_BYTES) {
         this.resetPendingTranscripts();
         this.failConnection(new Error(GOOGLE_REALTIME_TRANSCRIPT_OVERFLOW_MESSAGE));
         return false;
       }
-      pending.text += text;
+      pending.text += transcript.text;
       pending.byteCount += bytes;
       if (!completeInput) {
-        this.emitTranscript(role, text, false);
+        this.emitTranscript(role, transcript.text, false);
         if (this.connectionOwner !== owner) {
           return false;
         }
