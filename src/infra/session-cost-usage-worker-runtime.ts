@@ -123,7 +123,13 @@ export function prepareUsageCostWorker(params: {
     add(toDatabaseOptions(resolveSqliteReadScope({ ...target, env })));
   }
   return {
-    location: { agentId, databasePath, storePath, env },
+    location: {
+      agentId,
+      databasePath,
+      storePath,
+      // Windows preparation uses a Proxy; transfer data needs its resolved root in a plain snapshot.
+      env: { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
+    },
     config: params.config,
     agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
     databases: [...databases.values()],
