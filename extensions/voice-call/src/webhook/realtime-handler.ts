@@ -240,22 +240,15 @@ function buildForcedConsultSpeechPrompt(result: string): string {
   ].join("\n");
 }
 
-type PendingStreamToken = {
-  expiry: number;
+type StreamSessionMetadata = {
+  providerName: "twilio" | "telnyx";
+  callId: string;
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
-  providerName?: "twilio" | "telnyx";
-  callId?: string;
 };
 
-type StreamSessionRequest = {
-  providerName?: "twilio" | "telnyx";
-  callId?: string;
-  from?: string;
-  to?: string;
-  direction?: "inbound" | "outbound";
-};
+type PendingStreamToken = StreamSessionMetadata & { expiry: number };
 
 export type StreamSession = {
   token: string;
@@ -423,8 +416,12 @@ export class RealtimeCallHandler {
     return `${this.publicPathPrefix}${normalizeWebhookPath(this.config.streamPath ?? "/voice/stream/realtime")}`;
   }
 
-  buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
-    const rawDirection = params?.get("Direction");
+  buildTwiMLPayload(
+    req: http.IncomingMessage,
+    params: URLSearchParams,
+    callId: string,
+  ): WebhookResponsePayload {
+    const rawDirection = params.get("Direction");
     const previousOrigin = this.publicOrigin;
     if (!previousOrigin) {
       this.publicOrigin = req.headers.host ?? DEFAULT_HOST;
@@ -432,8 +429,9 @@ export class RealtimeCallHandler {
     try {
       const { streamUrl } = this.issueStreamSession({
         providerName: "twilio",
-        from: params?.get("From") ?? undefined,
-        to: params?.get("To") ?? undefined,
+        callId,
+        from: params.get("From") ?? undefined,
+        to: params.get("To") ?? undefined,
         direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
       });
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -468,7 +466,7 @@ export class RealtimeCallHandler {
       return;
     }
 
-    const providerName = callerMeta.providerName ?? "twilio";
+    const providerName = callerMeta.providerName;
     const adapter: StreamFrameAdapter =
       providerName === "telnyx" ? new TelnyxStreamFrameAdapter() : new TwilioStreamFrameAdapter();
 
@@ -506,6 +504,10 @@ export class RealtimeCallHandler {
           }
           if (frame.kind === "start") {
             if (initialized) {
+              return;
+            }
+            if (providerName === "twilio" && frame.providerCallId !== callerMeta.callId) {
+              ws.close(1008, "Call identity does not match stream session");
               return;
             }
             initialized = true;
@@ -691,9 +693,9 @@ export class RealtimeCallHandler {
     }
   }
 
-  issueStreamSession(request: StreamSessionRequest = {}): StreamSession {
+  issueStreamSession(request: StreamSessionMetadata): StreamSession {
     const token = this.issueStreamToken({
-      providerName: request.providerName ?? "twilio",
+      providerName: request.providerName,
       callId: request.callId,
       from: request.from,
       to: request.to,
@@ -704,7 +706,7 @@ export class RealtimeCallHandler {
     return { token, streamUrl };
   }
 
-  private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
+  private issueStreamToken(meta: StreamSessionMetadata): string {
     const token = randomUUID();
     const now = Date.now();
     const expiry = resolveExpiresAtMsFromDurationMs(STREAM_TOKEN_TTL_MS, { nowMs: now });
@@ -734,7 +736,7 @@ export class RealtimeCallHandler {
     return token;
   }
 
-  private consumeStreamToken(token: string): Omit<PendingStreamToken, "expiry"> | null {
+  private consumeStreamToken(token: string): StreamSessionMetadata | null {
     const entry = this.pendingStreamTokens.get(token);
     if (!entry) {
       return null;
@@ -743,20 +745,15 @@ export class RealtimeCallHandler {
     if (!isFutureDateTimestampMs(entry.expiry)) {
       return null;
     }
-    return {
-      from: entry.from,
-      to: entry.to,
-      direction: entry.direction,
-      providerName: entry.providerName,
-      callId: entry.callId,
-    };
+    const { expiry: _expiry, ...metadata } = entry;
+    return metadata;
   }
 
   private async handleCall(
     streamSid: string,
     callSid: string,
     ws: WebSocket,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
+    callerMeta: StreamSessionMetadata,
     adapter: StreamFrameAdapter,
   ): Promise<RealtimeTelephonyBinding | null> {
     const preparedCall = await this.prepareCallInManager(callSid, callerMeta);
@@ -1994,10 +1991,7 @@ export class RealtimeCallHandler {
     }
   }
 
-  private async prepareCallInManager(
-    callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry"> = {},
-  ) {
+  private async prepareCallInManager(callSid: string, callerMeta: StreamSessionMetadata) {
     const timestamp = Date.now();
     const baseFields = {
       providerCallId: callSid,
@@ -2017,7 +2011,7 @@ export class RealtimeCallHandler {
 
   private async resolveRealtimeCall(
     callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
+    callerMeta: StreamSessionMetadata,
     baseFields: {
       providerCallId: string;
       timestamp: number;
@@ -2026,7 +2020,10 @@ export class RealtimeCallHandler {
       to?: string;
     },
   ): Promise<CallRecord | null> {
-    if (callerMeta.callId) {
+    // Telnyx binds by its internal call id; Twilio identity is enforced by the
+    // start-frame CallSid comparison, so it creates the record below instead of
+    // looking up by a provider CallSid getCallForStream would not resolve.
+    if (callerMeta.providerName === "telnyx" && callerMeta.callId) {
       const call = await this.manager.getCallForStream(callerMeta.callId);
       return call?.providerCallId === callSid ? call : null;
     }
