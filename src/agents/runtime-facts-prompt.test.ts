@@ -37,9 +37,10 @@ describe("approved executable runtime facts", () => {
       file.agents!.main!.allowlist!.reverse();
       expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(added);
       file.agents = {};
-      expect((await buildRuntimeFactsContext(params)).at(0)?.text).toBe(
-        "## Approved executables\nnone",
-      );
+      expect(await buildRuntimeFactsContext(params)).toEqual([]);
+      expect(
+        (await buildRuntimeFactsContext({ ...params, includeEmptySnapshots: true })).at(0)?.text,
+      ).toBe("## Approved executables\nnone");
     }));
 
   it("bounds hints and omits command approvals, global wildcards, bare names, and unsafe or oversized tokens", () =>

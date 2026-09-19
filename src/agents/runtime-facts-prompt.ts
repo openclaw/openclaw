@@ -20,11 +20,16 @@ type RuntimeFactsParams = {
   sessionId?: string;
   agentId: string;
   cfg: OpenClawConfig;
+  /** Keep literal `none` snapshots so append-only carriers can supersede prior facts. */
+  includeEmptySnapshots?: boolean;
 };
 
 /** Shared by embedded carriers and CLI current-turn context. */
 export async function buildMediaTaskRuntimeContext(
-  params: Pick<RuntimeFactsParams, "capabilityToolNames" | "sessionKey" | "agentId">,
+  params: Pick<
+    RuntimeFactsParams,
+    "capabilityToolNames" | "sessionKey" | "agentId" | "includeEmptySnapshots"
+  >,
 ): Promise<string | undefined> {
   const sections = [
     ["image_generate", buildActiveImageGenerationTaskPromptContextForSession],
@@ -34,15 +39,22 @@ export async function buildMediaTaskRuntimeContext(
   const facts = await Promise.all(
     sections
       .filter(([tool]) => params.capabilityToolNames.has(tool))
-      .map(
-        async ([tool, build]) =>
-          (await build(params.sessionKey, params.agentId)) ?? `- tool=${tool}; none`,
-      ),
+      .map(async ([tool, build]) => {
+        const text = await build(params.sessionKey, params.agentId);
+        if (text) {
+          return text;
+        }
+        return params.includeEmptySnapshots ? `- tool=${tool}; none` : undefined;
+      }),
   );
-  return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
+  const present = facts.filter((text): text is string => Boolean(text));
+  return present.length ? ["## Media Generation Tasks", ...present].join("\n") : undefined;
 }
 
-function buildApprovedExecutablesRuntimeContext(agentId: string): string {
+function buildApprovedExecutablesRuntimeContext(
+  agentId: string,
+  includeEmptySnapshots: boolean,
+): string | undefined {
   const header = "## Approved executables";
   try {
     const { allowlist } = resolveExecApprovalsFromFile({ file: loadExecApprovals(), agentId });
@@ -64,6 +76,9 @@ function buildApprovedExecutablesRuntimeContext(agentId: string): string {
       })
       .toSorted()
       .slice(0, 10);
+    if (!hints.length && !includeEmptySnapshots) {
+      return undefined;
+    }
     return [
       header,
       ...(hints.length
@@ -83,27 +98,33 @@ export async function buildRuntimeFactsContext(
   params: RuntimeFactsParams,
 ): Promise<RuntimeContextFragment[]> {
   const sections: string[] = [];
+  const includeEmptySnapshots = params.includeEmptySnapshots === true;
   if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
-    sections.push(buildApprovedExecutablesRuntimeContext(params.agentId));
+    const approved = buildApprovedExecutablesRuntimeContext(params.agentId, includeEmptySnapshots);
+    if (approved) {
+      sections.push(approved);
+    }
   }
   if (params.capabilityToolNames.has("process")) {
     const sessions = listActiveProcessSessionReferences({
       scopeKey: resolveProcessToolScopeKey(params),
     }).toSorted((a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
-    sections.push(
-      [
-        "Active exec sessions:",
-        ...(sessions.length
-          ? sessions.map((session) => {
-              const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
-              const cwd = session.cwd
-                ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
-                : "";
-              return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
-            })
-          : ["none"]),
-      ].join("\n"),
-    );
+    if (sessions.length || includeEmptySnapshots) {
+      sections.push(
+        [
+          "Active exec sessions:",
+          ...(sessions.length
+            ? sessions.map((session) => {
+                const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+                const cwd = session.cwd
+                  ? ` cwd=${truncateUtf16Safe(sanitizeForPromptLiteral(session.cwd), 256)}`
+                  : "";
+                return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
+              })
+            : ["none"]),
+        ].join("\n"),
+      );
+    }
   }
   const canSpawn = params.capabilityToolNames.has("sessions_spawn");
   const subagentContext = buildActiveSubagentRuntimeContext({
@@ -112,8 +133,10 @@ export async function buildRuntimeFactsContext(
     controllerAgentId: params.agentId,
     includeSpawnContext: canSpawn,
   });
-  if (subagentContext || canSpawn) {
-    sections.push(subagentContext ?? "## Active Subagents\nnone");
+  if (subagentContext) {
+    sections.push(subagentContext);
+  } else if (canSpawn && includeEmptySnapshots) {
+    sections.push("## Active Subagents\nnone");
   }
   const media = await buildMediaTaskRuntimeContext(params);
   if (media) {
