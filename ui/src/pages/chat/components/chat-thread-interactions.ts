@@ -117,6 +117,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   queue: ChatQueueItem[];
   initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];
+  composerPendingInputIds?: ReadonlySet<string>;
   showThinking: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;

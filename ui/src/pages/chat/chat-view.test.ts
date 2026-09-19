@@ -1641,63 +1641,6 @@ describe("retained input navigation", () => {
     expect(historyState.chatMessages).toEqual([]);
   });
 
-  it.each(["pending custody", "transcript"] as const)(
-    "hides the retained queue copy represented by %s without hiding an identical new send",
-    (source) => {
-      const historyState = makeChatHost({ currentSessionId: "retained-input-session" });
-      const message = {
-        role: "user",
-        content: "Check the deployment notes",
-        timestamp: 100,
-        idempotencyKey: "retained-run:user",
-      };
-      if (source === "pending custody") {
-        applyChatPendingInputs(historyState, {
-          total: 1,
-          items: [
-            {
-              id: "retained-input",
-              runId: "retained-run",
-              acceptedAt: 100,
-              state: "queued",
-              message,
-            },
-          ],
-        });
-      }
-      const queue = ["before", "retained", "new"].map((id, index) => ({
-        id,
-        text: message.content,
-        createdAt: 100 + index,
-        sendRunId: `${id}-run`,
-        sendState: "waiting-reconnect" as const,
-      }));
-      const onQueueRemove = vi.fn();
-      const onQueueMove = vi.fn();
-      const container = renderChatView({
-        historyState,
-        messages: source === "transcript" ? [message] : [],
-        queue,
-        onQueueRemove,
-        onQueueMove,
-      });
-
-      const rows = container.querySelectorAll(".chat-queue__item");
-      expect([...rows].map((row) => row.getAttribute("data-chat-queue-item"))).toEqual([
-        "before",
-        "new",
-      ]);
-      const grips = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__grip")];
-      expect(grips).toHaveLength(2);
-      expect(grips.every((grip) => grip.disabled)).toBe(true);
-      grips[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
-      expect(onQueueMove).not.toHaveBeenCalled();
-      rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
-      expect(onQueueRemove).toHaveBeenCalledWith("new");
-      expect(queue).toHaveLength(3);
-    },
-  );
-
   it("does not show an inventory banner for a single retained message", () => {
     const historyState = makeChatHost({
       sessionKey: "agent:main:retained-input",

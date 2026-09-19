@@ -6,9 +6,11 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
@@ -36,18 +38,79 @@ type PendingInputView = {
   before?: number;
   readonly loading: boolean;
   error?: string;
+  /** Queued inputs first observed while this session was already presented. */
+  composerInputIds: ReadonlySet<string>;
   revision: number;
   request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
+function buildPendingInputAttachments(
+  inputId: string,
+  media: ReturnType<typeof readTranscriptMediaEntries>,
+): ChatAttachment[] {
+  return media.map((entry) => {
+    const attachment: ChatAttachment = {
+      id: `pending-input:${inputId}:media:${entry.factIndex}`,
+      previewUrl: entry.path,
+      mimeType: entry.mediaType ?? "application/octet-stream",
+    };
+    if (entry.fileName) {
+      attachment.fileName = entry.fileName;
+    }
+    if (entry.sizeBytes !== undefined) {
+      attachment.sizeBytes = entry.sizeBytes;
+    }
+    return attachment;
+  });
+}
+
+export function buildPendingInputQueueItems(
+  inputs: ChatPendingInputsPage["items"],
+  workspaceSyncPendingRunIds: readonly string[] = [],
+  workerSetupPending = false,
+  composerInputIds?: ReadonlySet<string>,
+): ChatQueueItem[] {
+  return inputs.flatMap((input) => {
+    if (
+      input.state !== "queued" ||
+      (composerInputIds !== undefined && !composerInputIds.has(input.id))
+    ) {
+      return [];
+    }
+    const media = readTranscriptMediaEntries(input.message);
+    const stateLabel =
+      input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
+        ? t(
+            workerSetupPending
+              ? "chat.pendingInputs.waitingForWorkerSetup"
+              : "chat.pendingInputs.waitingForWorkspaceSync",
+          )
+        : undefined;
+    const sourceClients = readMessageClientSources(input.message);
+    return [
+      {
+        id: `pending-input:${input.id}`,
+        text: extractTextCached(input.message) ?? "",
+        createdAt: input.acceptedAt,
+        ...(input.runId ? { sendRunId: input.runId } : {}),
+        ...(media.length ? { attachments: buildPendingInputAttachments(input.id, media) } : {}),
+        custody: {
+          kind: "pending-input",
+          ...(stateLabel ? { stateLabel } : {}),
+          ...(sourceClients.length ? { sourceClients } : {}),
+        },
+      },
+    ];
+  });
+}
+
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
   browserInputs: readonly ChatQueueItem[] = [],
-  workspaceSyncPendingRunIds: readonly string[] = [],
-  workerSetupPending = false,
   messageRecovery?: ChatMessageRecovery,
+  composerInputIds?: ReadonlySet<string>,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
@@ -55,6 +118,11 @@ export function buildPendingInputItems(
     return items;
   }
   for (const input of inputs) {
+    // Only inputs accepted while this pane was already active use the transient
+    // composer tray. Inputs discovered on navigation should already read as chat.
+    if (input.state === "queued" && composerInputIds?.has(input.id) !== false) {
+      continue;
+    }
     if (
       searchQuery?.trim() &&
       !messageMatchesSearchQuery(input.message, searchQuery, messageRecovery)
@@ -68,21 +136,6 @@ export function buildPendingInputItems(
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
       ),
     );
-    if (input.state === "queued") {
-      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
-        items.push({
-          kind: "notice",
-          key: `pending-input:${input.id}:state`,
-          timestamp: input.acceptedAt,
-          text: t(
-            workerSetupPending
-              ? "chat.pendingInputs.waitingForWorkerSetup"
-              : "chat.pendingInputs.waitingForWorkspaceSync",
-          ),
-        });
-      }
-      continue;
-    }
     items.push({
       kind: "notice",
       key: `pending-input:${input.id}:state`,
@@ -193,6 +246,7 @@ export function applyChatPendingInputs(
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
+      composerInputIds: new Set(),
       revision: 0,
       get loading() {
         return this.request?.kind === "navigation";
@@ -200,6 +254,16 @@ export function applyChatPendingInputs(
     };
     pendingInputViews.set(state, view);
   } else {
+    const previousIds = new Set(view.page.items.map((input) => input.id));
+    const currentQueuedIds = new Set(
+      displayPage.items.filter((input) => input.state === "queued").map((input) => input.id),
+    );
+    view.composerInputIds = new Set([
+      ...[...view.composerInputIds].filter((id) => currentQueuedIds.has(id)),
+      ...displayPage.items
+        .filter((input) => input.state === "queued" && !previousIds.has(input.id))
+        .map((input) => input.id),
+    ]);
     view.revision += 1;
     if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
       view.request = undefined;
