@@ -169,6 +169,36 @@ describe("native hook relay CLI", () => {
     expect(stderr.text()).toBe("err");
   });
 
+  it.each(["", "   "])("rejects blank timeout %j before reading relay input", async (timeout) => {
+    const invokeBridge = vi.fn();
+    const callGateway = vi.fn();
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        timeout,
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        invokeBridge: invokeBridge as never,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("invalid native hook timeout");
+    expect(invokeBridge).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed timeouts before reading relay input", async () => {
     const invokeBridge = vi.fn();
     const callGateway = vi.fn();
