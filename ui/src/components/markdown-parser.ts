@@ -12,6 +12,7 @@ import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
 } from "./markdown-assistant-transcript.ts";
+import { installMarkdownAudioTranscript } from "./markdown-audio-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { installMarkdownDetails } from "./markdown-details.ts";
 import {
@@ -155,6 +156,7 @@ export function createMarkdownParser(): MarkdownItParser {
   // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
   // markdown-it uses <s> tags; we added "s" to the sanitizer allowlist.
   markdownParser.enable("strikethrough");
+  installMarkdownAudioTranscript(markdownParser);
   installAssistantTranscriptRoleMarkdown(markdownParser, escapeMarkdownHtml);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
