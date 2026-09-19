@@ -34,6 +34,7 @@ import {
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import { executeDeliveryQueueAck } from "../infra/outbound/delivery-queue-ack.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import {
   readApnsRegistrationFromDatabase,
@@ -426,6 +427,9 @@ export function executeSharedStateCommand(
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
   };
+  if (command.type === "deliveryQueue.ack") {
+    return executeDeliveryQueueAck(command.input, writeOptions);
+  }
   if (command.type === "skillUploads.commit") {
     return commitSkillUploadInDatabase(command.input, writeOptions);
   }

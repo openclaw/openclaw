@@ -707,8 +707,16 @@ existing synchronous transaction owner. Outbound dead-letter health counts use
 the existing grouped-count kernel in the shared-state worker. Health collection
 captures its original worker admission before awaiting configuration and other
 health work; cached health replies await the count while retaining cached ingress
-pressure. Other outbound queue operations and media custody remain separate
-migration work.
+pressure.
+
+Outbound ACK settlement also runs in that worker. It captures the selected state
+root and options before admission, preserves exact attempt ownership checks,
+and returns committed media paths before host cleanup. A lost worker reply
+fails the ACK without replaying it or inferring success from an absent row;
+pre-send best-effort fallback therefore cannot authorize a provider send after
+an unacknowledged settlement. Media stays available for existing orphan cleanup.
+Other outbound queue operations and media custody remain separate migration work.
+Schemas, retained receipts, update behavior, and cleanup policy are unchanged.
 
 Conversation sends, turns, and queue completion retain their logical agent and
 physical store while waiting for agent write admission. Retry validation reads

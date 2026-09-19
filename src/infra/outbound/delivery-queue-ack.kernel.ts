@@ -13,17 +13,12 @@ import { hasLiveDeliveryQueueClaim } from "../delivery-queue-sqlite.types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-paths.js";
 import { createDeliveryQueueMediaRetentionInDatabase } from "./delivery-queue-media-staging.kernel.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
+import type {
+  AckDeliveryOptions,
+  FailPendingDeliveryResult,
+} from "./delivery-queue-settlement.types.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
-
-export type AckDeliveryOptions = {
-  /** Caller holds a GC-visible recovery lease until its active adapter settles. */
-  retainSpoolArtifacts?: boolean;
-  /** An intentionally suppressed pre-send batch must not become a success receipt. */
-  suppressCompletionReceipt?: boolean;
-  /** Prevent an older provider attempt from settling a replacement owner. */
-  expectedPlatformSendAttemptId?: string | null;
-};
 
 /** Retires an unsent live claim while its adapter preparation still owns resources. */
 export function retireUnsentDeliveryInDatabase(
@@ -160,8 +155,6 @@ export function ackDeliveryInDatabase(
   }
   return spoolPaths;
 }
-
-export type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
 
 /** Conditionally dead-letter a freshly re-read pending entry without a claimed state. */
 export function failPendingDeliveryInDatabase(
