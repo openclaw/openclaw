@@ -173,6 +173,33 @@ describe("coerceDisplayValue surrogate-safe truncation", () => {
   });
 });
 
+describe("coerceDisplayValue deep array nesting", () => {
+  it("does not overflow the stack on a deeply nested array argument", () => {
+    let value: unknown = "x";
+    for (let i = 0; i < 5_000; i += 1) {
+      value = [value];
+    }
+    const { detail } = resolveToolVerbAndDetailForArgs({
+      toolKey: "custom_tool",
+      args: { note: value },
+      fallbackDetailKeys: ["note"],
+      detailMode: "first",
+    });
+    // Beyond the depth limit the nested array no longer contributes a display value.
+    expect(detail).toBeUndefined();
+  });
+
+  it("keeps normal shallow array nesting visible", () => {
+    const { detail } = resolveToolVerbAndDetailForArgs({
+      toolKey: "custom_tool",
+      args: { note: [["a", "b"], "c"] },
+      fallbackDetailKeys: ["note"],
+      detailMode: "first",
+    });
+    expect(detail).toBe("a, b, c");
+  });
+});
+
 describe("progress card tool display", () => {
   it.each(["progress_card", "update_plan"])(
     "keeps %s card content out of generic labels",
