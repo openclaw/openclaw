@@ -21,11 +21,11 @@
     },
     "webSearch.baseUrl": {
       "label": "Perplexity Base URL",
-      "help": "Optional Perplexity/OpenRouter chat-completions base URL override."
+      "help": "Optional direct Perplexity Agent API or OpenRouter compatibility base URL."
     },
     "webSearch.model": {
       "label": "Perplexity Model",
-      "help": "Optional Sonar/OpenRouter model override."
+      "help": "Optional legacy Sonar preset or Agent API/OpenRouter model override."
     }
   },
   "contracts": {

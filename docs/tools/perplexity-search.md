@@ -1,5 +1,5 @@
 ---
-summary: "Perplexity Search API and Sonar/OpenRouter compatibility for web_search"
+summary: "Perplexity Search API, Agent API, and OpenRouter compatibility for web_search"
 read_when:
   - You want to use Perplexity Search for web search
   - You need PERPLEXITY_API_KEY or OPENROUTER_API_KEY setup
@@ -8,7 +8,23 @@ title: "Perplexity search"
 
 OpenClaw supports the Perplexity Search API as a `web_search` provider. It returns structured results with `title`, `url`, and `snippet` fields.
 
-For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter setups. If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `plugins.entries.perplexity.config.webSearch.apiKey`, or set `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, the provider switches to the chat-completions path and returns AI-synthesized answers with citations instead of structured Search API results.
+For compatibility, OpenClaw also supports synthesized Perplexity answers. Direct
+Perplexity `baseUrl` / `model` overrides use the Agent API, while
+`OPENROUTER_API_KEY`, an `sk-or-...` configured key, or another non-Perplexity
+base URL keeps the OpenAI-compatible chat-completions path. Both return one
+AI-synthesized answer with citations instead of structured Search API rows.
+
+Legacy direct Sonar model names map to the replacement Agent API presets:
+
+| Sonar model           | Agent API preset |
+| --------------------- | ---------------- |
+| `sonar`               | `fast`           |
+| `sonar-pro`           | `low`            |
+| `sonar-reasoning-pro` | `medium`         |
+| `sonar-deep-research` | `high`           |
+
+Other direct model overrides are sent as Agent API model IDs with web search
+enabled.
 
 ## Install plugin
 
@@ -90,6 +106,35 @@ Optional compatibility controls:
 }
 ```
 
+### Direct synthesized answers
+
+Set a direct Perplexity model override to keep synthesized `web_search` answers
+through Agent API instead of structured Search API rows:
+
+```json5
+{
+  plugins: {
+    entries: {
+      perplexity: {
+        config: {
+          webSearch: {
+            apiKey: "pplx-...",
+            model: "sonar-pro", // maps to Agent API preset "low"
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        provider: "perplexity",
+      },
+    },
+  },
+}
+```
+
 ## Where to set the key
 
 **Via config:** run `openclaw configure --section web`. It stores the key in `~/.openclaw/openclaw.json` under `plugins.entries.perplexity.config.webSearch.apiKey`. That field also accepts SecretRef objects.
@@ -142,7 +187,7 @@ Total content budget (max 1000000).
 Per-page token limit.
 </ParamField>
 
-For the legacy Sonar/OpenRouter compatibility path:
+For the synthesized Agent API/OpenRouter compatibility paths:
 
 - `query`, `count`, and `freshness` are accepted.
 - `count` is compatibility-only there; the response is still one synthesized answer with citations rather than an N-result list.
@@ -200,8 +245,8 @@ await web_search({
 ## Notes
 
 - Perplexity Search API returns structured web search results (`title`, `url`, `snippet`).
-- OpenRouter, or an explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model`, switches Perplexity back to Sonar chat completions for compatibility.
-- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows.
+- A direct Perplexity `baseUrl` / `model` override uses Agent API. OpenRouter and other non-Perplexity base URLs keep chat completions for compatibility.
+- Agent API/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
 
 ## Related
