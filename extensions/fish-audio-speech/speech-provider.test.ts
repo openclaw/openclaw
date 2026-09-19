@@ -171,6 +171,20 @@ describe("Fish Audio speech provider", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    ["null", "null"],
+    ["a bare array", '[{"_id":"own-0","title":"Own 0"}]'],
+    ["a JSON scalar", "42"],
+  ])("rejects a %s voice-list envelope instead of paging to empty", async (_label, body) => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(body, { status: 200 }),
+    ) as unknown as typeof fetch;
+    const provider = buildFishAudioSpeechProvider();
+    await expect(
+      provider.listVoices?.({ providerConfig: { apiKey: "fish-test" }, timeoutMs: 9_000 }),
+    ).rejects.toThrow("Fish Audio voices: malformed JSON response");
+  });
+
   it("fails closed on blank credentials before network access", async () => {
     vi.stubEnv("FISH_API_KEY", "   ");
     vi.stubEnv("FISH_AUDIO_API_KEY", "   ");
