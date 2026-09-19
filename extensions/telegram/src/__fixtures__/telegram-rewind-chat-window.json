@@ -1,0 +1,36 @@
+[
+  {
+    "label": "Conversation context",
+    "source": "telegram",
+    "type": "chat_window",
+    "sessionTranscriptDedupeMessageIds": ["assistant-2"],
+    "payload": {
+      "order": "chronological",
+      "relation": "selected_for_current_message",
+      "messages": [
+        {
+          "message_id": "101",
+          "sender": "Pat",
+          "sender_id": "10",
+          "timestamp_ms": 1000,
+          "body": "retained question"
+        },
+        {
+          "message_id": "102",
+          "sender": "Pat",
+          "sender_id": "10",
+          "timestamp_ms": 2000,
+          "body": "discarded question"
+        },
+        {
+          "message_id": "103",
+          "sender": "OpenClaw (you)",
+          "sender_id": "900",
+          "timestamp_ms": 3000,
+          "body": "discarded reply",
+          "session_transcript_id": "assistant-2"
+        }
+      ]
+    }
+  }
+]
