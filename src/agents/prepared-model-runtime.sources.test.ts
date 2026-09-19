@@ -325,6 +325,56 @@ describe("prepared catalog source composition", () => {
     expect(captureModelsJsonContents(input)).toBe("{ malformed");
   });
 
+  it("removes credential material but keeps transport headers from an inherited catalog", () => {
+    const { facts } = fixture();
+    const stateDir = tempDirs.make("openclaw-prepared-inherited-auth-boundary-");
+    const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
+    fs.mkdirSync(systemAgentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(systemAgentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          inherited: {
+            apiKey: "system-agent-key",
+            headers: {
+              Authorization: "Bearer system-agent",
+              "X-Catalog-Route": "keep-provider-route",
+            },
+            models: [
+              {
+                id: "inherited-model",
+                headers: {
+                  "X-Auth-Token": "system-agent-token",
+                  "X-Model-Route": "keep-model-route",
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+    const input = normalizePreparedModelRuntimeInput({
+      ...facts.input,
+      agentId: "ops",
+      agentDir: secondaryAgentDir,
+      config: {
+        ...facts.input.config,
+        agents: { defaults: { systemAgent: { agentId: "main" } } },
+      },
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const inherited = JSON.parse(captureModelsJsonContents(input) ?? "null");
+    expect(inherited.providers.inherited).not.toHaveProperty("apiKey");
+    expect(inherited.providers.inherited.headers).toEqual({
+      "X-Catalog-Route": "keep-provider-route",
+    });
+    expect(inherited.providers.inherited.models[0].headers).toEqual({
+      "X-Model-Route": "keep-model-route",
+    });
+  });
+
   it.each(["same", "static route", "credentials", "metadata"] as const)(
     "shares captured registries across workspaces only for equivalent sources: %s",
     async (difference) => {

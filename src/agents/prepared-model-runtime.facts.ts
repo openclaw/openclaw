@@ -5,6 +5,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
@@ -23,6 +24,7 @@ import { getPluginRegistryInspectionResources } from "../plugins/registry-inspec
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import { discoverModelsFromCapturedSources } from "./agent-model-discovery.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
@@ -558,13 +560,85 @@ function readModelsJsonContents(agentDir: string): string | null {
   }
 }
 
+function sanitizeInheritedHeaders(value: unknown): { changed: boolean; value: unknown } {
+  if (!isRecord(value)) {
+    return { changed: false, value };
+  }
+  const entries = Object.entries(value).filter(
+    ([name]) => !isLikelySensitiveModelProviderHeaderName(name),
+  );
+  return entries.length === Object.keys(value).length
+    ? { changed: false, value }
+    : { changed: true, value: Object.fromEntries(entries) };
+}
+
+function sanitizeInheritedModel(value: unknown): { changed: boolean; value: unknown } {
+  if (!isRecord(value)) {
+    return { changed: false, value };
+  }
+  const headers = sanitizeInheritedHeaders(value.headers);
+  return headers.changed
+    ? { changed: true, value: { ...value, headers: headers.value } }
+    : { changed: false, value };
+}
+
+function sanitizeInheritedProvider(value: unknown): { changed: boolean; value: unknown } {
+  if (!isRecord(value)) {
+    return { changed: false, value };
+  }
+  const headers = sanitizeInheritedHeaders(value.headers);
+  const models = Array.isArray(value.models)
+    ? value.models.map((model) => sanitizeInheritedModel(model))
+    : undefined;
+  const modelsChanged = models?.some((model) => model.changed) === true;
+  const apiKeyChanged = Object.hasOwn(value, "apiKey");
+  if (!headers.changed && !modelsChanged && !apiKeyChanged) {
+    return { changed: false, value };
+  }
+  const sanitized = { ...value };
+  delete sanitized.apiKey;
+  if (headers.changed) {
+    sanitized.headers = headers.value;
+  }
+  if (modelsChanged && models) {
+    sanitized.models = models.map((model) => model.value);
+  }
+  return { changed: true, value: sanitized };
+}
+
+function sanitizeInheritedModelsJsonContents(contents: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    return contents;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) {
+    return contents;
+  }
+  const providers = Object.entries(parsed.providers).map(
+    ([providerId, provider]) => [providerId, sanitizeInheritedProvider(provider)] as const,
+  );
+  if (!providers.some(([, provider]) => provider.changed)) {
+    return contents;
+  }
+  return JSON.stringify({
+    ...parsed,
+    providers: Object.fromEntries(
+      providers.map(([providerId, provider]) => [providerId, provider.value]),
+    ),
+  });
+}
+
 export function captureModelsJsonContents(
   input: Pick<PreparedModelRuntimeInput, "agentDir" | "fallbackAgentDir">,
 ): string | null {
   const localContents = readModelsJsonContents(input.agentDir);
-  return localContents !== null || !input.fallbackAgentDir
-    ? localContents
-    : readModelsJsonContents(input.fallbackAgentDir);
+  if (localContents !== null || !input.fallbackAgentDir) {
+    return localContents;
+  }
+  const inheritedContents = readModelsJsonContents(input.fallbackAgentDir);
+  return inheritedContents === null ? null : sanitizeInheritedModelsJsonContents(inheritedContents);
 }
 export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
   sha256Base64Url(stableStringify(value));

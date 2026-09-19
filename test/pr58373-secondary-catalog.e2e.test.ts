@@ -53,7 +53,13 @@ describe("PR #58373 secondary catalog runtime proof", () => {
       const envSnapshot = captureEnv([...envKeys]);
       let providerServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      const providerRequests: Array<{ method: string; url: string }> = [];
+      const providerRequests: Array<{
+        authorization: string | undefined;
+        catalogRoute: string | undefined;
+        method: string;
+        modelRoute: string | undefined;
+        url: string;
+      }> = [];
 
       try {
         tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pr58373-proof-"));
@@ -88,7 +94,13 @@ describe("PR #58373 secondary catalog runtime proof", () => {
         }
 
         providerServer = createServer((request, response) => {
-          providerRequests.push({ method: request.method ?? "", url: request.url ?? "" });
+          providerRequests.push({
+            authorization: request.headers.authorization,
+            catalogRoute: request.headers["x-catalog-route"] as string | undefined,
+            method: request.method ?? "",
+            modelRoute: request.headers["x-model-route"] as string | undefined,
+            url: request.url ?? "",
+          });
           request.resume();
           writeOpenAiResponsesText(response, {
             text: "PR58373_RUNTIME_OK",
@@ -108,7 +120,21 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           `http://127.0.0.1:${providerAddress.port}/v1`,
           MODEL_ID,
         );
-        const { apiKey: _apiKey, ...catalogProvider } = provider.config;
+        const { apiKey: _apiKey, ...catalogProviderBase } = provider.config;
+        const catalogProvider = {
+          ...catalogProviderBase,
+          headers: {
+            Authorization: "Bearer system-agent-catalog-key",
+            "X-Catalog-Route": "provider-route",
+          },
+          models: catalogProviderBase.models.map((model) => ({
+            ...model,
+            headers: {
+              Authorization: "Bearer system-agent-model-key",
+              "X-Model-Route": "model-route",
+            },
+          })),
+        };
         await fs.writeFile(
           path.join(mainAgentDir, "models.json"),
           `${JSON.stringify({ providers: { [provider.providerId]: catalogProvider } }, null, 2)}\n`,
@@ -120,7 +146,7 @@ describe("PR #58373 secondary catalog runtime proof", () => {
               [`${provider.providerId}:proof`]: {
                 type: "api_key",
                 provider: provider.providerId,
-                key: "synthetic-loopback-key",
+                key: "system-agent-auth-key",
               },
             },
           },
@@ -164,6 +190,22 @@ describe("PR #58373 secondary catalog runtime proof", () => {
         await expect(fs.stat(path.join(secondaryAgentDir, "models.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
+        const saveSecondaryAuth = (key: string) =>
+          saveAuthProfileStore(
+            {
+              version: 1,
+              profiles: {
+                [`${provider.providerId}:proof`]: {
+                  type: "api_key",
+                  provider: provider.providerId,
+                  key,
+                },
+              },
+            },
+            secondaryAgentDir,
+            { syncExternalCli: false },
+          );
+        saveSecondaryAuth("secondary-account-b");
 
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close();
@@ -176,22 +218,51 @@ describe("PR #58373 secondary catalog runtime proof", () => {
         });
         await gateway.server.startupSettled;
 
-        const runId = "pr58373-secondary-turn";
-        const accepted = await gateway.client.request<{ runId?: string; status?: string }>(
-          "agent",
+        const runSecondaryTurn = async (runId: string) => {
+          const accepted = await gateway?.client.request<{ runId?: string; status?: string }>(
+            "agent",
+            {
+              sessionKey: "agent:ops:main",
+              message: "Reply with the configured proof marker.",
+              deliver: false,
+              idempotencyKey: runId,
+            },
+          );
+          expect(accepted).toMatchObject({ runId, status: "accepted" });
+          await expect(
+            gateway?.client.request("agent.wait", { runId, timeoutMs: 30_000 }),
+          ).resolves.toMatchObject({ status: "ok" });
+        };
+        await runSecondaryTurn("pr58373-secondary-account-b");
+        expect(providerRequests).toEqual([
           {
-            sessionKey: "agent:ops:main",
-            message: "Reply with the configured proof marker.",
-            deliver: false,
-            idempotencyKey: runId,
+            authorization: "Bearer secondary-account-b",
+            catalogRoute: "provider-route",
+            method: "POST",
+            modelRoute: "model-route",
+            url: "/v1/responses",
           },
-        );
-        expect(accepted).toMatchObject({ runId, status: "accepted" });
-        await expect(
-          gateway.client.request("agent.wait", { runId, timeoutMs: 30_000 }),
-        ).resolves.toMatchObject({ status: "ok" });
+        ]);
 
-        expect(providerRequests).toEqual([{ method: "POST", url: "/v1/responses" }]);
+        await disconnectGatewayClient(gateway.client);
+        await gateway.server.close();
+        saveSecondaryAuth("secondary-account-c");
+        gateway = await startGatewayWithClient({
+          cfg: updatedConfig,
+          configPath,
+          token: TOKEN,
+          clientDisplayName: "pr58373-proof-reassigned",
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+        await gateway.server.startupSettled;
+        await runSecondaryTurn("pr58373-secondary-account-c");
+        expect(providerRequests[1]).toEqual({
+          authorization: "Bearer secondary-account-c",
+          catalogRoute: "provider-route",
+          method: "POST",
+          modelRoute: "model-route",
+          url: "/v1/responses",
+        });
         await expect(fs.stat(path.join(secondaryAgentDir, "models.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
