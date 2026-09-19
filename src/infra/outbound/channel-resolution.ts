@@ -238,6 +238,7 @@ function* resolveOutboundChannelPluginSteps(
     return resolveActivatedOutboundPluginFromRuntimeRegistry(
       normalized,
       yield { ...params, channel: normalized },
+      params.requiredAction,
     );
   }
 
