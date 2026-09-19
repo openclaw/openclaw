@@ -81,7 +81,13 @@ export function promptSnapshot(
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
 ): Promise<MirroredUserMessage> {
-  const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+  // Prefer the host-admitted row over the prepared prompt. Write hooks may have
+  // transformed the content during persistence, and native prompt annotation
+  // fingerprints the admitted bytes; fingerprinting prepared content instead
+  // skips best-effort mirroring on any divergence.
+  const admittedMessage = params.userTurnTranscriptRecorder?.getPersistedMessage?.();
+  const resolvedMessage =
+    admittedMessage ?? (await params.userTurnTranscriptRecorder?.resolveMessage());
   return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
 }
 
