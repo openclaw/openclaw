@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import { createConfigIoContext } from "../config/io.context.js";
 import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import {
@@ -315,6 +316,7 @@ module.exports = {
         const result = await runPreparedModelCatalogWorkerRequest(serialized, {
           kind: "catalog",
           syntheticAuth: [],
+          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
         });
         expect(result.status).toBe("ok");
         const runtimeFacts = getConfigResolutionFacts(serialized.input.config);

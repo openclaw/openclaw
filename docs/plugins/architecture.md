@@ -281,6 +281,12 @@ lifetime. Agent and authentication facts belong to each task; plugin registratio
 and captured source remain with the shared inventory. Standalone hosts that supply
 their own environment retain an isolated catalog worker for that environment.
 
+Catalog and authentication refresh tasks carry the host's prepared Claw consent
+provenance. Worker config reconstruction and provider imports consume these facts
+without opening or copying the shared state database. Host config publication and
+Doctor retain their existing provenance refresh and artifact-preserving inspection
+paths; stored data, schemas, and update/rollback behavior are unchanged.
+
 Credential persistence publishes fresh shared-store ownership before credential
 discovery. Login and explicit auth refresh join the credential owner's publication
 instead of creating another catalog generation for the same change.
