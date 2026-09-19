@@ -524,6 +524,47 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-composer-return")
     }
 
+    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let model = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 8))
+        model.tap()
+        let publicFixtureModel = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(publicFixtureModel.waitForExistence(timeout: 3))
+        publicFixtureModel.tap()
+        self.waitForValue("claude-opus-4-1", of: model)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running.")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Here is my follow-up.")
+        self.attachScreenshot(named: "text-draft-during-active-response")
+        XCTAssertTrue(stop.exists, "Typing must not remove the active response's Stop control")
+        XCTAssertTrue(stop.isEnabled)
+        let notice = app.staticTexts["chat-composer-active-run-notice"]
+        XCTAssertTrue(notice.exists)
+        XCTAssertEqual(input.value as? String, "Here is my follow-up.")
+
+        stop.tap()
+        XCTAssertTrue(send.waitForExistence(timeout: 8))
+        self.waitForEnabled(send)
+        XCTAssertFalse(notice.exists)
+        XCTAssertEqual(input.value as? String, "Here is my follow-up.")
+        send.tap()
+        XCTAssertTrue(app.staticTexts["Here is my follow-up."].waitForExistence(timeout: 8))
+    }
+
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
         self.launchApp(
