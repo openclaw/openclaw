@@ -179,6 +179,16 @@ export const AgentDefaultsBaseSchema = z
           })
           .strict()
           .optional(),
+        /** Optional typed-decision semantic curation for safeguard compaction. */
+        semanticCuration: z
+          .object({
+            /** Curation mode. Shadow observes only; apply may reduce built-in summarizer input. */
+            mode: z.enum(["off", "shadow", "apply"]).optional(),
+            /** Per-decision deadline in milliseconds. */
+            timeoutMs: z.number().int().positive().max(5000).optional(),
+          })
+          .strict()
+          .optional(),
         /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
         midTurnPrecheck: z
           .object({
