@@ -186,6 +186,7 @@ export async function installManagedPlugin(
         deferRuntime: params.deferRuntime,
         beforePersistentApply,
         request,
+        enable: params.request.enable,
         snapshot,
         env,
         logger: params.logger ?? { warn: (message) => warnings.push(message) },

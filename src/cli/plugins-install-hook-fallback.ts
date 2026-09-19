@@ -106,6 +106,13 @@ async function installHookPack(
   params: InstallParams,
   expectedPackageKind?: "hook-only",
 ): Promise<InstallResult> {
+  if (params.request.enable === false) {
+    return {
+      ok: false,
+      error:
+        "--no-enable is only supported for plugins. Install hook packs separately with openclaw hooks install.",
+    };
+  }
   // Online plugin rejection can precede this fallback; acquire and reread only for the hook write.
   return await withPluginLifecycleLease({ signal: params.signal }, async (lease) => {
     const request = resolvePluginInstallRequestContext({
@@ -317,7 +324,11 @@ export async function installPluginWithHookFallback(params: InstallParams): Prom
     });
     if (fallback) {
       (params.runtime ?? defaultRuntime).log(theme.warn(fallback.warning));
-      return await install({ source: "bundled", pluginId: fallback.bundledSource.pluginId });
+      return await install({
+        source: "bundled",
+        pluginId: fallback.bundledSource.pluginId,
+        ...(request.enable === false ? { enable: false } : {}),
+      });
     }
   }
   const hook = await installHookPack(hookSource, params);
