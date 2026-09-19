@@ -6,12 +6,10 @@ import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
-  formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
   type ChannelInboundTurnPlan,
-  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -27,13 +25,11 @@ import {
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   ensureConfiguredBindingRouteReady,
-  readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
-import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -103,6 +99,11 @@ import {
   isStaleIMessageBacklog,
 } from "./inbound-dedupe.js";
 import {
+  formatIMessageInboundMediaBody,
+  isIMessagePluginPayloadAttachment,
+  resolveIMessageInboundMediaInput,
+} from "./inbound-media.js";
+import {
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
@@ -112,6 +113,7 @@ import {
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
+import { readIMessageInboundStoreAllowFrom } from "./pairing-store-admission.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
@@ -122,7 +124,7 @@ import {
 } from "./recovery-cursor.js";
 import { resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
-import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
@@ -137,71 +139,6 @@ type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTyping
 
 function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
   return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
-}
-
-function isIMessagePluginPayloadAttachment(attachment: {
-  original_path?: string | null;
-  transfer_name?: string | null;
-  uti?: string | null;
-}): boolean {
-  const attachmentPath = attachment.original_path?.trim().toLowerCase() ?? "";
-  const transferName = attachment.transfer_name?.trim().toLowerCase() ?? "";
-  const uti = attachment.uti?.trim().toLowerCase() ?? "";
-  return (
-    attachmentPath.endsWith(".pluginpayloadattachment") ||
-    transferName.endsWith(".pluginpayloadattachment") ||
-    uti === "com.apple.messages.pluginpayloadattachment"
-  );
-}
-
-function resolveIMessageInboundMediaInput(params: {
-  messageText: string;
-  attachments: IMessageAttachment[];
-  effectiveAttachmentRoots: readonly string[];
-  logVerbose?: (message: string) => void;
-}) {
-  // Apple rich-link previews are opaque plugin payloads; the useful URL stays
-  // in message text. Treating them as media creates phantom attachments and
-  // incorrectly bypasses text-only inbound debounce.
-  const mediaCandidates = params.attachments.filter(
-    (entry) => !isIMessagePluginPayloadAttachment(entry),
-  );
-  const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
-    const contentType = attachment.mime_type?.trim() || undefined;
-    return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-  });
-  const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
-    const fact = mediaFacts[index] ?? { kind: "unknown" as const };
-    const attachmentPath = attachment.original_path?.trim();
-    if (!attachmentPath || attachment.missing) {
-      return fact;
-    }
-    if (
-      !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
-    ) {
-      params.logVerbose?.(
-        `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
-      );
-      return fact;
-    }
-    return { ...fact, path: attachmentPath };
-  });
-  return {
-    bodyText: params.messageText,
-    mediaFacts,
-    mediaCandidates,
-    rawMediaAttachments,
-  };
-}
-
-function formatIMessageInboundMediaBody(params: {
-  messageText: string;
-  unavailableCount: number;
-}): string {
-  return formatInboundMediaUnavailableText({
-    body: params.messageText,
-    notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
-  });
 }
 
 // Local chat.db path to read MAX(ROWID) from for the startup since_rowid. Only
@@ -740,11 +677,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
 
-    const storeAllowFrom = await readChannelAllowFromStore(
-      "imessage",
-      process.env,
-      accountInfo.accountId,
-    ).catch(() => []);
+    const storeAllowFrom = await readIMessageInboundStoreAllowFrom({
+      message,
+      cfg,
+      accountId: accountInfo.accountId,
+      dmPolicy,
+      groupAllowFrom,
+      allowFrom,
+      allowLegacyConversationAllowFromForGroup,
+    });
     const isQuestionReaction = hasIMessageQuestionReactionTarget({
       accountId: accountInfo.accountId,
       message,

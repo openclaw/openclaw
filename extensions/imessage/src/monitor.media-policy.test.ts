@@ -201,7 +201,7 @@ describe("iMessage monitor attachment policy", () => {
       } as never,
     });
 
-    await vi.waitFor(() => expect(readChannelAllowFromStoreMock).toHaveBeenCalled());
+    expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
     expect(stageIMessageAttachmentsMock).not.toHaveBeenCalled();
   });
 
