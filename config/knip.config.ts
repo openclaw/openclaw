@@ -560,6 +560,10 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Focused probe tests consume the version parser and the once-per-process
+    // reset seam; production reaches the probe only through
+    // adoptInstalledClaudeCodeVersion.
+    "src/llm/anthropic-claude-code-version.ts": ["exports"],
   },
   workspaces: {
     ".": {

@@ -36,8 +36,137 @@ export {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 
+/**
+ * The Claude Code version the Anthropic OAuth (subscription) path presents
+ * itself as, in `user-agent: claude-cli/<version>` and the billing header.
+ *
+ * Anthropic gates its newest models on this number: with the pinned value a
+ * Fable 5.1 request on a subscription login is refused with HTTP 400
+ * "Claude Code 2.1.75 does not support this model; version 2.1.251 or newer
+ * is required", while the same login works through an installed Claude Code
+ * that is newer. This constant is the FALLBACK; a host that finds a newer
+ * Claude Code installed reports that one through
+ * {@link setAnthropicClaudeCodeVersion} (the gateway does, at startup), so the
+ * version sent is one that is actually on the machine. Only a newer version
+ * is ever adopted — a downgrade would claim a client older than the pinned one.
+ */
 export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.75";
-export const ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${ANTHROPIC_CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
+
+let anthropicClaudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION;
+
+const SEMVER_PREFIX_RE = /^(\d+)\.(\d+)\.(\d+)/u;
+
+function parseSemverPrefix(version: string): [number, number, number] | null {
+  const match = SEMVER_PREFIX_RE.exec(version.trim());
+  if (!match) {
+    return null;
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(a: [number, number, number], b: [number, number, number]): number {
+  const [aMajor, aMinor, aPatch] = a;
+  const [bMajor, bMinor, bPatch] = b;
+  return aMajor - bMajor || aMinor - bMinor || aPatch - bPatch;
+}
+
+/** The Claude Code version currently reported on the OAuth path. */
+export function getAnthropicClaudeCodeVersion(): string {
+  return anthropicClaudeCodeVersion;
+}
+
+/**
+ * Report an installed Claude Code's version on the OAuth path. Adopted only
+ * when it parses as `major.minor.patch` and is newer than the version in
+ * use; returns whether it was adopted.
+ */
+export function setAnthropicClaudeCodeVersion(version: string): boolean {
+  const next = parseSemverPrefix(version);
+  const current = parseSemverPrefix(anthropicClaudeCodeVersion);
+  if (!next || !current || compareSemver(next, current) <= 0) {
+    return false;
+  }
+  anthropicClaudeCodeVersion = `${next[0]}.${next[1]}.${next[2]}`;
+  return true;
+}
+
+/** Test seam: back to the pinned fallback, with no startup work pending. */
+export function resetAnthropicClaudeCodeVersionForTests(): void {
+  anthropicClaudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION;
+  identityReady = Promise.resolve();
+}
+
+/** The billing system block, carrying the version currently reported. */
+export function anthropicClaudeCodeBillingSystemBlock(): string {
+  return `x-anthropic-billing-header: cc_version=${anthropicClaudeCodeVersion}; cc_entrypoint=sdk-cli;`;
+}
+
+/**
+ * One consistent Claude Code identity for one request: the version, the
+ * `user-agent` header and the billing system block all derived from a single
+ * read, so a request can never carry two different versions.
+ */
+export type AnthropicClaudeCodeIdentity = {
+  version: string;
+  userAgent: string;
+  billingSystemBlock: string;
+};
+
+export function snapshotAnthropicClaudeCodeIdentity(): AnthropicClaudeCodeIdentity {
+  const version = anthropicClaudeCodeVersion;
+  return {
+    version,
+    userAgent: `claude-cli/${version}`,
+    billingSystemBlock: `x-anthropic-billing-header: cc_version=${version}; cc_entrypoint=sdk-cli;`,
+  };
+}
+
+/**
+ * Upper bound on how long a request waits for host startup work that may
+ * change the reported version (probing the installed Claude Code). A probe
+ * that has not settled by then is still allowed to adopt a version later; the
+ * request just proceeds with what is known now.
+ */
+export const ANTHROPIC_CLAUDE_CODE_IDENTITY_TIMEOUT_MS = 7_000;
+
+let identityReady: Promise<void> = Promise.resolve();
+
+/**
+ * Registers host startup work that may still change the reported version.
+ * Every OAuth request built after this call waits for that work to settle
+ * (bounded by {@link ANTHROPIC_CLAUDE_CODE_IDENTITY_TIMEOUT_MS}) before it
+ * reads the identity, so the first request of a fresh process does not go out
+ * with the pinned fallback while a newer install is still being detected.
+ * Rejections are treated as "nothing adopted"; they never fail a request.
+ */
+export function deferAnthropicClaudeCodeIdentityUntil(
+  work: Promise<unknown>,
+  timeoutMs: number = ANTHROPIC_CLAUDE_CODE_IDENTITY_TIMEOUT_MS,
+): void {
+  const settled = work.then(
+    () => undefined,
+    () => undefined,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bounded = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+    timer.unref?.();
+  });
+  identityReady = Promise.race([settled, bounded]).finally(() => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+/**
+ * The identity to build an OAuth request with: waits for any registered
+ * startup work (bounded), then takes one snapshot. Cheap once settled.
+ */
+export async function resolveAnthropicClaudeCodeIdentity(): Promise<AnthropicClaudeCodeIdentity> {
+  await identityReady;
+  return snapshotAnthropicClaudeCodeIdentity();
+}
 
 type ReplayModelRef = {
   provider?: string;
