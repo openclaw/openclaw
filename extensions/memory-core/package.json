@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     "./api.js": "./api.ts",
-    "./session-search-visibility-api.js": "./session-search-visibility-api.ts"
+    "./session-search-visibility-api.js": "./session-search-visibility-api.ts",
+    "./worker-api.js": "./worker-api.ts"
   },
   "dependencies": {
     "chokidar": "5.0.0",

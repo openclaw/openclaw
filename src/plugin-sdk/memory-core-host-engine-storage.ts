@@ -73,6 +73,7 @@ export {
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
+  MemoryWorkspaceFiles,
   MemoryWorkspaceWatchRequest,
   CuratedMarkdownEntry,
   CuratedProjectAnnotations,

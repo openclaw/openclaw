@@ -52,6 +52,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (this.sources.has("memory")) {
       try {
         const inspection = await inspectMemorySourceState({
+          files: this.memoryFiles,
           db: this.db,
           workspaceDir: this.workspaceDir,
           settings: this.settings,

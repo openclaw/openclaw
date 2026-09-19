@@ -16,6 +16,7 @@ import {
   type MemorySearchManager,
   type MemorySessionSyncTarget,
   type MemorySyncParams,
+  type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
@@ -81,6 +82,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly cacheKey: string;
   protected readonly purpose: MemoryIndexManagerPurpose;
   protected override readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected override readonly memoryFiles?: MemoryWorkspaceFiles;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
@@ -117,6 +119,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected indexIdentityState: MemoryIndexIdentityState;
 
   static async get(params: {
+    memoryFiles?: MemoryWorkspaceFiles;
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
@@ -125,6 +128,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     maintenanceSource?: MemoryIndexManager;
   }): Promise<MemoryIndexManager | null> {
     const source = params.maintenanceSource;
+    const memoryFiles = source?.memoryFiles ?? params.memoryFiles;
+    memoryFiles?.assertCurrent();
     const cfg = source?.cfg ?? params.cfg;
     const agentId = source?.agentId ?? normalizeAgentId(params.agentId);
     const purpose = normalizeMemoryIndexManagerPurpose(params.purpose);
@@ -170,6 +175,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                     cfg,
                     agentId,
                     workspaceDir,
+                    memoryFiles,
                     settings,
                     providerRequirement,
                     purpose,
@@ -191,6 +197,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 if (params.inspectSources) {
                   await manager.inspectDiagnosticSourceState();
                 }
+                memoryFiles?.assertCurrent();
                 return manager;
               } catch (error) {
                 try {
@@ -205,7 +212,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 throw error;
               }
             },
-            reuse: (manager) => !manager.closing && !manager.closed && manager.db.isOpen,
+            reuse: ({ closing, closed, db, memoryFiles: files }) =>
+              !closing && !closed && db.isOpen && files === memoryFiles,
           };
         },
       },
@@ -213,6 +221,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   private constructor(params: {
+    memoryFiles?: MemoryWorkspaceFiles;
     managerRegistry: MemoryManagerRegistry<MemoryIndexManager>;
     cacheKey: string;
     cfg: OpenClawConfig;
@@ -236,6 +245,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
+    this.memoryFiles = params.memoryFiles;
     this.settings = {
       ...effectiveSettings,
       store: { ...effectiveSettings.store, databasePath: dbPath },

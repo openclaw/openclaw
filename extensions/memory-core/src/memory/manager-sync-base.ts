@@ -13,6 +13,7 @@ import {
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySessionSyncTarget,
   type MemorySource,
+  type MemoryWorkspaceFiles,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -77,6 +78,9 @@ const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
 export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext {
+  protected readonly memoryFiles?: MemoryWorkspaceFiles;
+  protected memoryWatchSubscription?: AbortController;
+  protected memoryWatchUnavailable = false;
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
@@ -157,12 +161,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }): Promise<MemorySourceSyncPlan>;
 
   protected async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
+    this.memoryFiles?.assertCurrent();
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
     this.activeManagerOperations += 1;
     try {
-      return await this.withPublishedDatabase(run);
+      const result = await this.withPublishedDatabase(run);
+      this.memoryFiles?.assertCurrent();
+      return result;
     } finally {
       this.activeManagerOperations -= 1;
       if (this.activeManagerOperations === 0) {
