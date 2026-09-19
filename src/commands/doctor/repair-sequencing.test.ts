@@ -497,6 +497,13 @@ describe("doctor repair sequencing", () => {
   });
 
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "google-meet": { enabled: true },
+        },
+      },
+    };
     const events: string[] = [];
     const refreshedSnapshot = createPluginMetadataSnapshotFixture();
     mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
@@ -515,20 +522,8 @@ describe("doctor repair sequencing", () => {
 
     const result = await runDoctorRepairSequence({
       state: {
-        cfg: {
-          plugins: {
-            entries: {
-              "google-meet": { enabled: true },
-            },
-          },
-        } as OpenClawConfig,
-        candidate: {
-          plugins: {
-            entries: {
-              "google-meet": { enabled: true },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: structuredClone(config),
+        candidate: structuredClone(config),
         pendingChanges: false,
         fixHints: [],
       },
@@ -542,28 +537,17 @@ describe("doctor repair sequencing", () => {
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
     expect(mocks.maybeRepairPluginOpenClawHostLinks).toHaveBeenCalledOnce();
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
-      cfg: {
-        plugins: {
-          entries: {
-            "google-meet": { enabled: true },
-          },
-        },
-      },
+      cfg: config,
       env: process.env,
       baselineRecords: {},
+      repairVersionDrift: true,
     });
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
     expect(mocks.loadInstalledPluginIndex).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {
-          plugins: {
-            entries: {
-              "google-meet": { enabled: true },
-            },
-          },
-        },
+        config,
         env: process.env,
         installRecords: {},
       }),

@@ -329,6 +329,12 @@ still use them. `openclaw update` still runs Doctor after installing the candida
 after a manual package replacement, run `openclaw doctor --fix` before restarting
 the Gateway.
 
+Doctor also brings drifted active official npm plugins to the installed OpenClaw
+release. It uses the same plugin updater as `openclaw update` and leaves
+third-party plugins unchanged. An unavailable plugin produces a warning with
+the reason; it does not prevent the other repairs from completing. Restore
+registry access or wait for the missing package, then rerun `openclaw doctor --fix`.
+
 `OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1` skips package-local postinstall
 cleanup, but still completes the lifecycle marker. It does not disable Doctor or
 Gateway startup migrations.
@@ -340,6 +346,37 @@ To evaluate an affected package without changing a working Gateway, use a
 disposable environment with separate home, config, and state directories. A
 different npm prefix alone does not isolate operator state.
 </Warning>
+
+### Stuck on 2026.9.3
+
+The published 2026.9.3 updater has a fixed five-minute limit that can stop an
+upgrade before it finishes. A timeout fix in the target release cannot replace
+the updater already running. Bypass that older updater once with a manual
+package installation.
+
+Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+first. Keep the same service account, npm prefix, profile, and state/config
+overrides. Stop the Gateway through its owning supervisor before replacing the
+package. For a managed npm install:
+
+```bash
+openclaw gateway stop
+npm install -g openclaw@latest --allow-scripts=openclaw
+openclaw doctor --fix
+openclaw gateway restart
+openclaw gateway status --deep
+```
+
+Omit `--allow-scripts=openclaw` on npm 11.15 and earlier. For an external
+supervisor, use its stop and restart commands. Doctor keeps an already-stopped
+Gateway stopped, so complete the restart after reviewing its repair results.
+
+Automatic official-plugin drift repair was added after 2026.9.5. If the installed
+release still prints **Fix each drifted plugin**, run its printed
+`openclaw plugins update` commands before restarting. Once installed, a build
+with automatic drift repair performs those official-plugin updates during
+`doctor --fix`; any remaining readiness warning names the plugin that still
+needs attention.
 
 ### Advanced npm install topics
 
