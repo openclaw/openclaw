@@ -997,6 +997,19 @@ describe("published runtime choice", () => {
     ).toMatchObject({ kind: "unavailable" });
   });
 
+  it("resolves a provider-prefixed selection against the bare published row", async () => {
+    // `resolveSessionModelRef` keeps the self-provider prefix for a selection that
+    // was resolved through the catalog, so the display-key comparison stays the
+    // fallback for providers whose policy surface does not strip it.
+    publish();
+    const choice = await preparePublishedModelRuntimeChoice({ ...request, model: "fixture/model" });
+    expect(choice.kind).toBe("ready");
+    if (choice.kind !== "ready") {
+      throw new Error("Expected the prefixed spelling to select the published row");
+    }
+    expect(choice.validate()).toBeUndefined();
+  });
+
   it("rechecks the same generation at the session commit boundary", async () => {
     let current = true;
     publish(() => current);

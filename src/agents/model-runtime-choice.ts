@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { FailoverError } from "./failover/error.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 
 // Cache process-stable modules, not the catalog/auth facts read from each request's owner.
@@ -299,9 +301,14 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  let entry = decisions.snapshot.entries.find(
-    (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
-  );
+  // A provider can publish two literal rows that share one display key (ids `m`
+  // and `p/m` both render as `p/m`), so the requested row is resolved by catalog
+  // identity before the display key matches an alias of a sibling row.
+  let entry =
+    findModelInCatalog(decisions.snapshot.entries, params.provider, params.model) ??
+    decisions.snapshot.entries.find(
+      (row) => modelKey(row.provider, row.id) === modelKey(params.provider, params.model),
+    );
   if (!entry) {
     // Explicit selections may be outside finite browse inventory. The normal
     // resolver still owns the requested model's provider and physical route.
@@ -341,9 +348,11 @@ export async function preparePublishedModelRuntimeChoice(params: {
     }
     entry = modelCatalogRowToEntry(resolved.model);
   }
-  const variants = decisions.snapshot.routeVariants.filter(
-    (row) => modelKey(row.provider, row.id) === modelKey(entry.provider, entry.id),
-  );
+  // Route variants are published under the same identity key as their entry, so
+  // a sibling row's runtimes stay out of the selected row's candidate set.
+  const variantKeyOf = createModelCatalogIdentityKeyResolver();
+  const entryKey = variantKeyOf(entry);
+  const variants = decisions.snapshot.routeVariants.filter((row) => variantKeyOf(row) === entryKey);
   const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
   if (!choices?.includes(params.runtimeId)) {
     return { kind: "unavailable", message: unavailable };
