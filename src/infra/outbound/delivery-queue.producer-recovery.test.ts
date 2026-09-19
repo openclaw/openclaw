@@ -228,6 +228,55 @@ describe("exhausted delivery producer recovery", () => {
       expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("deliveryCompletion");
     },
   );
+  it.each(["startup", "recurring"] as const)(
+    "%s settles a producer-claimed entry whose durable completion has gone stale",
+    async (mode) => {
+      const id = "stale-producer-claimed";
+      const completion = {
+        kind: "pending-final" as const,
+        deliveryId: id,
+        intentId: "stale-intent",
+        sessionId: "stale-session",
+        sessionKey: "agent:main:directchat:direct:recipient",
+        storePath: path.join(tmpDir(), "sessions.json"),
+      };
+      // The session moved on without this delivery id (e.g. the live send
+      // already settled it through another path): the durable completion
+      // authority resolves this delivery as "stale", not "queued"/"delivered".
+      await sessionAccessor.replaceSessionEntry(completion, {
+        sessionId: completion.sessionId,
+        updatedAt: now,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "pending final",
+          context: { channel: "directchat", to: "recipient" },
+          createdAt: now,
+          intentId: completion.intentId,
+          deliveries: [],
+        },
+      });
+      // No reserveDeliveryAttempt here: the real incident's rows never
+      // reached a real send attempt (attemptCount stayed 0), so the retry
+      // budget is never exhausted and recovery must reach the completed-owner
+      // ack path instead of the unrelated budget-exhaustion settlement.
+      await enqueue(id, true, completion);
+      const claimId = await queueStorage.claimDeliveryPlatformSendAttempt(id, tmpDir());
+      if (!claimId) {
+        throw new Error("Expected producer custody");
+      }
+      now += 60_001;
+
+      await recover(mode);
+
+      // A stale durable completion must still terminalize the queue row (no
+      // completionRetention here, matching the real incident's rows, so a
+      // successful ack removes the row outright rather than marking it
+      // "failed"). Recovery must not leave a producer-claimed entry pending
+      // forever just because its completion authority no longer tracks it.
+      expect(queueStatus(id)).toBeUndefined();
+    },
+  );
+
   it("preserves suppressed payload outcomes when a rejected delivery resumes owner settlement", async () => {
     const id = "rejected-batch-settlement";
     const completion = await preparePendingFinal(
