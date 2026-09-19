@@ -23,7 +23,9 @@ import {
   readOpenClawAgentDatabaseRegistryToken,
   readOpenIncognitoAgentDatabaseGeneration,
 } from "../../state/openclaw-agent-db.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionModelSources,
@@ -37,6 +39,7 @@ import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-ac
 import type { SessionEntryListScope, SessionEntrySummary } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
+import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   listConfiguredSessionStoreAgentIds,
@@ -688,5 +691,54 @@ export function loadCombinedSessionStoreForGatewayCore(
     opts.loadEntries
       ? opts.loadEntries(target, prepared.projection)
       : loadGatewayStoreEntries({ ...target, projection: prepared.projection }),
+  );
+}
+
+/** Descriptive listings retain federation policy while durable rows are read by its worker. */
+export async function loadCombinedSessionStoreForGatewayCoreAsync(
+  cfg: OpenClawConfig,
+  opts: Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded"> = {},
+): Promise<GatewayCombinedSessionStore> {
+  const options = { ...opts };
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const prepared = prepareCombinedSessionStore(cfg, options);
+  // Preparation can refresh registry discovery; retain its resulting topology generation.
+  const registryToken = readOpenClawAgentDatabaseRegistryToken();
+  const incognitoGeneration = readOpenIncognitoAgentDatabaseGeneration();
+  // Windows environment proxies cannot cross the worker boundary.
+  const transferEnv = { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR };
+  return await withSessionHistoryWorkerDatabases(
+    prepared.reads.map(({ storeTarget }) => ({
+      agentId: storeTarget.agentId,
+      path: storeTarget.storePath,
+      env,
+    })),
+    async (owners) => {
+      const entries = new Map<string, SessionEntrySummary[]>();
+      for (const [index, { storeTarget }] of prepared.reads.entries()) {
+        const owner = expectDefined(owners[index], "retained session store");
+        const rows = await owner.readEntries({
+          ...storeTarget,
+          env: transferEnv,
+          projection: prepared.projection,
+          clone: false,
+        });
+        entries.set(storeTargetKey(storeTarget), rows);
+      }
+      for (const owner of owners) {
+        owner.assertCurrent();
+      }
+      if (
+        registryToken !== readOpenClawAgentDatabaseRegistryToken() ||
+        incognitoGeneration !== readOpenIncognitoAgentDatabaseGeneration()
+      ) {
+        throw new Error("Session stores changed while preparing the listing. Retry the request.");
+      }
+      // The merger rechecks admission and reads process-local incognito handles at consumption.
+      return mergeCombinedSessionStore(cfg, options, prepared, (target) =>
+        expectDefined(entries.get(storeTargetKey(target)), "prepared session entries"),
+      );
+    },
   );
 }

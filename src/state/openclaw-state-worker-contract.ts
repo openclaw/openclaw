@@ -1,5 +1,6 @@
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
@@ -135,6 +136,7 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
     "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
+    "worktrees.list": { input: undefined; output: ManagedWorktreeRecord[] };
     "projects.resolve": { input: { id: string }; output: ProjectRegistryRecord | undefined };
     "projects.insert": {
       input: { project: ProjectRegistryInsert; lease: OpenClawStateLeaseIdentity };

@@ -66,6 +66,26 @@ verified descriptors and post-render thumbnail checks remain in place. Inserts, 
 promotion, cleanup claim/deletion transactions, Doctor imports, and native session
 metadata reads keep their existing owners and remain separate worker migrations.
 
+Project recents and observed checkouts prepare durable session listings through
+the existing session-transcript worker. Federation captures physical targets,
+options, and a transferable environment before waiting, preserving canonical
+keys, ordering, and admission diagnostics; unavailable reads remain errors.
+The Gateway resolves current profile aliases and disclosure
+scope after preparation. The history owner retains every selected durable store
+through the batch; canonical close revokes the pending listing instead of
+letting it reopen a later store generation. Process-local incognito reads and store-topology
+resolution retain their native owners. Checkout-deletion reference checks and
+final exact-row authority checks remain synchronous; prepared listings do not
+grant deletion or session authority. Schemas, retention, and update behavior are unchanged.
+
+Observed-project discovery and the CLI's lossless worktree cleanup result read
+managed worktree registry records through the shared-state worker. The read
+captures its database before waiting and preserves record ordering, cleanup
+outcomes, removed records, and the existing creating-open behavior. It does not
+probe checkouts or reconcile lifecycle state. Creation, removal, restoration,
+run leases, and cloned-project deletion checks retain their existing owners;
+these observational reads do not establish that a checkout is unreferenced.
+
 Profile enumeration for user lists, session-member pickers, and human-mention
 directories runs in the same shared-state worker. Ordered profile metadata,
 tombstones, emails, and verified GitHub handles retain their existing query owner;

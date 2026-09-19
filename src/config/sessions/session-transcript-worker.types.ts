@@ -20,6 +20,8 @@ import type {
 } from "./session-accessor.sqlite-model-context.js";
 import type {
   SessionAccessScope,
+  SessionEntryListScope,
+  SessionEntrySummary,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type {
@@ -77,6 +79,17 @@ export type SessionUsageCacheWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
+export type SessionEntryListWorkerInput = {
+  kind: "session-entry-list";
+  database: { agentId: string; path: string };
+  scope: SessionEntryListScope;
+};
+
+export type SessionEntryListWorkerResult = {
+  kind: "session-entry-list";
+  entries: SessionEntrySummary[];
+};
+
 export type SessionBranchSummaryWorkerInput = {
   kind: "branch-summaries";
   request: SessionBranchSummaryReadRequest;
@@ -87,6 +100,7 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-row-presence": boolean;
   "session-members": SessionMember[];
+  "session-entry-list": SessionEntryListWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
   "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
   "session-entry": {

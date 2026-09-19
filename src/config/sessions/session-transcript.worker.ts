@@ -3,6 +3,7 @@ import type {
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionHistoryWorkerResult } from "./session-history-types.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
@@ -14,6 +15,7 @@ import {
 import type {
   SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
+  SessionEntryListWorkerInput,
   SessionMembersWorkerInput,
   SessionModelContextWorkerInput,
   SessionRowPresenceWorkerInput,
@@ -83,6 +85,7 @@ serveWorkerTasks(
     const request = input as
       | SessionModelContextWorkerInput
       | SessionEntryWorkerInput
+      | SessionEntryListWorkerInput
       | SessionTranscriptHistoryWorkerInput
       | SessionRowPresenceWorkerInput
       | SessionMembersWorkerInput
@@ -119,6 +122,19 @@ serveWorkerTasks(
       }
     }
     try {
+      if (request.kind === "session-entry-list") {
+        const { listSessionEntriesReadOnly } = await import("./session-accessor.sqlite-entry.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "session-entry-list" as const,
+            entries: listSessionEntriesReadOnly({
+              ...request.scope,
+              env: cloneEnvWithPlatformSemantics(request.scope.env ?? process.env),
+            }),
+          }))),
+        };
+      }
       if (request.kind === "usage-cache") {
         const { readSessionCostUsageCache } =
           await import("../../infra/session-cost-usage-cache-read.js");

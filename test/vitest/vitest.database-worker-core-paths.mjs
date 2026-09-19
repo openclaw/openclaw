@@ -1,5 +1,16 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/worktrees/empty-source.test.ts",
+  "src/agents/worktrees/registry-read.test.ts",
+  "src/agents/worktrees/service-branches.test.ts",
+  "src/agents/worktrees/service.acceleration.test.ts",
+  "src/agents/worktrees/service.capacity.test.ts",
+  "src/agents/worktrees/service.diagnostics.test.ts",
+  "src/agents/worktrees/service.gc.test.ts",
+  "src/agents/worktrees/service.hooks.test.ts",
+  "src/agents/worktrees/service.orphans.test.ts",
+  "src/agents/worktrees/service.profiles.test.ts",
+  "src/agents/worktrees/service.test.ts",
   "src/channels/join-intro/report-channel-room-join.test.ts",
   "src/plugin-sdk/ingress-effect-once.test.ts",
   "src/plugin-sdk/persistent-dedupe.worker.test.ts",

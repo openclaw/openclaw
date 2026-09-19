@@ -835,7 +835,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
         now: Date.now(),
       });
     }
-    const kept = managedWorktrees.listRegistryRecords();
+    const kept = await managedWorktrees.listRegistryRecords();
     const key = "agent:main:worktree-above-cleanup-target";
     const scope = { agentId: "main", sessionKey: key, storePath };
     const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
@@ -893,7 +893,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
       expect(await requireGit(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
       expect(await requireGit(worktree.path, ["branch", "--show-current"])).toBe(worktree.branch);
       expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("project\n");
-      expect(managedWorktrees.listRegistryRecords()).toHaveLength(101);
+      expect(await managedWorktrees.listRegistryRecords()).toHaveLength(101);
       for (const record of kept) {
         expect(managedWorktrees.findLiveById(record.id)).toEqual(record);
         expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("workspace\n");
