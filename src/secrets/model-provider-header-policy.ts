@@ -27,6 +27,22 @@ const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
   "credential",
 ];
 
+// Only recognized transport metadata is exempt from prepared-auth protection.
+// Unknown/custom headers can carry credentials even without an auth-like name.
+const NON_CREDENTIAL_MODEL_PROVIDER_HEADER_NAMES = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "content-type",
+  "openai-organization",
+  "user-agent",
+]);
+
+/** Recognizes transport metadata, not an override of explicit secret/auth provenance. */
+export function isNonCredentialModelProviderHeaderName(value: string): boolean {
+  return NON_CREDENTIAL_MODEL_PROVIDER_HEADER_NAMES.has(normalizeLowercaseStringOrEmpty(value));
+}
+
 /**
  * Returns whether a model-provider header name should be treated as secret-bearing.
  * This is intentionally conservative: false positives are audit noise, false negatives leak keys.
