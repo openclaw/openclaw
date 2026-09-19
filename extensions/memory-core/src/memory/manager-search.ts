@@ -11,9 +11,9 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { buildMatchQueryFromTerms, planKeywordSearch, tokenizeFtsQuery } from "./keyword-query.js";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
 
-const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_contains";
 
@@ -72,7 +72,7 @@ function comparePathKeywordSearchResults(
 export type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 function normalizeSearchTokens(raw: string): string[] {
-  return normalizeStringEntriesLower(raw.normalize("NFC").match(FTS_QUERY_TOKEN_RE) ?? []);
+  return normalizeStringEntriesLower(tokenizeFtsQuery(raw.normalize("NFC")));
 }
 
 function literalSearchMatcher(value: string, whole = false): RegExp {
@@ -234,14 +234,6 @@ function buildExactPathCandidatePatterns(query: string): string[] {
   return [...patterns];
 }
 
-function buildMatchQueryFromTerms(terms: string[]): string | null {
-  if (terms.length === 0) {
-    return null;
-  }
-  const quoted = terms.map((term) => `"${term.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
-}
-
 function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
   return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
 }
@@ -250,42 +242,6 @@ function buildModelFilter(column: string, models: string[]): string {
   return models.length === 1
     ? `${column} = ?`
     : `${column} IN (${models.map(() => "?").join(", ")})`;
-}
-
-function planKeywordSearch(params: {
-  query: string;
-  ftsTokenizer?: "unicode61" | "trigram";
-  buildFtsQuery: (raw: string) => string | null;
-  includeCombiningMarks?: boolean;
-}): { matchQuery: string | null; substringTerms: string[] } {
-  if (params.ftsTokenizer !== "trigram") {
-    return {
-      matchQuery: params.buildFtsQuery(params.query),
-      substringTerms: [],
-    };
-  }
-
-  const tokenPattern = params.includeCombiningMarks ? /[\p{L}\p{M}\p{N}_]+/gu : FTS_QUERY_TOKEN_RE;
-  const tokens = normalizeStringEntries(params.query.match(tokenPattern) ?? []);
-  if (tokens.length === 0) {
-    return { matchQuery: null, substringTerms: [] };
-  }
-
-  const matchTerms: string[] = [];
-  const substringTerms: string[] = [];
-  for (const token of tokens) {
-    // FTS5 MATCH cannot find terms shorter than three Unicode characters.
-    if (Array.from(token).length < 3) {
-      substringTerms.push(token);
-      continue;
-    }
-    matchTerms.push(token);
-  }
-
-  return {
-    matchQuery: buildMatchQueryFromTerms(matchTerms),
-    substringTerms,
-  };
 }
 
 function planPathKeywordSearch(params: {
@@ -529,6 +485,7 @@ export async function searchKeyword(params: {
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
     buildFtsQuery: params.buildFtsQuery,
+    canonicalVariants: true,
   });
   if (!plan.matchQuery && plan.substringTerms.length === 0) {
     return [];
@@ -589,7 +546,7 @@ export async function searchKeyword(params: {
       console.warn(
         `memory search: FTS5 MATCH failed, falling back to substring search: ${String(matchErr)}`,
       );
-      const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
+      const queryTokens = tokenizeFtsQuery(params.query);
       const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
       rows = loadRows(null, allTerms);
     }
