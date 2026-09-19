@@ -22,6 +22,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { shouldSynthesizeFinalAudio } from "./dispatch-from-config.tts-guard.test-support.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply-dispatcher.js";
 import type {
   ReplyDispatchKind,
@@ -295,12 +296,7 @@ const ttsMocks = vi.hoisted(() => {
         payload: ReplyPayload;
         kind: "tool" | "block" | "final";
       };
-      if (
-        state.synthesizeFinalAudio &&
-        params.kind === "final" &&
-        typeof params.payload?.text === "string" &&
-        params.payload.text.trim()
-      ) {
+      if (shouldSynthesizeFinalAudio(params, state.synthesizeFinalAudio)) {
         return {
           ...params.payload,
           mediaUrl: "https://example.com/tts-synth.opus",
@@ -870,12 +866,7 @@ export function resetPluginTtsAndThreadMocks() {
       payload: ReplyPayload;
       kind: "tool" | "block" | "final";
     };
-    if (
-      ttsMocks.state.synthesizeFinalAudio &&
-      params.kind === "final" &&
-      typeof params.payload?.text === "string" &&
-      params.payload.text.trim()
-    ) {
+    if (shouldSynthesizeFinalAudio(params, ttsMocks.state.synthesizeFinalAudio)) {
       return {
         ...params.payload,
         mediaUrl: "https://example.com/tts-synth.opus",

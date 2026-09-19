@@ -68,7 +68,11 @@ When `tts.auto` is enabled, OpenClaw:
   `auto: "always"`. Explicit speech requests such as `/tts audio` and `/tts latest`
   still send audio. Commands that continue into an assistant run keep the normal
   auto-TTS behavior for the assistant's answer.
-- Skips TTS if the reply already contains structured media.
+- Never attaches audio to a reply that already carries media: one message holds
+  one media set, and the audio would replace the attachment. When that attachment
+  is not audio — a picture, a document, a video — the answer is spoken as a
+  separate voice message that follows the visible one. A reply that already
+  carries audio stays as it is, and so does a terminal command reply.
 - Skips very short replies (under 10 chars).
 - Skips replies dominated by fenced code; inline code and surrounding prose remain eligible for speech.
 - Summarizes long replies when summaries are enabled, using
@@ -91,11 +95,15 @@ If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
 ```text
 Reply -> TTS enabled?
   no  -> send text
-  yes -> has media / short?
+  yes -> short?
           yes -> send text
-          no  -> length > limit?
-                   no  -> TTS -> attach audio
-                   yes -> summary enabled and available?
-                            no  -> truncate -> TTS -> attach audio
-                            yes -> summarize -> TTS -> attach audio
+          no  -> has media?
+                   yes -> send the reply as it is, then:
+                            audio attachment     -> nothing further
+                            non-audio attachment -> TTS -> send audio-only message
+                   no  -> length > limit?
+                            no  -> TTS -> attach audio
+                            yes -> summary enabled and available?
+                                     no  -> truncate -> TTS -> attach audio
+                                     yes -> summarize -> TTS -> attach audio
 ```
