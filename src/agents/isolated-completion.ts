@@ -73,6 +73,7 @@ type RunIsolatedCompletionParams = {
   /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   thinkLevel?: ThinkLevel;
+  outputSchema?: AgentHarnessIsolatedCompletionParamsV2["outputSchema"];
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
@@ -632,6 +633,7 @@ async function runIsolatedCompletionOwned(
                 authorization.owner === "host"
                   ? prepareIsolatedHostAuthorization(harness, authorization)
                   : authorization,
+              ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
               streamParams: clampIsolatedStreamParams(request.streamParams, modelMaxTokens),
             });
             priorProfileAttempted ||= attempt?.kind === "profile";

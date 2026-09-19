@@ -134,6 +134,7 @@ function boundedResult() {
   return {
     text: "The update was sent successfully.",
     items: [],
+    submittedInput: [{ type: "text", text: createAttempt().prompt, text_elements: [] }],
     model: "synthetic-catalog-id",
     nativeSelection: { model: "synthetic-summary-model", modelProvider: "openai" },
     usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, reasoningTokens: 3, total: 12 },
