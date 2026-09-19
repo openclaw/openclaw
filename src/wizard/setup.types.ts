@@ -6,11 +6,18 @@ import type { SecretInput } from "../config/types.secrets.js";
 // persisted defaults.
 export type WizardFlow = "quickstart" | "advanced";
 
+/**
+ * Auth modes the wizard carries through setup. Token and password are the
+ * selectable modes; an existing trusted-proxy mode is preserved untouched so an
+ * unrelated rerun never rewrites the Gateway auth boundary.
+ */
+export type WizardGatewayAuthChoice = GatewayAuthChoice | "trusted-proxy";
+
 export type QuickstartGatewayDefaults = {
   hasExisting: boolean;
   port: number;
   bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
-  authMode: GatewayAuthChoice;
+  authMode: WizardGatewayAuthChoice;
   tailscaleMode: "off" | "serve" | "funnel";
   token?: SecretInput;
   password?: SecretInput;
@@ -21,7 +28,7 @@ export type GatewayWizardSettings = {
   port: number;
   bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
   customBindHost?: string;
-  authMode: GatewayAuthChoice;
+  authMode: WizardGatewayAuthChoice;
   gatewayToken?: string;
   tailscaleMode: "off" | "serve" | "funnel";
 };

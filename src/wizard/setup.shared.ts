@@ -1,5 +1,5 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -23,7 +23,7 @@ import {
   getSecurityNoteMessage,
   getSecurityNoteTitle,
 } from "./setup.security-note.js";
-import type { QuickstartGatewayDefaults } from "./setup.types.js";
+import type { QuickstartGatewayDefaults, WizardGatewayAuthChoice } from "./setup.types.js";
 
 type QuickstartGatewayOptionOverrides = Pick<
   OnboardOptions,
@@ -76,7 +76,9 @@ export function formatQuickstartGatewaySummary(
       auth:
         defaults.authMode === "token"
           ? t("wizard.setup.quickstartAuthTokenDefault")
-          : t("common.password"),
+          : defaults.authMode === "trusted-proxy"
+            ? t("wizard.setup.quickstartAuthTrustedProxy")
+            : t("common.password"),
     }),
     t("wizard.setup.quickstartTailscaleExposure", {
       exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
@@ -270,8 +272,14 @@ export function resolveQuickstartGatewayDefaults(
       ? bindRaw
       : "loopback";
 
-  let authMode: GatewayAuthChoice = "token";
-  if (baseConfig.gateway?.auth?.mode === "token" || baseConfig.gateway?.auth?.mode === "password") {
+  let authMode: WizardGatewayAuthChoice = "token";
+  if (
+    baseConfig.gateway?.auth?.mode === "token" ||
+    baseConfig.gateway?.auth?.mode === "password" ||
+    baseConfig.gateway?.auth?.mode === "trusted-proxy"
+  ) {
+    // The wizard cannot author a trustedProxy policy, so an authored mode is
+    // carried through untouched; only fresh installs start at the token default.
     authMode = baseConfig.gateway.auth.mode;
   } else if (baseConfig.gateway?.auth?.token) {
     authMode = "token";

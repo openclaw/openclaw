@@ -387,6 +387,7 @@ export const zh_TW = {
       quickstartOnlyLocal: "QuickStart 僅支援本機 Gateway。將切換到手動模式。",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway 密鑰（自動產生）",
+      quickstartAuthTrustedProxy: "可信代理",
       quickstartDirectChannels: "直接進入聊天頻道設定。",
       quickstartGatewayAuth: "Gateway 認證：{auth}",
       quickstartGatewayBind: "Gateway 綁定：{bind}",

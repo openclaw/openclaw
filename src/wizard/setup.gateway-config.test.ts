@@ -67,7 +67,7 @@ describe("configureGatewayForSetup", () => {
     };
   }
 
-  function createQuickstartGateway(authMode: "token" | "password") {
+  function createQuickstartGateway(authMode: "token" | "password" | "trusted-proxy") {
     return {
       hasExisting: false,
       port: 18789,
@@ -185,6 +185,38 @@ describe("configureGatewayForSetup", () => {
         runtime: createRuntime(),
       });
       expect(result.nextConfig.gateway?.auth).toEqual(baseConfig.gateway.auth);
+      expect(prompter.select).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway access protection" }),
+      );
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["quickstart", "advanced"] as const)(
+    "%s preserves an existing trusted-proxy config without minting a token",
+    async (flow) => {
+      const baseConfig = {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      };
+      mocks.randomToken.mockClear();
+      const prompter = createPrompter({ selectQueue: [], textQueue: [] });
+      const result = await configureGatewayForSetup({
+        flow,
+        baseConfig,
+        nextConfig: baseConfig,
+        localPort: 18789,
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+        prompter,
+        runtime: createRuntime(),
+      });
+      expect(result.nextConfig.gateway?.auth).toEqual(baseConfig.gateway.auth);
+      expect(result.settings.authMode).toBe("trusted-proxy");
+      expect(mocks.randomToken).not.toHaveBeenCalled();
       expect(prompter.select).not.toHaveBeenCalledWith(
         expect.objectContaining({ message: "Gateway access protection" }),
       );

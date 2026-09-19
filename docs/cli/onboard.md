@@ -100,7 +100,7 @@ not overwrite the existing skill.
   shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
-  password. Existing password-mode configurations are preserved. Explicit local Gateway flags such as
+  password. Existing token, password, and trusted-proxy configurations are preserved. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.

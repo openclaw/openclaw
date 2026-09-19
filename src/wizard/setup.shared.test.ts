@@ -85,6 +85,18 @@ describe("resolveQuickstartGatewayDefaults", () => {
       expected: "Password",
       mode: "password",
     },
+    {
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      expected: "Trusted proxy",
+      mode: "trusted-proxy",
+    },
   ])(
     "summarizes the resolved $mode secret without offering an auth choice",
     ({ config, expected, mode }) => {

@@ -387,6 +387,7 @@ export const zh_CN = {
       quickstartOnlyLocal: "QuickStart 仅支持本地 Gateway。将切换到手动模式。",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway 密钥（自动生成）",
+      quickstartAuthTrustedProxy: "可信代理",
       quickstartDirectChannels: "直接进入聊天频道设置。",
       quickstartGatewayAuth: "Gateway 认证：{auth}",
       quickstartGatewayBind: "Gateway 绑定：{bind}",

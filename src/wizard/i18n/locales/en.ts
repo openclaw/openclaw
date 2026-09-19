@@ -397,6 +397,7 @@ export const en = {
       quickstartOnlyLocal: "QuickStart only supports local gateways. Switching to Manual mode.",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway secret (generated)",
+      quickstartAuthTrustedProxy: "Trusted proxy",
       quickstartDirectChannels: "Direct to chat channels.",
       quickstartGatewayAuth: "Gateway auth: {auth}",
       quickstartGatewayBind: "Gateway bind: {bind}",
