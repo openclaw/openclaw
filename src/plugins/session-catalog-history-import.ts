@@ -9,6 +9,7 @@ import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript
 
 const SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS = 200;
 const SESSION_CATALOG_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
+const SESSION_CATALOG_HISTORY_IMPORT_MAX_PAGES = 200;
 const SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT = 100;
 
 function importedSessionCatalogMessage(params: {
@@ -122,9 +123,15 @@ async function readBoundedSessionCatalogHistory(params: {
   read: (params: { cursor?: string; limit: number }) => Promise<SessionsCatalogReadResult>;
 }): Promise<SessionCatalogTranscriptItem[]> {
   const items: SessionCatalogTranscriptItem[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
   let bytes = 0;
-  while (items.length < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS) {
+  for (
+    let pageNumber = 0;
+    pageNumber < SESSION_CATALOG_HISTORY_IMPORT_MAX_PAGES &&
+    items.length < SESSION_CATALOG_HISTORY_IMPORT_MAX_ITEMS;
+    pageNumber += 1
+  ) {
     const page = await params.read({
       limit: Math.min(
         SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT,
@@ -158,9 +165,10 @@ async function readBoundedSessionCatalogHistory(params: {
         return items.toReversed();
       }
     }
-    if (!page.nextCursor || page.nextCursor === cursor) {
+    if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
       break;
     }
+    seenCursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
   return items.toReversed();
@@ -198,7 +206,7 @@ export async function importSessionCatalogHistory(params: {
         message,
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        ...(params.commitGuard ? { beforeFreshMessageCommit: params.commitGuard } : {}),
       });
     }
     const notice = params.continuationNotice?.trim();
@@ -210,7 +218,7 @@ export async function importSessionCatalogHistory(params: {
         },
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        ...(params.commitGuard ? { beforeFreshMessageCommit: params.commitGuard } : {}),
       });
     }
   });
