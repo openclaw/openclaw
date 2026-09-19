@@ -452,6 +452,13 @@ captured persisted facts and revalidate after cleanup. A recorded refusal on an 
 does not hide healthy local credentials; selected-store failures still propagate.
 Credential mutations and synchronous SDK readers retain their existing owners.
 
+Bounded CLI and provider-setup auth scopes prepare shared ownership and portable
+credentials through the same shared-state worker before invoking their callback.
+Each scope reads fresh credentials and retains its original state root across
+preparation. Database close or a shared ownership change prevents delayed scope
+entry. Nested and concurrent scopes keep separate read-through views; OAuth
+refresh material remains with its existing owner.
+
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
 foreground context queue. Session exports read events, statistics, and session
