@@ -55,12 +55,13 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.fetch",
     hasActiveWork: () => false,
+    duplex: "optional",
     cap: "file",
     dangerous: true,
-    handle: async (paramsJSON) => {
+    handle: async (paramsJSON, io) => {
       const { handleFileFetch } = await import("./src/node-host/file-fetch.js");
       const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileFetch>[0];
-      const result = await handleFileFetch(params);
+      const result = await handleFileFetch(params, io);
       return JSON.stringify(result);
     },
   },
@@ -86,6 +87,17 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
       const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirFetch>[0];
       const result = await handleDirFetch(params);
       return JSON.stringify(result);
+    },
+  },
+  {
+    command: "file.create",
+    cap: "file",
+    dangerous: true,
+    duplex: true,
+    handle: async (paramsJSON, io) => {
+      const { handleFileCreate } = await import("./src/node-host/file-create.js");
+      const params = asOptionalRecord(readNodeCommandParams(paramsJSON)) ?? {};
+      return JSON.stringify(await handleFileCreate(params, io));
     },
   },
   {

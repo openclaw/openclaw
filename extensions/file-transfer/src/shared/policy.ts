@@ -571,7 +571,8 @@ export async function persistLiteralGrant(input: PersistLiteralGrantInput): Prom
         canonicalPath: input.canonicalPath,
       });
       policyConfig.literalGrants = grants;
-      const kind = input.command === "file.write" ? "write" : "read";
+      const kind =
+        input.command === "file.write" || input.command === "file.create" ? "write" : "read";
       policyConfig.pendingReapprovals = readPendingReapprovals(policyConfig).filter(
         (pending) =>
           pending.kind !== kind ||

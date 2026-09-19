@@ -113,7 +113,10 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
     cannot reconnect or survive a node disconnection.
 
     The node plugin declares `duplex: true` and registers a message listener
-    through the optional framed command I/O capability:
+    through the optional framed command I/O capability. Use `duplex: "optional"`
+    when the same command also supports unary calls; it remains advertised on
+    nodes without duplex support. Select binary behavior from an explicit request
+    parameter, not from I/O presence alone:
 
     ```typescript
     api.registerNodeHostCommand({
@@ -204,6 +207,12 @@ Authorize the public operation before using this capability. Node pairing,
 command grants, and plugin path policies still apply. The capability accepts no
 caller-selected scopes and stops accepting work when the service stops or its
 Gateway closes. Ordinary `api.runtime.nodes.invoke` keeps its caller's authority.
+
+`ctx.openNodeDuplex?.()` opens the same framed binary transport for the service's
+own commands registered with `duplex: true` or `duplex: "optional"`. It uses the same node policy and
+service lifetime as `invokeNode`; callers cannot select an identity or scopes.
+An optional `assertCurrent` callback adds the current operation's liveness check
+before dispatch and each frame. Closing the service cancels open channels.
 
 Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and

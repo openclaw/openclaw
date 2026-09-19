@@ -382,6 +382,13 @@ export type OpenClawPluginServiceContext = {
       "scopes"
     >,
   ) => Promise<unknown>;
+  /** Service-owned binary transport for this plugin's duplex node commands. */
+  openNodeDuplex?: (
+    params: Omit<
+      Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>[0],
+      "scopes"
+    > & { assertCurrent?: () => void },
+  ) => ReturnType<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;

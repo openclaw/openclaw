@@ -350,7 +350,8 @@ async function invokePreflight(input: {
     };
   }
   const binding = readPathBinding(payload?.binding);
-  const expectedBindingKind = input.op === "file.write" ? "write" : "existing";
+  const expectedBindingKind =
+    input.op === "file.write" || input.op === "file.create" ? "write" : "existing";
   if (!binding || binding.kind !== expectedBindingKind) {
     return {
       ok: false,

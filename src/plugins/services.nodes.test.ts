@@ -11,6 +11,7 @@ import {
   withOperatorToolGatewayAuthority,
 } from "../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
+import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
@@ -254,5 +255,124 @@ describe("service-owned node invocation", () => {
       cleanup.resolve();
       await stopping;
     }
+  });
+});
+
+async function openServiceDuplex(
+  options: { assertCurrent?: () => void; duplex?: true | "optional" } = {},
+) {
+  const fixture = await startFixture();
+  fixture.registry.nodeHostCommands.push({
+    pluginId: fixture.record.id,
+    source: fixture.record.source,
+    command: { command: "file.create", duplex: options.duplex ?? true, handle: async () => "{}" },
+  });
+  const dispatched = createDeferredCore<GatewayRequestHandlerOptions>();
+  const finish = createDeferredCore();
+  fixture.nodeHandler.mockImplementation(async (ctx) => {
+    dispatched.resolve(ctx);
+    const cancelled = new Promise<void>((resolve) => {
+      ctx.signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await Promise.race([finish.promise, cancelled]);
+    ctx.respond(true, { ok: true });
+  });
+  const sendInvokeInput = vi.fn();
+  fixture.context.nodeRegistry = {
+    sendInvokeInput,
+  } as unknown as GatewayRequestContext["nodeRegistry"];
+  const opening = fixture.serviceContext.openNodeDuplex!({
+    ...request,
+    command: "file.create",
+    maxMessageBytes: 128 * 1024,
+    assertCurrent: options.assertCurrent,
+  });
+  const ctx = await dispatched.promise;
+  const stream = ctx.client!.internal!.nodeInvokeStream!;
+  stream.onDispatchReady("preflight");
+  // A non-mutating preflight has no receiver and must not open the channel.
+  let ready = false;
+  void opening.then(() => {
+    ready = true;
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(ready).toBe(false);
+  stream.onDispatchReady("upload");
+  const endpoint = createNodeDuplexEndpoint({
+    sendFrame: (frame) => stream.onProgress(JSON.stringify(frame)),
+  });
+  await endpoint.sendReady();
+  const channel = await opening;
+  sendInvokeInput.mockImplementation((id, frame) => {
+    expect(id).toBe("upload");
+    endpoint.receive(JSON.stringify(frame));
+  });
+  return { ...fixture, channel, ctx, finish, endpoint, sendInvokeInput };
+}
+
+describe("service-owned node duplex", () => {
+  it.each([true, "optional"] as const)(
+    "uses %s duplex after canonical preflight",
+    async (duplex) => {
+      const fixture = await openServiceDuplex({ duplex });
+      const received: Uint8Array[] = [];
+      fixture.endpoint.onMessage((message) => {
+        received.push(message);
+      });
+      const source = Buffer.alloc(128 * 1024, 7);
+      await fixture.channel.send(source);
+      expect(received.map((message) => Buffer.from(message))).toEqual([source]);
+      expect(fixture.sendInvokeInput).toHaveBeenCalledTimes(16);
+      expect(fixture.ctx.client?.internal).toMatchObject({
+        pluginRuntimeOwnerId: "files",
+        operatorRoleActor: { kind: "system" },
+      });
+      fixture.finish.resolve();
+      await expect(fixture.channel.closed).resolves.toEqual({ ok: true });
+      await expect(fixture.channel.send(source)).rejects.toThrow(/closed/);
+    },
+  );
+
+  it.each(["stop", "gateway", "replace", "caller"])(
+    "stops retained sends and pending dispatch on %s revocation",
+    async (action) => {
+      let current = true;
+      const fixture = await openServiceDuplex({
+        assertCurrent() {
+          if (!current) {
+            throw new Error("turn no longer current");
+          }
+        },
+      });
+      const closed = expect(fixture.channel.closed).rejects.toThrow();
+      if (action === "stop") {
+        await fixture.handle.stop();
+      }
+      if (action === "gateway") {
+        getGatewayContextLifetime(fixture.resolveContext).abort();
+      }
+      if (action === "replace") {
+        revokePluginRecord(fixture.registry, fixture.record);
+      }
+      if (action === "caller") {
+        current = false;
+      }
+      await expect(fixture.channel.send(Uint8Array.of(1))).rejects.toThrow();
+      await closed;
+      expect(fixture.sendInvokeInput).not.toHaveBeenCalled();
+      expect(fixture.ctx.signal?.aborted).toBe(true);
+    },
+  );
+
+  it("rejects non-duplex and unowned commands before dispatch", async () => {
+    const fixture = await startFixture();
+    for (const command of ["file.fetch", "system.run", "other.stream"]) {
+      await expect(
+        fixture.serviceContext.openNodeDuplex!({ ...request, command }),
+      ).rejects.toThrow();
+    }
+    expect(fixture.nodeHandler).not.toHaveBeenCalled();
   });
 });
