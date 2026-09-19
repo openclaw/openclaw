@@ -84,9 +84,9 @@ function getDarwinProcessStartTime(pid: number, env: NodeJS.ProcessEnv): number 
   }
 }
 
-/** Read the Linux procfs start identity used by Linux-owned runtime state. */
+/** Read the Linux or Android procfs start identity used by runtime state. */
 export function getProcessStartTime(pid: number): number | null {
-  if (!isValidPid(pid) || process.platform !== "linux") {
+  if (!isValidPid(pid) || (process.platform !== "linux" && process.platform !== "android")) {
     return null;
   }
   try {
