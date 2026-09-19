@@ -169,6 +169,12 @@ class TasksPage extends OpenClawLightDomElement {
   @state() private cancellingTaskIds = new Set<string>();
 
   @state() private transcriptTaskId: string | null = null;
+  private transcriptGeneration = 0;
+  private transcriptReturn: {
+    taskId: string;
+    scroller: HTMLElement;
+    top: number;
+  } | null = null;
   private readonly transcriptHost: TaskTranscriptHost = {
     client: null,
     connected: false,
@@ -476,10 +482,24 @@ class TasksPage extends OpenClawLightDomElement {
     }
   }
 
-  private async viewTranscript(taskId: string) {
+  private async viewTranscript(taskId: string, opener: HTMLButtonElement) {
+    const generation = ++this.transcriptGeneration;
+    const scroller = this.closest(".content");
+    this.transcriptReturn =
+      scroller instanceof HTMLElement
+        ? {
+            taskId,
+            scroller,
+            top: opener.getBoundingClientRect().top - scroller.getBoundingClientRect().top,
+          }
+        : null;
     this.transcriptTaskId = taskId;
     await this.updateComplete;
-    if (!this.isConnected || this.transcriptTaskId !== taskId) {
+    if (
+      !this.isConnected ||
+      this.transcriptTaskId !== taskId ||
+      this.transcriptGeneration !== generation
+    ) {
       return;
     }
     const transcript = this.querySelector<HTMLElement>(".tasks-transcript");
@@ -487,7 +507,44 @@ class TasksPage extends OpenClawLightDomElement {
     transcript?.scrollIntoView({ block: "start", behavior: "instant" });
   }
 
+  private async returnFromTranscript() {
+    const origin = this.transcriptReturn;
+    const focused = document.activeElement;
+    this.closeTranscript();
+    const generation = this.transcriptGeneration;
+    await this.updateComplete;
+    if (
+      !origin ||
+      !this.isConnected ||
+      generation !== this.transcriptGeneration ||
+      this.closest(".content") !== origin.scroller ||
+      (document.activeElement !== focused && document.activeElement !== document.body)
+    ) {
+      return;
+    }
+    const opener = this.querySelector<HTMLButtonElement>(
+      `[data-task-id="${CSS.escape(origin.taskId)}"] .task-row__transcript`,
+    );
+    if (!opener || opener.disabled) {
+      return;
+    }
+    opener.focus({ preventScroll: true });
+    const bounds = opener.getBoundingClientRect();
+    const style = getComputedStyle(opener);
+    const focusInset = Math.ceil(
+      Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset),
+    );
+    const top = bounds.top - origin.scroller.getBoundingClientRect().top;
+    const returnTop = Math.max(
+      focusInset,
+      Math.min(origin.top, origin.scroller.clientHeight - bounds.height - focusInset),
+    );
+    origin.scroller.scrollBy({ top: top - returnTop, behavior: "instant" });
+  }
+
   private closeTranscript() {
+    this.transcriptGeneration += 1;
+    this.transcriptReturn = null;
     resetTaskDetail(this.transcriptHost);
     this.transcriptTaskId = null;
   }
@@ -515,7 +572,7 @@ class TasksPage extends OpenClawLightDomElement {
     >
       <div class="tasks-transcript__header">
         <h2>${taskTitle(task)}</h2>
-        <button class="btn btn--sm" type="button" @click=${() => this.closeTranscript()}>
+        <button class="btn btn--sm" type="button" @click=${() => void this.returnFromTranscript()}>
           ${t("common.close")}
         </button>
       </div>
@@ -570,7 +627,7 @@ class TasksPage extends OpenClawLightDomElement {
           onRetry: (taskId) => void this.recoverTask(taskId, "retry"),
           onDismiss: (taskId) => void this.recoverTask(taskId, "dismiss"),
           onCopyResult: (taskId) => void this.copyTaskResult(taskId),
-          onViewTranscript: (taskId) => void this.viewTranscript(taskId),
+          onViewTranscript: (taskId, opener) => void this.viewTranscript(taskId, opener),
           onNavigateToChat: (sessionKey) => {
             const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
             this.context.navigate(

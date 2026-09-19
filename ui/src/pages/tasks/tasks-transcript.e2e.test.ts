@@ -30,11 +30,12 @@ const newTask = {
 };
 
 suite.define(() => {
-  it("opens the exact listed automation task, pages history, and retires closed reads", async () => {
+  it.each([1440, 390])("returns to the task at %i px", async (width) => {
+    const height = width === 1440 ? 900 : 844;
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { width: 1100, height: 900 },
+      viewport: { width, height },
     });
     const page = await context.newPage();
     try {
@@ -58,7 +59,9 @@ suite.define(() => {
             cases: [
               {
                 match: { taskId: oldTask.id, cursor: "older" },
-                response: { messages: [{ role: "user", content: "Original automation request" }] },
+                response: {
+                  messages: [{ role: "user", content: "Original automation request" }],
+                },
               },
               {
                 match: { taskId: oldTask.id },
@@ -84,6 +87,8 @@ suite.define(() => {
       expect(await oldButton.count()).toBe(1);
       await oldButton.scrollIntoViewIfNeeded();
       await oldButton.focus();
+      const openerBounds = await oldButton.boundingBox();
+      assert.isNotNull(openerBounds);
       await oldButton.press("Enter");
       const transcript = page.getByRole("region", { name: "Task transcript", exact: true });
       await transcript.getByText("Earlier automation output", { exact: true }).waitFor();
@@ -95,11 +100,25 @@ suite.define(() => {
         .boundingBox();
       assert.isNotNull(headingBounds);
       expect(headingBounds.y).toBeGreaterThanOrEqual(0);
-      expect(headingBounds.y + headingBounds.height).toBeLessThanOrEqual(900);
+      expect(headingBounds.y + headingBounds.height).toBeLessThanOrEqual(height);
       await transcript.getByRole("button", { name: "Show earlier" }).click();
       await transcript.getByText("Original automation request", { exact: true }).waitFor();
       expect(await oldRow.getByRole("link", { name: "Open session" }).count()).toBe(1);
-      await transcript.getByRole("button", { name: "Close", exact: true }).click();
+      const close = transcript.getByRole("button", { name: "Close", exact: true });
+      await close.focus();
+      await close.press("Enter");
+      await expect
+        .poll(() => oldButton.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      const returnedBounds = await oldButton.boundingBox();
+      assert.isNotNull(returnedBounds);
+      expect(Math.abs(returnedBounds.y - openerBounds.y)).toBeLessThanOrEqual(1);
+      await page.keyboard.press("Tab");
+      expect(
+        await oldRow
+          .getByRole("link", { name: "Open session" })
+          .evaluate((element) => document.activeElement === element),
+      ).toBe(true);
       await gateway.deferNext("tasks.history", { taskId: oldTask.id, limit: 100 });
       await oldButton.click();
       await expect.poll(async () => (await gateway.getRequests("tasks.history")).length).toBe(3);
@@ -114,8 +133,39 @@ suite.define(() => {
       expect(await transcript.textContent()).not.toContain("Stale earlier response");
       expect(await transcript.textContent()).not.toContain("Earlier automation output");
       expect(await gateway.getRequests("tasks.history")).toMatchObject(
-        [oldTask.id, oldTask.id, oldTask.id, newTask.id].map((taskId) => ({ params: { taskId } })),
+        [oldTask.id, oldTask.id, oldTask.id, newTask.id].map((taskId) => ({
+          params: { taskId },
+        })),
       );
+      await gateway.emitGatewayEvent("task", {
+        action: "upserted",
+        task: { ...newTask, status: "running", updatedAt: 7000 },
+      });
+      await page.locator(`[data-task-section="active"] [data-task-id="${newTask.id}"]`).waitFor();
+      await gateway.emitGatewayEvent("task", {
+        action: "upserted",
+        task: { ...newTask, updatedAt: 8000 },
+      });
+      await page.locator(`[data-task-section="recent"] [data-task-id="${newTask.id}"]`).waitFor();
+      await page.setViewportSize({ width, height: 500 });
+      await close.focus();
+      await close.press("Enter");
+      const newButton = page
+        .locator(`[data-task-id="${newTask.id}"]`)
+        .getByRole("button", { name: "View transcript", exact: true });
+      await expect
+        .poll(() => newButton.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      const resizedBounds = await newButton.boundingBox();
+      assert.isNotNull(resizedBounds);
+      const focusInset = await newButton.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+      });
+      expect(resizedBounds.y - focusInset).toBeGreaterThanOrEqual(-1);
+      expect(resizedBounds.y + resizedBounds.height + focusInset).toBeLessThanOrEqual(501);
+      await newButton.press("Enter");
+      await transcript.getByText("Latest automation output", { exact: true }).waitFor();
       const socketCount = await gateway.getSocketCount();
       await gateway.closeLatest(1012, "Reconnect task transcript viewer");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
@@ -125,8 +175,36 @@ suite.define(() => {
         .getByRole("button", { name: "View transcript", exact: true })
         .click();
       await transcript.getByText("Latest automation output", { exact: true }).waitFor();
+      // A new transcript selection in the same turn owns focus after Close commits.
+      await close.evaluate((element) => {
+        (element as HTMLButtonElement).click();
+        document
+          .querySelector<HTMLButtonElement>(
+            '[data-task-id="old-automation-task"] .task-row__transcript',
+          )!
+          .click();
+      });
+      await transcript.getByText("Earlier automation output", { exact: true }).waitFor();
+      await expect
+        .poll(() => transcript.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+
+      // Close must also respect focus that moves to another control before rendering.
+      const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+      const refreshHandle = await refresh.elementHandle();
+      assert.isNotNull(refreshHandle);
+      await close.evaluate((element, nextFocus) => {
+        (element as HTMLButtonElement).click();
+        (nextFocus as HTMLButtonElement).focus();
+      }, refreshHandle);
+      await transcript.waitFor({ state: "detached" });
+      expect(await refresh.evaluate((element) => document.activeElement === element)).toBe(true);
+      await newButton.click();
+      await transcript.getByText("Latest automation output", { exact: true }).waitFor();
+      await refresh.focus();
       await gateway.emitGatewayEvent("task", { action: "deleted", taskId: newTask.id });
       await transcript.waitFor({ state: "detached" });
+      expect(await refresh.evaluate((element) => document.activeElement === element)).toBe(true);
     } finally {
       await context.close();
     }
