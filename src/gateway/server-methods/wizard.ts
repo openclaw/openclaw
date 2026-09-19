@@ -21,7 +21,10 @@ import {
   WizardSession,
   type WizardStep,
 } from "../../wizard/session.js";
-import { canAccessWizardSession } from "../server-wizard-sessions.js";
+import {
+  canAccessWizardSession,
+  UNCOLLECTED_TERMINAL_RETENTION_MS,
+} from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayClient } from "./client-types.js";
 import {
@@ -85,6 +88,27 @@ function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: 
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
 }
 
+// Same idle budget as openclaw.setup.auth.start so a dropped Control UI
+// cannot pin SETUP_ADMISSION_BUSY until Gateway restart.
+const WIZARD_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
+
+// Timer cancel does not go through wizard.cancel, so start must schedule
+// bounded map cleanup after admission settles. Keep the terminal result
+// collectable for the same window later starts use.
+function scheduleUnattendedWizardRetirement(
+  context: GatewayRequestContext,
+  session: WizardSession,
+  sessionId: string,
+) {
+  const retire = () => {
+    const timer = setTimeout(() => {
+      context.purgeWizardSession(sessionId);
+    }, UNCOLLECTED_TERMINAL_RETENTION_MS);
+    timer.unref?.();
+  };
+  void whenAdmittedWizardSessionSettled(session).then(retire, retire);
+}
+
 /** Resolves a live wizard session or sends the public not-found error. */
 function findWizardSessionOrRespond(params: {
   context: GatewayRequestContext;
@@ -116,34 +140,46 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const flow = params.flow ?? "setup";
     const createSession = () =>
       flow === "channels"
-        ? new WizardSession((prompter, _signal, wizardSession) =>
-            runHostedWizard((runtime) =>
-              context.channelWizardRunner(
-                {
-                  channel: readStringValue(params.channel),
-                  onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
-                  // Durable effects (plugin installs, config commit) must finish
-                  // even if the client cancels mid-write.
-                  beforePersistentEffect: async () => wizardSession.lockCancellation(),
-                },
-                runtime,
-                prompter,
+        ? new WizardSession(
+            (prompter, _signal, wizardSession) =>
+              runHostedWizard((runtime) =>
+                context.channelWizardRunner(
+                  {
+                    channel: readStringValue(params.channel),
+                    onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
+                    // Durable effects (plugin installs, config commit) must finish
+                    // even if the client cancels mid-write.
+                    beforePersistentEffect: async () => wizardSession.lockCancellation(),
+                  },
+                  runtime,
+                  prompter,
+                ),
               ),
-            ),
+            {
+              timeoutMs: WIZARD_SESSION_TIMEOUT_MS,
+              renewIdleOnActivity: true,
+            },
           )
-        : new WizardSession((prompter) =>
-            runHostedWizard((runtime) =>
-              context.wizardRunner(
-                {
-                  mode: params.mode,
-                  workspace: readStringValue(params.workspace),
-                  installDaemon: params.installDaemon,
-                },
-                runtime,
-                prompter,
+        : new WizardSession(
+            (prompter) =>
+              runHostedWizard((runtime) =>
+                context.wizardRunner(
+                  {
+                    mode: params.mode,
+                    workspace: readStringValue(params.workspace),
+                    installDaemon: params.installDaemon,
+                  },
+                  runtime,
+                  prompter,
+                ),
               ),
-            ),
+            {
+              timeoutMs: WIZARD_SESSION_TIMEOUT_MS,
+              renewIdleOnActivity: true,
+            },
           );
+    // Reap abandoned terminal results from earlier start-and-abandon cycles.
+    context.findRunningWizard();
     const session = await createAdmittedWizardSession(createSession, flow === "setup");
     if (!session) {
       respondSetupAdmissionBusy(respond);
@@ -156,6 +192,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
       // so an immediate replacement wizard is not rejected as still busy.
       await whenAdmittedWizardSessionSettled(session);
       context.purgeWizardSession(sessionId);
+    } else {
+      scheduleUnattendedWizardRetirement(context, session, sessionId);
     }
     respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
   },
