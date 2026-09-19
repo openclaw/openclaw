@@ -227,7 +227,7 @@ describe("scanStatus", () => {
     await scanStatus({});
 
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 2500 }),
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 60_000 }),
     );
   });
 
@@ -271,7 +271,7 @@ describe("scanStatus", () => {
         probe: false,
         timeoutMs: 5000,
       },
-      timeoutMs: 2500,
+      timeoutMs: 5000,
     });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     expect(firstBuildChannelsTableCall()).toStrictEqual([

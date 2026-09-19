@@ -62,6 +62,10 @@ follows the current account's instance (`openclaw@<user>.service`) while
 preserving the shared template. Run Doctor as that account after the system
 service owner stops its instance.
 
+Doctor waits for a starting local Gateway using the shared 60-second readiness budget, both on its initial check and after an approved restart. It reports the observed startup phase while waiting. A Gateway that still reports startup at the deadline produces a non-failing “still starting” result; Doctor leaves it running and does not offer another restart. Connection failure without startup evidence remains a diagnostic failure. This also applies when an installed updater invokes the candidate Doctor.
+
+Plugin initialization and database startup checks can make a cold start take longer than ten seconds on a loaded or older host. Let the existing Gateway finish starting before requesting a separate restart. Remote Gateway diagnostics keep using the configured remote target.
+
 ## Remote Gateway recovery
 
 With `gateway.mode: "remote"`, a failed Gateway health check does not trigger

@@ -80,8 +80,8 @@ export async function scanStatusJsonFast(
   runtime: RuntimeEnv,
 ): Promise<StatusJsonScanResult> {
   const online = await (await statusGatewayModuleLoader.load()).scanStatusJsonGateway(opts);
-  if (online) {
-    return online;
+  if (online.scan) {
+    return online.scan;
   }
   const overview = await collectStatusScanOverview({
     env: process.env,
@@ -95,7 +95,7 @@ export async function scanStatusJsonFast(
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
     includeLocalStatusRpcFallback: opts.all === true,
-    gatewayProbeTimeoutMs: opts.all === true ? undefined : (opts.timeoutMs ?? 1000),
+    gatewaySnapshot: online.gatewaySnapshot,
   });
   const pluginCompatibility = opts.all
     ? await statusScanPluginStatusModuleLoader

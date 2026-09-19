@@ -30,6 +30,39 @@ import type {
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
+const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+
+export async function readGatewayStartupPhase(params: {
+  configuredProbe: ConfiguredGatewayLocalProbe;
+  port: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const response = await params.configuredProbe.requestHttp({
+    host: "127.0.0.1",
+    pathname: "/startupz",
+    port: params.port,
+    timeoutMs: Math.min(
+      params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+      GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+    ),
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  if (response?.statusCode !== 503) {
+    return undefined;
+  }
+  try {
+    const startup = asOptionalRecord(JSON.parse(response.body));
+    return startup?.status === "starting" &&
+      typeof startup.pendingReason === "string" &&
+      startup.pendingReason.trim()
+      ? formatGatewayRestartProbeError(startup.pendingReason)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
@@ -76,7 +109,10 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/healthz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
+          timeoutMs: Math.min(
+            remainingMs,
+            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+          ),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -85,7 +121,10 @@ export async function waitForGatewayHttpReadiness(params: {
           host: "127.0.0.1",
           pathname: "/readyz",
           port: params.port,
-          timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? 3_000),
+          timeoutMs: Math.min(
+            remainingMs,
+            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+          ),
           ...(params.signal ? { signal: params.signal } : {}),
         })
         .then((result) => result?.statusCode ?? null),
@@ -269,7 +308,7 @@ export async function confirmGatewayReachable(params: {
       requireLocalBackendSharedAuth: authNone,
       deviceIdentity: null,
       sharedStateMode: "read-only",
-      timeoutMs: params.timeoutMs ?? 3_000,
+      timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
         result.gatewayVersion = hello.server.version;
@@ -306,6 +345,7 @@ export type GatewayRestartProbeContext = {
 
 export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
+  explicitAuth?: GatewayRestartProbeAuth,
 ): Promise<GatewayRestartProbeContext> {
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   const cfg = await createConfigIO({
@@ -320,6 +360,7 @@ export async function resolveGatewayRestartProbeContext(
     cfg,
     mode: "local",
     env: mergedEnv,
+    explicitAuth,
   });
   return { auth: resolved.auth, config: cfg };
 }

@@ -513,6 +513,56 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("shares the readiness deadline with deep health and skips heartbeat when it expires", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      mocks.callGateway.mockImplementation(async () => {
+        clock.mockReturnValue(38_000);
+        return { ok: true };
+      });
+      const result = await resolveStatusRuntimeSnapshot({
+        config: {},
+        sourceConfig: {},
+        deep: true,
+        gatewayReachable: true,
+        gatewayProbeDeadlineMs: 38_000,
+      });
+
+      expect(result.health).toEqual({ ok: true });
+      expect(result.lastHeartbeat).toBeNull();
+      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith({
+        method: "health",
+        params: { probe: true },
+        config: {},
+        timeoutMs: 38_000,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it.each([
+    { gatewayStartupPhase: "plugins", health: undefined },
+    { gatewayStartupPhase: undefined, health: { error: "connection refused" } },
+  ])(
+    "uses the completed initial probe for deep health ($gatewayStartupPhase)",
+    async ({ gatewayStartupPhase, health }) => {
+      const snapshot = await resolveStatusRuntimeSnapshot({
+        config: {},
+        sourceConfig: {},
+        deep: true,
+        gatewayReachable: false,
+        gatewayStartupPhase,
+        gatewayProbeError: "connection refused",
+        suppressHealthErrors: true,
+      });
+
+      expect(snapshot.health).toEqual(health);
+      expect(snapshot.lastHeartbeat).toBeNull();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not suppress failed deep health probes for text status", async () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
 

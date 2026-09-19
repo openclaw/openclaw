@@ -139,6 +139,7 @@ export function buildStatusCommandOverviewRows(
   const lastHeartbeatValue = buildStatusLastHeartbeatValue({
     deep: params.opts.deep,
     gatewayReachable: params.surface.gatewayReachable,
+    gatewayStartupPhase: params.surface.gatewayProbe?.startupPhase,
     lastHeartbeat: params.lastHeartbeat,
     warn: params.warn,
     muted: params.muted,

@@ -5,6 +5,7 @@ import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
+import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -31,6 +32,7 @@ import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -44,7 +46,6 @@ import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
 export type { HealthSummary } from "../gateway/health/types.js";
 
-const DEFAULT_TIMEOUT_MS = 10_000;
 const healthLog = createSubsystemLogger("health");
 
 const debugHealth = (
@@ -100,7 +101,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     password: params.password,
     tlsFingerprint: details.tlsFingerprint,
     preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
     config: params.config,
     json: params.json,
   });
@@ -177,6 +178,10 @@ export async function healthCommand(
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
+    const remainingMs = await waitForGatewayDiagnostic({ ...opts, config: cfg }, runtime);
+    if (remainingMs === undefined) {
+      return;
+    }
     summary = await withProgress(
       {
         label: "Checking gateway health…",
@@ -187,7 +192,7 @@ export async function healthCommand(
         await callGateway<HealthSummary>({
           method: "health",
           params: opts.verbose ? { probe: true } : undefined,
-          timeoutMs: opts.timeoutMs,
+          timeoutMs: remainingMs,
           config: cfg,
           token: opts.token,
           password: opts.password,

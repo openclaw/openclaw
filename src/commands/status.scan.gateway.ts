@@ -7,22 +7,23 @@ import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { resolveMemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
+import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 import { buildStatusScanResult, type StatusJsonScanResult } from "./status.scan-result.js";
 import {
   buildColdStartStatusSummary,
   createStatusScanCoreBootstrap,
 } from "./status.scan.bootstrap-shared.js";
-import { resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
+import { resolveGatewayProbeSnapshot, type GatewayProbeSnapshot } from "./status.scan.shared.js";
 
 /** The running Gateway owns fleet admission and status; local discovery is the offline fallback. */
 export async function scanStatusJsonGateway(opts: {
   timeoutMs?: number;
   all?: boolean;
-}): Promise<StatusJsonScanResult | null> {
+}): Promise<{ scan?: StatusJsonScanResult; gatewaySnapshot?: GatewayProbeSnapshot }> {
   const env = process.env;
   const configPath = resolveConfigPath(env);
   if (!existsSync(configPath)) {
-    return null;
+    return {};
   }
   const cfg = await measureCliCommandStartup(
     "status.connection-config",
@@ -30,38 +31,39 @@ export async function scanStatusJsonGateway(opts: {
     { env },
   );
   if (!cfg) {
-    return null;
+    return {};
   }
   let projectionError = "Gateway status is unavailable.";
-  const [gatewaySnapshot, status] = await Promise.all([
-    resolveGatewayProbeSnapshot({
-      cfg,
-      configPath,
-      env,
-      opts: {
-        timeoutMs: opts.timeoutMs ?? 1000,
-        localStatusRpcFallback: false,
-      },
-    }),
-    measureCliCommandStartup(
-      "status.gateway-projection",
-      () =>
-        callGateway<StatusSummary>({
-          config: cfg,
-          configPath,
-          method: "status",
-          params: { includeChannelSummary: false, includeCliProjection: true },
-          timeoutMs: opts.timeoutMs ?? 10_000,
-        }).catch((error: unknown) => {
-          projectionError = error instanceof Error ? error.message : String(error);
-          return null;
-        }),
-      { config: cfg, env },
-    ),
-  ]);
-  if (!status && !gatewaySnapshot.gatewayProbe?.ok) {
-    return null;
+  const gatewaySnapshot = await resolveGatewayProbeSnapshot({
+    cfg,
+    configPath,
+    env,
+    opts,
+  });
+  if (!gatewaySnapshot.gatewayReachable) {
+    return { gatewaySnapshot };
   }
+  const status = await measureCliCommandStartup(
+    "status.gateway-projection",
+    () => {
+      const timeoutMs = resolveStatusGatewayProbeTimeoutMs({ ...opts, ...gatewaySnapshot });
+      if (timeoutMs === 0) {
+        projectionError = "Gateway probe budget exhausted before status projection.";
+        return Promise.resolve(null);
+      }
+      return callGateway<StatusSummary>({
+        config: cfg,
+        configPath,
+        method: "status",
+        params: { includeChannelSummary: false, includeCliProjection: true },
+        timeoutMs,
+      }).catch((error: unknown) => {
+        projectionError = error instanceof Error ? error.message : String(error);
+        return null;
+      });
+    },
+    { config: cfg, env },
+  );
   const { cliProjection, ...summary }: StatusSummary = status ?? buildColdStartStatusSummary();
   if (status) {
     gatewaySnapshot.gatewayReachable = true;
@@ -128,7 +130,7 @@ export async function scanStatusJsonGateway(opts: {
     bootstrap.updatePromise,
   ]);
   const conflict = resolveGatewayAuthTokenSourceConflict({ cfg, env });
-  return buildStatusScanResult({
+  const scan = buildStatusScanResult({
     env,
     cfg: statusConfig,
     sourceConfig: cfg,
@@ -219,4 +221,5 @@ export async function scanStatusJsonGateway(opts: {
       ],
     },
   });
+  return { scan };
 }

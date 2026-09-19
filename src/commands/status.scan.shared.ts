@@ -22,10 +22,14 @@ import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
+import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 
 const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+const gatewayReadinessModuleLoader = createLazyImportLoader(
+  () => import("../cli/daemon-cli/diagnostic-readiness.js"),
+);
 const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
   const { loadBundledPluginPublicArtifactModuleSync } =
     await import("../plugins/public-surface-loader.js");
@@ -33,13 +37,6 @@ const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
     inspectMemoryIndexPresence: (databasePath: string) => Promise<boolean>;
   }>({ dirName: "memory-core", artifactBasename: "status-api.js" });
 });
-
-export function resolveStatusGatewayProbeTimeoutMs(opts: {
-  timeoutMs?: number;
-  all?: boolean;
-}): number {
-  return opts.timeoutMs ?? (opts.all ? 5000 : 2500);
-}
 
 function loadGatewayProbeModule() {
   return gatewayProbeModuleLoader.load();
@@ -76,6 +73,7 @@ export type GatewayProbeSnapshot = {
   gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGatewayFn>> | null;
   gatewayReachable: boolean;
+  gatewayProbeDeadlineMs?: number;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   gatewayCallOverrides?: {
     url: string;
@@ -133,7 +131,6 @@ async function applyLocalStatusRpcFallback(params: {
     password?: string;
   };
   timeoutMs: number;
-  timeoutMsExplicit: boolean;
   enabled?: boolean;
 }): Promise<GatewayProbeResult | null> {
   if (params.enabled === false) {
@@ -142,11 +139,7 @@ async function applyLocalStatusRpcFallback(params: {
   if (!shouldTryLocalStatusRpcFallback(params)) {
     return params.gatewayProbe;
   }
-  // Explicit probe budgets are operator-owned; only implicit fallback defaults get a floor.
-  const boundedFallbackTimeoutMs = Math.min(
-    2000,
-    params.timeoutMsExplicit ? params.timeoutMs : Math.max(1000, params.timeoutMs),
-  );
+  const boundedFallbackTimeoutMs = Math.min(2000, params.timeoutMs);
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
   const status = await loadGatewayCallModule()
     .then(({ callGateway }) =>
@@ -210,6 +203,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     resolveAuthWhenRemoteUrlMissing?: boolean;
     mergeAuthWarningIntoProbeError?: boolean;
     localStatusRpcFallback?: boolean;
+    onProgress?: (phase: string) => void;
   };
 }): Promise<GatewayProbeSnapshot> {
   const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
@@ -229,22 +223,61 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
   const probeTimeoutMs = resolveStatusGatewayProbeTimeoutMs(params.opts);
-  const initialGatewayProbe = shouldProbe
-    ? await loadProbeGatewayModule()
-        .then(({ probeGateway }) =>
-          probeGateway({
-            url: gatewayConnection.url,
-            config: params.cfg,
-            auth: gatewayProbeAuthResolution.auth,
-            env: params.env,
-            timeoutMs: probeTimeoutMs,
-            detailLevel: params.opts.detailLevel ?? "presence",
-          }),
-        )
-        .catch(() => null)
-    : null;
+  const readiness = shouldProbe
+    ? await gatewayReadinessModuleLoader.load().then(({ waitForGatewayDiagnosticReadiness }) =>
+        waitForGatewayDiagnosticReadiness({
+          config: params.cfg,
+          timeoutMs: probeTimeoutMs,
+          onProgress: params.opts.onProgress,
+          ...gatewayProbeAuthResolution.auth,
+        }),
+      )
+    : undefined;
+  const gatewayProbeDeadlineMs = readiness
+    ? performance.now() + Math.max(0, probeTimeoutMs - (readiness.elapsedMs ?? 0))
+    : undefined;
+  const canDiagnose =
+    readiness?.healthy ||
+    readiness?.waitOutcome === "plugin-errors" ||
+    readiness?.waitOutcome === "channel-errors";
+  const remainingTimeoutMs = () =>
+    resolveStatusGatewayProbeTimeoutMs({ timeoutMs: probeTimeoutMs, gatewayProbeDeadlineMs });
+  const initialGatewayProbe: GatewayProbeResult | null =
+    readiness && (!canDiagnose || remainingTimeoutMs() === 0)
+      ? {
+          ok: false,
+          url: gatewayConnection.url,
+          connectLatencyMs: null,
+          error:
+            readiness.waitOutcome === "still-starting"
+              ? null
+              : (readiness.probeError ??
+                (canDiagnose ? "Gateway probe budget exhausted." : "Gateway is unreachable")),
+          ...(readiness.waitOutcome === "still-starting"
+            ? { startupPhase: readiness.startupPhase ?? "startup" }
+            : {}),
+          auth: { role: null, scopes: [], capability: "unknown" },
+          close: null,
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        }
+      : shouldProbe
+        ? await loadProbeGatewayModule()
+            .then(({ probeGateway }) =>
+              probeGateway({
+                url: gatewayConnection.url,
+                config: params.cfg,
+                auth: gatewayProbeAuthResolution.auth,
+                env: params.env,
+                timeoutMs: remainingTimeoutMs(),
+                detailLevel: params.opts.detailLevel ?? "presence",
+              }),
+            )
+            .catch(() => null)
+        : null;
   const gatewayProbe = await applyLocalStatusRpcFallback({
     cfg: params.cfg,
     configPath: params.configPath,
@@ -252,14 +285,16 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayUrl: gatewayConnection.url,
     gatewayProbe: initialGatewayProbe,
     gatewayProbeAuth: gatewayProbeAuthResolution.auth,
-    timeoutMs: probeTimeoutMs,
-    timeoutMsExplicit,
-    enabled: params.opts.localStatusRpcFallback !== false,
+    timeoutMs: remainingTimeoutMs(),
+    enabled:
+      params.opts.localStatusRpcFallback !== false &&
+      (!readiness || (canDiagnose && remainingTimeoutMs() > 0)),
   });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
     gatewayProbeAuthWarning &&
-    gatewayProbe?.ok === false
+    gatewayProbe?.ok === false &&
+    !gatewayProbe.startupPhase
   ) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
@@ -278,6 +313,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
+    ...(gatewayProbeDeadlineMs !== undefined ? { gatewayProbeDeadlineMs } : {}),
     gatewaySelf,
     ...(remoteUrlMissing
       ? {

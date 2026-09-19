@@ -149,9 +149,9 @@ describe("scanStatusJsonFast", () => {
   });
 
   it.each([
-    { opts: {}, expected: 1000 },
+    { opts: {}, expected: 60_000 },
     { opts: { timeoutMs: 1500 }, expected: 1500 },
-    { opts: { all: true }, expected: 5000 },
+    { opts: { all: true }, expected: 60_000 },
     { opts: { all: true, timeoutMs: 700 }, expected: 700 },
   ])("bounds gateway secret resolution to $expected ms for $opts", async ({ opts, expected }) => {
     await scanStatusJsonFast(opts, {} as never);
@@ -219,7 +219,7 @@ describe("scanStatusJsonFast", () => {
 
     await scanStatusJsonFast({}, {} as never);
 
-    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
@@ -335,7 +335,7 @@ describe("scanStatusJsonFast", () => {
       url: "ws://127.0.0.1:18789",
       config: resolvedConfig,
       auth: {},
-      timeoutMs: 1000,
+      timeoutMs: 60_000,
       detailLevel: "presence",
     });
     expect(probeArgs.env).toBe(process.env);

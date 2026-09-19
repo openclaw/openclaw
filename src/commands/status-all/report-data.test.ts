@@ -239,47 +239,58 @@ describe("buildStatusAllReportData", () => {
     },
   );
 
-  it("collects delivery and exporter stability projections in parallel", async () => {
-    await buildStatusAllReportData({
-      overview: {
-        cfg: {},
-        gatewaySnapshot: {
-          gatewayReachable: true,
-          gatewayProbe: { error: null },
-          gatewayCallOverrides: undefined,
-          gatewayConnection: {},
-          remoteUrlMissing: false,
-        },
-        secretDiagnostics: [],
-        tailscaleMode: "off",
-        tailscaleDns: null,
-        agentStatus: { agents: [], defaultId: null },
-        channels: { rows: [], details: [] },
-        channelIssues: [],
-        runtimeDegradation: { degradedSecretOwners: [], degradedPlugins: [] },
-        osSummary: { label: "test" },
-      } as never,
-      daemon: {} as never,
-      nodeService: {} as never,
-      nodeOnlyGateway: null,
-      progress: { setLabel: vi.fn(), tick: vi.fn() },
-    });
+  it.each([false, true])(
+    "collects stability projections only after readiness (starting: %s)",
+    async (starting) => {
+      const report = await buildStatusAllReportData({
+        overview: {
+          cfg: {},
+          gatewaySnapshot: {
+            gatewayReachable: !starting,
+            gatewayProbe: { error: null, ...(starting ? { startupPhase: "plugins" } : {}) },
+            gatewayCallOverrides: undefined,
+            gatewayConnection: {},
+            remoteUrlMissing: false,
+          },
+          secretDiagnostics: [],
+          tailscaleMode: "off",
+          tailscaleDns: null,
+          agentStatus: { agents: [], defaultId: null },
+          channels: { rows: [], details: [] },
+          channelIssues: [],
+          runtimeDegradation: { degradedSecretOwners: [], degradedPlugins: [] },
+          osSummary: { label: "test" },
+        } as never,
+        daemon: {} as never,
+        nodeService: {} as never,
+        nodeOnlyGateway: null,
+        progress: { setLabel: vi.fn(), tick: vi.fn() },
+      });
 
-    expect(mocks.resolveStatusGatewayDiagnosticsSafe.mock.calls).toEqual([
-      [
-        expect.objectContaining({
-          gatewayReachable: true,
-        }),
-      ],
-      [
-        expect.objectContaining({
-          gatewayReachable: true,
-          type: "telemetry.exporter",
-        }),
-      ],
-    ]);
-    expect(mocks.resolveStatusSummaryFromOverview).not.toHaveBeenCalled();
-  });
+      if (starting) {
+        expect(mocks.resolveStatusGatewayDiagnosticsSafe).not.toHaveBeenCalled();
+        expect(mocks.resolveStatusGatewayHealthSafe).not.toHaveBeenCalled();
+        expect(report.diagnosis.gatewayStartupPhase).toBe("plugins");
+        expect(report.diagnosis.health).toBeUndefined();
+        return;
+      }
+
+      expect(mocks.resolveStatusGatewayDiagnosticsSafe.mock.calls).toEqual([
+        [
+          expect.objectContaining({
+            gatewayReachable: true,
+          }),
+        ],
+        [
+          expect.objectContaining({
+            gatewayReachable: true,
+            type: "telemetry.exporter",
+          }),
+        ],
+      ]);
+      expect(mocks.resolveStatusSummaryFromOverview).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the configured system agent for workspace skill diagnosis", async () => {
     await buildStatusAllReportData({

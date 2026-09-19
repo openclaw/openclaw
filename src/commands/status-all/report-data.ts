@@ -79,6 +79,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
     channelIssues: StatusScanOverviewResult["channelIssues"];
     agentStatus: StatusScanOverviewResult["agentStatus"];
     gatewayReachable: boolean;
+    gatewayStartupPhase?: string;
     health: StatusGatewayHealthSafe | undefined;
     deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
     exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
@@ -90,27 +91,30 @@ async function resolveStatusAllLocalDiagnosis(params: {
   const configPath = resolveStatusAllConfigPath(snap?.path);
   const diagnosticsParams = {
     config: overview.cfg,
+    gatewayProbeDeadlineMs: overview.gatewaySnapshot.gatewayProbeDeadlineMs,
     timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
     gatewayReachable: params.gatewayReachable,
     ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
   };
 
-  const [health, deliveryDiagnostics, exporterDiagnostics] = params.nodeOnlyGateway
-    ? [undefined, null, null]
-    : await Promise.all([
-        resolveStatusGatewayHealthSafe({
-          config: overview.cfg,
-          timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
-          gatewayReachable: params.gatewayReachable,
-          gatewayProbeError: params.gatewayProbe?.error ?? null,
-          ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
-        }),
-        resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
-        resolveStatusGatewayDiagnosticsSafe({
-          ...diagnosticsParams,
-          type: "telemetry.exporter",
-        }),
-      ]);
+  const [health, deliveryDiagnostics, exporterDiagnostics] =
+    params.nodeOnlyGateway || params.gatewayProbe?.startupPhase
+      ? [undefined, null, null]
+      : await Promise.all([
+          resolveStatusGatewayHealthSafe({
+            config: overview.cfg,
+            gatewayProbeDeadlineMs: overview.gatewaySnapshot.gatewayProbeDeadlineMs,
+            timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
+            gatewayReachable: params.gatewayReachable,
+            gatewayProbeError: params.gatewayProbe?.error ?? null,
+            ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+          }),
+          resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
+          resolveStatusGatewayDiagnosticsSafe({
+            ...diagnosticsParams,
+            type: "telemetry.exporter",
+          }),
+        ]);
 
   params.progress.setLabel("Checking local state…");
   // These probes are intentionally best-effort so status-all can still print a partial report.
@@ -181,6 +185,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
       channelIssues: overview.channelIssues,
       agentStatus: overview.agentStatus,
       gatewayReachable: params.gatewayReachable,
+      gatewayStartupPhase: params.gatewayProbe?.startupPhase,
       health,
       deliveryDiagnostics,
       exporterDiagnostics,

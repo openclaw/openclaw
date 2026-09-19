@@ -436,11 +436,9 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const timeoutMs = ctx.options.nonInteractive === true ? 3000 : 10_000;
   const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
-    timeoutMs,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
@@ -449,7 +447,6 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
-        timeoutMs,
       })
     : { checked: false, ready: false, skipped: healthOk };
 }

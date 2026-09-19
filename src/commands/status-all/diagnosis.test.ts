@@ -610,6 +610,17 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Retry: openclaw gateway stability");
   });
 
+  it("preserves startup phase in channel diagnosis", async () => {
+    const params = createBaseParams([]);
+    params.gatewayStartupPhase = "plugins";
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Channel issues skipped (gateway still starting (phase plugins))");
+    expect(output).not.toContain("gateway unreachable");
+    expect(output).not.toContain("Gateway health:");
+  });
+
   it("does not read or display stale stderr tails on Darwin", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
