@@ -1,6 +1,6 @@
 import { generateUUID } from "../../../lib/uuid.ts";
 
-export function pickerMenu(target: EventTarget | null): HTMLElement | null {
+function pickerMenu(target: EventTarget | null): HTMLElement | null {
   return target instanceof Element
     ? target.closest<HTMLElement>(".chat-controls__model-menu")
     : null;
@@ -43,7 +43,7 @@ function ensureModelPickerIds(menu: HTMLElement): void {
   input.setAttribute("aria-expanded", details.open ? "true" : "false");
 }
 
-export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
+function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
     candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
   });
@@ -52,6 +52,25 @@ export function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | un
     input?.setAttribute("aria-activedescendant", row.id);
   } else {
     input?.removeAttribute("aria-activedescendant");
+  }
+}
+
+export function handleModelPointerMove(event: PointerEvent): void {
+  // Layout can move a row under a stationary pointer and fire mouseenter.
+  // Touch movement scrolls the list; clicks select independently of hover.
+  // SAFETY: Bound only to model, target, and account option buttons.
+  const row = event.currentTarget as HTMLButtonElement;
+  if (
+    event.pointerType === "touch" ||
+    row.hidden ||
+    !isSelectableModelRow(row) ||
+    row.hasAttribute("data-chat-model-highlighted")
+  ) {
+    return;
+  }
+  const menu = pickerMenu(row);
+  if (menu) {
+    highlightModelRow(menu, row);
   }
 }
 

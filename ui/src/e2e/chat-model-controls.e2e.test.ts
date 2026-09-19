@@ -837,59 +837,87 @@ suite.define(() => {
     },
   );
 
-  it.each(["chat", "new"])(
-    "clears %s model search before Escape dismisses the picker",
-    async (route) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-        const artifactDir = artifactRoot
-          ? createControlUiE2eArtifactDir(`model-search-escape-${route}`, artifactRoot)
-          : undefined;
+  it.each([
+    { route: "chat", width: 1440 },
+    { route: "chat", width: 390 },
+    { route: "new", width: 1440 },
+    { route: "new", width: 390 },
+  ])(
+    "keeps /$route model highlight when search clears beneath a stationary pointer ($width px)",
+    async ({ route, width }) => {
+      await suite.withPage({ viewport: { width, height: 844 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          agentModel: "openai/gpt-5.5",
+          agentModel: "openai/model-alpha",
+          sessionInfo: { model: "model-alpha", modelProvider: "openai" },
           models: [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-            { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+            { id: "model-alpha", name: "Model Alpha", provider: "openai" },
+            { id: "model-beta", name: "Model Beta", provider: "openai" },
+            { id: "model-gamma", name: "Model Gamma", provider: "anthropic" },
           ],
         });
         await page.goto(`${suite.server.baseUrl}${route}`);
         const composer = page.locator(".agent-chat__input").first();
         const picker = composer.locator(".chat-controls__model-picker");
-        const trigger = picker.locator('[data-chat-model-select="true"]');
-        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
+        const trigger = picker.locator("[data-chat-model-select]");
+        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(3);
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
         const search = picker.locator("[data-chat-model-search]");
-        await search.fill("anthropic");
-        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: `${artifactDir}/01-filtered.png`,
-          });
+        const selected = picker.locator('[data-chat-model-option="openai/model-alpha"]');
+        const returned = picker.locator('[data-chat-model-option="openai/model-beta"]');
+        const selectedValue = await trigger.getAttribute("data-chat-select-value");
+        const draft = composer.locator("textarea").first();
+        const draftValue = await draft.inputValue();
+        await search.fill("zz");
+        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(0);
+        await search.click();
+        const probe = await returned.evaluateHandle((row) => {
+          const controller = new AbortController();
+          const options = { signal: controller.signal };
+          const events = { pointerMoves: 0, mouseMoves: 0, entries: 0 };
+          document.addEventListener("pointermove", () => events.pointerMoves++, options);
+          document.addEventListener("mousemove", () => events.mouseMoves++, options);
+          row.addEventListener("mouseenter", () => events.entries++, options);
+          return { events, stop: () => controller.abort() };
+        });
+        try {
+          await page.keyboard.press("Escape");
+          // Wait for Chromium's layout-induced entry, not merely the synchronous
+          // search reset: that reset already passes before the original overwrite.
+          await expect
+            .poll(() => probe.evaluate(({ events }) => events.entries))
+            .toBeGreaterThan(0);
+          expect(
+            await probe.evaluate(({ events }) => [events.pointerMoves, events.mouseMoves]),
+          ).toEqual([0, 0]);
+          expect(await selected.getAttribute("data-chat-model-highlighted")).not.toBeNull();
+          expect(await search.getAttribute("aria-activedescendant")).toBe(
+            await selected.getAttribute("id"),
+          );
+          expect(await selected.getAttribute("aria-selected")).toBe("true");
+          expect(await returned.evaluate((row) => getComputedStyle(row).backgroundColor)).not.toBe(
+            await selected.evaluate((row) => getComputedStyle(row).backgroundColor),
+          );
+          expect(await trigger.getAttribute("data-chat-select-value")).toBe(selectedValue);
+          expect(await draft.inputValue()).toBe(draftValue);
+          expect(await search.inputValue()).toBe("");
+          expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+        } finally {
+          await probe.evaluate(({ stop }) => stop());
+          await probe.dispose();
         }
-        await search.press("Escape");
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: `${artifactDir}/02-first-escape.png`,
-          });
-        }
-        await expect.poll(() => picker.getAttribute("open")).toBe("");
-        expect(await search.inputValue()).toBe("");
-        expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
-        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(2);
-        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-
-        await search.press("Escape");
-        await expect.poll(() => picker.getAttribute("open")).toBe(null);
+        await returned.hover();
+        await expect
+          .poll(() => returned.getAttribute("data-chat-model-highlighted"))
+          .not.toBeNull();
+        await page.keyboard.press("ArrowUp");
+        expect(await search.getAttribute("aria-activedescendant")).toBe(
+          await selected.getAttribute("id"),
+        );
+        await page.keyboard.press("Escape");
+        await expect.poll(() => picker.getAttribute("open")).toBeNull();
         expect(await trigger.evaluate((summary) => summary === document.activeElement)).toBe(true);
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: `${artifactDir}/03-second-escape.png`,
-          });
-        }
       });
     },
   );

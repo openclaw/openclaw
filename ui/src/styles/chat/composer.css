@@ -2056,7 +2056,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   text-align: left;
 }
 
-.chat-controls__inline-select-option:hover,
 .chat-controls__inline-select-option:focus-visible {
   background: var(--bg-hover);
   outline: none;

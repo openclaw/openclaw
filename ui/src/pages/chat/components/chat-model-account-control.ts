@@ -13,7 +13,7 @@ import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-acc
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
-import { highlightModelRow, pickerMenu } from "./chat-model-picker-search.ts";
+import { handleModelPointerMove } from "./chat-model-picker-search.ts";
 
 registerModelAccountsEnglish();
 
@@ -254,14 +254,7 @@ export function renderChatModelAccountControl(params: {
                 ?hidden=${!currentInventory.open}
                 aria-disabled=${option.disabled ? "true" : nothing}
                 ?disabled=${params.disabled || (option.disabled && option.value !== "more")}
-                @mouseenter=${(event: MouseEvent) => {
-                  // SAFETY: Bound to each account option button's mouseenter event.
-                  const row = event.currentTarget as HTMLButtonElement;
-                  const menu = pickerMenu(row);
-                  if (menu) {
-                    highlightModelRow(menu, row);
-                  }
-                }}
+                @pointermove=${handleModelPointerMove}
                 @click=${(event: MouseEvent) => selectAccount(option.value, event)}
               >
                 <span class="chat-controls__model-option-provider" aria-hidden="true"
