@@ -40,6 +40,37 @@ describe("Gateway creation preparation", () => {
       });
     },
   );
+  it("infers the child owner from an agent-prefixed parent", async () => {
+    await withOpenClawTestState({ label: "gateway-create-parent-owner" }, async (state) => {
+      const mainRoot = state.path("ws-main");
+      const opsRoot = state.path("ws-ops");
+      await fs.mkdir(mainRoot);
+      await fs.mkdir(opsRoot);
+      const common = {
+        cfg: {
+          agents: {
+            ownership: "explicit" as const,
+            entries: { main: { workspace: mainRoot }, ops: { workspace: opsRoot } },
+          },
+        },
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" as const },
+      };
+      const parent = await createGatewaySession({ ...common, key: "agent:ops:main" });
+      expect(parent.ok).toBe(true);
+      const child = await createGatewaySession({
+        ...common,
+        parentSessionKey: "agent:ops:main",
+        emitCommandHooks: true,
+        succeedsParent: false,
+      });
+      expect(child).toMatchObject({
+        ok: true,
+        key: expect.stringMatching(/^agent:ops:dashboard:/u),
+        entry: { parentSessionKey: "agent:ops:main" },
+      });
+    });
+  });
   it("retains the full adopted target while checking sibling labels", async () => {
     await withOpenClawTestState({ label: "gateway-create-snapshot" }, async () => {
       const create = (key: string, label: string) =>

@@ -7231,7 +7231,6 @@ test("sessions.create forks an active parent from its last completed message", a
 test("sessions.create resolves an agent-qualified fork from the parent store", async () => {
   const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
   const workStorePath = storeTemplate.replace("{agentId}", "work");
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;
@@ -7273,7 +7272,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
     });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.key).toMatch(/^agent:work:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
     expect(created.payload?.entry?.forkSource).toEqual({
       sessionKey: "agent:work:main",
@@ -7288,7 +7287,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
           "agent-qualified forked session id",
         ),
         sessionKey: created.payload?.key ?? "",
-        storePath: mainStorePath,
+        storePath: workStorePath,
       }),
     ).resolves.toEqual(
       expect.arrayContaining([

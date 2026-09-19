@@ -26,7 +26,10 @@ import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  resolveSessionCreateAgentId,
+} from "../session-request-agent.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
@@ -139,11 +142,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitlyRequestedKey = normalizeOptionalString(p.key);
-    const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
-      cfg,
-      explicitlyRequestedKey ?? (p.agentId === undefined ? "main" : undefined),
-      p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
-    );
+    const explicitlyRequestedAgent = resolveSessionCreateAgentId(cfg, p);
     if (!explicitlyRequestedAgent.ok) {
       respond(false, undefined, explicitlyRequestedAgent.error);
       return;

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveSessionEventAgentScope,
   resolveRequestedSessionAgentId,
+  resolveSessionCreateAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
 
@@ -143,6 +144,75 @@ describe("requested session agent ownership", () => {
         "agent:retired:main",
       ),
     ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
+});
+
+describe("session creation owner selection", () => {
+  const fleet = (): OpenClawConfig => ({
+    agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+  });
+
+  it("infers the child owner from an agent-qualified parent", () => {
+    expect(resolveSessionCreateAgentId(fleet(), { parentSessionKey: "agent:ops:main" })).toEqual({
+      ok: true,
+      agentId: "ops",
+    });
+  });
+
+  it("prefers the parent over a designated ambient default", () => {
+    const cfg = fleet();
+    cfg.agents!.defaults = { systemAgent: { agentId: "main" } };
+    expect(resolveSessionCreateAgentId(cfg, { parentSessionKey: "agent:ops:main" })).toEqual({
+      ok: true,
+      agentId: "ops",
+    });
+  });
+
+  it("keeps explicit child targets ahead of the parent", () => {
+    expect(
+      resolveSessionCreateAgentId(fleet(), {
+        agentId: "main",
+        parentSessionKey: "agent:ops:main",
+      }),
+    ).toEqual({ ok: true, agentId: "main" });
+    expect(
+      resolveSessionCreateAgentId(fleet(), {
+        key: "agent:main:child",
+        parentSessionKey: "agent:ops:main",
+      }),
+    ).toEqual({ ok: true, agentId: "main" });
+  });
+
+  it("keeps ambient behavior for bare parents", () => {
+    expect(resolveSessionCreateAgentId(fleet(), { parentSessionKey: "main" })).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+    expect(resolveSessionCreateAgentId(fleet(), {})).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("rejects parents that name an unconfigured agent", () => {
+    expect(
+      resolveSessionCreateAgentId(fleet(), { parentSessionKey: "agent:ghost:main" }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: 'Unknown agent id "ghost"' },
+    });
+  });
+
+  it("rejects an explicit blank agent id instead of inferring", () => {
+    expect(
+      resolveSessionCreateAgentId(fleet(), {
+        agentId: "",
+        parentSessionKey: "agent:ops:main",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: 'Unknown agent id ""' },
+    });
   });
 });
 

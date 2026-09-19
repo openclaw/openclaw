@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -196,4 +197,20 @@ export function resolveRequestedSessionAgentId(
     ok: false,
     error: errorShape(ErrorCodes.INVALID_REQUEST, selectionError.message),
   };
+}
+
+export function resolveSessionCreateAgentId(
+  cfg: OpenClawConfig,
+  selection: { key?: string; agentId?: string; parentSessionKey?: string },
+): RequestedSessionAgentIdResolution {
+  const key = normalizeOptionalString(selection.key);
+  const agentId =
+    selection.agentId ??
+    parseAgentSessionKey(key)?.agentId ??
+    parseAgentSessionKey(normalizeOptionalString(selection.parentSessionKey))?.agentId;
+  return resolveRequestedSessionAgentId(
+    cfg,
+    key ?? (agentId === undefined ? "main" : undefined),
+    agentId,
+  );
 }
