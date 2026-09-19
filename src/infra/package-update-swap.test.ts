@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 describe("retained package backup retirement", () => {
   it("keeps launcher evidence with a published transaction when mutation admission throws", async () => {
@@ -113,6 +117,86 @@ describe("retained package backup retirement", () => {
 });
 
 describe("launcher backup capture", () => {
+  it.runIf(process.platform === "darwin")(
+    "accepts a symlink backup with different permission bits through rollback",
+    async () => {
+      const base = dirs.make("openclaw-launcher-backup-mode-");
+      const { params, launcher } = await createPackageSwapFixture(base);
+      const target = "../lib/node_modules/openclaw/package.json";
+      await fs.unlink(launcher);
+      await fs.symlink(target, launcher);
+      await fs.lchmod(launcher, 0o700);
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await rename(...args);
+        if (path.basename(path.dirname(String(args[1]))).startsWith(".openclaw.shim-backup-")) {
+          await fs.lchmod(args[1], 0o755);
+        }
+      });
+      let transaction: PackageUpdateTransaction | undefined;
+      const result = await swapStagedPackageInstall({
+        ...params,
+        onTransaction: (value) => {
+          transaction = value;
+        },
+      });
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      expect(await transaction!.rollback(() => {})).toMatchObject({ exitCode: 0 });
+      expect(await fs.readlink(launcher)).toBe(target);
+      expect(await transaction!.complete({ activationVerified: false }, () => {})).toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["target", "type", "mode", "contents"] as const)(
+    "names a changed backup %s and retains the failed copy before activation",
+    async (field) => {
+      const base = dirs.make("openclaw-launcher-backup-changed-");
+      const { params, launcher, packageRoot } = await createPackageSwapFixture(base);
+      if (field === "target" || field === "type") {
+        await fs.unlink(launcher);
+        await fs.symlink("../lib/node_modules/openclaw/package.json", launcher);
+      } else {
+        await fs.chmod(launcher, 0o755);
+      }
+      const original = await fs.lstat(launcher);
+      const rename = fs.rename.bind(fs);
+      let backup = "";
+      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+        await rename(...args);
+        if (!path.basename(path.dirname(String(args[1]))).startsWith(".openclaw.shim-backup-")) {
+          return;
+        }
+        backup = String(args[1]);
+        if (field === "target" || field === "type") {
+          await fs.unlink(backup);
+          if (field === "target") {
+            await fs.symlink("different-target", backup);
+          } else {
+            await fs.writeFile(backup, "different type");
+          }
+        } else if (field === "mode") {
+          await fs.chmod(backup, 0o700);
+        } else {
+          await fs.writeFile(backup, "different contents");
+        }
+      });
+      const beforeActivate = vi.fn();
+      const result = await swapStagedPackageInstall({ ...params, beforeActivate });
+      expect(result.status).toBe("failed");
+      expect(result.step.stderrTail).toContain(`differing fields: ${field}`);
+      expect(result.step.stderrTail).toContain(`failed copy retained at ${backup}`);
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect((await fs.lstat(launcher)).ino).toBe(original.ino);
+      expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+      expect(await fs.lstat(backup)).toBeDefined();
+      if (field === "target") {
+        expect(await fs.readlink(backup)).toBe("different-target");
+      }
+    },
+  );
+
   it.each([false, true])(
     "preserves the installation after a launcher backup failure (cleanup denied=%s)",
     async (cleanupDenied) => {

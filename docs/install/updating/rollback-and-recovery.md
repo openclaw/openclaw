@@ -31,6 +31,17 @@ backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
 
+Launcher backups compare the link type and target, plus ownership when it can
+be preserved. Symlink permission bits do not block an update; macOS link modes
+are copied when supported. Regular-file launchers still require matching modes
+and contents. If backup verification fails, the report names the differing
+fields and the retained failed copy for inspection before retrying.
+
+This behavior belongs to the installed updater. An older updater, including
+2026.9.4, can refuse a macOS launcher backup before the target version runs.
+Use the installation's [manual package-manager update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+if that first update is blocked.
+
 For a target that can read the current state, preview and use the managed
 rollback path:
 
