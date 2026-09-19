@@ -217,9 +217,17 @@ function repoRelative(file: string): string {
   return relative(REPO_ROOT, file).replaceAll("\\", "/");
 }
 
+// A report process observes one checkout snapshot; JSON/text render modes can share its file reads.
+const workspaceTextFileSourcesByCompatKey = new Map<string, WorkspaceTextFile[]>();
+
 function collectWorkspaceTextFileSources(
   records?: readonly PluginCompatRecord[],
 ): WorkspaceTextFile[] {
+  const cacheKey = records?.map((record) => record.code).join("\0") ?? "*";
+  const cached = workspaceTextFileSourcesByCompatKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const tokens = records?.flatMap((record) =>
     record.status === "deprecated"
       ? extractCompatTokens(record)
@@ -236,14 +244,21 @@ function collectWorkspaceTextFileSources(
         ),
       ])
     : null;
-  return (matches ?? collectWorkspaceTextFiles()).map((file) => ({
+  const sources = (matches ?? collectWorkspaceTextFiles()).map((file) => ({
     file,
     relativeFile: repoRelative(file),
     source: readFileSync(file, "utf8"),
   }));
+  workspaceTextFileSourcesByCompatKey.set(cacheKey, sources);
+  return sources;
 }
 
+let summaryWorkspaceTextFileSources: WorkspaceTextFile[] | undefined;
+
 function collectSummaryWorkspaceTextFileSources(): WorkspaceTextFile[] {
+  if (summaryWorkspaceTextFileSources) {
+    return summaryWorkspaceTextFileSources;
+  }
   const pluginSdkFiles = collectWorkspaceTextFilesMatchingGit([
     "-E",
     String.raw`openclaw/plugin-sdk/[a-z0-9][a-z0-9-]*`,
@@ -255,13 +270,14 @@ function collectSummaryWorkspaceTextFileSources(): WorkspaceTextFile[] {
   for (const file of collectTextFiles(resolve(REPO_ROOT, "packages/memory-host-sdk/src"))) {
     files.add(file);
   }
-  return [...files]
+  summaryWorkspaceTextFileSources = [...files]
     .toSorted((left, right) => repoRelative(left).localeCompare(repoRelative(right)))
     .map((file) => ({
       file,
       relativeFile: repoRelative(file),
       source: readFileSync(file, "utf8"),
     }));
+  return summaryWorkspaceTextFileSources;
 }
 
 function isDocsFile(file: string): boolean {
