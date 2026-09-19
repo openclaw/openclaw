@@ -24,6 +24,7 @@ import {
   type SecretEgressCertificateStatus,
   type SecretEgressTlsContext,
 } from "./certificates.js";
+import { substituteLiteralSentinel, swapSecretEgressHeaders } from "./header-substitution.js";
 import {
   createSecretEgressBodyBudget,
   forwardSecretEgressRequest,
@@ -164,29 +165,23 @@ function swapRequestText(params: {
   host: string;
   registered: RegisteredRun;
 }): { value: string; substituted: boolean } {
-  if (!containsSecretSentinel(params.value)) {
-    return { value: params.value, substituted: false };
-  }
-  let substituted = false;
-  const swapped = params.value.replace(
-    new RegExp(SECRET_SENTINEL_PATTERN.source, "g"),
-    (sentinel) => {
-      const resolved = resolveRegisteredSentinel({
+  const swapped = substituteLiteralSentinel({
+    value: params.value,
+    urlMode: params.urlMode,
+    resolveSentinel: (sentinel) =>
+      resolveRegisteredSentinel({
         sentinel,
         host: params.host,
         registered: params.registered,
-      });
-      if (resolved === undefined) {
-        return sentinel;
-      }
-      substituted = true;
-      return params.urlMode ? encodeURIComponent(resolved) : resolved;
-    },
-  );
-  if (containsSecretSentinel(swapped)) {
+      }),
+    sentinelPattern: SECRET_SENTINEL_PATTERN,
+    containsSentinel: containsSecretSentinel,
+  });
+  // A sentinel that survives substitution was never resolved for this run/host.
+  if (containsSecretSentinel(swapped.value)) {
     throw new SecretEgressSubstitutionError("unresolved-sentinel");
   }
-  return { value: swapped, substituted };
+  return swapped;
 }
 
 function swapRequestHeaders(params: {
@@ -197,38 +192,24 @@ function swapRequestHeaders(params: {
   headers: IncomingHttpHeaders;
   substituted: boolean;
 } {
-  const output: IncomingHttpHeaders = {};
-  let substituted = false;
-  for (const [name, rawValue] of Object.entries(params.headers)) {
-    const lowerName = name.toLowerCase();
-    if (lowerName === "proxy-authorization" || lowerName === "proxy-connection") {
-      continue;
-    }
-    if (Array.isArray(rawValue)) {
-      output[name] = rawValue.map((value) => {
-        const swapped = swapRequestText({
-          value,
-          urlMode: false,
-          host: params.host,
-          registered: params.registered,
-        });
-        substituted ||= swapped.substituted;
-        return swapped.value;
-      });
-      continue;
-    }
-    if (rawValue !== undefined) {
-      const swapped = swapRequestText({
-        value: rawValue,
+  return swapSecretEgressHeaders({
+    headers: params.headers,
+    substituteLiteral: (value) =>
+      swapRequestText({
+        value,
         urlMode: false,
         host: params.host,
         registered: params.registered,
-      });
-      substituted ||= swapped.substituted;
-      output[name] = swapped.value;
-    }
-  }
-  return { headers: output, substituted };
+      }),
+    resolveSentinel: (sentinel) =>
+      resolveRegisteredSentinel({
+        sentinel,
+        host: params.host,
+        registered: params.registered,
+      }),
+    sentinelPattern: SECRET_SENTINEL_PATTERN,
+    containsSentinel: containsSecretSentinel,
+  });
 }
 
 /** Starts one authenticated, loopback-only substitution proxy. */

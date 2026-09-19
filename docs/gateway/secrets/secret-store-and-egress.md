@@ -51,6 +51,8 @@ Store values are not encrypted at rest. They are stored unencrypted in the share
 
 The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store `secret` entries without receiving their plaintext. OpenClaw puts the existing authenticated sentinel in the subprocess environment, then a Gateway-owned loopback proxy replaces it in request URLs, headers, and streamed bodies immediately before egress.
 
+Plaintext substitution also covers upstream HTTP Basic authentication. Clients that only support Basic, including git over HTTPS, Docker registries, and most REST APIs, merge the user and password and base64-encode them, which hides the sentinel from literal matching. The proxy decodes a canonical `Authorization: Basic` payload, substitutes a sentinel registered for this run in either the user or the password, and re-encodes it before egress. Malformed or non-canonical payloads, and credentials without a registered sentinel, are forwarded unchanged. This does not widen custody: the proxy already decrypts bound sentinels, host binding and run liveness are enforced by the same authorization check as the plaintext path, and a sentinel bound to a different host is refused before any upstream connection.
+
 Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
 
 ```bash
