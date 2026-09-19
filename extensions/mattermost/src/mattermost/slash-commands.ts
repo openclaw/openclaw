@@ -234,8 +234,10 @@ async function createMattermostCommand(
  * Delete a custom slash command.
  */
 async function deleteMattermostCommand(client: MattermostClient, commandId: string): Promise<void> {
-  await client.request<Record<string, unknown>>(`/commands/${encodeURIComponent(commandId)}`, {
+  // Mattermost answers with 200 {"status":"OK"}; registration recreates the command after this.
+  await client.request<void>(`/commands/${encodeURIComponent(commandId)}`, {
     method: "DELETE",
+    discardResponse: true,
   });
 }
 

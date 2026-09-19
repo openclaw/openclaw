@@ -35,7 +35,8 @@ export function createMattermostReactionFetchMock(params: {
   const allowAdd = mode === "add" || mode === "both";
   const allowRemove = mode === "remove" || mode === "both";
   const addStatus = params.status ?? 201;
-  const removeStatus = params.status ?? 204;
+  // Mattermost answers reaction removal with 200 {"status":"OK"}, not 204.
+  const removeStatus = params.status ?? 200;
   const removePath = `/api/v4/users/${userId}/posts/${params.postId}/reactions/${encodeURIComponent(params.emojiName)}`;
 
   return vi.fn<typeof fetch>(async (url, init) => {
@@ -77,7 +78,7 @@ export function createMattermostReactionFetchMock(params: {
 
     if (allowRemove && urlText.endsWith(removePath)) {
       expect(init?.method).toBe("DELETE");
-      const responseBody = params.body === undefined ? null : params.body;
+      const responseBody = params.body === undefined ? { status: "OK" } : params.body;
       return new Response(
         responseBody === null ? null : JSON.stringify(responseBody),
         responseBody === null

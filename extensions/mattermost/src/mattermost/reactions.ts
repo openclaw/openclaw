@@ -194,22 +194,22 @@ async function runMattermostReaction(
 }
 
 async function createReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
-  await client.request<Record<string, unknown>>("/reactions", {
+  await client.request<void>("/reactions", {
     method: "POST",
     body: JSON.stringify({
       user_id: params.userId,
       post_id: params.postId,
       emoji_name: params.emojiName,
     }),
+    discardResponse: true,
   });
 }
 
 async function deleteReaction(client: MattermostClient, params: MutationPayload): Promise<void> {
   const emoji = encodeURIComponent(params.emojiName);
-  await client.request<unknown>(
-    `/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`,
-    {
-      method: "DELETE",
-    },
-  );
+  // Mattermost answers with 200 {"status":"OK"}, not 204.
+  await client.request<void>(`/users/${params.userId}/posts/${params.postId}/reactions/${emoji}`, {
+    method: "DELETE",
+    discardResponse: true,
+  });
 }
