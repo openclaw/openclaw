@@ -15,9 +15,11 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
+  appendTelegramDroppedControlFallback,
   buildTelegramPresentationButtons,
   resolveTelegramInlineButtons,
   type TelegramButtonBuildOptions,
+  type TelegramDroppedControl,
 } from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
@@ -327,4 +329,66 @@ export function resolveTelegramInteractiveTextFallback(params: {
   }
   const fallback = renderMessagePresentationFallbackText({ presentation: interactivePresentation });
   return fallback.trim() ? fallback : text;
+}
+
+export function resolveFinalTelegramPresentationText(params: {
+  payload: ReplyPayload;
+  text: string;
+  richMessages: boolean;
+  allowWebAppButtons?: boolean;
+}): string | undefined {
+  if (params.payload.presentationTextMode !== "fallback") {
+    return undefined;
+  }
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  if (!presentation) {
+    return undefined;
+  }
+  // The streamed final must land on the same text the non-streamed sender's
+  // canonicalization would produce: presentational blocks and controls Telegram
+  // cannot encode stay in the message text, while native-encodable controls
+  // move to the inline keyboard and out of the text. Filtering interactive
+  // blocks wholesale would erase the only visible fallback for dropped controls.
+  const buttonOptions: TelegramButtonBuildOptions = {
+    allowWebAppButtons: params.allowWebAppButtons === true,
+    questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
+  };
+  // SAFETY: channelData.telegram is untyped extension data; its buttons reference forwards unvalidated, like the canonicalization path above.
+  const telegramData = params.payload.channelData?.telegram as
+    | { buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"] }
+    | undefined;
+  // Dispatch resolves the same legacy controls with a collection hook and
+  // appends their labels to the text this renderer replaces, so the fallback
+  // final must re-collect them or the only visible label is lost.
+  const droppedControls: TelegramDroppedControl[] = [];
+  const existingButtons = resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      interactive: normalizeLegacyInteractiveReply(params.payload.interactive),
+    },
+    {
+      ...buttonOptions,
+      onDroppedControl: (control) => droppedControls.push(control),
+    },
+  );
+  const { fallbackBlocks } = partitionTelegramPresentationBlocks({
+    presentation,
+    presentationControlsSelected: existingButtons === undefined,
+    buttonOptions,
+  });
+  if (fallbackBlocks.length === 0) {
+    return undefined;
+  }
+  const rendered = (
+    params.richMessages
+      ? renderTelegramRichFallbackText({ ...presentation, blocks: fallbackBlocks })
+      : renderMessagePresentationFallbackText({
+          presentation: { ...presentation, blocks: fallbackBlocks },
+        })
+  ).trimEnd();
+  if (!rendered) {
+    return undefined;
+  }
+  const finalText = appendTelegramDroppedControlFallback(rendered, droppedControls);
+  return finalText !== params.text.trimEnd() ? finalText : undefined;
 }

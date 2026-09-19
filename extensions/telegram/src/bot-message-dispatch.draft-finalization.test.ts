@@ -160,6 +160,192 @@ describeTelegramDispatch("dispatchTelegramMessage draft-finalization", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps the native status table on the finalized streamed preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Gateway status as plain text",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Status",
+                headers: ["Key", "Value"],
+                rows: [["Gateway", "running"]],
+                rowHeaderColumnIndex: 0,
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { richMessages: true, streaming: { mode: "partial" } },
+    });
+
+    // The streamed final renders the portable table island; the authored
+    // fallback text alone would silently drop the native table.
+    const finalUpdate = answerDraftStream.update.mock.calls.at(-1)?.[0] as string;
+    expect(finalUpdate).toContain("<table><caption>Status</caption>");
+    expect(finalUpdate).toContain("<td>running</td>");
+    expect(finalUpdate).not.toBe("Gateway status as plain text");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dropped-control label when a fallback final mixes a table with an unencodable control", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Gateway status as plain text",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Status",
+                headers: ["Key", "Value"],
+                rows: [["Gateway", "running"]],
+                rowHeaderColumnIndex: 0,
+              },
+              {
+                type: "buttons",
+                buttons: [{ label: "Copy manually", value: "x".repeat(65) }],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { richMessages: true, streaming: { mode: "partial" } },
+    });
+
+    // Native table renders while the dropped control keeps its text fallback;
+    // filtering every interactive block would erase the only visible label.
+    const finalUpdate = answerDraftStream.update.mock.calls.at(-1)?.[0] as string;
+    expect(finalUpdate).toContain("<table><caption>Status</caption>");
+    expect(finalUpdate).toContain("- Copy manually");
+    expect(finalUpdate).not.toBe("Gateway status as plain text");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dropped legacy-control label when a fallback final mixes a table with a legacy interactive control", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Gateway status as plain text",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Status",
+                headers: ["Key", "Value"],
+                rows: [["Gateway", "running"]],
+                rowHeaderColumnIndex: 0,
+              },
+            ],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Copy manually", value: "x".repeat(65) }],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { richMessages: true, streaming: { mode: "partial" } },
+    });
+
+    // Dispatch appends the dropped legacy-control label to the recovered text;
+    // the presentation-only finalization must re-collect it, not erase it.
+    const finalUpdate = answerDraftStream.update.mock.calls.at(-1)?.[0] as string;
+    expect(finalUpdate).toContain("<table><caption>Status</caption>");
+    expect(finalUpdate).toContain("- Copy manually");
+    expect(finalUpdate).not.toBe("Gateway status as plain text");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps the group web-app label when a fallback final mixes a table with a web-app control", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Gateway status as plain text",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Status",
+                headers: ["Key", "Value"],
+                rows: [["Gateway", "running"]],
+                rowHeaderColumnIndex: 0,
+              },
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Launch",
+                    action: { type: "web-app", url: "https://example.com/app" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        chatId: -1001234,
+        isGroup: true,
+        msg: {
+          chat: { id: -1001234, type: "supergroup" },
+          message_id: 456,
+          message_thread_id: 777,
+        } as TelegramMessageContext["msg"],
+        threadSpec: { id: 777, scope: "forum" },
+      }),
+      streamMode: "partial",
+      telegramCfg: { richMessages: true, streaming: { mode: "partial" } },
+    });
+
+    // Web App buttons are unavailable in groups, so the final text keeps the
+    // control's fallback label next to the rendered native table.
+    const finalUpdate = answerDraftStream.update.mock.calls.at(-1)?.[0] as string;
+    expect(finalUpdate).toContain("<table><caption>Status</caption>");
+    expect(finalUpdate).toContain("Launch: https://example.com/app");
+    expect(finalUpdate).not.toBe("Gateway status as plain text");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("renders dropped controls in the finalized streamed preview", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

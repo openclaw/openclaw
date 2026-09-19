@@ -37,7 +37,10 @@ import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js"
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { failPromptContextSequence, mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
-import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
+import {
+  canonicalizeTelegramPresentationPayload,
+  resolveFinalTelegramPresentationText,
+} from "./interactive-fallback.js";
 import { createLaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import {
   createLaneTextDeliverer,
@@ -692,6 +695,14 @@ export function createDeliveryState(
     createPromptContextSequence: () => createPromptContextSequence(getTurn()),
     resolveFinalTextCandidate: async () =>
       (await getTurn().resolveCurrentTurnTranscriptFinal())?.text,
+    resolveFinalPresentationText: ({ payload, text }) =>
+      resolveFinalTelegramPresentationText({
+        payload,
+        text,
+        richMessages: getTurn().telegramCfg.richMessages === true,
+        allowWebAppButtons:
+          resolveTelegramTargetChatType(String(getTurn().context.chatId)) === "direct",
+      }),
     log: logVerbose,
     markDelivered: deliveryState.markDelivered,
   });

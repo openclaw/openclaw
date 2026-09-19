@@ -70,6 +70,10 @@ type CreateLaneTextDelivererParams = {
     finalText: string;
     laneName: LaneName;
   }) => Promise<string | undefined> | string | undefined;
+  resolveFinalPresentationText?: (params: {
+    payload: ReplyPayload;
+    text: string;
+  }) => Promise<string | undefined> | string | undefined;
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -259,7 +263,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
     rotateFinalizedStream(lane);
 
     const finalText = text.trimEnd();
-    const previewText = useFinalTextRecovery
+    const recoveredText = useFinalTextRecovery
       ? await resolveTranscriptBackedChannelFinalText({
           payload,
           finalText,
@@ -276,6 +280,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
           },
         })
       : finalText;
+    // A finalized preview never reaches sendPayload's presentation
+    // canonicalization, so a structured presentation would silently degrade
+    // to the authored fallback text on the streamed final message. The owner
+    // renders it once here; partial updates keep the plain stream text.
+    const previewText =
+      finalizePreview && payload.presentation
+        ? ((await params.resolveFinalPresentationText?.({
+            payload,
+            text: recoveredText,
+          })) ?? recoveredText)
+        : recoveredText;
     lane.lastPartialText = previewText;
     lane.hasStreamedMessage = true;
     lane.finalized = false;
