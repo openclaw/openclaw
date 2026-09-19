@@ -25,6 +25,7 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   assertSystemdAvailable: async () => {},
   execBusctlUser: busctl,
+  execSystemctlUser: async () => ({ code: 0, termination: "exit", stdout: "", stderr: "" }),
 }));
 
 import {

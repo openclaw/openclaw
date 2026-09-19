@@ -7,6 +7,7 @@ import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
+import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import { installSystemdService, stageSystemdService } from "./systemd-install.js";
 
 const native = vi.hoisted(() => ({
@@ -91,6 +92,109 @@ it.each([false, true])(
     expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
   },
 );
+
+it.each(["success", "failure", "interruption"] as const)(
+  "keeps cached candidate inputs until rollback reload confirms restoration (%s)",
+  async (reload) => {
+    const { env, unit, environment, originals } = await createInstallFixture();
+    await fs.rm(environment);
+    let cachedUnit = originals.get(unit)!;
+    let activationFailed = false;
+    let restoredReload = false;
+    let inputPresentAtReload = false;
+    const warnings: string[] = [];
+    native.active.mockResolvedValue({ ok: true, value: true });
+    native.exec.mockImplementation(async (_env, args) => {
+      if (args[0] === "daemon-reload") {
+        const diskUnit = await fs.readFile(unit, "utf8");
+        if (activationFailed) {
+          expect(diskUnit).toBe(originals.get(unit));
+          inputPresentAtReload = await fs.stat(environment).then(
+            () => true,
+            () => false,
+          );
+          if (reload !== "success") {
+            return {
+              code: 1,
+              termination: reload === "failure" ? "exit" : "signal",
+              stdout: "",
+              stderr: `rollback reload ${reload}`,
+            };
+          }
+          restoredReload = true;
+        }
+        cachedUnit = diskUnit;
+      }
+      if (args[0] === "restart" && !activationFailed) {
+        expect(cachedUnit).toContain(environment);
+        activationFailed = true;
+        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
+      }
+      return {
+        code: 0,
+        termination: "exit",
+        stdout: args[0] === "is-enabled" ? "enabled" : "",
+        stderr: "",
+      };
+    });
+    const installation = installSystemdService({
+      env,
+      stdout: new PassThrough(),
+      warn: (message) => warnings.push(message),
+      programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
+      environment: { SERVICE_VALUE: "candidate" },
+      environmentValueSources: { SERVICE_VALUE: "file" },
+    });
+    await expect(installation).rejects.toThrow("candidate failed");
+    expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+    expect(inputPresentAtReload).toBe(true);
+    if (reload === "success") {
+      expect(restoredReload).toBe(true);
+      expect(cachedUnit).toBe(originals.get(unit));
+      await expect(fs.stat(environment)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(warnings).toEqual([]);
+    } else {
+      expect(cachedUnit).toContain(environment);
+      expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+      expect(warnings.join("\n")).toContain("retained");
+      expect(warnings.join("\n")).toContain(environment);
+      expect(warnings.join("\n")).toContain("Retry");
+    }
+  },
+);
+
+it("retries a failed rollback reload before retiring retained generated inputs", async () => {
+  const { env, unit, environment, originals } = await createInstallFixture();
+  await fs.rm(environment);
+  const warnings: string[] = [];
+  await withSystemdDefinitionMutation(
+    env,
+    env,
+    async (mutation) => {
+      await mutation.publish(environment, "SERVICE_VALUE=candidate\n", 0o600);
+      await mutation.publish(unit, `[Service]\nEnvironmentFile=${environment}\n`, 0o600);
+      native.exec.mockResolvedValueOnce({
+        code: 1,
+        termination: "exit",
+        stdout: "",
+        stderr: "reload failed",
+      });
+      await expect(mutation.restoreAll()).rejects.toThrow("reload was not confirmed");
+      expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+      expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+      native.exec.mockImplementationOnce(async (_env, args) => {
+        expect(args).toEqual(["daemon-reload"]);
+        expect(await fs.readFile(unit, "utf8")).toBe(originals.get(unit));
+        expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+        return { code: 0, termination: "exit", stdout: "", stderr: "" };
+      });
+      await expect(mutation.restoreAll()).resolves.toBe(true);
+      await expect(fs.stat(environment)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+    { warn: (message) => warnings.push(message) },
+  );
+  expect(warnings).toHaveLength(1);
+});
 
 it.each([
   { enabled: "enabled", running: true, failure: "activation" },

@@ -473,7 +473,9 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             ? ["daemon-reload", "enable", "daemon-reload"]
             : custodyLoss === "daemon-reload"
               ? ["daemon-reload", "daemon-reload"]
-              : [],
+              : custodyLoss === "definition-published"
+                ? ["daemon-reload"]
+                : [],
       );
     expect(observations.authorityFailure).toMatchObject({
       code: "service-authority-revoked",

@@ -2962,14 +2962,14 @@ describe("stageSystemdService", () => {
         .mockResolvedValueOnce()
         .mockResolvedValueOnce()
         .mockResolvedValueOnce()
-        .mockRejectedValueOnce(new Error("system ownership appeared before activation"));
+        .mockRejectedValue(new Error("system ownership appeared before activation"));
 
       await expect(
         installSystemdService(gatewayPortSystemdServiceFixture(env, "18789")),
       ).rejects.toThrow("system ownership appeared before activation");
 
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(4);
+      expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(5);
       expect(execFileMock).toHaveBeenCalledTimes(1);
     });
   });
@@ -3839,8 +3839,8 @@ describe("systemd service install and uninstall", () => {
           "daemon-reload",
           ...(action === "restart" ? ["enable"] : []),
           action,
-          "disable",
           "daemon-reload",
+          "disable",
           ...(action === "restart" ? ["stop"] : []),
         ]);
       });
@@ -3906,7 +3906,7 @@ describe("systemd service install and uninstall", () => {
         ["--user", "status"],
         ["--user", "daemon-reload"],
         ["--user", "enable", NODE_SERVICE],
-        ["--user", "disable", NODE_SERVICE],
+        ["--user", "daemon-reload"],
       ]);
     });
   });

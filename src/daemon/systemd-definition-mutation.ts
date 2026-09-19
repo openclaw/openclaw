@@ -28,6 +28,8 @@ import {
   GatewayServiceAuthorityError,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
+import { execSystemctlUser, readSystemctlDetail } from "./systemd-exec.js";
+import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
   isNodeSystemdEnvironment,
   readSystemdServiceExecStart,
@@ -277,6 +279,7 @@ export async function withSystemdDefinitionMutation<T>(
   options?: {
     timeoutMs?: number;
     definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
+    warn?: (message: string) => void;
   },
 ): Promise<T> {
   const deadlineAt =
@@ -337,6 +340,33 @@ export async function withSystemdDefinitionMutation<T>(
     const snapshots = initial.snapshots;
     const publications = new Map<string, string>();
     const stagedFiles: GatewayServiceStagedFiles["files"] = [];
+    let reloadPending = false;
+    const reloadRestoredDefinition = async () => {
+      if (!reloadPending) {
+        return;
+      }
+      try {
+        await assertNoSystemGatewayOwnership(env, remainingTimeoutMs());
+        assertGatewayServiceUpdateCurrent();
+        const result = await execSystemctlUser(
+          env,
+          ["daemon-reload"],
+          remainingTimeoutMs(),
+          assertGatewayServiceUpdateCurrent,
+        );
+        assertGatewayServiceUpdateCurrent();
+        if (result.code !== 0 || result.termination !== "exit") {
+          throw new Error(
+            `systemctl rollback daemon-reload failed: ${readSystemctlDetail(result)}`,
+          );
+        }
+        reloadPending = false;
+      } catch (error) {
+        const message = `Systemd rollback reload was not confirmed; service inputs including ${generated} were retained. Retry service installation from the same profile after the user manager is available.`;
+        options?.warn?.(message);
+        throw new Error(message, { cause: error });
+      }
+    };
     const publish = async (
       file: string,
       contents: string | Buffer,
@@ -376,6 +406,7 @@ export async function withSystemdDefinitionMutation<T>(
         assertGatewayServiceUpdateCurrent();
         options?.definitionTransaction?.assertCurrent();
         await fs.rename(temporary, file);
+        reloadPending ||= file === unit;
         // Re-read every artifact against this inode/payload. Canonical temp paths
         // keep cleanup in the original directory even if the publication alias moves.
         const published = identity(written, Buffer.from(contents));
@@ -457,6 +488,8 @@ export async function withSystemdDefinitionMutation<T>(
       if (snapshot) {
         await publish(file, snapshot.contents, snapshot.mode, false);
       } else if (file === generated) {
+        // Disk restoration does not invalidate systemd's cached candidate definition.
+        await reloadRestoredDefinition();
         await remove(file);
       } else {
         await refresh(true);
@@ -486,7 +519,7 @@ export async function withSystemdDefinitionMutation<T>(
         let restored = false;
         let failure: Error | undefined;
         const files = [unit, `${unit}.bak`, ...(isNodeSystemdEnvironment(env) ? [] : [generated])];
-        // Restore existing inputs, then their unit, before retiring new inputs.
+        // Restore existing inputs, then reload their restored unit before retiring new inputs.
         // A superseded artifact is preserved; a failed unit restore still owns its references.
         const order = files.toSorted(
           (a, b) =>
@@ -496,6 +529,9 @@ export async function withSystemdDefinitionMutation<T>(
         for (const file of order) {
           try {
             restored = (await restore(file, snapshots.get(file) ?? null)) || restored;
+            if (file === unit) {
+              await reloadRestoredDefinition();
+            }
           } catch (error) {
             if (file === unit || (file === generated && snapshots.has(generated))) {
               throw error;

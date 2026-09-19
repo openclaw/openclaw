@@ -51,7 +51,6 @@ export async function captureSystemdInstallRecovery(env: GatewayServiceEnv, inst
           await run(["enable", "--runtime", unit]);
         }
       }
-      await run(["daemon-reload"]);
       if (restartAttempted) {
         await run([running ? "restart" : "stop", unit]);
       }

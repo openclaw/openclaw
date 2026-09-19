@@ -267,6 +267,7 @@ async function writeSystemdUnit(
     description,
     beforeLoad,
     definitionTransaction,
+    warn,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
@@ -414,7 +415,7 @@ async function writeSystemdUnit(
       }
       return { unitPath, backedUp: existingUnit !== null };
     },
-    { definitionTransaction },
+    { definitionTransaction, warn },
   );
 }
 
