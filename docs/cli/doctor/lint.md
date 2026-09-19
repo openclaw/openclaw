@@ -73,6 +73,12 @@ Explicit lint exit codes:
 
 When the updater runs lint, warning-severity findings below its error threshold are retained in a separate JSON `warnings` array. They do not change the lint exit code. The updater records these advisories in its run history, including intentional open channel policies, so they remain available in `openclaw update status`. Ordinary standalone lint keeps the selected output threshold.
 
+If a caller cancels state-lease acquisition before an inspection starts, Doctor records
+an informational diagnostic with `errorCode: OPENCLAW_STATE_LEASE_ABORTED`, the elapsed
+time, and the caller's signal as its cause. Below the selected threshold, this diagnostic
+appears in JSON `warnings` and human output without failing lint. It means the inspection
+was not performed. Cancellation after acquisition and other inspection failures remain errors.
+
 A configured Codex plugin that is missing or whose advertised health API cannot be
 verified produces an availability warning under `core/doctor/codex-session-routes`,
 with the plugin name and repair command. Untrusted installations are not imported

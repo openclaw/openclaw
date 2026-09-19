@@ -416,8 +416,7 @@ describe("ManagedWorktreeService capacity", () => {
           }
           await vi.waitFor(() => expect(settled).toBe(true));
           await expect(result).resolves.toMatchObject({
-            code:
-              ending === "abort" ? "OPENCLAW_STATE_LEASE_ABORTED" : "OPENCLAW_STATE_LEASE_TIMEOUT",
+            code: ending === "abort" ? "OPENCLAW_STATE_LEASE_ABORTED" : "OPENCLAW_STATE_LEASE_HELD",
           });
           expect(service.listRegistryRecords()).toEqual([]);
           expect(await git(repo, "branch", "--list", "openclaw/waiting")).toBe("");

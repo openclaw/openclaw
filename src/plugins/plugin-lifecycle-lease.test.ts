@@ -286,7 +286,7 @@ describe("plugin lifecycle lease", () => {
         await cleanupEntered.promise;
         await expect(
           withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "acquired"),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
+        ).rejects.toMatchObject({ outcome: { kind: "held" } });
       } finally {
         releaseCleanup.resolve();
         await completion;
@@ -396,7 +396,7 @@ describe("plugin lifecycle lease", () => {
         let assertionError: unknown;
         try {
           await expect(fs.readFile(secondResult, "utf8")).resolves.toBe(
-            "OPENCLAW_STATE_LEASE_TIMEOUT",
+            "OPENCLAW_STATE_LEASE_HELD",
           );
           await expect(fs.access(secondMarker)).rejects.toMatchObject({ code: "ENOENT" });
         } catch (error) {

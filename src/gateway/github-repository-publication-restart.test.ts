@@ -50,7 +50,7 @@ describe("repository checkpoint GitHub publication", () => {
     );
   });
 
-  it.each(["turn", "reset", "move", "held", "store-busy"] as const)(
+  it.each(["turn", "reset", "move", "held", "store-busy", "retired-owner"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await repositoryFixture();
@@ -77,6 +77,7 @@ describe("repository checkpoint GitHub publication", () => {
       const original = readRepositoryGitHubPublication(first.requestId)!;
       expect(original.pushed_head_commit).toBeNull();
       await f.capture("later unselected change\n", "later");
+      const retiredCoordinator = person.coordinator;
       restartPersonalPublicationFixture(person);
       const pending = person.coordinator.personalStatus(
         person.action,
@@ -150,13 +151,42 @@ describe("repository checkpoint GitHub publication", () => {
         writer = new DatabaseSync(database.path);
         writer.exec("BEGIN IMMEDIATE");
       }
-      const confirmed = await callPersonalPublicationRpc(person, "sessions.github.confirm", {
+      const confirmation = {
         sessionKey: SESSION_KEY,
         requestId: first.requestId,
         generation: person.generation,
         account: personalPublicationAccount,
         requestDigest: pending.confirmation!.requestDigest,
-      }).finally(() => {
+      };
+      if (boundary === "retired-owner") {
+        const aborted = await callPersonalPublicationRpc(
+          { ...person, coordinator: retiredCoordinator },
+          "sessions.github.confirm",
+          confirmation,
+        );
+        expect(aborted[0]).toBe(false);
+        expect(aborted[2]).toMatchObject({
+          code: "UNAVAILABLE",
+          retryable: false,
+          details: {
+            leaseAcquisition: {
+              kind: "aborted",
+              reason: "caller-signal",
+              elapsedMs: expect.any(Number),
+            },
+          },
+        });
+        expect(aborted[2].details.leaseAcquisition.elapsedMs).toBeGreaterThanOrEqual(0);
+        expect(f.runtime.effects).toEqual(["push"]);
+        expect(readRepositoryGitHubPublication(first.requestId)?.checkpoint_ref).toBe(
+          original.checkpoint_ref,
+        );
+      }
+      const confirmed = await callPersonalPublicationRpc(
+        person,
+        "sessions.github.confirm",
+        confirmation,
+      ).finally(() => {
         writer?.exec("ROLLBACK");
         writer?.close();
       });

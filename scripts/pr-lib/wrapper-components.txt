@@ -934,10 +934,12 @@ src/plugin-sdk/file-lock.ts
 src/plugin-sdk/keyed-async-queue.ts
 src/plugin-sdk/message-tool-delivery-hints.ts
 src/plugin-state/plugin-state-store.comparison.ts
+src/plugin-state/plugin-state-store.database.ts
 src/plugin-state/plugin-state-store.journal.ts
 src/plugin-state/plugin-state-store.kernel.ts
 src/plugin-state/plugin-state-store.mutations.ts
 src/plugin-state/plugin-state-store.reads.ts
+src/plugin-state/plugin-state-store.retention.ts
 src/plugin-state/plugin-state-store.sqlite.ts
 src/plugin-state/plugin-state-store.types.ts
 src/plugin-state/plugin-state-worker-contract.ts
@@ -1333,9 +1335,13 @@ src/state/user-model-account-id.ts
 src/state/user-model-accounts.ts
 src/state/user-preferences.store.ts
 src/state/user-preferences.worker.ts
+src/state/user-profile-events.ts
+src/state/user-profile-github-identity.ts
+src/state/user-profile-list.ts
 src/state/user-profiles-internal.ts
 src/state/user-profiles-schema.ts
 src/state/user-profiles-tailscale-avatar.ts
+src/state/user-profiles.worker.ts
 src/tasks/detached-task-runtime-contract.ts
 src/tasks/task-backing-records.ts
 src/tasks/task-cancellation-state.ts
@@ -1377,6 +1383,7 @@ src/utils.ts
 src/utils/boolean.ts
 src/utils/delivery-context.shared.ts
 src/utils/fetch-timeout.ts
+src/utils/github-login.ts
 src/utils/message-channel-constants.ts
 src/utils/message-channel-core.ts
 src/utils/message-channel-normalize.ts

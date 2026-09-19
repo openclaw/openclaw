@@ -32,7 +32,9 @@ afterEach(async () => {
 });
 
 function harness() {
+  const realNow = Date.now.bind(Date);
   vi.useFakeTimers({ toFake: ["Date"] });
+  vi.spyOn(Date, "now").mockImplementation(realNow);
   const stateDir = tempDirs.make("transcript-selection-");
   const requests: TranscriptStartRequest[] = [];
   const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(

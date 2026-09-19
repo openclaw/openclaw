@@ -863,7 +863,7 @@ describe("doctor lint state isolation", () => {
     },
   );
 
-  it("keeps runtime schema OAuth inspection off the writable source state", async () => {
+  it("records cancelled OAuth inspection without using a token or writing source state", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-oauth-"));
     const stateDir = path.join(rootDir, "operator-state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -884,36 +884,63 @@ describe("doctor lint state isolation", () => {
     const lock = new DatabaseSync(databasePath);
     lock.exec("BEGIN IMMEDIATE");
     const before = snapshotDoctorLintSqliteFamily(databasePath);
+    let resolvedToken: string | undefined;
     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
       {
         id: "core/doctor/runtime-tool-schemas",
         kind: "core",
         description: "checks OAuth state ownership",
         async detect() {
-          const token = await resolveMcpOAuthAccessToken({
-            identity,
-            acceptUnknownExpiry: true,
-            signal: AbortSignal.timeout(250),
-          });
-          expect(token).toBe("stored-inspection-token-not-real");
-          return [];
+          const privateDatabasePath = resolveOpenClawStateSqlitePath(process.env);
+          expect(privateDatabasePath).not.toBe(databasePath);
+          const competingWriter = new DatabaseSync(privateDatabasePath);
+          competingWriter.exec("BEGIN IMMEDIATE");
+          const signal = AbortSignal.timeout(250);
+          const releaseWriter = () => {
+            if (competingWriter.isTransaction) {
+              competingWriter.exec("ROLLBACK");
+            }
+          };
+          signal.addEventListener("abort", releaseWriter, { once: true });
+          try {
+            resolvedToken = await resolveMcpOAuthAccessToken({
+              identity,
+              acceptUnknownExpiry: true,
+              signal,
+            });
+            return [];
+          } finally {
+            signal.removeEventListener("abort", releaseWriter);
+            releaseWriter();
+            competingWriter.close();
+          }
         },
       },
     ]);
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
-      await expect(
-        runDoctorLintCli(runtime, {
-          json: true,
-          onlyIds: ["core/doctor/runtime-tool-schemas"],
-        }),
-      ).resolves.toBe(0);
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/runtime-tool-schemas"],
+      });
       expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
         ok: true,
         checksRun: 1,
         findings: [],
+        warnings: [
+          {
+            checkId: "core/doctor/runtime-tool-schemas",
+            severity: "info",
+            errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
+            message: expect.stringMatching(
+              /^state lease inspection not performed: aborted after \d+ ms by the caller's signal$/,
+            ),
+          },
+        ],
       });
+      expect(exitCode).toBe(0);
+      expect(resolvedToken).toBeUndefined();
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();

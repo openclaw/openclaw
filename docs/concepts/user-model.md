@@ -83,7 +83,7 @@ The Gateway binds personal publication to your authenticated profile, the select
 
 After a Gateway restart, unfinished personal publication requires your explicit confirmation before it continues. Confirmation reuses the original request. It checks for an already-created commit, pushed branch, or pull request, so a lost response does not blindly repeat the action. A changed connection or incompatible workspace requires a new, explicitly selected action. For a repository-only session, confirmation retains the original checkpoint even if later turns have completed. It never silently publishes those later changes.
 
-If confirmation cannot access its state store, the Gateway reports a retryable unavailable result with the storage cause. If the workspace exclusion is held, the response names its recorded holder and lease epoch. Retry uses the original request and accepted checkpoint.
+If confirmation cannot access its state store, the Gateway reports a retryable unavailable result with the storage cause. If the workspace exclusion is held, the response names its recorded holder and lease epoch. Caller cancellation is reported separately and does not trigger an automatic retry. Retry uses the original request and accepted checkpoint.
 
 ### Disconnect and reconnect
 

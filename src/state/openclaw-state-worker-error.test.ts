@@ -77,8 +77,7 @@ describe("shared-state worker error transport", () => {
 
   it.each([
     "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-    "OPENCLAW_STATE_LEASE_TIMEOUT",
-    "STATE_LEASE_BUSY",
+    "OPENCLAW_STATE_LEASE_HELD",
     "OPENCLAW_STATE_LEASE_ABORTED",
     "OPENCLAW_STATE_LEASE_LOST",
     "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
@@ -536,7 +535,7 @@ describe("shared-state worker error transport", () => {
         {
           type: "state-lease",
           leaseCode: "OPENCLAW_STATE_LEASE_LOST",
-          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+          code: "OPENCLAW_STATE_LEASE_HELD",
           name: "OpenClawStateLeaseError",
           message: "mismatched lease classification",
         },

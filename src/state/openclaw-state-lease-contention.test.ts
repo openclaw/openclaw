@@ -58,6 +58,10 @@ describe.each([undefined, "existing"] as const)(
                   ending === "timeout"
                     ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED"
                     : "OPENCLAW_STATE_LEASE_ABORTED",
+                outcome:
+                  ending === "timeout"
+                    ? { kind: "store-unavailable", reason: "lifecycle-busy" }
+                    : { kind: "aborted", reason: "caller-signal", elapsedMs: expect.any(Number) },
               });
               if (ending === "abort") {
                 controller.abort(new Error("cancel waiting acquisition"));

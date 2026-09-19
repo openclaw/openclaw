@@ -346,11 +346,12 @@ async function executeDoctorLint(
   };
   const result = await runDoctorLintChecks(ctx, runOpts);
   const visible = result.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
-  const warnings = isUpdateDoctorLintPass(stateView.sourceEnv)
-    ? result.findings.filter(
-        (finding) => finding.severity === "warning" && !healthFindingMeetsSeverity(finding, sevMin),
-      )
-    : [];
+  const warnings = result.findings.filter(
+    (finding) =>
+      !healthFindingMeetsSeverity(finding, sevMin) &&
+      (finding.errorCode === "OPENCLAW_STATE_LEASE_ABORTED" ||
+        (isUpdateDoctorLintPass(stateView.sourceEnv) && finding.severity === "warning")),
+  );
   const exitCode = exitCodeFromFindings(result.findings, sevMin);
   return {
     exitCode,
@@ -368,7 +369,7 @@ async function executeDoctorLint(
         });
         return;
       }
-      const displayed = [...visible, ...(stateView.cleanupWarnings ?? [])];
+      const displayed = [...visible, ...warnings, ...(stateView.cleanupWarnings ?? [])];
       process.stdout.write(
         `doctor --lint: ran ${result.checksRun} check(s), ${displayed.length} finding(s)\n`,
       );

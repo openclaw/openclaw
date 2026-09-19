@@ -120,7 +120,7 @@ it("refuses a competing owner and preserves a replacement lease on cleanup", asy
             }),
           ),
         ).rejects.toMatchObject({
-          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+          code: "OPENCLAW_STATE_LEASE_HELD",
           outcome: { kind: "held" },
         });
         const db = openNodeSqliteDatabase(f.pathname);
@@ -351,7 +351,7 @@ it("joins nested maintenance work before releasing the actual durable lease", as
           throw new Error("competitor was admitted");
         }),
       ),
-    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT", outcome: { kind: "held" } });
+    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD", outcome: { kind: "held" } });
   } finally {
     release.resolve();
     await run;

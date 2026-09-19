@@ -7,7 +7,7 @@ import type { PluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 
 const request = { source: "npm", spec: "demo@1.2.3" } as const;
 function wireError(cause: unknown) {
-  const error = pluginLifecycleError(cause);
+  const error = pluginLifecycleError(cause, { entered: true });
   return Object.assign(new Error(error.message), { details: error.details });
 }
 

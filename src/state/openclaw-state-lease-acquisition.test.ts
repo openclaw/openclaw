@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as backoff from "../infra/backoff.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -22,6 +23,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { OpenClawStateLeaseAcquisitionError } from "./openclaw-state-lease-error.js";
+import * as leaseStorage from "./openclaw-state-lease-storage.js";
 import * as leaseStore from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
@@ -131,10 +134,13 @@ it("records unavailable storage when a lifecycle writer prevents observing a hel
 it("does not enter maintenance after cancellation during storage preparation", async () => {
   await withOpenClawTestState({ label: "lease-aborted-preparation" }, async (state) => {
     const controller = new AbortController();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const open = stateDatabaseOpen.openUnpublishedStateDatabase;
     vi.spyOn(stateDatabaseOpen, "openUnpublishedStateDatabase").mockImplementation((options) => {
       const database = open(options);
+      clock.mockReturnValue(2_500);
       controller.abort(new Error("cancel preparation"));
+      clock.mockReturnValue(9_000);
       return database;
     });
     const run = vi.fn(async () => undefined);
@@ -151,13 +157,83 @@ it("does not enter maintenance after cancellation during storage preparation", a
         },
         run,
       ),
-    ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+    ).rejects.toMatchObject({
+      code: "OPENCLAW_STATE_LEASE_ABORTED",
+      outcome: { kind: "aborted", reason: "caller-signal", elapsedMs: 1_500 },
+      cause: controller.signal.reason,
+    });
     expect(run).not.toHaveBeenCalled();
     expect(
       openOpenClawStateDatabase({ env: state.env }).db.prepare("SELECT * FROM state_leases").all(),
     ).toEqual([]);
   });
 });
+
+it.each(["acquired", "held", "store-unavailable"] as const)(
+  "records cancellation while awaiting an acquisition that settles as %s",
+  async (outcome) => {
+    await withOpenClawTestState({ label: "lease-aborted-after-grant" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const identity = { scope: "core:test", key: "aborted-after-grant", owner: "other-owner" };
+      if (outcome === "held") {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => leaseStore.acquireOpenClawStateLeaseInTransaction(db, identity, 60_000),
+          { env: state.env },
+        );
+      }
+      const writer = outcome === "store-unavailable" ? new DatabaseSync(database.path) : undefined;
+      writer?.exec("BEGIN IMMEDIATE");
+      const controller = new AbortController();
+      const acquire = leaseStorage.acquireLease;
+      vi.spyOn(leaseStorage, "acquireLease").mockImplementation(async (...args) => {
+        try {
+          const result = await acquire(...args);
+          expect(result.kind).toBe(outcome);
+          return result;
+        } catch (error) {
+          expect(outcome).toBe("store-unavailable");
+          expect(error).toMatchObject({ cause: { errcode: 5 } });
+          throw error;
+        } finally {
+          // The caller ends before the awaiting lease owner consumes the worker's result.
+          controller.abort(new Error("cancel pending acquisition"));
+        }
+      });
+      const run = vi.fn(async () => undefined);
+      try {
+        const failure = await withOpenClawStateLease(
+          {
+            scope: identity.scope,
+            key: identity.key,
+            database: { scope: "shared", options: { env: state.env } },
+            leaseMs: 60_000,
+            waitMs: 0,
+            signal: controller.signal,
+          },
+          run,
+        ).catch((error: unknown) => error);
+        expect(failure).toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_ABORTED",
+          cause: controller.signal.reason,
+        });
+        if (outcome === "acquired") {
+          expect(failure).not.toBeInstanceOf(OpenClawStateLeaseAcquisitionError);
+        } else {
+          expect(failure).toMatchObject({
+            outcome: { kind: "aborted", reason: "caller-signal", elapsedMs: expect.any(Number) },
+          });
+        }
+        expect(run).not.toHaveBeenCalled();
+        expect(database.db.prepare("SELECT owner FROM state_leases").all()).toEqual(
+          outcome === "held" ? [{ owner: identity.owner }] : [],
+        );
+      } finally {
+        writer?.exec("ROLLBACK");
+        writer?.close();
+      }
+    });
+  },
+);
 
 it("restores the cached connection timeout after preparation fails during schema publication", async () => {
   await withOpenClawTestState({ label: "lease-preparation-restoration" }, async (state) => {
@@ -238,6 +314,9 @@ it.each(["invalid", "aborted"] as const)(
           reason === "invalid"
             ? "OPENCLAW_STATE_LEASE_INVALID_INPUT"
             : "OPENCLAW_STATE_LEASE_ABORTED",
+        ...(reason === "aborted"
+          ? { outcome: { kind: "aborted", reason: "caller-signal", elapsedMs: expect.any(Number) } }
+          : {}),
       });
       expect(fs.existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
     });

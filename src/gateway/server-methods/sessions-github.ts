@@ -15,7 +15,6 @@ import { GitHubPublicationKnownFailure } from "../github-publication-failure.js"
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.js";
 import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionAction,
@@ -52,31 +51,24 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
     try {
       return await handler(options);
     } catch (error) {
-      if (error instanceof OpenClawStateLeaseAcquisitionError) {
-        const held = error.outcome.kind === "held";
-        options.respond(
-          false,
-          undefined,
-          errorShape(held ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE, error.message, {
-            retryable: !held,
-            details: { leaseAcquisition: error.outcome },
-          }),
-        );
-        return;
-      }
       const publishing = method === "sessions.github.publish";
-      const busy = error instanceof SessionWorkspaceReservationBusyError;
       if (publishing && error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
+      const acquisition =
+        error instanceof OpenClawStateLeaseAcquisitionError ? error.outcome : undefined;
+      const forbidden = acquisition ? acquisition.kind === "held" : !publishing;
       options.respond(
         false,
         undefined,
         errorShape(
-          publishing || busy ? ErrorCodes.UNAVAILABLE : ErrorCodes.FORBIDDEN,
+          forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE,
           error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
-          busy
-            ? { retryable: true }
+          acquisition
+            ? {
+                retryable: acquisition.kind === "store-unavailable",
+                details: { leaseAcquisition: acquisition },
+              }
             : publishing &&
                 error instanceof GitHubPublicationKnownFailure &&
                 "idempotencyKey" in options.params &&

@@ -1,7 +1,6 @@
 const leaseErrorCodes = [
   "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-  "OPENCLAW_STATE_LEASE_TIMEOUT",
-  "STATE_LEASE_BUSY",
+  "OPENCLAW_STATE_LEASE_HELD",
   "OPENCLAW_STATE_LEASE_ABORTED",
   "OPENCLAW_STATE_LEASE_LOST",
   "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
@@ -10,7 +9,8 @@ export type OpenClawStateLeaseErrorCode = (typeof leaseErrorCodes)[number];
 
 type OpenClawStateLeaseAcquisitionFailure =
   | { kind: "held"; holder: { owner: string; epoch: number } }
-  | { kind: "store-unavailable"; reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" };
+  | { kind: "store-unavailable"; reason: "sqlite-busy" | "lifecycle-busy" | "storage-error" }
+  | { kind: "aborted"; reason: "caller-signal"; elapsedMs: number };
 
 export function isOpenClawStateLeaseErrorCode(
   value: unknown,
@@ -37,12 +37,16 @@ export class OpenClawStateLeaseAcquisitionError extends OpenClawStateLeaseError 
     super(
       outcome.kind === "held"
         ? `${label} is held by ${outcome.holder.owner} (lease epoch ${outcome.holder.epoch})`
-        : `failed to acquire ${label}: store unavailable (${outcome.reason})`,
+        : outcome.kind === "aborted"
+          ? `${label} acquisition was aborted after ${outcome.elapsedMs} ms by caller signal`
+          : `failed to acquire ${label}: store unavailable (${outcome.reason})`,
       {
         code:
           outcome.kind === "held"
-            ? "OPENCLAW_STATE_LEASE_TIMEOUT"
-            : "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
+            ? "OPENCLAW_STATE_LEASE_HELD"
+            : outcome.kind === "aborted"
+              ? "OPENCLAW_STATE_LEASE_ABORTED"
+              : "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
         cause,
       },
     );
