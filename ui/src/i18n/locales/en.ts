@@ -5262,7 +5262,7 @@ export const en: TranslationMap & {
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be greater than 0 seconds.",
       webhookUrlRequired: "Webhook URL is required.",
-      webhookUrlInvalid: "Webhook URL must start with http:// or https://.",
+      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",
       invalidIntervalAmount: "Invalid interval amount.",
       cronExprRequiredShort: "Cron expression required.",

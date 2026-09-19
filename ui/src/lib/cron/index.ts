@@ -33,6 +33,7 @@ import {
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
+import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
 export { loadCronScopeStats } from "./scope.ts";
 
@@ -264,11 +265,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
   }
   if (form.deliveryMode === "webhook") {
-    const target = form.deliveryTo.trim();
-    if (!target) {
-      errors.deliveryTo = "cron.errors.webhookUrlRequired";
-    } else if (!/^https?:\/\//i.test(target)) {
-      errors.deliveryTo = "cron.errors.webhookUrlInvalid";
+    const deliveryError = resolveCronWebhookDeliveryError(form.deliveryTo);
+    if (deliveryError) {
+      errors.deliveryTo = deliveryError;
     }
   }
   if (form.failureAlertMode === "custom") {
