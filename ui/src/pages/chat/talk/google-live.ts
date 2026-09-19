@@ -63,12 +63,31 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
 
 // Browser sessions can still pin a 2.5 model, whose text and tool-response wire
 // contract differs from the 3.1 default carried in new session metadata.
+function normalizeGoogleLiveModelId(model: string): string {
+  return model.startsWith("models/") ? model.slice("models/".length) : model;
+}
+
 function isGemini31LiveModel(model: string | undefined): boolean {
   if (!model) {
     return true;
   }
-  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
+  const modelId = normalizeGoogleLiveModelId(model);
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
+}
+
+// Gemini 3.8 Live Extended Thinking closes the session (1007) on function response
+// scheduling, so like Gemini 3.1 Live it gets one unscheduled final response per call.
+// Plain `gemini-3.8-live` keeps the async tool contract.
+function isGemini38LiveExtendedThinkingModel(model: string | undefined): boolean {
+  if (!model) {
+    return false;
+  }
+  const modelId = normalizeGoogleLiveModelId(model);
+  return modelId.startsWith("gemini-3.8-live") && modelId.includes("extended-thinking");
+}
+
+function supportsToolResultScheduling(model: string | undefined): boolean {
+  return !isGemini31LiveModel(model) && !isGemini38LiveExtendedThinkingModel(model);
 }
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
@@ -532,7 +551,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           {
             id: callId,
             name,
-            ...(!isGemini31LiveModel(this.session.model) ? { scheduling: "WHEN_IDLE" } : {}),
+            ...(supportsToolResultScheduling(this.session.model)
+              ? { scheduling: "WHEN_IDLE" }
+              : {}),
             response:
               result && typeof result === "object" && !Array.isArray(result)
                 ? result

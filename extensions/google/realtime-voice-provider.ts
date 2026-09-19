@@ -14,7 +14,6 @@ import {
   type RealtimeInputConfig,
   type Session,
   StartSensitivity,
-  type ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
 import {
@@ -33,6 +32,7 @@ import type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
+  RealtimeVoiceBargeInOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   convertPcmToMulaw8k,
@@ -60,7 +60,14 @@ import {
   GOOGLE_REALTIME_DEFAULT_MODEL,
   GOOGLE_REALTIME_VOICE_METADATA,
 } from "./realtime-voice-metadata.js";
-import { resolveGoogleGemini3ThinkingLevel } from "./thinking-api.js";
+import {
+  buildGoogleLiveInterruptTurn,
+  buildThinkingConfig,
+  isGemini31LiveModel,
+  modelSupportsToolResultContinuation,
+  supportsAsyncFunctionCalling,
+  supportsClientContentInterrupt,
+} from "./realtime-voice-model-contract.js";
 
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";
 const GOOGLE_REALTIME_DEFAULT_API_VERSION = "v1beta";
@@ -239,37 +246,6 @@ function normalizeProviderConfig(
 
 function resolveEnvApiKey(): string | undefined {
   return trimToUndefined(process.env.GEMINI_API_KEY) ?? trimToUndefined(process.env.GOOGLE_API_KEY);
-}
-
-// Gemini 3.1 Live replaces client-content text and async tools with realtime text
-// and sequential function responses; explicit older models keep their prior contract.
-function isGemini31LiveModel(model: string): boolean {
-  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
-  return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
-}
-
-function supportsAsyncFunctionCalling(model: string): boolean {
-  return !isGemini31LiveModel(model);
-}
-
-function buildThinkingConfig(
-  config: GoogleRealtimeLiveConfig,
-  model: string,
-): ThinkingConfig | undefined {
-  if (isGemini31LiveModel(model)) {
-    const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
-      modelId: model,
-      thinkingLevel: config.thinkingLevel,
-      thinkingBudget: config.thinkingBudget,
-    });
-    return thinkingLevel
-      ? { thinkingLevel: thinkingLevel as ThinkingConfig["thinkingLevel"] }
-      : undefined;
-  }
-  if (typeof config.thinkingBudget === "number") {
-    return { thinkingBudget: config.thinkingBudget };
-  }
-  return undefined;
 }
 
 function buildRealtimeInputConfig(
@@ -483,7 +459,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
     this.model = config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
-    this.supportsToolResultContinuation = supportsAsyncFunctionCalling(this.model);
+    this.supportsToolResultContinuation = modelSupportsToolResultContinuation(this.model);
   }
 
   async connect(): Promise<void> {
@@ -674,6 +650,25 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   setMediaTimestamp(_ts: number): void {}
+
+  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
+    if (!supportsClientContentInterrupt(this.model)) {
+      return;
+    }
+    if (!this.session || !this.connected || !this.sessionConfigured) {
+      return;
+    }
+    if (options?.audioPlaybackActive !== true && options?.force !== true) {
+      return;
+    }
+    try {
+      this.session.sendClientContent(buildGoogleLiveInterruptTurn());
+    } catch (error) {
+      this.config.onError?.(
+        error instanceof Error ? error : new Error("Google Live barge-in interrupt failed"),
+      );
+    }
+  }
 
   sendUserMessage(text: string): void {
     const normalized = text.trim();
