@@ -381,7 +381,12 @@ describe("standing-intent admitted operations", () => {
       );
       await expectWaiting(work, held.entered);
       await vi.advanceTimersByTimeAsync(15_000);
-      expect(await work).toBeUndefined();
+      // A timed-out contribution is reported rather than silently dropped: the
+      // runner returns a bounded loss notice naming this plugin instead of
+      // undefined. The intent's own state must still be untouched.
+      const timedOut = await work;
+      expect(timedOut?.prependContext).toBeUndefined();
+      expect(timedOut?.appendContext).toContain("memory-core (handler-failed)");
 
       held.release();
       await held.drain();
@@ -428,7 +433,11 @@ describe("standing-intent admitted operations", () => {
       const liveCaller = keep(listStandingIntents({ agentId: "main" }));
       await expectWaiting(liveCaller, held.entered);
       await vi.advanceTimersByTimeAsync(15_000);
-      expect(await hookWork).toBeUndefined();
+      // Same reporting contract as above; the queued live caller is what this
+      // test is really about and must still be served after the reopen.
+      const expiredHook = await hookWork;
+      expect(expiredHook?.prependContext).toBeUndefined();
+      expect(expiredHook?.appendContext).toContain("memory-core (handler-failed)");
       held.release();
       await expect(liveCaller).resolves.toMatchObject([
         { id: existing.id, status: "armed", fireCount: 0 },

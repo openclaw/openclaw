@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
@@ -7,7 +6,6 @@ import {
   attachToolAllowlistIntersection,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../agents/tool-policy.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
@@ -40,7 +38,6 @@ import type {
   PluginHookHandlerMap,
   PluginHookReplyPayload,
   PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -55,7 +52,6 @@ import type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
-  PluginHookToolAuthority,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
   PluginHookResolveExecEnvContext,
@@ -65,6 +61,7 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
+import { createPromptBuildHookDispatch } from "./hooks-prompt-build.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
 import {
   type PluginSubagentRequesterContext,
@@ -191,6 +188,12 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult = HookResult<K>> = {
     registration: PluginHookRegistration<K>,
     event: HookEvent<K>,
   ) => TResult;
+  /**
+   * Called when a handler's contribution is discarded (throw or timeout) and the
+   * runner continues without it. Lets a caller surface the loss instead of
+   * shipping a result that merely looks complete.
+   */
+  onHandlerDropped?: (params: { hookName: K; pluginId: string; error: unknown }) => void;
   isolateEventPerHandler?: boolean;
   eventForHandler?: (event: HookEvent<K>, result: TResult | undefined) => HookEvent<K>;
   mergeNullResults?: boolean;
@@ -304,9 +307,6 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
-  // Prompt-build hooks may start nested agent runs through any caller. The
-  // mutable token lets detached descendants dispatch after the outer run settles.
-  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
   const runtimeDecisionScopeId = randomUUID();
   let runtimeDecisionOrdinal = 0;
 
@@ -924,6 +924,8 @@ export function createHookRunner(
         if (err instanceof HookIsolationError) {
           throw err;
         }
+        // Report before handleHookError, which rethrows under a fail-closed policy.
+        policy.onHandlerDropped?.({ hookName, pluginId: hook.pluginId, error: err });
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
       policy.assertHandlerBoundaryActive?.();
@@ -1040,97 +1042,18 @@ export function createHookRunner(
     return { ...event, runId: ctx.runId };
   }
 
-  /**
-   * Run before_prompt_build hook.
-   * Allows plugins to inject context and system prompt before prompt submission.
-   */
-  async function runBeforePromptBuild(
-    event: PluginHookBeforePromptBuildEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    if (beforePromptBuildDispatch.getStore()?.active) {
-      return undefined;
-    }
-    const token = { active: true };
-    return await beforePromptBuildDispatch.run(token, async () => {
-      try {
-        return await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
-          "before_prompt_build",
-          event,
-          ctx,
-          {
-            mergeResults: mergeBeforePromptBuild,
-            includeRegistration: (registration) => registration.requiresToolAuthority !== true,
-          },
-        );
-      } finally {
-        token.active = false;
-      }
-    });
-  }
-
-  /** Runs context enrichment only after the host has finalized the turn's tool surface. */
-  async function runAuthorizedPromptBuild(
-    event: PluginHookBeforePromptBuildEvent,
-    ctx: PluginHookAgentContext,
-    params: {
-      toolAuthorityFingerprint: string;
-      activeToolNames: readonly string[];
-      assertHostActive: () => void;
-    },
-  ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    const sourceFingerprint = params.toolAuthorityFingerprint.trim();
-    if (!sourceFingerprint) {
-      return undefined;
-    }
-    const activeToolNames = [
-      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
-    ].toSorted();
-    const activeToolNameSet = new Set(activeToolNames);
-    const token = { active: true };
-    const assertActive = () => {
-      if (!token.active) {
-        throw new Error("prompt tool authority is no longer active");
-      }
-      params.assertHostActive();
-    };
-    const authority: PluginHookToolAuthority = Object.freeze({
-      fingerprint: createHash("sha256")
-        .update(sourceFingerprint)
-        .update("\0")
-        .update(activeToolNames.join("\0"))
-        .digest("hex"),
-      allows(toolName: string): boolean {
-        assertActive();
-        return activeToolNameSet.has(normalizeToolPolicyName(toolName));
-      },
-      assertActive,
-    });
-    try {
-      const result = await runModifyingHook<
-        "before_prompt_build",
-        PluginHookBeforePromptBuildResult
-      >(
+  const promptBuildHookDispatch = createPromptBuildHookDispatch({
+    logger,
+    mergeResults: mergeBeforePromptBuild,
+    listRegistrations: () => getHooksForName(registry, "before_prompt_build"),
+    dispatch: (event, ctx, policy) =>
+      runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
         "before_prompt_build",
         event,
-        { ...ctx, toolAuthority: authority },
-        {
-          mergeResults: mergeBeforePromptBuild,
-          includeRegistration: (registration) => registration.requiresToolAuthority === true,
-          assertHandlerBoundaryActive: assertActive,
-        },
-      );
-      if (!result) {
-        return undefined;
-      }
-      return {
-        ...(result.prependContext ? { prependContext: result.prependContext } : {}),
-        ...(result.appendContext ? { appendContext: result.appendContext } : {}),
-      };
-    } finally {
-      token.active = false;
-    }
-  }
+        ctx,
+        policy,
+      ),
+  });
 
   /**
    * Run agent_end hook.
@@ -1499,8 +1422,8 @@ export function createHookRunner(
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,
     }),
-    runBeforePromptBuild,
-    runAuthorizedPromptBuild,
+    runBeforePromptBuild: promptBuildHookDispatch.runBeforePromptBuild,
+    runAuthorizedPromptBuild: promptBuildHookDispatch.runAuthorizedPromptBuild,
     runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
     runModelCallStarted: bindVoidHook("model_call_started"),
     runModelCallEnded: bindVoidHook("model_call_ended"),

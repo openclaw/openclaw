@@ -2672,24 +2672,6 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("preserves the base prompt when prompt-build hooks fail", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => {
-        throw new Error("hook exploded");
-      }),
-    };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
-
-    const context = await fixture.prepare({});
-
-    expect(context.params.prompt).toBe("latest ask");
-    expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
-    expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
-    expect(context.systemPrompt).not.toContain("hook exploded");
-    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
-  });
-
   it.each([
     "custom",
     "legacy",

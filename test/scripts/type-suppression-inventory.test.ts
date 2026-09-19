@@ -136,6 +136,7 @@ describe("type suppression inventory", () => {
         "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
         "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
         "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:@ts-expect-error Tool authority is only supported for before_prompt_build.",
+        "src/plugins/prompt-build-drop.test.ts:@ts-expect-error - `detail` is intentionally not part of the contract.",
         "src/plugins/registry.diagnostics.test.ts:@ts-expect-error JavaScript plugins may omit the required supplement builder.",
         "src/plugins/registry.diagnostics.test.ts:@ts-expect-error JavaScript plugins may omit the required hosted-media resolver.",
         "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Unknown JavaScript hook names must produce a diagnostic.",
