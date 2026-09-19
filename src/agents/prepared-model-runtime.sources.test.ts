@@ -325,8 +325,8 @@ describe("prepared catalog source composition", () => {
     expect(captureModelsJsonContents(input)).toBe("{ malformed");
   });
 
-  it("removes credential material but keeps transport headers from an inherited catalog", () => {
-    const { facts } = fixture();
+  it("uses secondary auth with safe transport headers from an inherited catalog", async () => {
+    const { configured, facts, generation } = fixture();
     const stateDir = tempDirs.make("openclaw-prepared-inherited-auth-boundary-");
     const systemAgentDir = path.join(stateDir, "agents", "main", "agent");
     const secondaryAgentDir = path.join(stateDir, "agents", "ops", "agent");
@@ -335,7 +335,8 @@ describe("prepared catalog source composition", () => {
       path.join(systemAgentDir, "models.json"),
       JSON.stringify({
         providers: {
-          inherited: {
+          [providerId]: {
+            ...configured,
             apiKey: "system-agent-key",
             headers: {
               Authorization: "Bearer system-agent",
@@ -344,7 +345,7 @@ describe("prepared catalog source composition", () => {
             },
             models: [
               {
-                id: "inherited-model",
+                ...model("authored-only"),
                 headers: {
                   cookie: "model-session=system-agent",
                   "X-Auth-Token": "system-agent-token",
@@ -368,12 +369,39 @@ describe("prepared catalog source composition", () => {
     });
 
     const inherited = JSON.parse(captureModelsJsonContents(input) ?? "null");
-    expect(inherited.providers.inherited).not.toHaveProperty("apiKey");
-    expect(inherited.providers.inherited.headers).toEqual({
+    expect(inherited.providers[providerId]).not.toHaveProperty("apiKey");
+    expect(inherited.providers[providerId].headers).toEqual({
       "X-Catalog-Route": "keep-provider-route",
     });
-    expect(inherited.providers.inherited.models[0].headers).toEqual({
+    expect(inherited.providers[providerId].models[0].headers).toEqual({
       "X-Model-Route": "keep-model-route",
+    });
+
+    const result = await prepareConfiguredRuntimeFactsBatch({
+      agentFacts: [
+        {
+          ...facts,
+          input,
+          templateAuthStorage: AuthStorage.inMemory({
+            [providerId]: { type: "api_key", key: "secondary-agent-key" },
+          }),
+        },
+      ],
+      pluginGeneration: generation,
+    });
+    const selected = result.catalogs
+      .get(input)
+      ?.templateModelRegistry.find(providerId, "authored-only");
+    expect(selected).toBeDefined();
+    await expect(
+      result.catalogs.get(input)?.templateModelRegistry.getApiKeyAndHeaders(selected!),
+    ).resolves.toEqual({
+      ok: true,
+      apiKey: "secondary-agent-key",
+      headers: {
+        "X-Catalog-Route": "keep-provider-route",
+        "X-Model-Route": "keep-model-route",
+      },
     });
   });
 

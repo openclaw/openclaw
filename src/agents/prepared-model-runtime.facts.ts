@@ -559,15 +559,26 @@ function readModelsJsonContents(agentDir: string): string | null {
   }
 }
 
+export function captureModelsJsonSource(
+  input: Pick<PreparedModelRuntimeInput, "agentDir" | "fallbackAgentDir">,
+): Readonly<{ contents: string | null; sanitizedFallback: boolean }> {
+  const localContents = readModelsJsonContents(input.agentDir);
+  if (localContents !== null || !input.fallbackAgentDir) {
+    return { contents: localContents, sanitizedFallback: false };
+  }
+  const inheritedContents = readModelsJsonContents(input.fallbackAgentDir);
+  return inheritedContents === null
+    ? { contents: null, sanitizedFallback: false }
+    : {
+        contents: sanitizeInheritedModelsJsonContents(inheritedContents),
+        sanitizedFallback: true,
+      };
+}
+
 export function captureModelsJsonContents(
   input: Pick<PreparedModelRuntimeInput, "agentDir" | "fallbackAgentDir">,
 ): string | null {
-  const localContents = readModelsJsonContents(input.agentDir);
-  if (localContents !== null || !input.fallbackAgentDir) {
-    return localContents;
-  }
-  const inheritedContents = readModelsJsonContents(input.fallbackAgentDir);
-  return inheritedContents === null ? null : sanitizeInheritedModelsJsonContents(inheritedContents);
+  return captureModelsJsonSource(input).contents;
 }
 export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
   sha256Base64Url(stableStringify(value));
@@ -613,7 +624,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   for (const facts of params.agentFacts) {
     await nextTurn();
     params.assertCurrent?.(facts.input);
-    const modelsJsonContents = captureModelsJsonContents(facts.input);
+    const modelsJsonSource = captureModelsJsonSource(facts.input);
+    const modelsJsonContents = modelsJsonSource.contents;
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Root files remain authored inventory even when static preparation returned an empty result.
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
@@ -625,6 +637,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,
       credentials: facts.credentials,
       modelsJsonContents,
+      modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
       pluginCatalogs,
       staticProviderConfigs,
     });
@@ -639,6 +652,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
           config: facts.input.config,
           includePluginCatalogs: true,
           modelsJsonContents,
+          modelsJsonSanitizedFallback: modelsJsonSource.sanitizedFallback,
           pluginCatalogs,
           staticProviderConfigs,
           pluginMetadataSnapshot,

@@ -37,6 +37,7 @@ export type PreparedModelRuntimeCatalogFacts = {
 
 export type PreparedModelRuntimeCatalogSource = Readonly<{
   modelsJsonContents: string | null;
+  modelsJsonSanitizedFallback?: boolean;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
 }>;
