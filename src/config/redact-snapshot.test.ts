@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
+import { REDACTED_SENTINEL, redactConfigObject, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
   makeSnapshot,
   restoreRedactedValues,
@@ -48,6 +48,27 @@ function expectGatewayAuthFieldValue(
   expect(expectDefined(gatewayAuth[field], `gateway auth ${field}`)).toBe(expected);
   expect(expectDefined(resolvedAuth[field], `resolved gateway auth ${field}`)).toBe(expected);
 }
+
+describe("redactConfigObject depth guard", () => {
+  it("rejects deeply nested config instead of overflowing the stack", () => {
+    // redactValue() recurses through every nested value; beyond MAX_REDACTION_DEPTH
+    // (100) this must throw a clear Error rather than
+    // "RangeError: Maximum call stack size exceeded". 400 levels is well past the cap.
+    let value: unknown = { leaf: "x" };
+    for (let i = 0; i < 400; i += 1) {
+      value = { x: value };
+    }
+    expect(() => redactConfigObject(value)).toThrow(/maximum nesting depth/i);
+  });
+
+  it("redacts config nested within the maximum depth", () => {
+    let value: unknown = { apiKey: "secret-value" };
+    for (let i = 0; i < 10; i += 1) {
+      value = { x: value };
+    }
+    expect(() => redactConfigObject(value)).not.toThrow();
+  });
+});
 
 describe("redactConfigSnapshot", () => {
   it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
