@@ -1424,7 +1424,7 @@ packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
 packages/ai/src/transports/openai-completions-params.ts	7
 packages/ai/src/transports/openai-completions-replay.ts	9
-packages/ai/src/transports/openai-completions-stream.ts	8
+packages/ai/src/transports/openai-completions-stream.ts	4
 packages/ai/src/transports/openai-completions-string-content.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	9
 packages/ai/src/transports/openai-responses-client.ts	12
@@ -2703,6 +2703,7 @@ src/gateway/server-methods/plugin-approval.ts	2
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/question.ts	2
 src/gateway/server-methods/restart-request.ts	8
+src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-catalog-terminal-start.ts	1
 src/gateway/server-methods/session-catalog.ts	5
 src/gateway/server-methods/session-create-initial-turn.ts	2
@@ -3227,7 +3228,7 @@ src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	6
 src/plugins/memory-runtime.ts	1
-src/plugins/native-module-require.ts	2
+src/plugins/native-module-require.ts	3
 src/plugins/official-external-provider-endpoints.ts	1
 src/plugins/openai-compatible-embedding-provider.ts	2
 src/plugins/plugin-command-dispatch-contract.ts	1

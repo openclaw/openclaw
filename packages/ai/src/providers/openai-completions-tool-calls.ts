@@ -5,6 +5,30 @@ import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js
 import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
 import type { ToolCall } from "../types.js";
 
+export function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
+  // SAFETY: provider chunks are untyped here; only optional fields are probed.
+  const tc = toolCall as Record<string, unknown> | undefined;
+  if (!tc) {
+    return undefined;
+  }
+  // SAFETY: only .google is probed on the raw extra_content bag.
+  const extraContent = tc.extra_content as Record<string, unknown> | undefined;
+  // SAFETY: only thought_signature is read from the untyped google bag.
+  const extra = extraContent?.google as Record<string, unknown> | undefined;
+  const fromExtra = extra?.thought_signature;
+  if (typeof fromExtra === "string" && fromExtra.length > 0) {
+    return fromExtra;
+  }
+  // SAFETY: only the optional thought_signature is read from raw provider JSON.
+  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
+    ?.thought_signature;
+  if (typeof fromFunction === "string" && fromFunction.length > 0) {
+    return fromFunction;
+  }
+  const fromToolCall = tc.thought_signature;
+  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
+}
+
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
 const MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES = 256_000;

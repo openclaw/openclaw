@@ -17,6 +17,8 @@ interface DeepSeekTextFilter {
   push(chunk: string): string[];
   /** Flush buffered text at stream end, dropping any unterminated DSML block. */
   flush(): string[];
+  /** Whether buffered input may still produce output. */
+  hasPending(): boolean;
 }
 
 /** Create an incremental text filter that strips DeepSeek DSML tool blocks. */
@@ -84,6 +86,9 @@ export function createDeepSeekTextFilter(): DeepSeekTextFilter {
     },
     flush() {
       return consume(true);
+    },
+    hasPending() {
+      return buffer.length > 0;
     },
   };
 }
