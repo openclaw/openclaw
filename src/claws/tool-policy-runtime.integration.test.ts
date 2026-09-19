@@ -20,6 +20,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { persistClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
+import { resolveClawToolPolicyConsent } from "./tool-policy-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -184,6 +185,147 @@ describe("Claw tool policy consent provenance", () => {
         agentId: "worker",
         config,
       }),
+    ).toThrow("Cannot verify the installed tool authority");
+  });
+
+  it("honors adopted v3 tool profile consent after verifying the agent config digest", async () => {
+    const root = tempDirs.make("openclaw-adopted-claw-tool-consent-");
+    const env = stateEnv(root);
+    const workspace = join(root, "workspace-worker");
+    mkdirSync(workspace);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const adoptedAgent = {
+      id: "worker",
+      workspace,
+      tools: { profile: "full" as const, allow: ["read"] },
+    };
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        workspace,
+        adoptExistingAgent: true,
+        existingAgents: [adoptedAgent],
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    const record = persistClawInstallRecord(plan, { env });
+    const config = { agents: { list: [plan.agent.config] } };
+    setRuntimeConfigSnapshot(config);
+
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      agentId: "worker",
+      config,
+    });
+    const policies = resolveConversationToolPolicies({ capabilityProfile });
+    const filtered = applyToolPolicyPipeline({
+      tools: [{ name: "read" }, { name: "exec" }],
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: buildConversationToolPolicyPipelineSteps({
+        capabilityProfile,
+        policies,
+        includeRuntimeToolPolicy: true,
+      }),
+    });
+
+    expect(record.schemaVersion).toBe("openclaw.clawInstallRecord.v3");
+    expect(filtered.map((tool) => tool.name)).toEqual(["read"]);
+
+    const driftedConfig = {
+      agents: {
+        list: [
+          {
+            ...plan.agent.config,
+            tools: { profile: "full" as const, allow: ["read", "exec"] },
+          },
+        ],
+      },
+    };
+    setRuntimeConfigSnapshot(driftedConfig);
+    expect(() =>
+      resolveConversationCapabilityProfile({ agentId: "worker", config: driftedConfig }),
+    ).toThrow("Cannot verify the installed tool authority");
+  });
+
+  it("honors adopted consent for a mixed-case roster key and still rejects its drift", async () => {
+    const root = tempDirs.make("openclaw-adopted-mixedcase-claw-tool-consent-");
+    const env = stateEnv(root);
+    const workspace = join(root, "workspace-worker");
+    mkdirSync(workspace);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    // Adoption planning matches existingAgents by exact finalId, so the planning-side
+    // roster entry carries the canonical id even though the persisted config key below
+    // is mixed case ("WORKER") — mirroring how readClawPlanningAgentRoster canonicalizes
+    // agent ids (agent-adoption-apply.ts) before an adoption plan is built.
+    const adoptedAgent = {
+      id: "worker",
+      workspace,
+      tools: { profile: "full" as const, allow: ["read"] },
+    };
+    const { plan } = await makeProvenancePlan(
+      root,
+      { schemaVersion: 1, agent: { id: "worker" } },
+      {
+        workspace,
+        adoptExistingAgent: true,
+        existingAgents: [adoptedAgent],
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { profile: "full", allow: ["read"] } },
+        },
+      },
+    );
+    persistClawInstallRecord(plan, { env });
+    // Reconstruct the config the way agents.entries preserves an operator's original
+    // casing: the roster key is "WORKER", but the entry's own fields are unchanged.
+    const { id: _canonicalId, ...configWithoutId } = plan.agent.config;
+    const config = { agents: { entries: { WORKER: configWithoutId } } };
+    setRuntimeConfigSnapshot(config);
+
+    expect(
+      resolveClawToolPolicyConsent({
+        agentTools: config.agents.entries.WORKER.tools,
+        agentId: "WORKER",
+        profile: "full",
+        ownsProfile: true,
+        hasAgentAllowlist: true,
+      }),
+    ).toEqual({ frozen: true });
+
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      agentId: "WORKER",
+      config,
+    });
+    const policies = resolveConversationToolPolicies({ capabilityProfile });
+    const filtered = applyToolPolicyPipeline({
+      tools: [{ name: "read" }, { name: "exec" }],
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: buildConversationToolPolicyPipelineSteps({
+        capabilityProfile,
+        policies,
+        includeRuntimeToolPolicy: true,
+      }),
+    });
+    expect(filtered.map((tool) => tool.name)).toEqual(["read"]);
+
+    const driftedConfig = {
+      agents: {
+        entries: {
+          WORKER: {
+            ...configWithoutId,
+            tools: { profile: "full" as const, allow: ["read", "exec"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(driftedConfig);
+    expect(() =>
+      resolveConversationCapabilityProfile({ agentId: "WORKER", config: driftedConfig }),
     ).toThrow("Cannot verify the installed tool authority");
   });
 

@@ -3,6 +3,12 @@ import { removeClawWorkspaceFile, type RemovedWorkspaceFile } from "./lifecycle-
 import type { ClawRemovePlanAction } from "./lifecycle-remove-contract.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
 
+const BOOTSTRAP_RETAIN_REASONS: Partial<Record<ClawStatusRecord["bootstrapState"], string>> = {
+  modified: "Local bootstrap content changed; preserve the file.",
+  complete: "Native onboarding already consumed the bootstrap.",
+  unowned: "This install never seeded BOOTSTRAP.md; preserve the file.",
+};
+
 export function clawBootstrapStateBlocksRemove(record: ClawStatusRecord): boolean {
   return Boolean(
     record.install.bootstrap &&
@@ -17,6 +23,7 @@ export function planClawBootstrapRemoval(
     return undefined;
   }
   const blocked = clawBootstrapStateBlocksRemove(record);
+  const reason = BOOTSTRAP_RETAIN_REASONS[record.bootstrap.state];
   return {
     kind: "bootstrap",
     id: record.bootstrap.path,
@@ -29,11 +36,7 @@ export function planClawBootstrapRemoval(
       sourcePath: record.install.bootstrap.sourcePath,
       lifecycle: "native-seed-once",
     },
-    ...(record.bootstrap.state === "modified"
-      ? { reason: "Local bootstrap content changed; preserve the file." }
-      : record.bootstrap.state === "complete"
-        ? { reason: "Native onboarding already consumed the bootstrap." }
-        : {}),
+    ...(reason ? { reason } : {}),
   };
 }
 
@@ -56,7 +59,11 @@ export async function removeClawBootstrap(
       MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     );
   }
-  return record.bootstrap.state === "modified"
-    ? { path: record.bootstrap.path, action: "retainedModified" }
-    : { path: record.bootstrap.path, action: "missing" };
+  if (record.bootstrap.state === "modified") {
+    return { path: record.bootstrap.path, action: "retainedModified" };
+  }
+  if (record.bootstrap.state === "unowned") {
+    return { path: record.bootstrap.path, action: "retainedUnowned" };
+  }
+  return { path: record.bootstrap.path, action: "missing" };
 }

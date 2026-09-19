@@ -10,6 +10,8 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { preserveAdoptedAgentDefault } from "./adopted-agent-update.js";
+import { resolveCanonicalClawAgent } from "./agent-adoption-apply.js";
 import {
   clawExtensionProvenanceChanged,
   clawPackageActionsById,
@@ -193,7 +195,7 @@ export async function buildClawUpdatePlan(params: {
     const currentPackages = new Map(
       record.packages.map((pkg) => [clawPackageKey(pkg), pkg] as const),
     );
-    const targetPlan = await buildClawAddPlan({
+    const rawTargetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
       clawMarkdownBody: params.targetClawMarkdownBody,
       includePackageBootstrap: false,
@@ -213,13 +215,22 @@ export async function buildClawUpdatePlan(params: {
         ),
       },
     });
+    const liveAgent = resolveCanonicalClawAgent(params.config, agentId);
+    const targetPlan =
+      preserveAdoptedAgentDefault({
+        plan: rawTargetPlan,
+        install: record.install,
+        liveAgent,
+      }) ?? rawTargetPlan;
     const blockers = targetPlan.blockers.filter(isApplicationUpdateBlocker);
     const actions: ClawUpdateAction[] = [];
     const capabilityChanges: ClawUpdateCapabilityChange[] = [];
 
     const desiredAgentDigest = digest(targetPlan.agent.config);
+    const adoptedAgentUnavailable =
+      record.install.agentOrigin === "adopted" && record.agentState !== "present";
     const agentAction =
-      record.agentState === "modified"
+      record.agentState === "modified" || adoptedAgentUnavailable
         ? "manual"
         : record.agentState === "missing"
           ? "change"
@@ -234,7 +245,9 @@ export async function buildClawUpdatePlan(params: {
       blocked: agentAction === "manual",
       reason:
         agentAction === "manual"
-          ? "Live agent config changed after installation and must be reconciled manually."
+          ? adoptedAgentUnavailable && record.agentState === "missing"
+            ? "The adopted agent is missing; its pre-adoption default marker cannot be reconstructed safely."
+            : "Live agent config changed after installation and must be reconciled manually."
           : record.agentState === "missing"
             ? "Owned agent config is missing and would be restored from the target manifest."
             : agentAction === "unchanged"
