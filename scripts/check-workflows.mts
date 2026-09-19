@@ -9,11 +9,32 @@ import { join } from "node:path";
 
 const ACTIONLINT_REVISION = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
 const PRE_COMMIT_VERSION = "4.6.2";
+// pre-commit 4.6.2 declares requires-python >=3.10, so an older interpreter only
+// fails after a venv build and a network pip install.
+const PRE_COMMIT_PYTHON_FLOOR = "3.10";
 const WORKFLOW_DIR = ".github/workflows";
 
 function commandExists(command: string, args: readonly string[] = ["--version"]): boolean {
   const result = spawnSync(command, args, { stdio: "ignore" });
   return !result.error && result.status === 0;
+}
+
+function probePythonVersion(
+  command: string,
+): { runnable: false } | { runnable: true; version?: string } {
+  const result = spawnSync(command, ["--version"], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    return { runnable: false };
+  }
+  const match = /Python (\d+\.\d+(?:\.\d+)?)/u.exec(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+  const version = match?.[1];
+  return version ? { runnable: true, version } : { runnable: true };
+}
+
+function isBelowPythonFloor(version: string, floor: string): boolean {
+  const [major = 0, minor = 0] = version.split(".").map((part) => Number(part));
+  const [floorMajor = 0, floorMinor = 0] = floor.split(".").map((part) => Number(part));
+  return major < floorMajor || (major === floorMajor && minor < floorMinor);
 }
 
 function run(command: string, args: readonly string[]): void {
@@ -52,8 +73,15 @@ function exitWithFailure(failure: NonNullable<ReturnType<typeof runChecked>>): n
 }
 
 function runPreCommitFromTempVenv(hookArgs: string[]): boolean {
-  if (!commandExists("python3", ["--version"])) {
+  const pythonProbe = probePythonVersion("python3");
+  if (!pythonProbe.runnable) {
     return false;
+  }
+  if (pythonProbe.version && isBelowPythonFloor(pythonProbe.version, PRE_COMMIT_PYTHON_FLOOR)) {
+    console.error(
+      `[check-workflows] python3 is ${pythonProbe.version}, but pre-commit ${PRE_COMMIT_VERSION} requires Python >=${PRE_COMMIT_PYTHON_FLOOR}. Install a newer python3 or a pre-commit runtime.`,
+    );
+    process.exit(1);
   }
   const venvDir = mkdtempSync(join(tmpdir(), "openclaw-check-workflows-pre-commit-"));
   const python = join(venvDir, process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
