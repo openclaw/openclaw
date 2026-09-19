@@ -46,6 +46,7 @@ import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker
 import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
+import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 import type { UserProfileReadWorkerOperations } from "./user-profiles.worker.js";
@@ -57,6 +58,7 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
   HostedCatalogSnapshotWorkerOperations &
   PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
+  OnboardingRecommendationWriteOperations &
   UserProfileReadWorkerOperations &
   CronStoreWorkerOperations &
   CronStoreSaveWorkerOperations &

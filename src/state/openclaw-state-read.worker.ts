@@ -5,6 +5,7 @@ import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-co
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import type {
@@ -35,6 +36,8 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     (input.command.type === "admit" ||
       input.command.type === "fleet.list" ||
       input.command.type === "nodeHost.config" ||
+      (input.command.type === "onboardingRecommendations.read" &&
+        typeof input.command.configKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string"))
   );
 }
@@ -60,6 +63,14 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
         return withOpenClawStateReadOnlyLocation(
           ({ db }) => {
             sourceAdmitted = true;
+            if (command.type === "onboardingRecommendations.read") {
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                record: readOnboardingRecommendationsInDatabase(db, command.configKey),
+              };
+            }
             if (command.type === "nodeHost.config") {
               return {
                 ok: true,

@@ -95,6 +95,8 @@ import {
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
+import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
+import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -351,6 +353,13 @@ function createSharedStateWorkerBackend(
         }
         assertOpenClawStateDatabaseOwner(nativeDatabase.db, { pathname: nativeDatabase.path });
         return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
+      }
+      if (isOnboardingRecommendationWriteCommand(command)) {
+        return executeOnboardingRecommendationCommand(command, {
+          database: open(),
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        });
       }
       if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
         return executeUserPreferenceCommand(command, {
