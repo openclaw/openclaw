@@ -3719,7 +3719,12 @@ td.data-table-key-col {
   flex: 0 1 96px;
 }
 
-.agent-identity-editor__fields input {
+.agent-identity-editor__fields .agent-identity-editor__emoji-picker {
+  flex: 0 1 160px;
+}
+
+.agent-identity-editor__fields input,
+.agent-identity-editor__fields select {
   min-width: 0;
   width: 100%;
 }

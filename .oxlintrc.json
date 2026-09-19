@@ -397,6 +397,12 @@
       }
     },
     {
+      "files": ["ui/src/pages/agents/emoji-catalog.ts"],
+      "rules": {
+        "max-lines": ["warn", { "max": 1500, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
       "rules": {
         "max-lines": ["warn", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
