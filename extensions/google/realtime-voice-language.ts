@@ -8,7 +8,7 @@
 const LANGUAGE_NAMES = new Intl.DisplayNames(["en"], { type: "language" });
 
 /** English display name for a BCP-47 tag or bare ISO 639 code, or undefined when it is not one. */
-export function resolveRealtimeLanguageName(language: string | undefined): string | undefined {
+function resolveRealtimeLanguageName(language: string | undefined): string | undefined {
   const primary = language?.trim().split(/[-_]/)[0]?.toLowerCase();
   if (!primary || !/^[a-z]{2,3}$/.test(primary)) {
     return undefined;

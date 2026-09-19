@@ -1,9 +1,6 @@
 // Google tests cover the caller reply-language preference added to the realtime system instruction.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildGoogleRealtimeSystemInstruction,
-  resolveRealtimeLanguageName,
-} from "./realtime-voice-language.js";
+import { buildGoogleRealtimeSystemInstruction } from "./realtime-voice-language.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const { connectMock, createGoogleGenAIMock } = vi.hoisted(() => {
@@ -59,18 +56,22 @@ describe("Google realtime caller language", () => {
   });
 
   it("names the language from a bare code or a BCP-47 tag", () => {
-    expect(resolveRealtimeLanguageName("en")).toBe("English");
-    expect(resolveRealtimeLanguageName("en-us")).toBe("English");
-    expect(resolveRealtimeLanguageName("es-US")).toBe("Spanish");
-    expect(resolveRealtimeLanguageName(" de_DE ")).toBe("German");
+    const named = (language: string) =>
+      buildGoogleRealtimeSystemInstruction(undefined, language)?.match(
+        /^Reply language: (\w+) /,
+      )?.[1];
+    expect(named("en")).toBe("English");
+    expect(named("en-us")).toBe("English");
+    expect(named("es-US")).toBe("Spanish");
+    expect(named(" de_DE ")).toBe("German");
   });
 
   it("ignores missing, malformed and unknown language hints", () => {
-    expect(resolveRealtimeLanguageName(undefined)).toBeUndefined();
-    expect(resolveRealtimeLanguageName("")).toBeUndefined();
-    expect(resolveRealtimeLanguageName("english")).toBeUndefined();
-    expect(resolveRealtimeLanguageName("qq")).toBeUndefined();
-    expect(buildGoogleRealtimeSystemInstruction("Speak briefly.", "qq")).toBe("Speak briefly.");
+    for (const language of [undefined, "", "english", "qq"]) {
+      expect(buildGoogleRealtimeSystemInstruction("Speak briefly.", language)).toBe(
+        "Speak briefly.",
+      );
+    }
     expect(buildGoogleRealtimeSystemInstruction(undefined, undefined)).toBeUndefined();
   });
 
