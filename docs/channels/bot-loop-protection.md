@@ -7,7 +7,7 @@ title: "Bot loop protection"
 sidebarTitle: "Bot loop protection"
 ---
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`. When that path is enabled, pair loop protection prevents two bot identities from replying to each other indefinitely.
+OpenClaw can accept messages written by other bots on channels that support `allowBots`, and on Telegram, which has no `allowBots` and admits another bot through the same sender checks as a person. When that path is enabled, pair loop protection prevents two bot identities from replying to each other indefinitely.
 
 The guard is enforced by the core inbound reply runner. Each supporting channel maps its inbound event into generic facts: account or scope, conversation id, sender bot id, and receiver bot id. Core tracks the participant pair in both directions (A to B and B to A count as the same pair), applies a sliding-window budget, and suppresses the pair during a cooldown after the budget is exceeded.
 
@@ -113,6 +113,7 @@ Supporting channels layer their own config over the shared default, key by key. 
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
 - Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
 - Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.
+- Telegram: native `from.is_bot` facts for messages another bot sends as itself, keyed by Telegram account, chat, and bot pair. Telegram has no `allowBots`: a bot's message is admitted by the same `allowFrom`, `groupAllowFrom`, and `groupPolicy` checks as a person's. Messages sent on behalf of a chat name no bot author, so anonymous group admins, linked-channel forwards, and channel posts without a bot `from` never count. Two bots that only post as a channel are therefore not bounded by this guard. Telegram uses only `channels.defaults.botLoopProtection`.
 
 Channels that do not expose a reliable inbound bot identity keep using their normal self-message and access-policy filters. They should not opt into this guard until they can identify both participants in the bot pair.
 

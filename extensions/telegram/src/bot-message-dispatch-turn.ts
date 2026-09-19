@@ -12,6 +12,7 @@ import {
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramBotLoopProtection } from "./bot-loop-protection.js";
 import { sendPayload } from "./bot-message-dispatch-delivery.js";
 import {
   beginDraftQueuedFollowup,
@@ -139,6 +140,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           afterRecord: async () => {
             await sessionMetaTask;
           },
+          botLoopProtection: resolveTelegramBotLoopProtection({
+            cfg: turn.cfg,
+            accountId: context.route.accountId,
+            msg: context.msg,
+            botUserId: context.primaryCtx.me?.id,
+          }),
           dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
             deliverWithProviderMessageSending: async (payload, info) =>
