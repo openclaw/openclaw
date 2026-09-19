@@ -149,14 +149,35 @@ export function ackDeliveryInDatabase(
       throw new Error(`Delivery platform claim was lost: ${id}`);
     }
   } else {
-    const current = loadDeliveryQueueEntryInDatabase(
+    // A claimless caller settles only a genuinely unclaimed row. Reuse the
+    // same atomic ownership transition as the explicit null-owner case so a
+    // live producer/platform-send claim cannot be deleted from under its
+    // owner. The transition reports false for both missing and claimed rows;
+    // a missing row stays idempotent, so only throw when the row still exists.
+    // The follow-up read only classifies the failure and never mutates.
+    const settled = transitionOwnedDeliveryQueueEntryInDatabase(
       database,
-      OUTBOUND_DELIVERY_QUEUE_NAME,
-      id,
-      "pending",
+      {
+        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+        platformSendAttemptId: null,
+      },
+      (entry) => {
+        // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
+        settle(entry as QueuedDelivery);
+      },
     );
-    // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-    settle(current as QueuedDelivery | null);
+    if (!settled) {
+      const current = loadDeliveryQueueEntryInDatabase(
+        database,
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        id,
+        "pending",
+      );
+      if (current) {
+        throw new Error(`Delivery platform claim was lost: ${id}`);
+      }
+    }
   }
   return spoolPaths;
 }

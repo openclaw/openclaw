@@ -471,6 +471,50 @@ describe("delivery-queue storage", () => {
       expect(readStatus(id)).toBe("completed");
     });
 
+    it("claimless ack settles only genuinely unclaimed rows", async () => {
+      // Actually unclaimed row: claimless ack still settles successfully.
+      const unclaimedId = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "unclaimed settles" }],
+      });
+      await ackDelivery(unclaimedId, tmpDir());
+      expect(await loadPendingDelivery(unclaimedId, tmpDir())).toBeNull();
+
+      // Missing row: claimless ack remains idempotent.
+      await expect(ackDelivery("nonexistent-claimless-ack-id", tmpDir())).resolves.toBeUndefined();
+
+      // Live claimed row: claimless ack must fail without mutating the row.
+      const { artifact, id } = await enqueueSpoolDelivery("2");
+      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      if (!claimId) {
+        throw new Error("test invariant: live delivery must acquire its platform claim");
+      }
+      const lostClaim = `Delivery platform claim was lost: ${id}`;
+      await expect(ackDelivery(id, tmpDir())).rejects.toThrow(lostClaim);
+      expect(await loadPendingDelivery(id, tmpDir())).not.toBeNull();
+      expect(readStatus(id)).toBe("pending");
+      await expect(fs.stat(artifact)).resolves.toBeDefined();
+
+      // Explicit-null acknowledgement of the claimed row remains rejected.
+      await expect(
+        ackDelivery(id, tmpDir(), { expectedPlatformSendAttemptId: null }),
+      ).rejects.toThrow(lostClaim);
+      expect(await loadPendingDelivery(id, tmpDir())).not.toBeNull();
+
+      // Wrong-owner acknowledgement still fails.
+      await expect(
+        ackDelivery(id, tmpDir(), { expectedPlatformSendAttemptId: "stale-owner" }),
+      ).rejects.toThrow(lostClaim);
+      expect(await loadPendingDelivery(id, tmpDir())).not.toBeNull();
+      await expect(fs.stat(artifact)).resolves.toBeDefined();
+
+      // Correct-owner acknowledgement still succeeds and releases media.
+      await ackDelivery(id, tmpDir(), { expectedPlatformSendAttemptId: claimId });
+      expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
+      await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir())).resolves.toBeUndefined();
     });
