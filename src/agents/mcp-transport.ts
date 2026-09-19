@@ -34,6 +34,13 @@ type ResolvedMcpTransport = {
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   detachStderr?: () => void;
+  // Populated only when transportType is "stdio", so callers can run a
+  // pre-flight check (e.g. does `command` exist on PATH) before connecting.
+  stdioLaunch?: {
+    command: string;
+    cwd?: string;
+    env?: Record<string, string>;
+  };
 };
 
 const MAX_MCP_STDERR_LINE_BYTES = 8 * 1024;
@@ -153,6 +160,11 @@ export function resolveMcpTransport(
       requestTimeoutMs: resolved.requestTimeoutMs,
       supportsParallelToolCalls: resolved.supportsParallelToolCalls,
       detachStderr: attachStderrLogging(serverName, transport),
+      stdioLaunch: {
+        command: resolved.command,
+        ...(resolved.cwd !== undefined ? { cwd: resolved.cwd } : {}),
+        ...(resolved.env !== undefined ? { env: resolved.env } : {}),
+      },
     };
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);

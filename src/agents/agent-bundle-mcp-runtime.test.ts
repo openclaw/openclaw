@@ -1569,6 +1569,38 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("reports a missing stdio launcher command instead of a generic transport close", async () => {
+    const missingCommand = `openclaw-test-missing-command-${randomUUID()}`;
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-missing-command",
+      sessionKey: "agent:test:session-missing-command",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            missingbinary: { command: missingCommand, args: [] },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.servers).toEqual({});
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("missingbinary");
+      // The formatted message also carries the original connect failure via
+      // its cause chain (redactMcpDiagnosticError -> formatErrorMessage), so
+      // assert the actionable prefix rather than the exact full string.
+      expect(catalog.diagnostics?.[0]?.message).toContain(
+        `stdio command not found or not executable: ${missingCommand} — is it installed and on PATH?`,
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("redacts credentials from MCP catalog diagnostics", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-diagnostic-redaction-"));
     const serverPath = path.join(tempDir, "diagnostic-redaction.mjs");
@@ -1968,6 +2000,73 @@ describe("session MCP runtime", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  // The launcher command missing on disk must only block a *new* connection.
+  // An already-connected session refreshing its catalog (e.g. after
+  // notifications/tools/list_changed) must not be rejected just because its
+  // launcher was since removed, renamed, or made temporarily unavailable
+  // (such as during an update) — the running process needs no new spawn.
+  it.skipIf(process.platform === "win32")(
+    "keeps refreshing an already-connected session after its launcher command disappears from disk",
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-launcher-removed-"));
+      const serverPath = path.join(tempDir, "server.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      const notificationReleasePath = path.join(tempDir, "notify.release");
+      const wrapperPath = path.join(tempDir, "launcher-wrapper.sh");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath,
+        capabilities: { tools: { listChanged: true } },
+        toolsByList: [
+          [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
+          [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
+        ],
+        notifyListChangedAfterFirstList: true,
+        notifyListChangedReleasePath: notificationReleasePath,
+      });
+      await fs.writeFile(
+        wrapperPath,
+        `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(serverPath)}\n`,
+      );
+      await fs.chmod(wrapperPath, 0o755);
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-launcher-removed",
+        sessionKey: "agent:test:session-launcher-removed",
+        workspaceDir: "/workspace",
+        cfg: { mcp: { servers: { volatile: { command: wrapperPath, args: [] } } } },
+      });
+
+      try {
+        const firstCatalog = await runtime.getCatalog();
+        expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+
+        // The already-running child process keeps running; only the launcher
+        // path on disk is gone, matching an uninstalled/updated package.
+        await fs.rm(wrapperPath, { force: true });
+
+        await fs.writeFile(notificationReleasePath, "release", "utf8");
+        await waitForFileText(
+          logPath,
+          "notify tools/list_changed",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        await waitForPredicate(
+          () => runtime.peekCatalog() === null,
+          "list_changed to invalidate the catalog",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        const refreshedCatalog = await runtime.getCatalog();
+        expect(refreshedCatalog.diagnostics).toBeUndefined();
+        expect(refreshedCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+      } finally {
+        await runtime.dispose();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("reconnects after an MCP child process exits", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-child-exit-"));
