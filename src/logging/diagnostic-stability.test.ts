@@ -1004,6 +1004,21 @@ describe("diagnostic stability recorder", () => {
     );
   });
 
+  it("rejects blank stability query limit, sinceSeq, and type", () => {
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: "" })).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: "" })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "" })).toThrow(
+      "type must be a non-empty string",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "   " })).toThrow(
+      "type must be a non-empty string",
+    );
+  });
+
   it("rejects non-decimal stability query integer strings", () => {
     for (const malformed of ["0x2", "1e2", "+5", " 5 "]) {
       expect(() => normalizeDiagnosticStabilityQuery({ limit: malformed })).toThrow(
