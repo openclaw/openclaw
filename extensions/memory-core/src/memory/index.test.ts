@@ -1567,6 +1567,8 @@ describe("memory index", () => {
       trigger: "IDLE TRIGGER TARGET 729",
     };
     const sessionKey = (sessionId: string) => `agent:main:proof:${sessionId}`;
+    // Only the explicit sync calls may reach this test's failing publication trigger.
+    // Runtime listeners would enqueue unrelated work when the transcripts are seeded.
     const manager = await getFreshManager(
       createCfg({
         provider: "none",

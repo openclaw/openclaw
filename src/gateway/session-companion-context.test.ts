@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -13,13 +13,15 @@ import { defaultSessionCompanionContextReader } from "./session-companion-contex
 import { createSessionCompanion } from "./session-companion.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 afterEach(async () => {
-  // Worker leases still need these databases until asynchronous cleanup settles.
+  // Reconciliation and maintenance workers retain database leases; join their
+  // owners before closing shared state or removing the fixture directories.
   for (const stateDir of tempDirs.dirs) {
     await cleanupSessionStateForTest({ stateDir });
   }
+  tempDirs.cleanup();
   vi.unstubAllEnvs();
 });
 

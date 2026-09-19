@@ -644,6 +644,89 @@ describe("dispatchAgentHook trust handling", () => {
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start same-session work after its hook request disconnects", async () => {
+    const firstRunStarted = createDeferred();
+    const releaseFirstRun = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        firstRunStarted.resolve();
+        await releaseFirstRun.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
+
+    const firstAdmission = dispatchAgentHook({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    await firstRunStarted.promise;
+    await expect(firstAdmission).resolves.toMatchObject({ ok: true });
+
+    const request = new AbortController();
+    const disconnectedAdmission = resolveDispatchAgentHook()(
+      {
+        ...buildAgentPayload("Second"),
+        message: "second",
+        sessionKey: "shared-session",
+      },
+      { abortSignal: request.signal },
+    );
+    request.abort(new Error("client disconnected"));
+
+    await expect(disconnectedAdmission).resolves.toMatchObject({
+      ok: false,
+      statusCode: 503,
+      error: "hook request disconnected before agent run started",
+    });
+    releaseFirstRun.resolve();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["runner entry", "lane placement"] as const)(
+    "keeps hook work accepted at %s after disconnect",
+    async (boundary) => {
+      const runStarted = createDeferred();
+      const releaseRun = createDeferred();
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(
+        async (params: {
+          abortSignal: AbortSignal;
+          onExecutionStarted?: () => void;
+          onLaneWait?: (info: { waiting: boolean }) => void;
+        }) => {
+          if (boundary === "lane placement") {
+            params.onLaneWait?.({ waiting: false });
+          } else {
+            params.onExecutionStarted?.();
+          }
+          runStarted.resolve();
+          await releaseRun.promise;
+          expect(params.abortSignal.aborted).toBe(false);
+          return { status: "ok", summary: "done", delivered: false };
+        },
+      );
+      const request = new AbortController();
+      const admission = resolveDispatchAgentHook()(buildAgentPayload("Accepted"), {
+        abortSignal: request.signal,
+      });
+
+      await runStarted.promise;
+      await expect(admission).resolves.toMatchObject({ ok: true });
+      request.abort(new Error("client disconnected after acceptance"));
+      releaseRun.resolve();
+
+      await waitForFast(() =>
+        expect(logHooksInfoMock).toHaveBeenCalledWith(
+          expect.stringContaining("hook agent run completed"),
+          expect.objectContaining({ name: "Accepted" }),
+        ),
+      );
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    },
+  );
+
   it("does not announce successful deliver:false hook results", async () => {
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "ok",

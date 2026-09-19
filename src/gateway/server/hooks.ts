@@ -12,10 +12,7 @@ import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  CronAgentAdmissionDisposition,
-  RunCronAgentTurnResult,
-} from "../../cron/isolated-agent/run.types.js";
+import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js";
 import type { CronJob } from "../../cron/types.js";
@@ -45,6 +42,7 @@ import {
 } from "../scheduled-run-gateway-context.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { createHookAdmissionFailure, createHookAgentAdmission } from "./hooks-admission.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 /**
@@ -55,12 +53,6 @@ import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-requ
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const HOOK_AGENT_START_ADMISSION_TIMEOUT_MS = 15_000;
-const HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR =
-  "hook agent run did not start before admission timeout";
-const HOOK_AGENT_SESSION_CONFLICT_ERROR =
-  "hook agent run was rejected because the target session changed";
-const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
-
 type HookEventTarget = {
   eventSessionKey: string;
   heartbeatTarget: { agentId?: string; sessionKey?: string };
@@ -145,25 +137,6 @@ function sanitizeHookLogMetadata(meta: HookLogMetadata): HookLogMetadata {
           : value,
       ]),
   );
-}
-
-function createHookAdmissionFailure(params: {
-  runId: string;
-  disposition?: CronAgentAdmissionDisposition;
-  statusCode?: 409 | 502 | 503;
-}): HookAgentDispatchResult {
-  const statusCode = params.statusCode ?? (params.disposition === "session-conflict" ? 409 : 502);
-  return {
-    ok: false,
-    statusCode,
-    error:
-      statusCode === 409
-        ? HOOK_AGENT_SESSION_CONFLICT_ERROR
-        : statusCode === 503
-          ? HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR
-          : HOOK_AGENT_PREPARATION_ERROR,
-    runId: params.runId,
-  };
 }
 
 function createSessionKeyedHookDispatchQueue() {
@@ -291,8 +264,9 @@ export function createGatewayHookDispatcher(params: {
 
   const dispatchAgentHook = async (
     value: HookAgentDispatchPayload,
-    pluginId?: string,
+    context: { abortSignal?: AbortSignal; pluginId?: string } = {},
   ): Promise<HookAgentDispatchResult> => {
+    const { abortSignal, pluginId } = context;
     const sessionKey = value.sessionKey;
     // A hook name is a single-line label: it lands in logs, in cron job `name` fields,
     // and inside prompt-bound system-event text. Reuse the console sanitizer so control
@@ -449,45 +423,12 @@ export function createGatewayHookDispatcher(params: {
       mainKey: dispatchCfg.session?.mainKey,
       cfg: dispatchCfg,
     });
-    let settleAdmission!: (result: HookAgentDispatchResult) => void;
-    let admissionSettled = false;
-    let admissionTimedOut = false;
-    let admissionTimer: ReturnType<typeof setTimeout> | undefined;
-    const admission = new Promise<HookAgentDispatchResult>((resolve) => {
-      settleAdmission = (result) => {
-        if (admissionSettled) {
-          return;
-        }
-        admissionSettled = true;
-        if (admissionTimer) {
-          clearTimeout(admissionTimer);
-          admissionTimer = undefined;
-        }
-        resolve(result);
-      };
+    const admission = createHookAgentAdmission({
+      runId,
+      completion: completion.promise,
+      abortSignal,
+      timeoutMs: value.admissionMode === "background" ? undefined : agentStartAdmissionTimeoutMs,
     });
-    const admissionTimeoutError = new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR);
-    const startupAbortController = new AbortController();
-    const settleSuccessfulAdmission = () => {
-      startupAbortController.signal.throwIfAborted();
-      settleAdmission({ ok: true, runId, completion: completion.promise });
-    };
-    // Background admission (fan-out items) skips the start deadline: the
-    // producer's redelivery plus the replay cache own retry semantics, and a
-    // canceled slow admission would keep every redelivery equally cold.
-    if (value.admissionMode !== "background") {
-      admissionTimer = setTimeout(() => {
-        admissionTimedOut = true;
-        startupAbortController.abort(admissionTimeoutError);
-        settleAdmission(
-          createHookAdmissionFailure({
-            runId,
-            statusCode: 503,
-          }),
-        );
-      }, agentStartAdmissionTimeoutMs);
-      admissionTimer.unref?.();
-    }
 
     // Queue identity is fixed when accepted; the isolated runner still receives
     // the original session expression and fresh config, preserving hook routing.
@@ -496,7 +437,7 @@ export function createGatewayHookDispatcher(params: {
         enqueueHookAgentDispatch(queueKey, async () => {
           // The admission deadline starts before this same-session queue. Expired
           // work must never enter cron preparation after an HTTP 503 was returned.
-          if (startupAbortController.signal.aborted) {
+          if (admission.signal.aborted) {
             return;
           }
           try {
@@ -504,7 +445,7 @@ export function createGatewayHookDispatcher(params: {
             try {
               validateHookAgentDeliveryAccount({ cfg, value: acceptedValue });
             } catch (err) {
-              settleAdmission({
+              admission.settle({
                 ok: false,
                 statusCode: 400,
                 error: formatErrorMessage(err),
@@ -522,7 +463,7 @@ export function createGatewayHookDispatcher(params: {
             const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
             // Lazy module loading is the last Gateway-owned async boundary before
             // cron preparation, so recheck the deadline after it settles.
-            if (startupAbortController.signal.aborted) {
+            if (admission.signal.aborted) {
               return;
             }
             const runHookIsolatedTurn = async () =>
@@ -555,21 +496,21 @@ export function createGatewayHookDispatcher(params: {
                           : {}),
                       },
                 } satisfies CronExecutionIdentityAdmission,
-                abortSignal: startupAbortController.signal,
+                abortSignal: admission.signal,
                 onLaneWait: (info) => {
                   if (info?.waiting === false) {
-                    settleSuccessfulAdmission();
+                    admission.accept();
                   }
                 },
-                onExecutionStarted: settleSuccessfulAdmission,
+                onExecutionStarted: admission.accept,
               });
             const result = await runScheduledHook(runHookIsolatedTurn);
-            if (admissionTimedOut) {
+            if (admission.signal.aborted) {
               return;
             }
             const summary = resolveHookRunSummary(result);
-            if (!admissionSettled) {
-              settleAdmission(
+            if (!admission.settled) {
+              admission.settle(
                 result.status === "ok" || result.executionStarted === true
                   ? { ok: true, runId, completion: completion.promise }
                   : createHookAdmissionFailure({
@@ -611,23 +552,23 @@ export function createGatewayHookDispatcher(params: {
               }
             }
           } catch (err) {
-            if (admissionTimedOut) {
+            if (admission.signal.aborted) {
               return;
             }
-            settleAdmission(createHookAdmissionFailure({ runId }));
+            admission.settle(createHookAdmissionFailure({ runId }));
             reportHookFailure(err);
           }
         }),
       "hooks:agent-dispatch",
     ).catch((err: unknown) => {
-      if (admissionTimedOut) {
+      if (admission.signal.aborted) {
         return;
       }
-      settleAdmission(createHookAdmissionFailure({ runId }));
+      admission.settle(createHookAdmissionFailure({ runId }));
       reportHookFailure(err);
     });
 
-    return await admission;
+    return await admission.result;
   };
 
   const pluginHookReplays = new Map<
@@ -680,7 +621,7 @@ export function createGatewayHookDispatcher(params: {
           delivery: value.deliver ? { mode: "announce", channel: "last" } : { mode: "none" },
           externalContentSource: "email",
         },
-        pluginId,
+        { pluginId },
       );
       return result.ok ? { ok: true, runId: result.runId } : { ok: false, reason: result.error };
     };

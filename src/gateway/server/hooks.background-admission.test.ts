@@ -2,12 +2,13 @@
 // admission-canceled, or nothing reaches the replay cache and every producer
 // redelivery repeats the same cold burst (livelock). Direct hooks keep the
 // bounded 15s admission contract.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveHooksConfig } from "../hooks.js";
+import { createResponse } from "../server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
@@ -66,6 +67,7 @@ async function post(
 ) {
   const req = Object.assign(Readable.from([JSON.stringify(payload)]), {
     method: "POST",
+    complete: true,
     url: path,
     headers: {
       authorization: "Bearer hook-secret",
@@ -73,18 +75,9 @@ async function post(
     },
     socket: { remoteAddress: "127.0.0.1" },
   }) as unknown as IncomingMessage;
-  let responseBody = "";
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn((chunk?: string) => {
-      if (typeof chunk === "string") {
-        responseBody = chunk;
-      }
-    }),
-  } as unknown as ServerResponse;
+  const { res, getBody } = createResponse();
   expect(await handler(req, res)).toBe(true);
-  return { res, body: () => responseBody };
+  return { res, body: getBody };
 }
 
 describe("hook background admission", () => {

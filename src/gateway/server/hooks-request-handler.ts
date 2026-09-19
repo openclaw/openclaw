@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
@@ -34,11 +33,10 @@ import {
   resolveHookPathBodyLimit,
   resolveHookSessionKey,
 } from "../hooks.js";
-import type { HookAgentDispatchResult, HookAgentDispatchSuccess } from "../hooks.types.js";
+import type { HookAgentDispatchResult } from "../hooks.types.js";
 import { sendJson } from "../http-common.js";
 import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import { resolveRequestClientIpFromHeaders } from "../net.js";
-import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
   HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
   sendAgentResult,
@@ -46,6 +44,7 @@ import {
   settleFanOutDispatches,
   type WakeResult,
 } from "./hooks-request-handler-response.js";
+import { createHookRequestReplay } from "./hooks-request-replay.js";
 
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
@@ -54,8 +53,6 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 // no idempotency key; item identity lives in the dispatch-scope fingerprint.
 const HOOK_FAN_OUT_DERIVED_IDEMPOTENCY = "hook-fanout-item";
 const HOOK_CONFIG_CHANGED_ERROR = "hook configuration changed; retry request";
-
-const hashReplay = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
 
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
@@ -71,19 +68,8 @@ type HookDispatchers = {
   ) => WakeResult;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
+    context: { abortSignal: AbortSignal },
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
-};
-
-type HookReplayEntry =
-  | { state: "pending"; dispatch: Promise<HookAgentDispatchResult> }
-  | { state: "active"; dispatch: HookAgentDispatchSuccess }
-  | { state: "terminal"; ts: number; dispatch: HookAgentDispatchSuccess };
-
-type HookReplayScope = {
-  pathKey: string;
-  token: string | undefined;
-  idempotencyKey?: string;
-  dispatchScope: Record<string, unknown>;
 };
 
 function resolveMappedHookExternalContentSource(params: { subPath: string; sessionKey: string }) {
@@ -107,7 +93,12 @@ export function createHooksRequestHandler(
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
   const fanoutResponseDeadlineMs =
     opts.fanoutResponseDeadlineMs ?? HOOK_FAN_OUT_RESPONSE_DEADLINE_MS;
-  const hookReplayCache = new Map<string, HookReplayEntry>();
+  const {
+    buildHookReplayCacheKey,
+    resolveHookReplay,
+    awaitHookReplay,
+    dispatchAgentHookWithReplay,
+  } = createHookRequestReplay();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
@@ -130,92 +121,6 @@ export function createHooksRequestHandler(
         clientIpConfig?.allowRealIpFallback === true,
       ) ?? req.socket?.remoteAddress;
     return normalizeRateLimitClientIp(clientIp);
-  };
-
-  const pruneHookReplayCache = (now: number) => {
-    for (const [key, entry] of hookReplayCache) {
-      if (entry.state === "terminal" && entry.ts < now - DEDUPE_TTL_MS) {
-        hookReplayCache.delete(key);
-      }
-    }
-    const terminal = [...hookReplayCache].filter(([, entry]) => entry.state === "terminal");
-    for (const [key] of terminal.slice(0, Math.max(0, terminal.length - DEDUPE_MAX))) {
-      hookReplayCache.delete(key);
-    }
-  };
-
-  const buildHookReplayCacheKey = (params: HookReplayScope): string | undefined => {
-    const idem = params.idempotencyKey?.trim();
-    if (!idem) {
-      return undefined;
-    }
-    const scope = JSON.stringify({
-      pathKey: params.pathKey,
-      dispatchScope: params.dispatchScope,
-    });
-    return `${hashReplay(params.token ?? "")}:${hashReplay(scope)}:${hashReplay(idem)}`;
-  };
-
-  const resolveHookReplay = (key: string | undefined) => {
-    if (!key) {
-      return undefined;
-    }
-    pruneHookReplayCache(Date.now());
-    const cached = hookReplayCache.get(key);
-    if (!cached) {
-      return undefined;
-    }
-    if (cached.state === "terminal") {
-      hookReplayCache.delete(key);
-      hookReplayCache.set(key, cached);
-    }
-    return cached.dispatch;
-  };
-
-  const dispatchAgentHookWithReplay = (
-    key: string | undefined,
-    dispatch: () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> => {
-    if (!key) {
-      return dispatch();
-    }
-    const existing = resolveHookReplay(key);
-    if (existing) {
-      return existing;
-    }
-    const pending = Promise.resolve()
-      .then(dispatch)
-      .then((result) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          if (result.ok) {
-            const active = { state: "active", dispatch: result } as const;
-            hookReplayCache.set(key, active);
-            const settle = () => {
-              if (hookReplayCache.get(key) !== active) {
-                return;
-              }
-              const terminal = { state: "terminal", ts: Date.now(), dispatch: result } as const;
-              hookReplayCache.delete(key);
-              hookReplayCache.set(key, terminal);
-              pruneHookReplayCache(terminal.ts);
-            };
-            void result.completion.then(settle, settle);
-          } else {
-            hookReplayCache.delete(key);
-          }
-        }
-        return result;
-      })
-      .catch((err: unknown) => {
-        const current = hookReplayCache.get(key);
-        if (current?.state === "pending" && current.dispatch === pending) {
-          hookReplayCache.delete(key);
-        }
-        throw err;
-      });
-    hookReplayCache.set(key, { state: "pending", dispatch: pending });
-    return pending;
   };
 
   return async (req, res) => {
@@ -469,7 +374,12 @@ export function createHooksRequestHandler(
       });
       const replay = resolveHookReplay(replayKey);
       if (replay) {
-        await sendAgentResult(res, await replay, undefined, waitForCompletion === true);
+        await sendAgentResult(
+          res,
+          await awaitHookReplay(replay, replayKey, req, res),
+          undefined,
+          waitForCompletion === true,
+        );
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -479,19 +389,22 @@ export function createHooksRequestHandler(
       if (dispatchSessionKey === null) {
         return true;
       }
-      const dispatched = await dispatchAgentHookWithReplay(replayKey, () => {
+      const dispatched = await dispatchAgentHookWithReplay(replayKey, req, res, (abortSignal) => {
         if (!isHooksConfigCurrent()) {
           return changedHooksConfigDispatchResult();
         }
-        return dispatchAgentHook({
-          ...normalized.value,
-          effectiveAgentId: target.effectiveAgentId,
-          idempotencyKey,
-          sessionKey: dispatchSessionKey,
-          sourcePath: `${basePath}/agent`,
-          agentId: target.selectedAgentId,
-          externalContentSource: "webhook",
-        });
+        return dispatchAgentHook(
+          {
+            ...normalized.value,
+            effectiveAgentId: target.effectiveAgentId,
+            idempotencyKey,
+            sessionKey: dispatchSessionKey,
+            sourcePath: `${basePath}/agent`,
+            agentId: target.selectedAgentId,
+            externalContentSource: "webhook",
+          },
+          { abortSignal },
+        );
       });
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
       return true;
@@ -608,36 +521,45 @@ export function createHooksRequestHandler(
               dispatchScope,
             });
             return () =>
-              dispatchAgentHookWithReplay(replayKey, () => {
-                if (!isHooksConfigCurrent()) {
-                  return changedHooksConfigDispatchResult();
-                }
-                return dispatchAgentHook({
-                  message: action.message,
-                  name: action.name ?? "Hook",
-                  idempotencyKey,
-                  agentId: target.selectedAgentId,
-                  effectiveAgentId: target.effectiveAgentId,
-                  wakeMode: action.wakeMode,
-                  sessionKey: dispatchSessionKey,
-                  sessionMode: action.sessionMode,
-                  sourcePath: `${basePath}/${subPath}`,
-                  deliver,
-                  channel,
-                  to: action.to,
-                  delivery,
-                  model: action.model,
-                  thinking: action.thinking,
-                  timeoutSeconds: action.timeoutSeconds,
-                  mappingId: action.mappingId,
-                  allowUnsafeExternalContent: action.allowUnsafeExternalContent,
-                  ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
-                  externalContentSource: resolveMappedHookExternalContentSource({
-                    subPath,
-                    sessionKey: sessionKey.value,
-                  }),
-                });
-              });
+              dispatchAgentHookWithReplay(
+                replayKey,
+                req,
+                res,
+                (abortSignal) => {
+                  if (!isHooksConfigCurrent()) {
+                    return changedHooksConfigDispatchResult();
+                  }
+                  return dispatchAgentHook(
+                    {
+                      message: action.message,
+                      name: action.name ?? "Hook",
+                      idempotencyKey,
+                      agentId: target.selectedAgentId,
+                      effectiveAgentId: target.effectiveAgentId,
+                      wakeMode: action.wakeMode,
+                      sessionKey: dispatchSessionKey,
+                      sessionMode: action.sessionMode,
+                      sourcePath: `${basePath}/${subPath}`,
+                      deliver,
+                      channel,
+                      to: action.to,
+                      delivery,
+                      model: action.model,
+                      thinking: action.thinking,
+                      timeoutSeconds: action.timeoutSeconds,
+                      mappingId: action.mappingId,
+                      allowUnsafeExternalContent: action.allowUnsafeExternalContent,
+                      ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
+                      externalContentSource: resolveMappedHookExternalContentSource({
+                        subPath,
+                        sessionKey: sessionKey.value,
+                      }),
+                    },
+                    { abortSignal },
+                  );
+                },
+                mapped.fanout,
+              );
           };
 
           // One pass over every action so a per-item transform emitting mixed

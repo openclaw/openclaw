@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +27,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { resolveHooksConfig } from "../hooks.js";
+import { createResponse } from "../server-http.test-harness.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "../server-lanes.js";
 
 const mocks = vi.hoisted(() => ({
@@ -127,6 +128,7 @@ async function postAgentHook(
     Readable.from([JSON.stringify({ message: "Dispatch", name: "Recovery", agentId: "hooks" })]),
     {
       method: "POST",
+      complete: true,
       url: options.mapping ? "/hooks/terminal" : "/hooks/agent",
       headers: {
         authorization: "Bearer hook-secret",
@@ -135,14 +137,7 @@ async function postAgentHook(
       socket: { remoteAddress: "127.0.0.1" },
     },
   ) as unknown as IncomingMessage;
-  let responseBody = "";
-  const res = {
-    statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn((chunk: string) => {
-      responseBody = chunk;
-    }),
-  } as unknown as ServerResponse;
+  const { res, getBody } = createResponse();
 
   if (options.rejectInitialConfig !== false) {
     mocks.getRuntimeConfig.mockImplementationOnce(() => {
@@ -151,7 +146,7 @@ async function postAgentHook(
   }
   mocks.getRuntimeConfig.mockReturnValue(config);
   expect(await handler(req, res)).toBe(true);
-  return { body: JSON.parse(responseBody) as { runId: string }, status: res.statusCode, logHooks };
+  return { body: JSON.parse(getBody()) as { runId: string }, status: res.statusCode, logHooks };
 }
 
 describe("gateway hook early-failure recovery", () => {

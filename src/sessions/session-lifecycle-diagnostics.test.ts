@@ -33,6 +33,7 @@ let clock = 120_000;
 let directory: string;
 let logFile: string;
 let diagnosticsWereEnabled: boolean;
+let pendingTimerOrigins: () => unknown;
 
 async function records(message: string): Promise<Record<string, unknown>[]> {
   await flushLogger();
@@ -103,18 +104,46 @@ beforeEach(() => {
   setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logFile });
   clock += 120_000;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // Vitest 5's fake clock retains live timers in its heap. Capture scheduling
+  // sites without wrapping callbacks so a teardown leak identifies its owner.
+  const fakeSetTimeout = globalThis.setTimeout;
+  const fakeClock = Reflect.get(fakeSetTimeout, "clock") as {
+    timerHeap?: { timers: Array<{ id: number; func: { name: string }; delay?: number }> };
+    jobs?: unknown[];
+  };
+  const origins = new Map<number, string | undefined>();
+  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+    const timer = fakeSetTimeout(callback, delay, ...args);
+    origins.set(Number(timer), new Error("Timer scheduled").stack);
+    return timer;
+  });
+  pendingTimerOrigins = () => ({
+    timers: fakeClock.timerHeap?.timers.map((timer) => ({
+      callback: timer.func.name,
+      delay: timer.delay,
+      creationStack: origins.get(timer.id),
+    })),
+    jobs: fakeClock.jobs?.length ?? 0,
+  });
   vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
 
 afterEach(async () => {
-  await flushLogger();
-  expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-  setLoggerOverride(null);
-  resetLogger();
-  fs.rmSync(directory, { recursive: true, force: true });
+  try {
+    await flushLogger();
+    if (vi.getTimerCount() !== 0) {
+      console.error("Session lifecycle teardown timer owners", pendingTimerOrigins());
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    // Restore the timer spy before uninstalling its fake clock, even if proof fails.
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    setLoggerOverride(null);
+    resetLogger();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
