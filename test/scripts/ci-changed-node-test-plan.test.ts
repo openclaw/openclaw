@@ -1409,6 +1409,7 @@ describe("CI changed Node test plan", () => {
     expect(shards.length).toBeLessThanOrEqual(50);
     expect(shards.every((shard) => !shard.targets)).toBe(true);
     expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+    expect(shards.every((shard) => (shard.groups?.length ?? 1) <= 4)).toBe(true);
     expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
     expect(shards.every((shard) => Number.isInteger(shard.predictedSeconds))).toBe(true);
     expect(new Set(groups.map((group) => group.shard_name)).size).toBe(groups.length);

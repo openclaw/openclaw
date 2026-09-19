@@ -4864,16 +4864,16 @@ jobs:
     # optimized build whose products are not inputs to the test graph.
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
+        phase: ${{ fromJSON(needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","kit-tests","app-tests"]' || '["kit-tests","app-tests"]') }}
     # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
     # Use the existing hosted image and budget from the first attempt.
     runs-on: macos-26
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
+      MACOS_PRIMARY_PHASE: ${{ needs.preflight.outputs.compatibility_target == 'true' && 'tests' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'app-tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       # Start before checkout/setup so their time counts against optional cache work.
@@ -4892,7 +4892,7 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Node environment for Apple assets
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
+        if: matrix.phase != 'kit-tests' && hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -4913,7 +4913,7 @@ jobs:
           --config.side-effects-cache=true
 
       - name: Setup Node.js for native test tooling
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
+        if: matrix.phase != 'kit-tests' && hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
         env:
           REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
         run: |
@@ -4922,6 +4922,7 @@ jobs:
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Prepare Apple Mermaid assets
+        if: matrix.phase != 'kit-tests'
         run: |
           set -euo pipefail
           if [[ -f scripts/prepare-apple-mermaid.mjs ]]; then
@@ -5006,7 +5007,7 @@ jobs:
 
       - name: Restore Swift build directory cache
         id: swift-build-cache
-        if: needs.preflight.outputs.cache_mode != 'off'
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.phase != 'kit-tests'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
@@ -5018,6 +5019,7 @@ jobs:
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
+        if: matrix.phase != 'kit-tests'
         run: |
           set -euo pipefail
           cache_valid=true
@@ -5084,7 +5086,7 @@ jobs:
           swift build --package-path apps/macos --product OpenClaw --configuration release
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'kit-tests' || matrix.phase == 'tests'
         run: |
           set -euo pipefail
           # Guard: chat-only consumers build OpenClawKit with the Talk trait
@@ -5101,7 +5103,7 @@ jobs:
 
       # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
       - name: OpenClawKit tests
-        if: matrix.phase == 'tests' && needs.preflight.outputs.run_openclawkit_tests == 'true'
+        if: (matrix.phase == 'kit-tests' || matrix.phase == 'tests') && needs.preflight.outputs.run_openclawkit_tests == 'true'
         run: |
           set -euo pipefail
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
@@ -5118,7 +5120,7 @@ jobs:
           swift test "${openclawkit_test_args[@]}"
 
       - name: Swabble tests
-        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'kit-tests'
         run: |
           set -euo pipefail
           swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
@@ -5127,7 +5129,7 @@ jobs:
 
       - name: Swift test
         id: swift-test
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'app-tests' || matrix.phase == 'tests'
         run: |
           set -euo pipefail
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
@@ -5186,7 +5188,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && matrix.phase == 'app-tests' && github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
@@ -5243,13 +5245,13 @@ jobs:
         id: record-swift-build-cache-metadata
         continue-on-error: true
         timeout-minutes: 1
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && steps.swift-cache-budget.outputs.allowed == 'true' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase != 'kit-tests' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && steps.swift-cache-budget.outputs.allowed == 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py record
 
       - name: Save Swift build directory cache
         continue-on-error: true
         timeout-minutes: 2
-        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && steps.swift-cache-budget.outputs.allowed == 'true' && (env.HISTORICAL_TARGET == 'true' || steps.record-swift-build-cache-metadata.outcome == 'success')
+        if: matrix.phase != 'kit-tests' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && steps.swift-cache-budget.outputs.allowed == 'true' && (env.HISTORICAL_TARGET == 'true' || steps.record-swift-build-cache-metadata.outcome == 'success')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build

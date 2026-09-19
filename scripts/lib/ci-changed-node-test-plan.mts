@@ -97,6 +97,7 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 const CHANGED_EXTENSION_JOB_SECONDS = 240;
+const CHANGED_EXTENSION_JOB_GROUPS = 4;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
@@ -575,6 +576,10 @@ function packChangedExtensionConfigShards(
     // Each envelope retains its own child process. Share only the checkout;
     // runtime preparation stays separate from other configs' readers.
     (bin, shard) =>
+      // Timing samples can lag a fast-growing extension inventory. Bound the
+      // serial critical path independently of its estimated seconds so one
+      // stale sample cannot accumulate an unbounded number of config runs.
+      bin.length < CHANGED_EXTENSION_JOB_GROUPS &&
       // Cost packing must not recreate the oversized native worker envelope.
       bin.reduce(
         (count, entry) => count + (nativeWorkerFileCounts.get(entry) ?? 0),
