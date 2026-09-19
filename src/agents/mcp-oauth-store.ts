@@ -1,4 +1,5 @@
 // Canonical MCP OAuth session state. Legacy JSON import belongs to doctor only.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
@@ -16,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureMcpOAuthPendingSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -33,6 +35,23 @@ type McpOAuthDatabase = Pick<
 const MCP_OAUTH_STORE_FORMAT_VERSION = 1;
 const UNINITIALIZED_STORE_FIELDS = new Set(["credentialState", "pendingAuthorizationChallenge"]);
 const pendingSchemaDatabases = new WeakSet<DatabaseSync>();
+// MCP OAuth sessions are operator credentials, so they follow the operator's
+// shared state root even while a run repoints OPENCLAW_STATE_DIR at disposable
+// run state (`agent exec`). Reads, rotated-token writes, and the refresh lease
+// all resolve through this one root, so the run never becomes a second refresh
+// owner and never reports a stored login as missing.
+const mcpOAuthSharedStateEnv = new AsyncLocalStorage<NodeJS.ProcessEnv>();
+
+/** Pin MCP OAuth session state to one shared state root for the duration of `run`. */
+export function withMcpOAuthSharedStateDir<T>(sharedStateDir: string, run: () => T): T {
+  return mcpOAuthSharedStateEnv.run({ ...process.env, OPENCLAW_STATE_DIR: sharedStateDir }, run);
+}
+
+/** Shared database options every MCP OAuth read, write, and lease must use. */
+export function mcpOAuthStateDatabaseOptions(): OpenClawStateDatabaseOptions {
+  const env = mcpOAuthSharedStateEnv.getStore();
+  return env ? { env } : {};
+}
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;
@@ -238,7 +257,7 @@ function readFromDatabase(database: DatabaseSync, storeKey: string): McpOAuthSto
 
 /** Read canonical state, opening the writable lifecycle when runtime owns it. */
 export function readMcpOAuthStore(storeKey: string): McpOAuthStore {
-  return readFromDatabase(openOpenClawStateDatabase().db, storeKey);
+  return readFromDatabase(openOpenClawStateDatabase(mcpOAuthStateDatabaseOptions()).db, storeKey);
 }
 
 /** Read status state without creating or repairing the shared database. */
@@ -249,7 +268,7 @@ export function readMcpOAuthStoreReadOnly(storeKey: string): McpOAuthStore {
         return {};
       }
       return readFromDatabase(db, storeKey);
-    }) ?? {}
+    }, mcpOAuthStateDatabaseOptions()) ?? {}
   );
 }
 
@@ -269,7 +288,7 @@ export function listMcpOAuthStoreKeysByPrefix(prefix: string): string[] {
           .orderBy("store_key", "asc"),
       ).rows;
       return rows.map((row) => row.store_key);
-    }) ?? []
+    }, mcpOAuthStateDatabaseOptions()) ?? []
   );
 }
 
@@ -282,8 +301,9 @@ function ensurePendingSchema(database: DatabaseSync): void {
 }
 
 function runPendingWrite<T>(run: (database: DatabaseSync) => T): T {
-  ensurePendingSchema(openOpenClawStateDatabase().db);
-  return runOpenClawStateWriteTransaction(({ db }) => run(db));
+  const options = mcpOAuthStateDatabaseOptions();
+  ensurePendingSchema(openOpenClawStateDatabase(options).db);
+  return runOpenClawStateWriteTransaction(({ db }) => run(db), options);
 }
 
 function deletePendingForStore(
@@ -322,7 +342,7 @@ export function readMcpOAuthPendingAuthorization(state: string): string | undefi
         .where("state", "=", state)
         .where("create_time", ">", Date.now() - MCP_OAUTH_PENDING_STATE_TTL_MS),
     )?.store_key;
-  });
+  }, mcpOAuthStateDatabaseOptions());
 }
 
 /** Claim one exact unexpired callback state while its store lease is still owned. */
@@ -436,7 +456,7 @@ export function updateMcpOAuthStore(
   return runOpenClawStateWriteTransaction(({ db }) => {
     const current = readFromDatabase(db, storeKey);
     return replaceMcpOAuthStore(db, storeKey, update(current), assertOwnedInTransaction);
-  });
+  }, mcpOAuthStateDatabaseOptions());
 }
 
 /** Clear one OAuth session while retaining an authoritative canonical row. */

@@ -1,5 +1,6 @@
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -10,9 +11,16 @@ import {
   clearMcpOAuthStore,
   consumeOAuthState,
   deleteMcpOAuthPendingAuthorizationsByPrefix,
+  listMcpOAuthStoreKeysByPrefix,
   readMcpOAuthPendingAuthorization,
+  readMcpOAuthStore,
+  readMcpOAuthStoreReadOnly,
+  updateMcpOAuthStore,
+  withMcpOAuthSharedStateDir,
   writeMcpOAuthPendingAuthorization,
 } from "./mcp-oauth-store.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withTempHome(run: () => Promise<void>): Promise<void> {
   await withBaseTempHome(async () => {
@@ -115,6 +123,38 @@ describe("MCP OAuth pending authorization store", () => {
       expect(readMcpOAuthPendingAuthorization("requester-a-state")).toBeUndefined();
       expect(readMcpOAuthPendingAuthorization("requester-b-state")).toBeUndefined();
       expect(readMcpOAuthPendingAuthorization("other-state")).toBe("other-r-requester");
+    });
+  });
+});
+
+describe("MCP OAuth shared state root scope", () => {
+  it("pins reads, writes, and pending state to the scoped root only", async () => {
+    await withTempHome(async () => {
+      const operatorStateDir = tempDirs.make("openclaw-mcp-oauth-operator-");
+      const identity = operatorMcpOAuthIdentity("Scoped", "https://scoped.example.com/mcp");
+      const tokens = {
+        access_token: "scoped-access",
+        refresh_token: "scoped-refresh",
+        token_type: "bearer",
+      };
+      withMcpOAuthSharedStateDir(operatorStateDir, () => {
+        updateMcpOAuthStore(identity.storeKey, (store) => ({ ...store, tokens }));
+        writeMcpOAuthPendingAuthorization(identity.storeKey, "scoped-state");
+      });
+
+      // The ambient root, which is where a temporary run points, never sees the session.
+      expect(readMcpOAuthStore(identity.storeKey)).toEqual({});
+      expect(readMcpOAuthStoreReadOnly(identity.storeKey)).toEqual({});
+      expect(listMcpOAuthStoreKeysByPrefix("Scoped-")).toEqual([]);
+      expect(readMcpOAuthPendingAuthorization("scoped-state")).toBeUndefined();
+
+      withMcpOAuthSharedStateDir(operatorStateDir, () => {
+        expect(readMcpOAuthStore(identity.storeKey)).toMatchObject({ tokens });
+        expect(readMcpOAuthStoreReadOnly(identity.storeKey)).toMatchObject({ tokens });
+        expect(listMcpOAuthStoreKeysByPrefix("Scoped-")).toEqual([identity.storeKey]);
+        expect(readMcpOAuthPendingAuthorization("scoped-state")).toBe(identity.storeKey);
+        expect(consumeOAuthState(identity.storeKey, "scoped-state")).toBe(true);
+      });
     });
   });
 });

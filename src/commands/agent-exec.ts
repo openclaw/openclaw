@@ -397,11 +397,13 @@ export async function agentExecCommand(
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
+      { withMcpOAuthSharedStateDir },
       { withHostExecInheritedEnvOmitted },
       { listKnownProviderAuthEnvVarNamesCore },
       runAgent,
     ] = await Promise.all([
       import("../agents/auth-profiles.js"),
+      import("../agents/mcp-oauth-store.js"),
       import("../infra/host-env-security.js"),
       import("../secrets/provider-env-vars.js"),
       deps.runAgent
@@ -459,13 +461,15 @@ export async function agentExecCommand(
       pluginInstallContext && pluginInstallRoots
         ? pluginInstallContext.withPluginInstallRoots(pluginInstallRoots, invoke)
         : invoke();
+    // MCP OAuth logins (`openclaw mcp login`) are stored credentials too: they stay
+    // on the original shared root, under its refresh lease, instead of the
+    // temporary state that would report every configured OAuth server as
+    // unauthorized.
     const runWithAuthScope = () =>
       opts.authEnvOnly === true
         ? withEnvOnlyAuthProfileStore(runWithPluginInstallRoots)
-        : withAuthProfileStoreAgentDir(
-            storedAuthAgentDir,
-            storedAuthStateDir,
-            runWithPluginInstallRoots,
+        : withAuthProfileStoreAgentDir(storedAuthAgentDir, storedAuthStateDir, () =>
+            withMcpOAuthSharedStateDir(storedAuthStateDir, runWithPluginInstallRoots),
           );
     const run = async () => {
       if (isExecutionIdentityCollectionEnabled(runConfig)) {

@@ -25,6 +25,7 @@ import {
   deleteMcpOAuthPendingAuthorization,
   deleteMcpOAuthPendingAuthorizationsByPrefix,
   listMcpOAuthStoreKeysByPrefix,
+  mcpOAuthStateDatabaseOptions,
   readMcpOAuthStore,
   readMcpOAuthStoreReadOnly,
   updateMcpOAuthStore,
@@ -69,7 +70,8 @@ async function withMcpOAuthLease<T>(
     {
       scope: "core:mcp-oauth",
       key: storeKey,
-      database: { scope: "shared" },
+      // The lease lives beside the rows it guards; a scoped shared root moves both.
+      database: { scope: "shared", options: mcpOAuthStateDatabaseOptions() },
       leaseMs: MCP_OAUTH_LEASE_MS,
       waitMs: MCP_OAUTH_LEASE_WAIT_MS,
       ...(signal ? { signal } : {}),
