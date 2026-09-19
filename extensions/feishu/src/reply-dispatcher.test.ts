@@ -192,7 +192,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
           resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          resolveMarkdownTableMode: vi.fn(() => "block"),
           convertMarkdownTables: vi.fn((text) => text),
           chunkTextWithMode: vi.fn((text) => [text]),
           chunkMarkdownTextWithMode: vi.fn((text) => [text]),
@@ -619,7 +619,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
     const runtime = getFeishuRuntimeMock();
-    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    // A budget this small cannot carry a fence at all, and the card decision asks the real
+    // chunker whether its markers survive, so the limit has to be one a fence fits in.
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(24);
     runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
 
     const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
@@ -2433,7 +2435,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   ])(
     "retains accepted $kind chunk content after receipt loss with $acceptedBeforeReceiptLoss prior receipts",
     async ({ kind, provider, acceptedBeforeReceiptLoss }) => {
-      useNonStreamingAutoAccount();
+      if (kind === "card") {
+        // A card carries a table as one component and its chunker cannot reopen a fence a
+        // cut strands, so both shapes now take the post path. Configuration is what puts
+        // plain prose on a card, which is the promotion this case is built on.
+        resolveFeishuAccountMock.mockReturnValue({
+          accountId: "main",
+          appId: "app_id",
+          appSecret: "app_secret",
+          domain: "feishu",
+          config: { renderMode: "card", streaming: { mode: "off" } },
+        });
+      } else {
+        useNonStreamingAutoAccount();
+      }
       const runtime = getFeishuRuntimeMock();
       runtime.channel.text.resolveTextChunkLimit.mockReturnValue(6);
       runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second", "third"]);
@@ -2451,7 +2466,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         ),
       );
       const { options } = createDispatcherHarness();
-      const text = kind === "card" ? "| first | second |\n| - | - |" : "firstsecondthird";
+      const text = "firstsecondthird";
 
       const error = await options
         .deliver({ text }, { kind: "final" })
@@ -4397,54 +4412,5 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
-  describe("table-limit routing", () => {
-    function setupDispatcher() {
-      const result = createFeishuReplyDispatcher({
-        cfg: {} as never,
-        agentId: "agent",
-        runtime: { log: vi.fn(), error: vi.fn() } as never,
-        chatId: "oc_chat",
-        sendTarget: "oc_chat",
-      });
-      return toTypingDispatcherOptions(result);
-    }
-
-    it("routes 5 markdown tables to static card when streaming is off", async () => {
-      useNonStreamingAutoAccount();
-      const options = setupDispatcher();
-      const text = makeTableText(5);
-      await options.deliver({ text }, { kind: "final" });
-
-      expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
-      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-    });
-
-    it("falls back to post mode for 6 markdown tables when streaming is off", async () => {
-      useNonStreamingAutoAccount();
-      const options = setupDispatcher();
-      const text = makeTableText(6);
-      await options.deliver({ text }, { kind: "final" });
-
-      expect(sendMessageFeishuMock).toHaveBeenCalled();
-      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    });
-
-    it("falls back to post mode for 6 tables with explicit renderMode=card", async () => {
-      resolveFeishuAccountMock.mockReturnValue({
-        accountId: "main",
-        appId: "app_id",
-        appSecret: "app_secret",
-        domain: "feishu",
-        config: { renderMode: "card", streaming: { mode: "off" } },
-      });
-      const options = setupDispatcher();
-      const text = makeTableText(6);
-      await options.deliver({ text }, { kind: "final" });
-
-      expect(sendMessageFeishuMock).toHaveBeenCalled();
-      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    });
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

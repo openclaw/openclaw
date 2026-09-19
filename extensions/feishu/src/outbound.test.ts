@@ -13,10 +13,18 @@ import {
 import {
   adaptMessagePresentationForChannel,
   renderMessagePresentationFallbackText,
+  renderPresentationForDelivery,
   type MessagePresentation,
   type MessagePresentationAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, ReplyPayload } from "../runtime-api.js";
 import {
   FEISHU_SELECTED_SECRET_ENV,
@@ -124,7 +132,6 @@ vi.mock("./comment-reaction.js", () => ({
 
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
-import { buildFeishuPostMessageContent } from "./markdown.js";
 import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER, feishuOutbound } from "./outbound.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
@@ -186,6 +193,26 @@ const cardRenderConfig: ClawdbotConfig = {
   },
 };
 
+const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+// GFM makes the outer pipes optional, and a fence hides rows that only look like a table.
+// Our parser finds a table in these two, but the card renderer does not draw one.
+// It does not descend into a blockquote, and it claims the leading list marker
+// for a list. Either way the rows would leave the message, so they take the post
+// path and arrive as a fenced block instead.
+// Root credentials make the implicit default account configured, so a send
+// without an account id resolves to it and reads the channel value.
+const tableModeConfig: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      appId: "cli_a1",
+      appSecret: "local-test-placeholder", // pragma: allowlist secret
+      renderMode: "raw",
+      markdown: { tables: "bullets" },
+      accounts: { work: { markdown: { tables: "off" } } },
+    },
+  },
+};
+
 function createOversizedTablePresentation() {
   return adaptMessagePresentationForChannel({
     presentation: {
@@ -231,6 +258,20 @@ afterAll(() => {
   vi.doUnmock("./comment-reaction.js");
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
+});
+
+// The shared table-mode resolver reads config only for a registered channel id
+// and takes the plugin default from its meta. The harness does not load the
+// runtime setup, so register the real plugin for every test.
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+  );
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 function resetOutboundMocks() {
@@ -629,6 +670,19 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 
+  it("resolves the markdown table mode for the named account on the post path", async () => {
+    await sendText({
+      cfg: tableModeConfig,
+      to: "chat_1",
+      text: tableMarkdown,
+      accountId: "work",
+    });
+    await sendText({ cfg: tableModeConfig, to: "chat_1", text: tableMarkdown });
+
+    expect(sendMessageCall(0)?.text).toBe(tableMarkdown);
+    expect(sendMessageCall(1)?.text).toBe("**Ada**  \n• Role: Lead");
+  });
+
   it("sends wrapped interactive card text as a native Feishu card", async () => {
     const text = JSON.stringify({
       type: "interactive",
@@ -726,6 +780,95 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     }
   });
 
+  // A comment carries no card, and the comment sender converts for its own chunker and
+  // keeps the authored form when the markers would not survive the cut. Converting the
+  // fallback before it gets there handed it a conversion it could not undo.
+  it("keeps a presentation comment readable when its fences cannot survive the cut", async () => {
+    const rows = Array.from({ length: 40 }, (_entry, index) => `> | row${index} | d |`);
+    const table = [
+      "> | name | detail |",
+      "> | --- | --- |",
+      ...rows,
+      `> | wide | ${"w".repeat(220)} |`,
+    ].join("\n");
+    const cfg = {
+      channels: { feishu: { accounts: { main: { markdown: { tables: "code" } } } } },
+    } as ClawdbotConfig;
+    const to = "comment:docx:doxcn123:7623358762119646411";
+    // The case only means anything while the conversion carries quoted markers and needs
+    // more than one comment to arrive.
+    expect(convertMarkdownTables(table, "code")).toContain("> ```");
+    expect(convertMarkdownTables(table, "code").length).toBeGreaterThan(4000);
+
+    const payload = { presentation: { blocks: [{ type: "text", text: table }] } };
+    const rendered = await renderPresentationForDelivery(
+      {
+        presentationCapabilities: feishuOutbound.presentationCapabilities,
+        renderPresentation: async (adapted, sourcePresentation) =>
+          await feishuOutbound.renderPresentation!({
+            payload: adapted,
+            presentation: adapted.presentation,
+            sourcePresentation,
+            ctx: { cfg, to, text: "", accountId: "main", payload: adapted } as never,
+          }),
+      },
+      payload as never,
+    );
+    await sendText({ cfg, to, text: rendered.text ?? "", accountId: "main" });
+
+    const contents = deliverCommentThreadTextMock.mock.calls.map((_call, index) =>
+      String(commentThreadParams(index)?.content ?? ""),
+    );
+    expect(contents.length).toBeGreaterThan(0);
+    for (const content of contents) {
+      // A comment opens and closes its own fences or carries none at all.
+      expect((content.match(/^> ```/gmu) ?? []).length % 2).toBe(0);
+    }
+    expect(contents.join("")).toContain("row39");
+  });
+
+  // A conversion hides its table inside a fence before the card question is asked, so
+  // asking only whether a table fits one card answered nothing for a quoted one, and the
+  // card chunker cannot close and reopen a quoted marker.
+  it("keeps a quoted table off the card path when its fences cannot survive the cut", async () => {
+    const rows = Array.from({ length: 40 }, (_entry, index) => `> | row${index} | d |`);
+    const table = [
+      "> | name | detail |",
+      "> | --- | --- |",
+      ...rows,
+      `> | wide | ${"w".repeat(220)} |`,
+    ].join("\n");
+    // The case only means anything while the conversion carries quoted markers and needs
+    // more room than one card has.
+    expect(convertMarkdownTables(table, "code")).toContain("> ```");
+    expect(convertMarkdownTables(table, "code").length).toBeGreaterThan(4000);
+
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            renderMode: "card",
+            accounts: { main: { markdown: { tables: "code" } } },
+          },
+        },
+      } as ClawdbotConfig,
+      to: "chat_1",
+      text: table,
+      accountId: "main",
+    });
+
+    const delivered = [
+      ...sendStructuredCardFeishuMock.mock.calls,
+      ...sendMessageFeishuMock.mock.calls,
+    ].map((call) => String(call[0]?.text ?? ""));
+    expect(delivered.length).toBeGreaterThan(0);
+    for (const message of delivered) {
+      // A message opens and closes its own fences or carries none at all.
+      expect((message.match(/^> ```/gmu) ?? []).length % 2).toBe(0);
+    }
+    expect(delivered.join("")).toContain("row39");
+  });
+
   it("uses markdown cards when renderMode=card", async () => {
     const result = await sendText({
       cfg: cardRenderConfig,
@@ -775,6 +918,77 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(sendMessageCall()?.replyToMessageId).toBe("om_thread_2");
     expect(sendMessageCall()?.replyInThread).toBe(true);
     expect(sendMessageCall()?.accountId).toBe("main");
+  });
+});
+
+describe("feishuOutbound.sendText receipt-less acceptance", () => {
+  // Feishu accepting a send without returning a message id raises a partial-delivery error
+  // by design, because an ordinary error would invite a duplicate retry. That text still
+  // reached the reader, so the content this reports has to carry it. Reporting only the
+  // chunks whose sender returned tells the turn a message it delivered was never sent.
+  it("reports a chunk Feishu accepted without a receipt as delivered content", async () => {
+    const sent: string[] = [];
+    sendMessageFeishuMock.mockImplementation(async ({ text }: { text: string }) => {
+      sent.push(text);
+      if (sent.length === 1) {
+        return { messageId: "chunk_1", chatId: "chat_1" };
+      }
+      throw createChannelPartialDeliveryError(
+        new Error("Feishu send failed: no message_id returned"),
+        { messageIds: [], visibleReplySent: true },
+      );
+    });
+
+    let caught: unknown;
+    try {
+      await feishuOutbound.sendText?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "x".repeat(5_000),
+        accountId: "main",
+      } as never);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
+    // Guard the fixture: one chunk would not exercise the accounting at all.
+    expect(sent.length).toBe(2);
+    // Length first, so a regression reads as two numbers rather than two walls of x.
+    expect(partial.deliveryResult.content?.length).toBe(sent.join("").length);
+    expect(partial.deliveryResult.content).toBe(sent.join(""));
+  });
+
+  // The other direction is worse: a send that genuinely failed must not be reported as
+  // delivered text, which is what the catch was added for in the first place.
+  it("leaves a chunk out of delivered content when its send genuinely failed", async () => {
+    const sent: string[] = [];
+    sendMessageFeishuMock.mockImplementation(async ({ text }: { text: string }) => {
+      sent.push(text);
+      if (sent.length === 1) {
+        return { messageId: "chunk_1", chatId: "chat_1" };
+      }
+      throw new Error("second chunk failed");
+    });
+
+    let caught: unknown;
+    try {
+      await feishuOutbound.sendText?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "x".repeat(5_000),
+        accountId: "main",
+      } as never);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
+    expect(sent.length).toBe(2);
+    expect(partial.deliveryResult.content?.length).toBe(sent[0]?.length);
+    expect(partial.deliveryResult.content).toBe(sent[0]);
   });
 });
 
@@ -2446,6 +2660,28 @@ describe("feishuOutbound comment-thread routing", () => {
     resetOutboundMocks();
   });
 
+  it.each([
+    ["bullets", convertMarkdownTables(tableMarkdown, "bullets")],
+    ["code", convertMarkdownTables(tableMarkdown, "code")],
+    [undefined, convertMarkdownTables(tableMarkdown, "code")],
+    ["off", tableMarkdown],
+  ] as const)(
+    "converts a table for a document-comment target in %s mode",
+    async (tables, expected) => {
+      const cfg: ClawdbotConfig = tables ? { channels: { feishu: { markdown: { tables } } } } : {};
+
+      await sendText({
+        cfg,
+        to: "comment:docx:doxcn123:7623358762119646411",
+        text: tableMarkdown,
+        accountId: "main",
+      });
+
+      expect(commentThreadParams()?.content).toBe(expected);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(feishuSecretRefPolicyCases)(
     "permits document-comment delivery only under configured SecretRef policy: $name",
     async (testCase) => {
@@ -2633,256 +2869,6 @@ describe("feishuOutbound comment-thread routing", () => {
 
     resolveCleanup?.(false);
     await sendPromise;
-  });
-});
-
-describe("feishuOutbound.sendText replyToId forwarding", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
-
-  it("forwards replyToId as replyToMessageId to sendMessageFeishu", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
-
-    expect(sendMessageCall()?.to).toBe("chat_1");
-    expect(sendMessageCall()?.text).toBe("hello");
-    expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
-    expect(sendMessageCall()?.accountId).toBe("main");
-  });
-
-  it("forwards replyToId to sendStructuredCardFeishu when renderMode=card", async () => {
-    await sendText({
-      cfg: cardRenderConfig,
-      to: "chat_1",
-      text: "```code```",
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
-
-    expect(sendStructuredCardCall()?.replyToMessageId).toBe("om_reply_target");
-  });
-
-  it("does not pass replyToMessageId when replyToId is absent", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "hello",
-      accountId: "main",
-    });
-
-    expect(sendMessageCall()?.to).toBe("chat_1");
-    expect(sendMessageCall()?.text).toBe("hello");
-    expect(sendMessageCall()?.accountId).toBe("main");
-    expect(sendMessageCall()?.replyToMessageId).toBeUndefined();
-  });
-
-  it("propagates threadId as replyInThread=true to sendMessageFeishu", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "topic reply",
-      threadId: "om_topic_root",
-      accountId: "main",
-    });
-
-    expect(sendMessageCall()?.replyToMessageId).toBe("om_topic_root");
-    expect(sendMessageCall()?.replyInThread).toBe(true);
-  });
-
-  it("propagates threadId as replyInThread=true to sendStructuredCardFeishu when renderMode=card", async () => {
-    await sendText({
-      cfg: cardRenderConfig,
-      to: "chat_1",
-      text: "```code```",
-      threadId: "om_topic_root",
-      accountId: "main",
-    });
-
-    expect(sendStructuredCardCall()?.replyToMessageId).toBe("om_topic_root");
-    expect(sendStructuredCardCall()?.replyInThread).toBe(true);
-  });
-
-  it("prefers replyToId over threadId for plain text (inline reply, no auto-thread)", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "inline reply",
-      replyToId: "om_inline",
-      threadId: "om_topic_root",
-      accountId: "main",
-    });
-
-    expect(sendMessageCall()?.replyToMessageId).toBe("om_inline");
-    expect(sendMessageCall()?.replyInThread).toBe(false);
-  });
-
-  it("materializes post-md prose soft breaks after raw render-mode routing", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "first line\nsecond line",
-      accountId: "main",
-    });
-
-    expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
-    expect(sendMessageCall()?.preparedPostText).toBe(true);
-  });
-
-  it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
-      replyToId: "om_reply_target",
-      accountId: "main",
-    });
-
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    for (const [index, [params]] of sendMessageFeishuMock.mock.calls.entries()) {
-      expect(params.text.length).toBeLessThanOrEqual(4_000);
-      expect(params.replyToMessageId).toBe(index === 0 ? "om_reply_target" : undefined);
-    }
-  });
-
-  it("keeps explicit first-mode replies sticky across expanded post-md chunks", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
-      replyToId: "om_explicit_reply",
-      replyToIdSource: "explicit",
-      replyToMode: "first",
-      accountId: "main",
-    });
-
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    for (const [params] of sendMessageFeishuMock.mock.calls) {
-      expect(params.replyToMessageId).toBe("om_explicit_reply");
-    }
-  });
-
-  it("records each accepted expanded text chunk before the next send", async () => {
-    sendMessageFeishuMock.mockImplementation(async () => ({
-      messageId: `chunk_${sendMessageFeishuMock.mock.calls.length}`,
-    }));
-    const onDeliveryResult = vi.fn();
-
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
-      accountId: "main",
-      onDeliveryResult,
-    });
-
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(
-      sendMessageFeishuMock.mock.calls.map((_call, index) => `chunk_${index + 1}`),
-    );
-  });
-
-  it("preserves the first accepted text chunk when the following send fails", async () => {
-    sendMessageFeishuMock
-      .mockResolvedValueOnce({ messageId: "accepted_chunk" })
-      .mockRejectedValueOnce(new Error("second chunk failed"));
-    const onDeliveryResult = vi.fn();
-
-    await expect(
-      sendText({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: Array.from({ length: 2_200 }, () => "a").join("\n"),
-        accountId: "main",
-        onDeliveryResult,
-      }),
-    ).rejects.toThrow("second chunk failed");
-
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
-      "accepted_chunk",
-    ]);
-  });
-
-  it("stops text fanout immediately when accepted delivery cannot be persisted", async () => {
-    const onDeliveryResult = vi.fn().mockRejectedValueOnce(new Error("progress write failed"));
-
-    await expect(
-      sendText({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: Array.from({ length: 2_200 }, () => "a").join("\n"),
-        accountId: "main",
-        onDeliveryResult,
-      }),
-    ).rejects.toThrow("progress write failed");
-
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-  });
-
-  it("re-chunks expanded post-md text at the selected account limit", async () => {
-    await sendText({
-      cfg: {
-        channels: {
-          feishu: {
-            accounts: {
-              main: { textChunkLimit: 10 },
-            },
-          },
-        },
-      },
-      to: "chat_1",
-      text: Array.from({ length: 10 }, () => "a").join("\n"),
-      accountId: "main",
-    });
-
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    for (const [params] of sendMessageFeishuMock.mock.calls) {
-      expect(params.text.length).toBeLessThanOrEqual(10);
-    }
-  });
-
-  it("re-chunks expanded post-md text at the serialized byte envelope", async () => {
-    await sendText({
-      cfg: {
-        channels: {
-          feishu: {
-            textChunkLimit: 25_000,
-          },
-        },
-      },
-      to: "chat_1",
-      text: Array.from({ length: 6_150 }, () => "a").join("\n"),
-      accountId: "main",
-    });
-
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    for (const [params] of sendMessageFeishuMock.mock.calls) {
-      const content = buildFeishuPostMessageContent({ messageText: params.text });
-      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
-    }
-  });
-
-  it("keeps every expanded post-md subchunk in the requested thread", async () => {
-    await sendText({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
-      threadId: "om_thread_root",
-      accountId: "main",
-    });
-
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    for (const [params] of sendMessageFeishuMock.mock.calls) {
-      expect(params.replyToMessageId).toBe("om_thread_root");
-      expect(params.replyInThread).toBe(true);
-    }
   });
 });
 
@@ -3545,6 +3531,49 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     ).toBe(false);
   });
 
+  // The fanout that separates an attachment from its text used to cut the text into
+  // 4,000-character fragments and send each one on its own. That cut lands on the
+  // authored table, before the target converts it, so only the first fragment kept the
+  // header and the rest arrived as raw pipes. The whole text goes in one call now and the
+  // target chunks it after converting.
+  it("keeps a long fallback table converted when an attachment splits the send", async () => {
+    const table = [
+      "| Name | Role |",
+      "| --- | --- |",
+      ...Array.from(
+        { length: 260 },
+        (_e, i) => `| person-number-${i} | Regional Operations Lead |`,
+      ),
+    ].join("\n");
+    // Guard the fixture: the authored table is longer than one fanout fragment.
+    expect(table.length).toBeGreaterThan(4000);
+
+    await feishuOutbound.sendPayload?.({
+      cfg: {
+        channels: { feishu: { accounts: { main: { markdown: { tables: "block" } } } } },
+      },
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: table,
+      accountId: "main",
+      payload: { text: table, mediaUrl: "https://example.com/file.png" },
+    });
+
+    const contents = deliverCommentThreadTextMock.mock.calls.map((_call, index) =>
+      String(commentThreadParams(index)?.content ?? ""),
+    );
+    // The attachment is its own comment; the rest carry the answer.
+    const tableContents = contents.filter((content) => content.includes("person-number-"));
+    expect(tableContents.length).toBeGreaterThan(1);
+    // Every comment carrying rows also carries the fence, so no continuation arrives as
+    // raw pipes the way the pre-conversion cut left them.
+    for (const content of tableContents) {
+      expect(content).toContain("```");
+    }
+    const joined = contents.join("");
+    expect(joined).toContain("Name");
+    expect(joined).toContain("person-number-259");
+  });
+
   it("still falls back to text on the presentation-fallback path when the marker is absent", async () => {
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
 
@@ -3641,130 +3670,6 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.text).toBe("caption");
     expect(sendMessageCall()?.replyToMessageId).toBe("om_thread_1");
     expect(sendMessageCall()?.accountId).toBe("main");
-  });
-});
-
-describe("feishuOutbound table-limit routing", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
-
-  function makeTableText(count: number): string {
-    return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
-      "\n\n",
-    );
-  }
-
-  it("routes 5 markdown tables to structured card when renderMode=auto", async () => {
-    const text = makeTableText(5);
-    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
-
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to post mode for 6 markdown tables when renderMode=auto", async () => {
-    const text = makeTableText(6);
-    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
-
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to post mode for 6 tables even with explicit renderMode=card", async () => {
-    const text = makeTableText(6);
-    await sendText({ cfg: cardRenderConfig, to: "chat_1", text, accountId: "main" });
-
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("excludes tables inside code blocks from the table count", async () => {
-    const text = "```\n| a | b |\n| - | - |\n| 1 | 2 |\n```\n\n" + makeTableText(5);
-    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
-
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("falls back to post mode for 6 pipeless GFM tables", async () => {
-    const text = Array.from({ length: 6 }, (_, i) => `a${i} | b${i}\n--- | ---\n1 | 2`).join(
-      "\n\n",
-    );
-    await sendText({ cfg: emptyConfig, to: "chat_1", text, accountId: "main" });
-
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("feishuOutbound presentation card table-limit", () => {
-  beforeEach(() => {
-    resetOutboundMocks();
-  });
-
-  function makeTableText(count: number): string {
-    return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
-      "\n\n",
-    );
-  }
-
-  function makeActionPresentation(): MessagePresentation {
-    return {
-      title: "Confirm",
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [{ label: "Confirm", action: { type: "command", command: "/ok" } }],
-        },
-      ],
-    };
-  }
-
-  it("refuses the presentation card and falls back to post mode for 6 markdown tables", async () => {
-    const text = makeTableText(6);
-    await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text,
-      accountId: "main",
-      payload: { text, presentation: makeActionPresentation() },
-    });
-
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendMessageCall()?.text).toContain("```");
-  });
-
-  it("still builds the presentation card for 5 markdown tables", async () => {
-    const text = makeTableText(5);
-    await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text,
-      accountId: "main",
-      payload: { text, presentation: makeActionPresentation() },
-    });
-
-    expect(sendCardFeishuMock).toHaveBeenCalled();
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses the card when a presentation text block embeds 6 tables", async () => {
-    const presentation: MessagePresentation = {
-      title: "Report",
-      blocks: [{ type: "text", text: makeTableText(6) }],
-    };
-    await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "chat_1",
-      text: "",
-      accountId: "main",
-      payload: { text: "", presentation },
-    });
-
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,8 @@
+import { convertMarkdownTables } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildFeishuPostMessageContent,
+  chunkedFencesBalance,
   chunkFeishuMarkdown,
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
@@ -106,6 +108,54 @@ describe("materializeFeishuPostMarkdownSoftBreaks", () => {
   it("treats an unclosed fence as code through the end of the document", () => {
     const input = "```ts\nconst first = 1\nconst second = 2";
     expect(materializeFeishuPostMarkdownSoftBreaks(input)).toBe(input);
+  });
+});
+
+describe("chunkedFencesBalance", () => {
+  const table = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+
+  it("reads a quoted marker past the quote's own four columns as indented code", () => {
+    // Five spaces after the marker: one of them belongs to the marker, and the four that
+    // remain make the rest indented code, so the line opens nothing and the table converts.
+    const converted = convertMarkdownTables(`> note:\n>     \`\`\`\n>\n> end.\n\n${table}`, "code");
+
+    expect(chunkedFencesBalance(converted, 4_000, "length")).toBe(true);
+  });
+
+  it("reads four spaces before a quote marker as the indented code they already are", () => {
+    // The four spaces settle the line before the marker is reached, so the marker is content
+    // and opens nothing, which leaves the generated table fences the only ones to balance.
+    const converted = convertMarkdownTables(`    > \`\`\`\n\n${table}`, "code");
+
+    expect(chunkedFencesBalance(converted, 4_000, "length")).toBe(true);
+  });
+
+  it("reads a quoted marker at three columns of content as the opener it is", () => {
+    // Four spaces, one of them the marker's own, leave three, which still opens a block.
+    const converted = convertMarkdownTables(`> note:\n>    \`\`\`\n>\n> end.\n\n${table}`, "code");
+
+    expect(chunkedFencesBalance(converted, 4_000, "length")).toBe(false);
+  });
+
+  it("measures a closer's indentation the way an opener's is measured", () => {
+    // Four spaces make the rest of a line indented code wherever the block it sits in
+    // begins, so the marker inside the top-level fence is content and the fence closes on
+    // the last line rather than the indented one. The item's closer carries the four
+    // spaces its content starts at, which is no indentation of its own, so it still
+    // closes the fence its marker line opened.
+    const authored = [
+      "  - ```",
+      "    sample",
+      "    ```",
+      "",
+      "```",
+      "sample",
+      "    ```",
+      "```",
+    ].join("\n");
+    const converted = convertMarkdownTables(`${authored}\n\n${table}`, "code");
+
+    expect(chunkedFencesBalance(converted, 4_000, "length")).toBe(true);
   });
 });
 

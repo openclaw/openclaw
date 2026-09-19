@@ -3,9 +3,13 @@ import { feishuPlugin } from "../channel-plugin-api.js";
 
 const renderPresentation = vi.hoisted(() => vi.fn());
 const sendPayload = vi.hoisted(() => vi.fn());
+const sendText = vi.hoisted(() => vi.fn());
+const sendFormattedText = vi.hoisted(() => vi.fn());
 
 vi.mock("./channel.runtime.js", () => ({
-  feishuChannelRuntime: { feishuOutbound: { renderPresentation, sendPayload } },
+  feishuChannelRuntime: {
+    feishuOutbound: { renderPresentation, sendPayload, sendText, sendFormattedText },
+  },
 }));
 
 afterAll(() => {
@@ -56,5 +60,29 @@ describe("Feishu public outbound presentation hooks", () => {
     const sendError = new Error("card delivery failed");
     sendPayload.mockRejectedValueOnce(sendError);
     await expect(feishuPlugin.outbound?.sendPayload?.(ctx)).rejects.toBe(sendError);
+  });
+
+  it("advertises the formatted sender alongside the per-message one", async () => {
+    const receipts = [{ channel: "feishu", messageId: "om_first" }];
+    sendFormattedText.mockResolvedValueOnce(receipts);
+
+    // Core reads this entry from the registered surface and keeps cutting the reply
+    // itself while it is absent, so the adapter implementing it is not enough. Both
+    // entries stay advertised, because the per-message one still answers a caller
+    // that hands over one unit at a time.
+    expect(typeof feishuPlugin.outbound?.sendFormattedText).toBe("function");
+    expect(typeof feishuPlugin.outbound?.sendText).toBe("function");
+
+    const formattedContext = {
+      cfg: {},
+      to: "chat:oc_group",
+      accountId: "work",
+      threadId: "om_parent",
+      text: "| a | b |\n| - | - |\n| 1 | 2 |",
+    };
+    await expect(feishuPlugin.outbound?.sendFormattedText?.(formattedContext)).resolves.toBe(
+      receipts,
+    );
+    expect(sendFormattedText).toHaveBeenCalledExactlyOnceWith(formattedContext);
   });
 });
