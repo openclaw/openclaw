@@ -177,6 +177,17 @@ struct RootTabsSidebarRegressionTests {
         #expect(!brandHeader.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("self.selectSidebarDestination(.settings)"))
         #expect(footer.contains("RootTabs.Sidebar.Destination.settings"))
+        #expect(footer.contains("RootSidebarGatewayControl(fallbackName: self.gatewayName)"))
+        #expect(!footer.contains("gatewayRemoteAddress"))
+        #expect(!footer.contains("gatewayServerName"))
+        #expect(footer.contains("selectSidebarDestination(.gateway)"))
+        let gatewayControl = try String(
+            contentsOf: Self.rootSidebarSourceURL().deletingLastPathComponent()
+                .appendingPathComponent("RootSidebarGatewayControl.swift"),
+            encoding: .utf8)
+        #expect(gatewayControl.contains(".accessibilityLabel(self.controlName)"))
+        #expect(gatewayControl
+            .contains(".accessibilityValue(self.presentation.entries.isEmpty ? \"\" : self.presentation.statusTitle)"))
 
         #expect(pages.contains("ForEach(pinnedSessionNodes)"))
         #expect(sessions.contains("section.id == \"recent\""))
@@ -190,6 +201,8 @@ struct RootTabsSidebarRegressionTests {
         #expect(pin.lowerBound < detail.lowerBound)
         #expect(openChat.lowerBound < contextActions.lowerBound)
         #expect(sessionButton.contains("sessionAccessibilityValue"))
+        #expect(sessionButton.contains("OpenClawSidebarPalette.unread"))
+        #expect(!sessionButton.contains(".fill(OpenClawSidebarPalette.accent)"))
     }
 
     @Test func `sidebar selection resets embedded settings navigation path`() throws {

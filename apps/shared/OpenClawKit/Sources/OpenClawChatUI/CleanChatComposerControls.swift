@@ -41,14 +41,11 @@ struct CleanChatComposerSurface: ViewModifier {
 
 enum CleanChatComposerMetrics {
     static let surfaceCornerRadius: CGFloat = 20
-    static let restingMinHeight: CGFloat = 104
     static let controlTouchSize: CGFloat = 44
     static let primaryVisualSize: CGFloat = 32
     static let editorInlineInset: CGFloat = 14
-    static let editorBlockInset: CGFloat = 6
     static let footerInlineInset: CGFloat = 8
     static let footerBlockInset: CGFloat = 6
-    static let rowGap: CGFloat = 4
     static let footerControlGap: CGFloat = 0
     static let regularModelWidth: CGFloat = 82
     static let compactModelWidth: CGFloat = controlTouchSize
@@ -237,6 +234,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
         } label: {
             CompactChatAttachmentLabel()
         }
+        .menuOrder(.fixed)
         .help("Composer options")
         .accessibilityLabel("Composer options")
         .accessibilityIdentifier("chat-attachment-picker")
@@ -294,6 +292,8 @@ struct OpenClawChatMicButton: View {
         case cancel
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let dictationControl: OpenClawChatDictationControl?
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
     let isDictationPending: Bool
@@ -301,6 +301,7 @@ struct OpenClawChatMicButton: View {
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
     var controlSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
+    var enablesTasteMotion = false
     let onCancelDictation: @MainActor () -> Void
     let onStartDictation: @MainActor () -> Void
 
@@ -351,6 +352,17 @@ struct OpenClawChatMicButton: View {
             .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
             .frame(width: self.controlSize, height: self.controlSize)
             .contentShape(Rectangle())
+            .modifier(ChatTasteSymbolReplaceModifier(enabled: self.tasteSymbolReplaceEnabled))
+    }
+
+    private var tasteSymbolReplaceEnabled: Bool {
+        #if os(iOS)
+        chatTasteAllowsSymbolReplace(
+            tasteMotionEnabled: self.enablesTasteMotion,
+            reduceMotion: self.reduceMotion)
+        #else
+        false
+        #endif
     }
 
     private func performDictationAction() {

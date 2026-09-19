@@ -150,7 +150,7 @@ extension OpenClawChatComposer {
                 Label {
                     Text(verbatim: title)
                 } icon: {
-                    Image(systemName: "checkmark").accessibilityHidden(true)
+                    Image(systemName: "checkmark")
                 }
             } else {
                 Text(verbatim: title)
