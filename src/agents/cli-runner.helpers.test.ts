@@ -822,17 +822,24 @@ describe("resolveCliRunQueueKey", () => {
     ).toBe("claude-cli:session:claude-session-123");
   });
 
-  it("prefers cliSessionId over ownerKey when resuming", () => {
-    expect(
-      resolveCliRunQueueKey({
-        backendId: "claude-cli",
-        serialize: true,
-        runId: "run-2b",
-        workspaceDir: "/tmp/project-a",
-        cliSessionId: "claude-session-123",
-        ownerKey: "abcd1234",
-      }),
-    ).toBe("claude-cli:session:claude-session-123");
+  it("keeps fresh and resumed runs of one Claude CLI session owner on the same lane", () => {
+    const fresh = resolveCliRunQueueKey({
+      backendId: "claude-cli",
+      serialize: true,
+      runId: "run-fresh",
+      workspaceDir: "/tmp/project-a",
+      ownerKey: "abcd1234",
+    });
+    const resumed = resolveCliRunQueueKey({
+      backendId: "claude-cli",
+      serialize: true,
+      runId: "run-resumed",
+      workspaceDir: "/tmp/project-a",
+      cliSessionId: "claude-session-123",
+      ownerKey: "abcd1234",
+    });
+    expect(resumed).toBe("claude-cli:owner:abcd1234");
+    expect(resumed).toBe(fresh);
   });
 
   it("keeps non-Claude backends on the provider lane when serialized", () => {
