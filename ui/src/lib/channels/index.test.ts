@@ -516,7 +516,7 @@ describe("channels controller DM pairing", () => {
       bootstrapCommandOwner: false,
     });
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingBusyRequestId).toBeNull();
+    expect(channels.state.pairingBusy).toBeNull();
     channels.dispose();
   });
 
@@ -551,7 +551,12 @@ describe("channels controller DM pairing", () => {
       notify: false,
       bootstrapCommandOwner: false,
     });
-    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await vi.waitFor(() =>
+      expect(channels.state.pairingBusy).toEqual({
+        requestId: "request-1",
+        operation: "approve",
+      }),
+    );
     await channels.refreshPairing();
     expect(listCount).toBe(1);
 
@@ -664,7 +669,12 @@ describe("channels controller DM pairing", () => {
       notify: false,
       bootstrapCommandOwner: false,
     });
-    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await vi.waitFor(() =>
+      expect(channels.state.pairingBusy).toEqual({
+        requestId: "request-1",
+        operation: "approve",
+      }),
+    );
     snapshot = {
       ...snapshot,
       hello: { auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] } },

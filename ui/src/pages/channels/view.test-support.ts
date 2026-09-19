@@ -17,7 +17,7 @@ export function createChannelsViewProps(
     pairingSnapshot,
     pairingError: null,
     pairingLastSuccessAt: null,
-    pairingBusyRequestId: null,
+    pairingBusy: null,
     pairingChannelFilter: null,
     pairingAccountFilter: null,
     pairingPrompt: null,

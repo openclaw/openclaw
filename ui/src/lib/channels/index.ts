@@ -35,6 +35,9 @@ type ChannelGateway = {
   subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
 };
 
+/** Which pairing mutation owns the current busy request. */
+export type ChannelsPairingOperation = "approve" | "dismiss";
+
 type ChannelsState = {
   client: ChannelGatewayClient | null;
   connected: boolean;
@@ -49,7 +52,9 @@ type ChannelsState = {
   pairingSnapshot: ChannelsPairingListResult | null;
   pairingError: string | null;
   pairingLastSuccess: number | null;
-  pairingBusyRequestId: string | null;
+  // The request and the operation are one fact: a busy request is always busy
+  // for exactly one of approve/dismiss, and the two must never disagree.
+  pairingBusy: { requestId: string; operation: ChannelsPairingOperation } | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginSessionKey: string | null;
@@ -200,7 +205,7 @@ function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = 
     pairingSnapshot: null,
     pairingError: null,
     pairingLastSuccess: null,
-    pairingBusyRequestId: null,
+    pairingBusy: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
     whatsappLoginSessionKey: null,
@@ -282,7 +287,7 @@ async function loadChannelPairing(
     !client ||
     !state.connected ||
     state.pairingLoading ||
-    (state.pairingBusyRequestId && !options.duringMutation)
+    (state.pairingBusy && !options.duringMutation)
   ) {
     return;
   }
@@ -312,6 +317,7 @@ type PairingMutation = {
   client: ChannelGatewayClient;
   pairingEpoch: number;
   requestId: string;
+  operation: ChannelsPairingOperation;
 };
 
 function isCurrentPairingMutation(state: ChannelsState, mutation: PairingMutation): boolean {
@@ -319,7 +325,8 @@ function isCurrentPairingMutation(state: ChannelsState, mutation: PairingMutatio
     state.connected &&
     state.client === mutation.client &&
     getChannelsLifecycle(state).pairingEpoch === mutation.pairingEpoch &&
-    state.pairingBusyRequestId === mutation.requestId
+    state.pairingBusy?.requestId === mutation.requestId &&
+    state.pairingBusy.operation === mutation.operation
   );
 }
 
@@ -345,16 +352,17 @@ async function approveChannelPairing(
   },
 ): Promise<ChannelsPairingApproveResult | null> {
   const client = state.client;
-  if (!client || !state.connected || state.pairingBusyRequestId) {
+  if (!client || !state.connected || state.pairingBusy) {
     return null;
   }
   const mutation: PairingMutation = {
     client,
     pairingEpoch: getChannelsLifecycle(state).pairingEpoch,
     requestId: params.requestId,
+    operation: "approve",
   };
   invalidatePairingRefresh(state);
-  state.pairingBusyRequestId = params.requestId;
+  state.pairingBusy = { requestId: params.requestId, operation: "approve" };
   state.pairingError = null;
   try {
     const result = await client.request<ChannelsPairingApproveResult>(
@@ -375,7 +383,7 @@ async function approveChannelPairing(
     return null;
   } finally {
     if (isCurrentPairingMutation(state, mutation)) {
-      state.pairingBusyRequestId = null;
+      state.pairingBusy = null;
     }
   }
 }
@@ -385,16 +393,17 @@ async function dismissChannelPairing(
   params: { channel: string; accountId: string; requestId: string },
 ): Promise<boolean> {
   const client = state.client;
-  if (!client || !state.connected || state.pairingBusyRequestId) {
+  if (!client || !state.connected || state.pairingBusy) {
     return false;
   }
   const mutation: PairingMutation = {
     client,
     pairingEpoch: getChannelsLifecycle(state).pairingEpoch,
     requestId: params.requestId,
+    operation: "dismiss",
   };
   invalidatePairingRefresh(state);
-  state.pairingBusyRequestId = params.requestId;
+  state.pairingBusy = { requestId: params.requestId, operation: "dismiss" };
   state.pairingError = null;
   try {
     await client.request("channels.pairing.dismiss", params);
@@ -412,7 +421,7 @@ async function dismissChannelPairing(
     return false;
   } finally {
     if (isCurrentPairingMutation(state, mutation)) {
-      state.pairingBusyRequestId = null;
+      state.pairingBusy = null;
     }
   }
 }
@@ -657,7 +666,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       state.pairingError = null;
       state.pairingLastSuccess = null;
       state.pairingLoading = false;
-      state.pairingBusyRequestId = null;
+      state.pairingBusy = null;
       state.pairingRefreshSeq += 1;
     }
     publish();
@@ -715,7 +724,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       lifecycle.pairingEpoch += 1;
       lifecycle.whatsappOperationSeq += 1;
       state.pairingRefreshSeq += 1;
-      state.pairingBusyRequestId = null;
+      state.pairingBusy = null;
       state.whatsappBusy = false;
       stopGateway();
       listeners.clear();

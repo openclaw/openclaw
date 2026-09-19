@@ -15,11 +15,18 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
+import type { ChannelsPairingOperation } from "../../lib/channels/index.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
 import type { ChannelWizardState } from "./wizard-controller.ts";
 
 export type ChannelKey = string;
+
+/** The pairing mutation currently in flight, if any. */
+type ChannelsPairingBusy = {
+  requestId: string;
+  operation: ChannelsPairingOperation;
+};
 
 export type ChannelPairingPrompt = {
   kind: "approve" | "dismiss";
@@ -40,7 +47,7 @@ export type ChannelsProps = {
   pairingSnapshot: ChannelsPairingListResult | null;
   pairingError: string | null;
   pairingLastSuccessAt: number | null;
-  pairingBusyRequestId: string | null;
+  pairingBusy: ChannelsPairingBusy | null;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
