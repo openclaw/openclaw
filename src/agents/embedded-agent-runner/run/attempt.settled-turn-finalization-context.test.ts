@@ -83,6 +83,11 @@ describe("settled post-tool turn finalization context", () => {
       captures: true,
     },
     {
+      kind: "google-sse-eof-incomplete-frame",
+      error: new Error("Google SSE stream ended with an incomplete frame"),
+      captures: true,
+    },
+    {
       kind: "terminated-word-variant",
       error: new Error("the request was terminated by the server"),
       captures: false,

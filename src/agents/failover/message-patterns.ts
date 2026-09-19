@@ -26,8 +26,9 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // Match model-transport EOF contracts, not plugin lifecycle stream failures.
 // Unresolved calls at EOF differ from an inconsistent completed response.
+// A cut Google SSE frame is a disconnect; malformed JSON in a whole frame is not.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls|Google SSE stream ended with an incomplete frame)[.!]?$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;

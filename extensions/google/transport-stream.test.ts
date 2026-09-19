@@ -1589,7 +1589,8 @@ describe("google transport stream", () => {
     const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("incomplete");
+    // Agent retry classifies this exact text as a transient disconnect.
+    expect(result.errorMessage).toBe("Google SSE stream ended with an incomplete frame");
   });
 
   it.each([
