@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isTrustedProxyAddress } from "openclaw/plugin-sdk/core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { boundedJsonUtf8Bytes } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -108,13 +109,33 @@ function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): st
   return undefined;
 }
 
-function resolveRequestOrigin(request: IncomingMessage): string {
+function resolveRequestScheme(
+  request: IncomingMessage,
+  trustedProxies?: string[],
+): "http" | "https" {
   const encrypted = "encrypted" in request.socket && request.socket.encrypted;
+  if (encrypted) {
+    return "https";
+  }
+  // Only a trusted reverse proxy's remote address may assert the original
+  // client scheme; an untrusted peer could otherwise spoof X-Forwarded-Proto.
+  if (!isTrustedProxyAddress(request.socket?.remoteAddress, trustedProxies)) {
+    return "http";
+  }
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  const firstHop = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto)
+    ?.split(",")[0]
+    ?.trim()
+    .toLowerCase();
+  return firstHop === "https" ? "https" : "http";
+}
+
+function resolveRequestOrigin(request: IncomingMessage, trustedProxies?: string[]): string {
+  const scheme = resolveRequestScheme(request, trustedProxies);
   try {
-    return new URL(`${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`)
-      .origin;
+    return new URL(`${scheme}://${request.headers.host ?? "localhost"}`).origin;
   } catch {
-    return `${encrypted ? "https" : "http"}://localhost`;
+    return `${scheme}://localhost`;
   }
 }
 
@@ -129,7 +150,9 @@ function createAgentCard(params: A2aHttpHandlerParams, request: IncomingMessage)
   const instanceName =
     (agentIds[0] ? resolveAgentConfig(params.config, agentIds[0])?.name?.trim() : undefined) ||
     "OpenClaw";
-  const advertisedOrigin = params.a2aConfig.advertisedUrl ?? resolveRequestOrigin(request);
+  const advertisedOrigin =
+    params.a2aConfig.advertisedUrl ??
+    resolveRequestOrigin(request, params.config.gateway?.trustedProxies);
   return {
     name: instanceName,
     description: "OpenClaw agent gateway using the Agent2Agent protocol.",
