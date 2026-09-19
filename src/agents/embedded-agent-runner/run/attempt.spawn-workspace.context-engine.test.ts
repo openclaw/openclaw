@@ -11,9 +11,21 @@ import {
   createSessionEntryWithTranscript,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "../../../context-engine/registry.test-support.js";
+import { loadAndActivateRootPluginRegistry } from "../../../plugins/loader.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  resetPluginLoaderTestStateForTest,
+  useNoBundledPlugins,
+  writePlugin,
+} from "../../../plugins/loader.test-fixtures.js";
 import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
+import { clearActivePluginRegistry } from "../../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { createContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
@@ -223,6 +235,153 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const availableTools = assembleParams.availableTools;
     expect(availableTools).toBeInstanceOf(Set);
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
+  it.each(["alice-id", "bob-id", undefined])(
+    "passes request sender %s to context assembly without a shared fallback",
+    async (senderId) => {
+      const contextEngine = createContextEngineBootstrapAndAssemble();
+
+      await createContextEngineAttemptRunner({
+        contextEngine,
+        sessionKey,
+        tempPaths,
+        attemptOverrides: { senderId },
+      });
+
+      const assembled = mockParams(contextEngine.assemble, 0, "assemble params");
+      if (senderId) {
+        expect(requireRecord(assembled.runtimeContext, "assemble runtime context").senderId).toBe(
+          senderId,
+        );
+      } else {
+        expect(assembled.runtimeContext).toBeUndefined();
+      }
+    },
+  );
+
+  it("recalls only the requesting sender's memory through a loader-installed engine", async () => {
+    useNoBundledPlugins();
+    const engineId = "sender-scoped-memory-engine";
+    const plugin = writePlugin({
+      id: engineId,
+      body: `const memories = new Map([
+  ["alice-id", "installed-memory:alice-only"],
+  ["bob-id", "installed-memory:bob-only"],
+]);
+module.exports = {
+  id: ${JSON.stringify(engineId)},
+  register(api) {
+    api.registerContextEngine(${JSON.stringify(engineId)}, () => ({
+      info: {
+        id: ${JSON.stringify(engineId)},
+        name: "Sender-scoped memory engine",
+        acceptedHostParams: ["runtimeContext"],
+      },
+      async ingest() { return { ingested: false }; },
+      async assemble({ messages, runtimeContext }) {
+        const memory = memories.get(runtimeContext?.senderId);
+        return {
+          messages,
+          estimatedTokens: 0,
+          ...(memory ? { systemPromptAddition: memory } : {}),
+        };
+      },
+      async compact() { return { ok: true, compacted: false }; },
+    }));
+  },
+};\n`,
+    });
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: [engineId],
+        load: { paths: [plugin.file] },
+        slots: { contextEngine: engineId },
+      },
+    };
+
+    try {
+      loadAndActivateRootPluginRegistry({
+        cache: false,
+        config,
+        onlyPluginIds: [engineId],
+        workspaceDir: plugin.dir,
+      });
+      const preparedRegistry = loadAgentRuntimePluginRegistryHandle({
+        basePluginIds: [],
+        config,
+        workspaceDir: plugin.dir,
+      });
+
+      await withPluginRuntimeRegistryScope(preparedRegistry, async () => {
+        const lease = await createContextEngineLogicalTurnLease({
+          identity: { runId: "sender-memory-proof", sessionId: embeddedSessionId },
+          config,
+          workspaceDir: plugin.dir,
+        });
+        expect(lease.degraded).toBe(false);
+        const installedEngine = lease.begin().engine;
+        try {
+          for (const testCase of [
+            { senderId: "alice-id", expected: "installed-memory:alice-only" },
+            { senderId: "bob-id", expected: "installed-memory:bob-only" },
+            { senderId: undefined, expected: undefined },
+          ]) {
+            let assemblyEvidence:
+              | { senderId: unknown; systemPromptAddition: string | undefined }
+              | undefined;
+            let completedSession: ReturnType<typeof createDefaultEmbeddedSession> | undefined;
+            await createContextEngineAttemptRunner({
+              contextEngine: {
+                ...installedEngine,
+                assemble: async (params) => {
+                  const result = await installedEngine.assemble(params);
+                  assemblyEvidence = {
+                    senderId: params.runtimeContext?.senderId,
+                    systemPromptAddition: result.systemPromptAddition,
+                  };
+                  return result;
+                },
+              },
+              sessionKey: `${sessionKey}:${testCase.senderId ?? "senderless"}`,
+              tempPaths,
+              attemptOverrides: { senderId: testCase.senderId },
+              createSession: () => {
+                completedSession = createDefaultEmbeddedSession();
+                return completedSession;
+              },
+            });
+            const promptSeenByModel = completedSession?.agent.state.systemPrompt ?? "";
+
+            if (testCase.expected) {
+              expect(assemblyEvidence).toEqual({
+                senderId: testCase.senderId,
+                systemPromptAddition: testCase.expected,
+              });
+              expect(promptSeenByModel).toContain(testCase.expected);
+              expect(promptSeenByModel).not.toContain(
+                testCase.senderId === "alice-id"
+                  ? "installed-memory:bob-only"
+                  : "installed-memory:alice-only",
+              );
+            } else {
+              expect(assemblyEvidence).toEqual({
+                senderId: undefined,
+                systemPromptAddition: undefined,
+              });
+              expect(promptSeenByModel).not.toContain("installed-memory:");
+            }
+          }
+        } finally {
+          await lease.dispose();
+        }
+      });
+    } finally {
+      await clearActivePluginRegistry();
+      resetContextEngineRuntimeQuarantineForTests();
+      resetPluginLoaderTestStateForTest();
+      cleanupPluginLoaderFixturesForTest();
+    }
   });
 
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
