@@ -40,6 +40,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it.each([false, true])(
+  "restores a saved draft without invalidating an empty queue (preserveCurrent=%s)",
+  (preserveCurrent) => {
+    const stored = { ...createState(), chatMessage: "Saved draft" };
+    expect(persistChatComposerState(stored)).toBe(true);
+    const state = createState();
+    const emptyQueue = state.chatQueue;
+    const persistence = new ChatComposerPersistence(() => state);
+    expect(persistence.restore({ preserveCurrent })).toBe(true);
+    expect(state.chatMessage).toBe("Saved draft");
+    expect(state.chatQueue).toBe(emptyQueue);
+  },
+);
+
 it("captures once per restore admission while pending, settled, reset, and switching scope", async () => {
   const pending = createDeferred<Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>>();
   const read = vi.spyOn(draftStore, "readDurableComposerDraft").mockReturnValue(pending.promise);

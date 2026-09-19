@@ -155,7 +155,11 @@ class ChatOutboxGatewayOwner {
       return;
     }
     observeOutboxRecoveryOwner(host);
-    host.chatQueue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
+    const queue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
+    // An empty publication must not invalidate the transcript's structural cache.
+    if (host.chatQueue.length > 0 || queue.length > 0) {
+      host.chatQueue = queue;
+    }
     for (const item of host.chatQueue) {
       const key = item.attachmentPayload?.key;
       if (

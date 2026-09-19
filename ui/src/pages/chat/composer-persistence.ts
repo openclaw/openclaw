@@ -585,7 +585,7 @@ export function restoreChatComposerState(
     state.chatMentions = snapshot.mentions;
     state.chatGoalDraftMode = snapshot.goalMode ?? null;
   }
-  if ((!options.preserveCurrent && snapshot.queue.length > 0) || state.chatQueue.length === 0) {
+  if (snapshot.queue.length > 0 && (!options.preserveCurrent || state.chatQueue.length === 0)) {
     state.chatQueue = snapshot.queue;
   }
   return true;

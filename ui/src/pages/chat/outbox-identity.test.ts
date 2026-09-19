@@ -14,7 +14,12 @@ import {
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { readQueuedMessageById, removeQueuedMessage, updateQueuedMessage } from "./chat-queue.ts";
+import {
+  readQueuedMessageById,
+  removeQueuedMessage,
+  subscribeChatOutboxProjection,
+  updateQueuedMessage,
+} from "./chat-queue.ts";
 import {
   admitStoredChatComposerQueueItem,
   listStoredChatOutboxes,
@@ -36,6 +41,64 @@ const state = {
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => vi.unstubAllGlobals());
+
+describe("outbox projection publication", () => {
+  it("retains empty pane queues through draft notifications and publishes real queue changes", () => {
+    const host = {
+      ...state,
+      hello: null,
+      chatQueue: new Array<ChatQueueItem>(),
+      requestUpdate: vi.fn(),
+    };
+    const peer = {
+      ...host,
+      sessionKey: "agent:default:other",
+      chatQueue: new Array<ChatQueueItem>(),
+      requestUpdate: vi.fn(),
+    };
+    const empty = host.chatQueue;
+    const peerEmpty = peer.chatQueue;
+    const unsubscribe = subscribeChatOutboxProjection(host);
+    const unsubscribePeer = subscribeChatOutboxProjection(peer);
+    try {
+      expect(host.chatQueue).toBe(empty);
+      expect(peer.chatQueue).toBe(peerEmpty);
+      for (const chatMessage of ["draft", ""]) {
+        host.requestUpdate.mockClear();
+        peer.requestUpdate.mockClear();
+        expect(persistChatComposerState({ ...host, chatMessage })).toBe(true);
+        expect(host.chatQueue).toBe(empty);
+        expect(peer.chatQueue).toBe(peerEmpty);
+        expect(host.requestUpdate).toHaveBeenCalled();
+        expect(peer.requestUpdate).toHaveBeenCalled();
+      }
+
+      const item = { id: "published", text: "queued message", createdAt: 1 };
+      expect(
+        admitStoredChatComposerQueueItem(
+          host,
+          captureChatOutboxAdmission(host, host.sessionKey),
+          item,
+        ),
+      ).toBe(true);
+      expect(host.chatQueue).toMatchObject([item]);
+      expect(peer.chatQueue).toBe(peerEmpty);
+      expect(
+        updateQueuedMessage(host, item.id, (current) => ({ ...current, text: "edited" })),
+      ).toMatchObject({ text: "edited" });
+      expect(host.chatQueue).toMatchObject([{ id: item.id, text: "edited" }]);
+      expect(removeQueuedMessage(host, item.id)).toBe("removed");
+      expect(host.chatQueue).toEqual([]);
+      const drained = host.chatQueue;
+      expect(persistChatComposerState({ ...host, chatMessage: "next draft" })).toBe(true);
+      expect(host.chatQueue).toBe(drained);
+      expect(peer.chatQueue).toBe(peerEmpty);
+    } finally {
+      unsubscribePeer();
+      unsubscribe();
+    }
+  });
+});
 
 describe("outbox submission handoff", () => {
   function admittedSubmission() {
