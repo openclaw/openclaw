@@ -125,7 +125,7 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 5;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 6;
 
 export type SkillSnapshot = {
   librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
@@ -133,6 +133,8 @@ export type SkillSnapshot = {
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
+    /** Gateway-admitted path for explicit reads of hidden, Gateway-owned skills. */
+    gatewayFilePath?: string;
     /** Config key can differ from the prompt-facing skill name. */
     skillKey?: string;
     primaryEnv?: string;
