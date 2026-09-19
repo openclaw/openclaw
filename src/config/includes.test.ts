@@ -8,6 +8,7 @@ import { collectIncludePathsRecursive } from "./includes-scan.js";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  MAX_CONFIG_VALUE_DEPTH,
   MAX_INCLUDE_DEPTH,
   type ConfigIncludeResolutionEvent,
   type IncludeResolver,
@@ -374,6 +375,26 @@ describe("resolveConfigIncludes", () => {
       () => resolve({ $include: "./fail0.json" }, failFiles),
       /Maximum include depth/,
     );
+  });
+
+  it("rejects deeply nested config values instead of overflowing the stack", () => {
+    // A single document with no $include still recurses through every nested
+    // value. Beyond MAX_CONFIG_VALUE_DEPTH this must fail with a clear
+    // ConfigIncludeError rather than "RangeError: Maximum call stack size
+    // exceeded".
+    let value: unknown = { leaf: true };
+    for (let i = 0; i < MAX_CONFIG_VALUE_DEPTH + 1; i += 1) {
+      value = { x: value };
+    }
+    expectResolveIncludeError(() => resolve(value), /Maximum config nesting depth/);
+  });
+
+  it("resolves config values nested within the maximum depth", () => {
+    let value: unknown = { leaf: true };
+    for (let i = 0; i < MAX_CONFIG_VALUE_DEPTH - 1; i += 1) {
+      value = { x: value };
+    }
+    expect(() => resolve(value)).not.toThrow();
   });
 
   it.each([

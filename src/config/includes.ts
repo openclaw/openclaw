@@ -24,6 +24,16 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
+/**
+ * Maximum nesting depth for plain values (objects/arrays) inside a single
+ * config document. MAX_INCLUDE_DEPTH bounds the `$include` file chain, but
+ * `process()`/`processObject()` also recurse through every nested value; with no
+ * bound a deeply nested document exhausts the call stack and surfaces as an
+ * opaque `RangeError: Maximum call stack size exceeded`. Hand-authored configs
+ * nest only a handful of levels, so this cap rejects pathological input with a
+ * clear ConfigIncludeError instead.
+ */
+export const MAX_CONFIG_VALUE_DEPTH = 100;
 const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */
@@ -199,6 +209,13 @@ class IncludeProcessor {
   }
 
   process(obj: unknown, logicalPath: readonly string[] = [], hasArrayAncestor = false): unknown {
+    if (logicalPath.length > MAX_CONFIG_VALUE_DEPTH) {
+      throw new ConfigIncludeError(
+        `Maximum config nesting depth (${MAX_CONFIG_VALUE_DEPTH}) exceeded at: ${logicalPath.join(".")}`,
+        this.basePath,
+      );
+    }
+
     if (Array.isArray(obj)) {
       return obj.map((item, index) => this.process(item, [...logicalPath, String(index)], true));
     }
