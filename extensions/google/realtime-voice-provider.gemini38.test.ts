@@ -3,6 +3,7 @@ import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildThinkingConfig,
+  emitsCompleteInputTranscripts,
   modelSupportsToolResultContinuation,
   supportsClientContentInterrupt,
 } from "./realtime-voice-model-contract.js";
@@ -106,6 +107,15 @@ describe("Gemini 3.8 Live model contracts", () => {
     expect(modelSupportsToolResultContinuation("gemini-3.1-flash-live-preview")).toBe(false);
     expect(supportsClientContentInterrupt("gemini-3.8-live-extended-thinking")).toBe(true);
     expect(supportsClientContentInterrupt("gemini-3.8-live")).toBe(false);
+  });
+
+  it("treats each 3.1 and 3.8 Live input transcription as a complete utterance", () => {
+    expect(emitsCompleteInputTranscripts("gemini-3.8-live")).toBe(true);
+    expect(emitsCompleteInputTranscripts("models/gemini-3.8-live-extended-thinking")).toBe(true);
+    expect(emitsCompleteInputTranscripts("gemini-3.1-flash-live-preview")).toBe(true);
+    expect(emitsCompleteInputTranscripts("gemini-2.5-flash-native-audio-preview-12-2025")).toBe(
+      false,
+    );
   });
 
   it("builds thinking config per model family", () => {
@@ -238,6 +248,39 @@ describe("buildGoogleRealtimeVoiceProvider with Gemini 3.8 Live", () => {
       turnComplete: true,
     });
   });
+
+  it.each(["gemini-3.8-live", "gemini-3.8-live-extended-thinking"])(
+    "finalizes each %s input transcription without a finished flag",
+    async (model) => {
+      const onTranscript = vi.fn();
+      await openConfiguredBridge({ providerConfig: { model }, onTranscript });
+      const onmessage = lastConnectParams().callbacks.onmessage;
+
+      // Wire order captured from both 3.8 models: one complete inputTranscription per
+      // utterance, never `finished`, immediately before the model turn it prompts.
+      for (const [question, answer] of [
+        ["What color is the sky?", "Blue."],
+        ["Name a yellow fruit.", "A banana."],
+      ]) {
+        onmessage({ serverContent: { inputTranscription: { text: question } } });
+        expect(onTranscript).toHaveBeenLastCalledWith("user", question, true);
+        onmessage({ serverContent: { outputTranscription: { text: answer } } });
+        onmessage({ serverContent: { generationComplete: true } });
+        onmessage({ serverContent: { turnComplete: true, interactionStatus: "IDLE" } });
+      }
+
+      expect(onTranscript.mock.calls.filter((call) => call[0] === "user")).toEqual([
+        ["user", "What color is the sky?", true],
+        ["user", "Name a yellow fruit.", true],
+      ]);
+      expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+        ["user", "What color is the sky?", true],
+        ["assistant", "Blue.", true],
+        ["user", "Name a yellow fruit.", true],
+        ["assistant", "A banana.", true],
+      ]);
+    },
+  );
 
   it("leaves barge-in to server-side VAD on other Gemini Live models", async () => {
     const bridge = await openConfiguredBridge({ providerConfig: { model: "gemini-3.8-live" } });
