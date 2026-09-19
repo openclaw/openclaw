@@ -15,7 +15,11 @@ import {
   runSourceCliProbe,
   withSourceCliParent,
 } from "./openclaw-cli-invocation.test-support.js";
-import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
+import {
+  clearGatewayAgentCliShim,
+  mergeGatewayAgentCliPath,
+  prepareGatewayAgentCliShim,
+} from "./openclaw-cli-shim.js";
 
 async function sourceFixture(root: string) {
   const f = await createSourceCliFixture(root);
@@ -61,6 +65,27 @@ vi.mock("./windows-encoding.js", async () => {
     resolveWindowsOemCodePageForEncoding: resolveWindowsOemCodePageForEncodingMock,
   };
 });
+
+function expectSourceCliSuccess(
+  phase: string,
+  result: ReturnType<typeof runSourceCliProbe>,
+  fixtureRoot: string,
+) {
+  // Child stacks in assertion messages make Vitest parse TSX's source-map template.
+  // Keep bounded child evidence separate so the launcher failure stays visible.
+  console.info(
+    "[source-cli-probe]",
+    JSON.stringify({
+      phase,
+      status: result.status,
+      signal: result.signal,
+      error: result.error?.message.replaceAll(fixtureRoot, "<fixture>").slice(0, 2048),
+      stdout: (result.stdout ?? "").replaceAll(fixtureRoot, "<fixture>").slice(0, 2048),
+      stderr: (result.stderr ?? "").replaceAll(fixtureRoot, "<fixture>").slice(-4096),
+    }),
+  );
+  expect(result.status, phase).toBe(0);
+}
 
 afterEach(clearGatewayAgentCliShim);
 describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", () => {
@@ -160,8 +185,14 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       });
       resolveWindowsOemEncodingMock.mockReturnValue("cp857");
       resolveWindowsOemCodePageForEncodingMock.mockReturnValue(857);
+      const unavailableWarnings: string[] = [];
       try {
-        await prepareGatewayAgentCliShim({ env: {}, invocation: cjkInvocation, stateDir });
+        await prepareGatewayAgentCliShim({
+          env: {},
+          invocation: cjkInvocation,
+          onUnavailable: (error) => unavailableWarnings.push(String(error).slice(0, 512)),
+          stateDir,
+        });
       } finally {
         resolveWindowsOemEncodingMock.mockImplementation(() => "gbk");
         resolveWindowsOemCodePageForEncodingMock.mockImplementation(() => 936);
@@ -175,7 +206,24 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
         fixture.callerCwd,
         { windowsVerbatimArguments: true },
       );
-      expect(afterFailedRegeneration.status).toBe(0);
+      expectSourceCliSuccess(
+        "existing launcher after failed CJK regeneration",
+        afterFailedRegeneration,
+        root,
+      );
+      const generatedPath = mergeGatewayAgentCliPath();
+      console.info(
+        "[gateway-agent-cli-fallback]",
+        JSON.stringify({
+          phase: "existing-launcher-after-failed-regeneration",
+          commandStatus: afterFailedRegeneration.status,
+          launcherPreserved: preservedLauncher.equals(existingLauncher),
+          generatedPathPresent: generatedPath !== undefined,
+          warningReported: unavailableWarnings.length > 0,
+        }),
+      );
+      expect(generatedPath).toBeUndefined();
+      expect(unavailableWarnings).toHaveLength(1);
       expect(JSON.parse(afterFailedRegeneration.stdout)).toMatchObject({
         source: "gateway",
         args: ["probe"],
