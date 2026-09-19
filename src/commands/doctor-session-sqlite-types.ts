@@ -21,6 +21,10 @@ export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue)
   return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
 }
 
+export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTargetReport): number {
+  return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
+}
+
 export type DoctorSessionSqliteRestoreConflict = {
   archivePath: string;
   reason: string;

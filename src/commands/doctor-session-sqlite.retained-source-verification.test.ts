@@ -1,22 +1,143 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadExactSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import {
   readDeferredPluginSessionImport,
   resolveVerifiedSessionSource,
   type SessionSourceVerification,
 } from "../infra/deferred-plugin-session-sources.js";
+import { ExitError } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
-import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import { doctorCommand } from "./doctor.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("retained session source verification", () => {
+  it.each([false, true])(
+    "preserves an empty-index receipt for an existing database (unindexed history: %s)",
+    async (history) => {
+      await withOpenClawTestState({ label: "deferred-empty-index" }, async (state) => {
+        const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+        const directory = state.sessionsDir("main");
+        fs.mkdirSync(directory, { recursive: true });
+        const storePath = path.join(directory, "sessions.json");
+        fs.writeFileSync(storePath, "{}");
+        const scope = { agentId: "main", storePath, env: state.env };
+        await upsertSessionEntryCore(
+          { ...scope, sessionKey: "agent:main:current" },
+          { sessionId: "current", updatedAt: 1 },
+        );
+        closeOpenClawAgentDatabasesForTest();
+        if (history) {
+          fs.writeFileSync(
+            path.join(directory, "historical.jsonl"),
+            [
+              { type: "session", version: 3, id: "historical" },
+              {
+                type: "message",
+                id: "message",
+                parentId: null,
+                message: { role: "user", content: "Retained history" },
+              },
+            ]
+              .map((entry) => JSON.stringify(entry))
+              .join("\n") + "\n",
+          );
+        }
+        recordDeferredPluginMigrations({
+          env: state.env,
+          pending: [
+            {
+              pluginId: "fixture-plugin",
+              reason: "Plugin is unavailable.",
+              command: "openclaw doctor --fix",
+            },
+          ],
+        });
+        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
+          "Legacy session store requires migration",
+        );
+        const report = await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          allAgents: true,
+          mode: "import",
+        });
+        expect(report.totals.importedEntries).toBe(history ? 1 : 0);
+        expect(report.targets.flatMap((target) => target.issues)).toEqual([
+          expect.objectContaining({ code: "plugin_migration_source_retained" }),
+        ]);
+        for (const mode of ["import", "inspect", "validate", "dry-run"] as const) {
+          const runtime = {
+            log: vi.fn(),
+            error: vi.fn(),
+            exit: (code: number): never => {
+              throw new ExitError(code);
+            },
+          };
+          await expect(
+            doctorCommand(runtime, {
+              sessionSqlite: mode,
+              sessionSqliteStore: storePath,
+              json: true,
+            }),
+          ).rejects.toMatchObject({ code: 0 });
+          const retried = JSON.parse(
+            String(runtime.log.mock.calls.at(-1)?.[0]),
+          ) as DoctorSessionSqliteReport;
+          expect(retried.totals.importedEntries).toBe(0);
+          expect(retried.targets.flatMap((target) => target.issues)).toEqual([
+            expect.objectContaining({ code: "plugin_migration_source_retained" }),
+          ]);
+        }
+        for (const manifestPath of migrationRun.listSessionSqliteMigrationManifestPaths(
+          state.env,
+        )) {
+          const manifest = migrationRun.readSessionSqliteMigrationManifest(manifestPath);
+          expect(manifest?.completedAt).toBeDefined();
+          expect(manifest?.failedAt).toBeUndefined();
+          expect(manifest?.failureReports).toBeUndefined();
+        }
+        expect(
+          migrationRun.findLatestFailedSessionSqliteMigrationManifest(state.env, report.targets),
+        ).toBeUndefined();
+        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+        expect(
+          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:current" })?.entry.sessionId,
+        ).toBe("current");
+        expect(fs.readFileSync(storePath, "utf8")).toBe("{}");
+        if (history) {
+          const uncaptured = path.join(directory, "current.jsonl");
+          const bytes = JSON.stringify({ type: "session", version: 3, id: "current" }) + "\n";
+          fs.writeFileSync(uncaptured, bytes);
+          const unexpected = await runDoctorSessionSqlite({
+            cfg,
+            env: state.env,
+            allAgents: true,
+            mode: "import",
+          });
+          expect(
+            unexpected.targets.flatMap((target) => target.issues).map((issue) => issue.code),
+          ).toEqual(["plugin_migration_source_retained", "active_sqlite_transcript_jsonl"]);
+          expect(fs.readFileSync(uncaptured, "utf8")).toBe(bytes);
+        }
+      });
+    },
+  );
+
   it.each([2, 32])(
     "reads each archive manifest once per verification of %s retained transcripts",
     async (transcriptCount) => {
