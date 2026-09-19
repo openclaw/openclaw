@@ -10,10 +10,13 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type {
   ClickClackBotCommand,
+  ClickClackBotQuestion,
   ClickClackChannel,
   ClickClackEvent,
   ClickClackMessage,
   ClickClackMessageProvenance,
+  ClickClackQuestionResolution,
+  ClickClackQuestionSpec,
   ClickClackUser,
   ClickClackWorkspace,
 } from "./types.js";
@@ -423,6 +426,7 @@ export function createClickClackClient(options: ClientOptions) {
         provenance?: ClickClackMessageProvenance;
         quotedMessageId?: string;
         nonce?: string;
+        question?: ClickClackQuestionSpec;
       },
     ): Promise<ClickClackMessage> => {
       const data = await request<{ message: ClickClackMessage }>(
@@ -433,6 +437,7 @@ export function createClickClackClient(options: ClientOptions) {
             body,
             ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
             ...(opts?.nonce ? { nonce: opts.nonce } : {}),
+            ...(opts?.question ? { question: opts.question } : {}),
             ...provenanceFields(opts?.provenance),
           }),
         },
@@ -442,7 +447,11 @@ export function createClickClackClient(options: ClientOptions) {
     createThreadReply: async (
       messageId: string,
       body: string,
-      opts?: { provenance?: ClickClackMessageProvenance; nonce?: string },
+      opts?: {
+        provenance?: ClickClackMessageProvenance;
+        nonce?: string;
+        question?: ClickClackQuestionSpec;
+      },
     ): Promise<ClickClackMessage> => {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/messages/${encodeURIComponent(messageId)}/thread/replies`,
@@ -451,6 +460,7 @@ export function createClickClackClient(options: ClientOptions) {
           body: JSON.stringify({
             body,
             ...(opts?.nonce ? { nonce: opts.nonce } : {}),
+            ...(opts?.question ? { question: opts.question } : {}),
             ...provenanceFields(opts?.provenance),
           }),
         },
@@ -588,7 +598,7 @@ export function createClickClackClient(options: ClientOptions) {
     createDirectMessage: async (
       conversationId: string,
       body: string,
-      opts?: { quotedMessageId?: string; nonce?: string },
+      opts?: { quotedMessageId?: string; nonce?: string; question?: ClickClackQuestionSpec },
     ): Promise<ClickClackMessage> => {
       const data = await request<{ message: ClickClackMessage }>(
         `/api/dms/${encodeURIComponent(conversationId)}/messages`,
@@ -598,10 +608,34 @@ export function createClickClackClient(options: ClientOptions) {
             body,
             ...(opts?.quotedMessageId ? { quoted_message_id: opts.quotedMessageId } : {}),
             ...(opts?.nonce ? { nonce: opts.nonce } : {}),
+            ...(opts?.question ? { question: opts.question } : {}),
           }),
         },
       );
       return data.message;
+    },
+    resolveQuestion: async (
+      messageId: string,
+      resolution: ClickClackQuestionResolution,
+    ): Promise<ClickClackMessage> => {
+      const data = await request<{ message: ClickClackMessage }>(
+        `/api/messages/${encodeURIComponent(messageId)}/question/resolution`,
+        { method: "POST", body: JSON.stringify(resolution) },
+      );
+      return data.message;
+    },
+    unresolvedQuestions: async (
+      after?: string,
+    ): Promise<{ questions: ClickClackBotQuestion[]; nextCursor?: string }> => {
+      const query = new URLSearchParams({ limit: "200" });
+      if (after) {
+        query.set("after", after);
+      }
+      const data = await request<{
+        questions: ClickClackBotQuestion[];
+        next_cursor?: string | null;
+      }>(`/api/bots/self/questions?${query.toString()}`);
+      return { questions: data.questions, nextCursor: data.next_cursor ?? undefined };
     },
     events: async (workspaceId: string, afterCursor?: string): Promise<ClickClackEvent[]> =>
       (await fetchEventPage(workspaceId, { afterCursor })).events,

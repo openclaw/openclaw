@@ -410,6 +410,36 @@ An older server's generic 404 is not treated as proof that a send is absent.
 OpenClaw leaves the delivery unresolved rather than risking a duplicate; update
 ClickClack before enabling media-producing agent replies.
 
+## Agent questions
+
+When an agent asks for input with `ask_user` during a ClickClack turn, OpenClaw
+posts the prompt as a ClickClack question card on servers that support
+questions. People answer from the card: one tap for a single choice, or a short
+form for several questions, multi-select, and free-text answers. **Skip** cancels
+the question and the agent continues without an answer.
+
+- The card accepts answers from the same people the account accepts messages
+  from (`allowFrom`). An answer from anyone else reopens the card with a note.
+- When the question ends another way (a typed reply, expiry, or cancellation),
+  the card shows that outcome and stops accepting answers.
+- Gateway questions end when the Gateway restarts. On start, each account marks
+  its cards that are still open as no longer waiting, and forwards any answer
+  that arrived while it was offline.
+- Answers normally reach the agent through realtime events. While a card is open,
+  OpenClaw also checks it every few seconds, so an interrupted connection does
+  not strand an answer.
+- Card work belongs to the running account. When the account stops or restarts,
+  for example after a configuration change, it stops forwarding answers and
+  updating cards. A restarted account picks up cards whose question is still
+  waiting and checks each answer against its current `allowFrom`.
+- The message body keeps the full text prompt for notifications, search, and
+  older clients. Older ClickClack servers ignore the card and show that text.
+- Questions that do not fit a card stay text prompts: secret questions, prompts
+  sent outside a ClickClack turn, and records that expire in less than 15
+  seconds or break the card limits.
+
+The bot token needs `bot:write`; card answers use the same message scopes.
+
 ## Native progress and agent activity rows
 
 Native progress is opt-in per account. Set `nativeProgress: true` to show a
