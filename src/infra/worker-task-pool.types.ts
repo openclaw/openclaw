@@ -62,6 +62,20 @@ export type WorkerTaskOptions<Input> = {
   onExecutionSettled?: (settlement: WorkerTaskExecutionSettlement) => void;
 };
 
+/** Internal custody: a result alone does not release its slot or notify execution settlement. */
+export type OwnedWorkerTask<Output> = {
+  result: Promise<Output>;
+  /** Joins cleanup and its execution receipt; failure can also begin cleanup automatically. */
+  close(options?: { retire?: true }): Promise<void>;
+};
+
+type TaskOwner = {
+  closed: boolean;
+  retire: boolean;
+  closing?: Promise<void>;
+  complete?: () => void;
+};
+
 type WorkerHostExchange = {
   id: number;
   pressure: AbortController;
@@ -75,6 +89,7 @@ export type Task<Input, Output> = Deferred<Output> & {
   controller: AbortController;
   exchange?: WorkerHostExchange;
   inputConsumed: boolean;
+  executionNotified: boolean;
   exchangeSequence: number;
   input?: WorkerTaskInput<Input>;
   options: WorkerTaskOptions<Input>;
@@ -84,6 +99,8 @@ export type Task<Input, Output> = Deferred<Output> & {
   slot?: Slot<Input, Output>;
   admitted: boolean;
   preparing: boolean;
+  preparation?: Deferred;
+  owner?: TaskOwner;
   inputBytes: number;
   computePermit?: WorkerComputePermit;
   enqueuedAt: number;
@@ -98,6 +115,19 @@ export type Slot<Input, Output> = {
   task?: Task<Input, Output>;
   idleTimer?: NodeJS.Timeout;
   retiring?: Promise<void>;
+  /** The retirement owner has joined this exact slot's native termination barrier. */
+  retired?: true;
   retirementFailed?: boolean;
   completions?: Array<() => void>;
+};
+
+export type WorkerTaskPoolDispatch = {
+  close(error: Error): Promise<void>;
+  getSnapshot(): {
+    maxWorkers: number;
+    workers: number;
+    workersCreated: number;
+    activeTasks: number;
+    pendingTasks: number;
+  };
 };

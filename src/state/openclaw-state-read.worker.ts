@@ -49,78 +49,88 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
 
 serveWorkerTasks((input): OpenClawStateReadReply => {
   let sourceAdmitted: true | undefined;
+  let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
   try {
     if (!isReadRequest(input)) {
       throw new Error("Shared-state reader requires a captured state location and read command");
     }
-    return runWithSqliteWorkerStateContext(input.context, () =>
-      withStateDatabaseCoordinatorRuntimeDirectory(input.context.coordinatorRuntime, () => {
-        if (input.checkFreshAdmission) {
-          openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
-            input.databasePath,
-            input.context.environment,
-          );
-        }
-        const { command } = input;
-        if (command.type === "admit") {
-          return { ok: true, type: "admit" };
-        }
-        return withOpenClawStateReadOnlyLocation(
-          ({ db }) => {
-            sourceAdmitted = true;
-            if (command.type === "audit.run.inspect") {
-              try {
-                return {
-                  ok: true,
-                  type: command.type,
-                  sourceAdmitted,
-                  result: {
-                    status: "inspected",
-                    inspection: inspectExecutionIdentityRunInDatabase(db, command.input),
-                  },
+    const reply = runWithSqliteWorkerStateContext(input.context, () =>
+      withStateDatabaseCoordinatorRuntimeDirectory(
+        input.context.coordinatorRuntime,
+        (): OpenClawStateReadReply => {
+          if (input.checkFreshAdmission) {
+            openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+              input.databasePath,
+              input.context.environment,
+              (error) => {
+                nativeCleanupFailure = {
+                  error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
                 };
-              } catch (error) {
-                if (!(error instanceof ExecutionDecisionCursorError)) {
-                  throw error;
+              },
+            );
+          }
+          const { command } = input;
+          if (command.type === "admit") {
+            return { ok: true, type: "admit" };
+          }
+          return withOpenClawStateReadOnlyLocation(
+            ({ db }) => {
+              sourceAdmitted = true;
+              if (command.type === "audit.run.inspect") {
+                try {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    result: {
+                      status: "inspected",
+                      inspection: inspectExecutionIdentityRunInDatabase(db, command.input),
+                    },
+                  };
+                } catch (error) {
+                  if (!(error instanceof ExecutionDecisionCursorError)) {
+                    throw error;
+                  }
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    result: { status: "invalid-cursor", message: error.message },
+                  };
                 }
+              }
+              if (command.type === "nodeHost.config") {
                 return {
                   ok: true,
                   type: command.type,
                   sourceAdmitted,
-                  result: { status: "invalid-cursor", message: error.message },
+                  row: readConfigMachineStateRowInDatabase(db, command.type),
                 };
               }
-            }
-            if (command.type === "nodeHost.config") {
-              return {
-                ok: true,
-                type: command.type,
-                sourceAdmitted,
-                row: readConfigMachineStateRowInDatabase(db, command.type),
-              };
-            }
-            return command.type === "fleet.list"
-              ? {
-                  ok: true,
-                  type: "fleet.list",
-                  sourceAdmitted,
-                  cells: listFleetCellsInDatabase(db),
-                }
-              : {
-                  ok: true,
-                  type: "fleet.get",
-                  sourceAdmitted,
-                  cell: getFleetCellInDatabase(db, command.tenantId),
-                };
-          },
-          input.databasePath,
-          input.location,
-          undefined,
-          input.expectedIdentity,
-          input.snapshotRoot,
-        );
-      }),
+              return command.type === "fleet.list"
+                ? {
+                    ok: true,
+                    type: "fleet.list",
+                    sourceAdmitted,
+                    cells: listFleetCellsInDatabase(db),
+                  }
+                : {
+                    ok: true,
+                    type: "fleet.get",
+                    sourceAdmitted,
+                    cell: getFleetCellInDatabase(db, command.tenantId),
+                  };
+            },
+            input.databasePath,
+            input.location,
+            undefined,
+            input.expectedIdentity,
+            input.snapshotRoot,
+          );
+        },
+      ),
     );
+    return nativeCleanupFailure ? { ...reply, nativeCleanupFailure } : reply;
   } catch (value) {
     const error = toStringifiedError(value);
     return {
@@ -128,6 +138,7 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
       sourceAdmitted,
       message: error.message,
       error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+      ...(nativeCleanupFailure ? { nativeCleanupFailure } : {}),
     };
   }
 });
