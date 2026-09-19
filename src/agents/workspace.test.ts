@@ -348,6 +348,29 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
+  it("preserves an attested profile hash when the starter template changes", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const fileName = DEFAULT_SOUL_FILENAME;
+    const filePath = path.join(tempDir, fileName);
+    const historicalContent = `${await fs.readFile(filePath, "utf-8")}legacy starter from an older release\n`;
+    await fs.writeFile(filePath, historicalContent);
+    const historicalHash = createHash("sha256").update(historicalContent).digest("hex");
+    await replaceWorkspaceAttestation({
+      workspaceDir: tempDir,
+      attestedAtMs: Date.now(),
+      generatedHashes: new Map([[fileName, historicalHash]]),
+    });
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(historicalContent);
+    expect(
+      (await readWorkspaceStateSnapshot(tempDir)).attestation?.generatedHashes.get(fileName),
+    ).toBe(historicalHash);
+  });
+
   it("refuses a recently attested workspace when only one generated file survives", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });

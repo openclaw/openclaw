@@ -488,13 +488,20 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   }
 }
 
-async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string, string>> {
+async function collectGeneratedBootstrapHashes(
+  dir: string,
+  existingHashes?: ReadonlyMap<string, string>,
+): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
   for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-      if (content === (await loadTemplate(fileName))) {
-        hashes.set(fileName, createHash("sha256").update(content).digest("hex"));
+      const contentHash = createHash("sha256").update(content).digest("hex");
+      if (
+        content === (await loadTemplate(fileName)) ||
+        existingHashes?.get(fileName) === contentHash
+      ) {
+        hashes.set(fileName, contentHash);
       }
     } catch {
       // Missing or unreadable files are not attested as generated.
@@ -522,12 +529,13 @@ function recentWorkspaceAttestation(
 async function maybeWriteWorkspaceAttestation(
   dir: string,
   beforePersistentApply?: () => void,
+  existingHashes?: ReadonlyMap<string, string>,
 ): Promise<void> {
   // Order snapshots by when their filesystem observation starts. The store
   // compares against a separate lock-time clock, so a newer committed scan
   // wins when this async collection finishes later.
   const attestedAtMs = Date.now();
-  const generatedHashes = await collectGeneratedBootstrapHashes(dir);
+  const generatedHashes = await collectGeneratedBootstrapHashes(dir, existingHashes);
   beforePersistentApply?.();
   try {
     await replaceWorkspaceAttestation({
@@ -945,7 +953,11 @@ export async function ensureAgentWorkspace(params?: {
       }
     }
     if (hasContentEvidence) {
-      await maybeWriteWorkspaceAttestation(dir, beforePersistentApply);
+      await maybeWriteWorkspaceAttestation(
+        dir,
+        beforePersistentApply,
+        initialState.attestation?.generatedHashes,
+      );
     }
     return { dir, bootstrapPending: false };
   }
@@ -1145,7 +1157,11 @@ export async function ensureAgentWorkspace(params?: {
     });
   }
   await ensureGitRepo(dir, isBrandNewWorkspace, beforePersistentApply);
-  await maybeWriteWorkspaceAttestation(dir, beforePersistentApply);
+  await maybeWriteWorkspaceAttestation(
+    dir,
+    beforePersistentApply,
+    initialState.attestation?.generatedHashes,
+  );
 
   return {
     dir,
