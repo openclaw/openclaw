@@ -178,10 +178,22 @@ export async function verifyActiveCallDrainLease(
       respond,
       context: {} as GatewayRequestHandlerOptions["context"],
     });
+  const reloadOutcome = createDeferredCore<unknown>();
+  const allowNativeCleanup = createDeferredCore();
   const reload = () =>
     withPluginLifecycleLease({ env, waitMs: 0 }, async (lease) => {
       reloadLease = lease;
-      return fixture.reload();
+      try {
+        const result = await fixture.reload();
+        reloadOutcome.resolve(result);
+        return result;
+      } catch (error) {
+        reloadOutcome.resolve(error);
+        throw error;
+      } finally {
+        // The drain uses simulated time; SQLite lease cleanup must run on real timers.
+        await allowNativeCleanup.promise;
+      }
     });
   const response = vi.fn();
   let callSettled = false;
@@ -241,7 +253,7 @@ export async function verifyActiveCallDrainLease(
     expect(await fs.readFile(effectsPath, "utf8")).toBe("");
     if (holdMs > 60_000) {
       await vi.advanceTimersByTimeAsync(1);
-      const failure = await reloading;
+      const failure = await reloadOutcome.promise;
       expect(failure).toBeInstanceOf(PluginRuntimeApplicationError);
       expect(failure).toMatchObject({
         details: { phase: "drain", committed: false, pluginIds: ["first"] },
@@ -286,7 +298,10 @@ export async function verifyActiveCallDrainLease(
     expect(response).toHaveBeenCalledExactlyOnceWith(true, { generation: 1 }, undefined, undefined);
     expect(await fs.readFile(effectsPath, "utf8")).toBe("completed\n");
     await vi.advanceTimersByTimeAsync(10_000);
+    vi.useRealTimers();
+    allowNativeCleanup.resolve();
     if (holdMs > 60_000) {
+      expect(await reloading).toBe(await reloadOutcome.promise);
       await expect(reload()).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
     } else {
       expect(await reloading).toMatchObject({ runtime: { pluginIds: ["first"] } });
@@ -323,7 +338,8 @@ export async function verifyActiveCallDrainLease(
     release.resolve();
     try {
       await originalCall;
-      await vi.advanceTimersByTimeAsync(10_000);
+      vi.useRealTimers();
+      allowNativeCleanup.resolve();
       await reloading;
     } finally {
       drainObservation.mockRestore();
