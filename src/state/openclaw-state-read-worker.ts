@@ -24,7 +24,7 @@ function decodeTaskReply(reply: OpenClawStateReadReply): OpenClawStateReadOutcom
   retainOpenClawStateWorkerErrorPayload(error, reply.error);
   return {
     error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
-    sourceAdmitted: reply.sourceAdmitted,
+    sourceAdmitted: reply.sourceAdmitted === true,
   };
 }
 
@@ -121,10 +121,9 @@ export function createOpenClawStateReadTransport(
     async close(): Promise<void> {
       await pool?.close();
     },
-    async readFailure(): Promise<{ error: unknown } | undefined> {
+    async readInterruptedOutcome(): Promise<OpenClawStateReadOutcome | undefined> {
       // Early task rejection records failure; only close acknowledges native cleanup.
-      const outcome = await interruptedTask;
-      return outcome && "error" in outcome ? outcome : undefined;
+      return await interruptedTask;
     },
   };
 }

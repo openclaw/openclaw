@@ -124,7 +124,7 @@ vi.mock("./openclaw-state-read-worker.js", () => ({
     validateFresh: async () => {},
     read: mocks.read,
     close: mocks.close,
-    readFailure: async () => undefined,
+    readInterruptedOutcome: async () => undefined,
   }),
 }));
 

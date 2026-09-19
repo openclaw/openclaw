@@ -185,6 +185,8 @@ export const databaseWorkerCoreTestFiles = [
   "test/plugins/beam-http-identity.test.ts",
   "test/plugins/codex-session-catalog-naming.test.ts",
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
+  "src/plugin-state/plugin-blob-store.test.ts",
+  "src/plugin-state/plugin-blob-store.readonly.test.ts",
   "src/plugin-state/plugin-state-store.doctor-repair.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
   "src/plugin-state/plugin-state-store.bulk.test.ts",

@@ -6,6 +6,11 @@ import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/regis
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import {
+  pluginBlobLookupInDatabase,
+  pluginBlobEntriesInDatabase,
+} from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
@@ -35,7 +40,8 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    (input.command.type === "admit" ||
+    (isPluginBlobReadCommand(input.command) ||
+      input.command.type === "admit" ||
       (input.command.type === "audit.run.inspect" &&
         isRecord(input.command.input) &&
         typeof input.command.input.now === "number" &&
@@ -91,27 +97,52 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
                 };
               }
             }
-            if (command.type === "nodeHost.config") {
-              return {
-                ok: true,
-                type: command.type,
-                sourceAdmitted,
-                row: readConfigMachineStateRowInDatabase(db, command.type),
-              };
-            }
-            return command.type === "fleet.list"
-              ? {
+            switch (command.type) {
+              case "nodeHost.config":
+                return {
                   ok: true,
-                  type: "fleet.list",
+                  type: command.type,
+                  sourceAdmitted,
+                  row: readConfigMachineStateRowInDatabase(db, command.type),
+                };
+              case "fleet.list":
+                return {
+                  ok: true,
+                  type: command.type,
                   sourceAdmitted,
                   cells: listFleetCellsInDatabase(db),
-                }
-              : {
+                };
+              case "fleet.get":
+                return {
                   ok: true,
-                  type: "fleet.get",
+                  type: command.type,
                   sourceAdmitted,
                   cell: getFleetCellInDatabase(db, command.tenantId),
                 };
+              case "pluginBlob.lookup":
+                return {
+                  ok: true,
+                  type: command.type,
+                  sourceAdmitted,
+                  value: pluginBlobLookupInDatabase(db, {
+                    ...command.input,
+                    env: input.context.environment,
+                    path: input.databasePath,
+                  }),
+                };
+              case "pluginBlob.entries":
+                return {
+                  ok: true,
+                  type: command.type,
+                  sourceAdmitted,
+                  value: pluginBlobEntriesInDatabase(db, {
+                    ...command.input,
+                    env: input.context.environment,
+                    path: input.databasePath,
+                  }),
+                };
+            }
+            return command satisfies never;
           },
           input.databasePath,
           input.location,

@@ -74,6 +74,7 @@ export class DiffArtifactStore {
   private readonly cleanupIntervalMs: number;
   private readonly renderingFileIds = new Set<string>();
   private cleanupInFlight: Promise<void> | null = null;
+  private cleanupStopped = false;
   private nextCleanupAt = 0;
 
   constructor(params: {
@@ -211,6 +212,15 @@ export class DiffArtifactStore {
     this.maybeCleanupExpired();
   }
 
+  startCleanup(): void {
+    this.cleanupStopped = false;
+  }
+
+  async stopCleanup(): Promise<void> {
+    this.cleanupStopped = true;
+    await this.cleanupInFlight;
+  }
+
   async cleanupExpired(): Promise<void> {
     const expired = await this.blobStore.deleteExpired();
     await Promise.all(expired.map(async (entry) => await this.deleteExpiredFile(entry)));
@@ -297,7 +307,7 @@ export class DiffArtifactStore {
 
   private maybeCleanupExpired(): void {
     const now = Date.now();
-    if (this.cleanupInFlight || now < this.nextCleanupAt) {
+    if (this.cleanupStopped || this.cleanupInFlight || now < this.nextCleanupAt) {
       return;
     }
 

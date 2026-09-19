@@ -1,12 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  resetPluginBlobStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import {
   cleanupMatrixDeliveryPlans,
   createMatrixPlannedEvents,
@@ -125,9 +121,8 @@ describe("Matrix durable delivery plans", () => {
     client.sendMessage.mockClear();
   });
 
-  afterEach(() => {
-    resetPluginBlobStoreForTests({ closeDatabase: false });
-    resetPluginStateStoreForTests();
+  afterEach(async () => {
+    await resetMatrixTestStores();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 

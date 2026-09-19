@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 // Diffs helper module supports test helpers behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -8,12 +9,41 @@ import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  openOpenClawStateDatabase,
+  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "../api.js";
 import { DiffArtifactStore } from "./store.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+
+export async function expireDiffArtifactForTest(
+  rootDir: string,
+  blobStore: PluginBlobStore<DiffArtifactBlobMetadata>,
+  id: string,
+  expectedTtlMs: number,
+): Promise<void> {
+  const entry = await blobStore.lookup(id);
+  assert.ok(entry);
+  assert.equal(entry.expiresAt! - entry.createdAt, expectedTtlMs);
+  const { db } = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: path.join(path.dirname(rootDir), "state") },
+  });
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db)
+      .updateTable("plugin_blob_entries")
+      .set({ expires_at: 1 })
+      .where("plugin_id", "=", "diffs")
+      .where("namespace", "=", "diff-artifacts")
+      .where("entry_key", "=", id),
+  );
+  assert.equal(Number(result.numAffectedRows), 1);
+}
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -62,10 +92,10 @@ export async function createDiffStoreHarness(prefix: string): Promise<{
   rootDir: string;
   store: DiffArtifactStore;
   blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
-  reopen: () => {
+  reopen: () => Promise<{
     store: DiffArtifactStore;
     blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
-  };
+  }>;
   cleanup: () => Promise<void>;
 }> {
   const { rootDir: harnessRoot, cleanup } = await createTempDiffRoot(prefix);
@@ -87,19 +117,25 @@ export async function createDiffStoreHarness(prefix: string): Promise<{
       env,
     );
   const blobStore = openBlobStore();
+  let store = new DiffArtifactStore({ rootDir, blobStore });
   return {
     rootDir,
-    store: new DiffArtifactStore({ rootDir, blobStore }),
+    store,
     blobStore,
-    reopen: () => {
+    reopen: async () => {
+      await store.stopCleanup();
+      await closeOpenClawStateDatabaseAsync();
       resetPluginBlobStoreForTests();
       const reopenedBlobStore = openBlobStore();
+      store = new DiffArtifactStore({ rootDir, blobStore: reopenedBlobStore });
       return {
-        store: new DiffArtifactStore({ rootDir, blobStore: reopenedBlobStore }),
+        store,
         blobStore: reopenedBlobStore,
       };
     },
     cleanup: async () => {
+      await store.stopCleanup();
+      await closeOpenClawStateDatabaseAsync();
       resetPluginBlobStoreForTests();
       await cleanup();
     },

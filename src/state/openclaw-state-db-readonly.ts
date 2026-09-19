@@ -51,6 +51,11 @@ import {
   resolveOpenClawStateSqlitePath,
 } from "./openclaw-state-db.paths.js";
 import {
+  mapOpenClawStateReadError,
+  observeReadOutcome,
+  type OpenClawStateReadReceipt,
+} from "./openclaw-state-read-error.js";
+import {
   assertRetainedReadScopeAdmission,
   bindRetainedReadScope,
   createRetainedReadScope,
@@ -59,6 +64,7 @@ import {
 import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
+  OpenClawStateReadOptions,
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
   OpenClawStateReadOnlyDatabase,
@@ -421,6 +427,17 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
+  readOptions: OpenClawStateReadOptions = {},
+): Promise<OpenClawStateReadReply | undefined> {
+  return mapOpenClawStateReadError(readOptions.mapError, (receipt) =>
+    executeRetainedOpenClawStateRead(options, command, receipt),
+  );
+}
+
+function executeRetainedOpenClawStateRead(
+  options: OpenClawStateDatabaseOptions,
+  command: OpenClawStateReadCommand,
+  receipt: OpenClawStateReadReceipt,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -590,6 +607,7 @@ export function executeExistingOpenClawStateRead(
         );
       }
       authority.assertCurrent();
+      receipt.phase = "unobserved";
       const outcome = await transport.read(
         {
           context,
@@ -600,6 +618,7 @@ export function executeExistingOpenClawStateRead(
         },
         authority,
       );
+      observeReadOutcome(receipt, outcome);
       const sourceAdmitted =
         "error" in outcome
           ? outcome.sourceAdmitted
@@ -636,9 +655,10 @@ export function executeExistingOpenClawStateRead(
     } catch (error) {
       cleanupErrors.push(error);
     }
-    const taskFailure = await transport.readFailure();
-    if (taskFailure && !errors.includes(taskFailure.error)) {
-      errors.unshift(taskFailure.error);
+    const interrupted = await transport.readInterruptedOutcome();
+    observeReadOutcome(receipt, interrupted);
+    if (interrupted && "error" in interrupted && !errors.includes(interrupted.error)) {
+      errors.unshift(interrupted.error);
     }
     // Cancellation can be the producer's error as well as its final admission result.
     errors.push(
