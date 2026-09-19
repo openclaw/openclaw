@@ -11,6 +11,24 @@ import {
 import { parseOpenAICompletionsUsage } from "./openai-transport-shared.js";
 
 describe("openai completions stream", () => {
+  it.each([
+    {
+      name: "missing total tokens",
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    },
+    {
+      name: "total below prompt and completion tokens",
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 14 },
+    },
+  ])("marks $name as unavailable context", ({ usage }) => {
+    const model = makeCompletionsModel();
+
+    expect(
+      parseOpenAICompletionsUsage(usage as Parameters<typeof parseOpenAICompletionsUsage>[0], model)
+        .contextUsage,
+    ).toEqual({ state: "unavailable" });
+  });
+
   it("preserves reasoning tokens without double-counting them", () => {
     const model = makeCompletionsModel({
       id: "gpt-5",
@@ -33,10 +51,66 @@ describe("openai completions stream", () => {
         input: 7,
         output: 20,
         cacheRead: 3,
+        contextUsage: { state: "available", promptTokens: 10, totalTokens: 30 },
         reasoningTokens: 7,
         totalTokens: 30,
       },
     );
+  });
+
+  it("preserves a valid provider-reported usage cost", () => {
+    const model = makeCompletionsModel({
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const usage = parseOpenAICompletionsUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBe(0);
+    expect(usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("maps cache_write_tokens as a separate write count", () => {
+    const model = makeCompletionsModel({
+      id: "openrouter/cached",
+      name: "OpenRouter Cached",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const usage = parseOpenAICompletionsUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
+      },
+      model,
+    );
+
+    // Writes are their own bucket: they must leave `input` and land in `totalTokens`,
+    // matching the plugin-sdk completions provider.
+    expect(usage).toMatchObject({
+      input: 5,
+      cacheRead: 3,
+      cacheWrite: 2,
+      contextUsage: { state: "available", promptTokens: 10, totalTokens: 15 },
+      totalTokens: 15,
+    });
   });
 
   it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
@@ -61,6 +135,33 @@ describe("openai completions stream", () => {
 
     expect(usage.cost.total).toBeCloseTo(0.00002);
     expect(usage.cost.totalOrigin).toBeUndefined();
+  });
+
+  it("clamps uncached prompt usage at zero", () => {
+    const model = makeCompletionsModel({
+      id: "gpt-5",
+      name: "GPT-5",
+      cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+    });
+
+    expectRecordFields(
+      parseOpenAICompletionsUsage(
+        {
+          prompt_tokens: 2,
+          completion_tokens: 5,
+          total_tokens: 7,
+          prompt_tokens_details: { cached_tokens: 4 },
+        },
+        model,
+      ),
+      {
+        input: 0,
+        output: 5,
+        cacheRead: 4,
+        contextUsage: { state: "unavailable" },
+        totalTokens: 9,
+      },
+    );
   });
 
   it("records usage from OpenAI-compatible streaming usage chunks", async () => {

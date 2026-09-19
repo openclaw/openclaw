@@ -55,6 +55,7 @@ const scenarios: UsageScenario[] = [
       cacheRead: 25,
       cacheWrite: 10,
       reasoningTokens: 7,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
       totalTokens: 120,
     },
     expectedCost: 0.00011625,
@@ -175,7 +176,14 @@ const scenarios: UsageScenario[] = [
       prompt_tokens_details: { cached_tokens: 4 },
       cost: -1,
     },
-    expectedUsage: { input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 },
+    expectedUsage: {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 0,
+      contextUsage: { state: "unavailable" },
+      totalTokens: 9,
+    },
     expectedCost: 0.000011,
   },
   {
