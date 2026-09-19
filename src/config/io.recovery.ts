@@ -11,6 +11,10 @@ import { resolveIsConfigReadOnly } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+/** Prefix repair found a valid suffix but could not keep a forensic copy. */
+export const PREFIX_RECOVERY_PRESERVATION_REFUSED = "refused" as const;
+export type PrefixRecoveryResult = boolean | typeof PREFIX_RECOVERY_PRESERVATION_REFUSED;
+
 function findJsonRootSuffix(
   raw: string,
   json5: { parse: (value: string) => unknown },
@@ -37,7 +41,7 @@ async function persistPrefixedConfigRecovery(params: {
   context: ConfigIoContext;
   originalRaw: string;
   recoveredRaw: string;
-}): Promise<void> {
+}): Promise<PrefixRecoveryResult> {
   const { context } = params;
   const observedAt = new Date().toISOString();
   const clobberedPath = await persistBoundedClobberedConfigSnapshot({
@@ -46,6 +50,12 @@ async function persistPrefixedConfigRecovery(params: {
     raw: params.originalRaw,
     observedAt,
   });
+  if (!clobberedPath) {
+    context.deps.logger.warn(
+      `Config prefix recovery skipped: could not write the .clobbered.* copy of the current config: ${context.configPath} (non-JSON prefix)`,
+    );
+    return PREFIX_RECOVERY_PRESERVATION_REFUSED;
+  }
   // Recovery must publish by rename; a copy fallback can truncate the live config.
   await replaceFileAtomic({
     filePath: context.configPath,
@@ -56,15 +66,15 @@ async function persistPrefixedConfigRecovery(params: {
     fileSystem: context.deps.fs,
   });
   context.deps.logger.warn(
-    `Config auto-stripped non-JSON prefix: ${context.configPath}` +
-      (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),
+    `Config auto-stripped non-JSON prefix: ${context.configPath} (original saved as ${clobberedPath})`,
   );
+  return true;
 }
 
 export async function recoverConfigFromJsonRootSuffixWithContext(
   context: ConfigIoContext,
   snapshot: ConfigFileSnapshot,
-): Promise<boolean> {
+): Promise<PrefixRecoveryResult> {
   if (resolveIsConfigReadOnly(context.deps.env)) {
     return false;
   }
@@ -97,10 +107,9 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   if (!validated.ok) {
     return false;
   }
-  await persistPrefixedConfigRecovery({
+  return await persistPrefixedConfigRecovery({
     context,
     originalRaw: snapshot.raw,
     recoveredRaw: suffixRecovery.raw,
   });
-  return true;
 }
