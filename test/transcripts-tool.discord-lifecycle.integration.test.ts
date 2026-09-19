@@ -121,7 +121,9 @@ defineDiscordVoiceTests(
           expect
             .soft(active.map((capture) => requireRecord(capture, "active capture").sessionId))
             .toEqual(["second"]);
-          expect.soft(first.stoppedAt).toEqual(expect.any(String));
+          await vi.waitFor(async () => {
+            expect((await store.readSession("first"))?.stoppedAt).toEqual(expect.any(String));
+          });
 
           await execute({ action: "stop", sessionId: "first" });
           await expect(execute({ action: "summarize", sessionId: "first" })).resolves.toMatchObject(
