@@ -129,15 +129,17 @@ describe("client geolocation lookup", () => {
   });
 
   it("does not cache an unavailable answer, so a later attempt can still succeed", async () => {
+    const cancel = vi.fn();
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ error: "downloading" }, false))
+      .mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { status: 503 }))
       .mockResolvedValueOnce(jsonResponse({ found: true, city: "Vienna" }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(lookupClientGeolocation("203.0.113.15")).resolves.toEqual({
       status: "unavailable",
     });
+    expect(cancel).toHaveBeenCalledOnce();
     await expect(lookupClientGeolocation("203.0.113.15")).resolves.toEqual({
       status: "located",
       location: { city: "Vienna" },
