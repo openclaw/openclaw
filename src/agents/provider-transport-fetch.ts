@@ -5,6 +5,7 @@ import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
+import { notifyLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -148,7 +149,7 @@ function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Respo
 
 function sanitizeOpenAISdkSseResponse(
   response: Response,
-  options?: { synthesizeJsonAsSse?: boolean },
+  options?: { signal?: AbortSignal; synthesizeJsonAsSse?: boolean },
 ): Response {
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.body) {
@@ -242,7 +243,9 @@ function sanitizeOpenAISdkSseResponse(
       buffer = buffer.slice(boundary.index + boundary.length);
       // OpenAI's SDK currently tries to JSON.parse event-only or blank-data SSE
       // messages. Drop those malformed keepalive-style blocks before it parses.
-      if (hasReadableSseData(block)) {
+      if (!hasReadableSseData(block)) {
+        notifyLlmRequestActivity(options?.signal);
+      } else {
         controller.enqueue(encoder.encode(`${block}${separator}`));
         enqueued += 1;
         return enqueued;
@@ -920,7 +923,7 @@ export function buildGuardedModelFetch(
     );
     return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)
       ? response
-      : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
+      : sanitizeOpenAISdkSseResponse(response, { signal: baseSignal, synthesizeJsonAsSse });
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
