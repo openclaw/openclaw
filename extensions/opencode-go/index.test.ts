@@ -405,6 +405,26 @@ describe("opencode-go provider plugin", () => {
     expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
   });
 
+  it("promotes a seed preview advertised by the authenticated live catalog", async () => {
+    const fetchGuard = createCatalogFetchGuard({
+      upstreamModels: {
+        "hy3-preview": upstreamModel("hy3-preview"),
+      },
+      liveModelIds: ["hy3-preview"],
+    });
+
+    await expect(
+      buildOpencodeGoLiveProviderConfig({
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      }),
+    ).resolves.toMatchObject({ models: [expect.objectContaining({ id: "hy3-preview" })] });
+
+    const provider = await registerSingleProviderPlugin(plugin);
+    const entries = await provider.augmentModelCatalog?.({ entries: [] } as never);
+    expect(requireCatalogEntry(entries, "hy3-preview").status).toBe("preview");
+  });
+
   it("loads model discovery and keeps every promoted row identical to runtime", async () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
