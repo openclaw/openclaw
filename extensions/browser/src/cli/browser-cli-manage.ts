@@ -27,6 +27,7 @@ import {
   runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
+import { logBrowserTabs, selectBrowserTabs, type BrowserTabFilters } from "./browser-cli-tabs.js";
 import { danger, defaultRuntime, info, shortenHomePath } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
@@ -86,25 +87,6 @@ async function runBrowserToggle(
 
 function parseTabIndex(value: string): number {
   return parseBrowserPositiveIntegerValue(value) ?? Number.NaN;
-}
-
-function logBrowserTabs(tabs: BrowserTab[]) {
-  if (tabs.length === 0) {
-    defaultRuntime.log("No tabs (browser closed or no targets).");
-    return;
-  }
-  defaultRuntime.log(
-    tabs
-      .map((t, i) => {
-        const labelHandle = t.label ? `label:${t.label}` : undefined;
-        const suggested = t.suggestedTargetId ? `use: ${t.suggestedTargetId}` : undefined;
-        const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
-          .filter(Boolean)
-          .join(" ");
-        return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
-      })
-      .join("\n"),
-  );
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
@@ -438,14 +420,18 @@ export function registerBrowserManageCommands(
   browser
     .command("tabs")
     .description("List open tabs")
-    .action(async (_opts, cmd) => {
+    .option("--title <text>", "Filter tab titles by case-insensitive substring")
+    .option("--url-contains <text>", "Filter tab URLs by case-insensitive substring")
+    .action(async (opts: BrowserTabFilters, cmd) => {
       await runBrowserCliRequest<{ tabs: BrowserTab[] }>({
         parent: parentOpts(cmd),
         method: "GET",
         path: "/tabs",
         timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
-        json: (result) => ({ tabs: result.tabs ?? [] }),
-        print: (result) => logBrowserTabs(result.tabs ?? []),
+        json: (result) => ({
+          tabs: selectBrowserTabs(result.tabs ?? [], opts).map(({ tab }) => tab),
+        }),
+        print: (result) => logBrowserTabs(selectBrowserTabs(result.tabs ?? [], opts)),
       });
     });
 
@@ -459,7 +445,7 @@ export function registerBrowserManageCommands(
         body: { action: "list" },
         timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
         json: (result) => ({ tabs: result.tabs ?? [] }),
-        print: (result) => logBrowserTabs(result.tabs ?? []),
+        print: (result) => logBrowserTabs(selectBrowserTabs(result.tabs ?? [])),
       });
     });
 
