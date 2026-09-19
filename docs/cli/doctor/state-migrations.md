@@ -20,6 +20,8 @@ Resolve that originating failure before retrying the blocked steps. These fields
 travel with `stepReceipts`, including Doctor refusal errors; they are separate
 from the persisted import receipts in `migration_runs` and `migration_sources`.
 Older execution receipts may omit `originatingRefusal`.
+`doctor --fix` includes the failing check, refusal code, and reason in its halt
+message and health warnings, using the same failure facts as `openclaw update repair`.
 
 Doctor imports recognized legacy workspace setup files during preflight, before
 Workshop migration accesses workspace state. An existing canonical SQLite setup record wins,
