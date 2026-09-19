@@ -39,11 +39,17 @@ Use the returned identities and current owner-visible task facts, not invented s
 
 #### Run a managed Lobster workflow
 
-For operator/agent use, the optional [Lobster tool](/tools/lobster) can execute a workflow with `flowControllerId` and `flowGoal`. It creates a managed flow, records a real approval pause as waiting, and finishes or fails from the workflow outcome. The workflow steps are not detached child task records.
+For operator/agent use, the optional [Lobster tool](/tools/lobster) can execute a workflow with `flowControllerId` and `flowGoal`. It creates a managed flow, records an approval or structured-input pause as waiting, and finishes or fails from the workflow outcome. The workflow steps are not detached child task records.
 
 The tool returns envelope fields plus `flow` and `mutation` at the top level of its details. Check `mutation.applied` and use `mutation.flow`, the post-mutation record, for the next `flowExpectedRevision`. After the user's decision, resume with the actual flow id/revision; omit the token and approval ID to recover the checkpoint saved in that flow. Explicit checkpoint credentials must match the saved approval. Check cancellation through `mutation.cancelled`. Report errors and rejected updates instead of treating workflow output as proof that flow state persisted.
 
 The bundled TaskFlow skill examples route synthetic inbox/PR batches and suspend for approval without contacting external services. A workflow approval is not an arbitrary Slack-reply listener: a real controller must register that listener, persist thread correlation and resume when the matching event arrives.
+
+For structured questions, the Lobster tool's `status` action rediscovers saved
+waits in the same session. Resume with the current revision and `responseJson`;
+the runtime validates the answer. See [managed Task Flow mode](/tools/lobster#managed-task-flow-mode)
+for the complete input, recovery, and cancellation contract. This does not
+create a form, Inbox item, or notification by itself.
 
 The same skill includes subagent recipes for research/review fan-out, implementation with independent verification, and recovery from canonical task IDs. Optional [Workboard](/plugins/workboard#agent-tools) claims coordinate cooperating writers through its existing claim/heartbeat/release lifecycle. Claims apply to cards, not paths or shell processes; overlapping writers must agree on the same card or use isolated worktrees.
 

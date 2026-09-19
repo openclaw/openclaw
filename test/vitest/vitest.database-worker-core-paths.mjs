@@ -184,6 +184,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/telegram-history-read.integration.test.ts",
   "test/plugins/beam-http-identity.test.ts",
   "test/plugins/codex-session-catalog-naming.test.ts",
+  "test/plugins/lobster-managed-input.test.ts",
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
   "src/plugin-state/plugin-state-store.doctor-repair.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
